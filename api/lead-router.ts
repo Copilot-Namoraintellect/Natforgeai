@@ -3,6 +3,8 @@ import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { leads, leadActivities } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { checkLimit, incrementResultUsage } from "./lib/subscription";
+import { TRPCError } from "@trpc/server";
 
 export const leadRouter = createRouter({
   list: authedQuery
@@ -118,6 +120,27 @@ export const leadRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const { id, lastContact, nextFollowUp, ...data } = input;
+
+      // Check if lead status is changing to won and linked to a campaign
+      if (data.status === "won") {
+        const [current] = await db
+          .select()
+          .from(leads)
+          .where(and(eq(leads.id, id), eq(leads.userId, ctx.user.id)))
+          .limit(1);
+
+        if (current && current.status !== "won" && current.campaignId) {
+          const resultCheck = await checkLimit(ctx.user.id, "result");
+          if (!resultCheck.allowed) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: resultCheck.reason!,
+            });
+          }
+          await incrementResultUsage(ctx.user.id);
+        }
+      }
+
       const updateData: any = { ...data };
       if (lastContact) updateData.lastContact = new Date(lastContact);
       if (nextFollowUp) updateData.nextFollowUp = new Date(nextFollowUp);

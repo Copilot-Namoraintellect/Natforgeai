@@ -30,8 +30,8 @@ export default function Analytics() {
         value: totalCampaigns,
         change: `${activeCampaigns} active`,
         icon: Megaphone,
-        color: "text-indigo-500",
-        bg: "bg-indigo-500/10",
+        color: "text-[#00D4FF]",
+        bg: "bg-[#00D4FF]/10",
       },
       {
         label: "Total Leads",
@@ -96,7 +96,7 @@ export default function Analytics() {
     completed: "bg-blue-500",
     new: "bg-blue-500",
     contacted: "bg-amber-500",
-    qualified: "bg-indigo-500",
+    qualified: "bg-[#00D4FF]",
     proposal: "bg-purple-500",
     negotiation: "bg-orange-500",
     won: "bg-emerald-500",
@@ -151,7 +151,7 @@ export default function Analytics() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
-              <Megaphone className="w-4 h-4 text-indigo-500" />
+              <Megaphone className="w-4 h-4 text-[#00D4FF]" />
               Campaign Status Breakdown
             </CardTitle>
           </CardHeader>
@@ -264,7 +264,7 @@ export default function Analytics() {
                             strokeWidth="3"
                           />
                           <path
-                            className="text-indigo-500"
+                            className="text-[#00D4FF]"
                             d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                             fill="none"
                             stroke="currentColor"
@@ -288,15 +288,15 @@ export default function Analytics() {
       </Card>
 
       {/* Quick Tips */}
-      <Card className="bg-gradient-to-br from-indigo-500/5 to-purple-600/5 border-indigo-500/20">
+      <Card className="bg-gradient-to-br from-[#00D4FF]/5 to-[#7C3AED]/5 border-[#00D4FF]/20">
         <CardHeader>
           <CardTitle className="text-base">Performance Tips</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="flex items-start gap-3">
-              <div className="p-2 rounded-lg bg-indigo-500/10">
-                <Eye className="w-4 h-4 text-indigo-500" />
+              <div className="p-2 rounded-lg bg-[#00D4FF]/10">
+                <Eye className="w-4 h-4 text-[#00D4FF]" />
               </div>
               <div>
                 <p className="text-sm font-medium">Increase Visibility</p>

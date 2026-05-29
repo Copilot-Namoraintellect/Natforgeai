@@ -15,6 +15,25 @@ import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
   ping: publicQuery.query(() => ({ ok: true, ts: Date.now() })),
+  firebaseStatus: publicQuery.query(async () => {
+    try {
+      const { firebaseAuth } = await import("./lib/firebase-admin");
+      const result = await firebaseAuth.listUsers(1);
+      return {
+        status: "ok",
+        projectId: "ai-marketing-tool-nxtz",
+        adminSdkInitialized: true,
+        apiReachable: true,
+        usersInProject: result.users.length,
+      };
+    } catch (err: any) {
+      return {
+        status: "error",
+        error: err.message,
+        code: err.code || "unknown",
+      };
+    }
+  }),
   auth: localAuthRouter,
   business: businessRouter,
   campaign: campaignRouter,

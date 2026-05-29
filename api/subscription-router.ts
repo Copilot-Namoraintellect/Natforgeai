@@ -3,6 +3,7 @@ import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { subscriptions, subscriptionTiers } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { getUserTier, getUserUsage, ensureFreeSubscription } from "./lib/subscription";
 
 export const subscriptionRouter = createRouter({
   // List all available tiers
@@ -139,4 +140,29 @@ export const subscriptionRouter = createRouter({
       const allowed = featureMap[input.feature] ?? true;
       return { allowed, tierName: tier.name, tierSlug: tier.slug };
     }),
+
+  // Get user's current usage vs limits
+  myUsage: authedQuery.query(async ({ ctx }) => {
+    await ensureFreeSubscription(ctx.user.id);
+    const tier = await getUserTier(ctx.user.id);
+    const usage = await getUserUsage(ctx.user.id);
+
+    return {
+      tier: {
+        name: tier?.name ?? "Free",
+        slug: tier?.slug ?? "free",
+        maxCampaigns: tier?.maxCampaigns ?? 2,
+        maxResults: tier?.maxResults ?? 5,
+        maxLeads: tier?.maxLeads ?? 20,
+        maxContent: tier?.maxContent ?? 10,
+        maxAutomations: tier?.maxAutomations ?? 0,
+        aiGeneration: tier?.aiGeneration ?? false,
+        analytics: tier?.analytics ?? false,
+      },
+      usage: {
+        campaignsCreated: usage.campaignsCreated,
+        successfulResults: usage.successfulResults,
+      },
+    };
+  }),
 });

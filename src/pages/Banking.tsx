@@ -119,7 +119,7 @@ export default function Banking() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <Building2 className="w-6 h-6 text-indigo-500" />
+          <Building2 className="w-6 h-6 text-[#00D4FF]" />
           Banking & Payment Details
         </h1>
         <p className="text-muted-foreground mt-1">
@@ -132,8 +132,8 @@ export default function Banking() {
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-indigo-500/10">
-                <Landmark className="w-5 h-5 text-indigo-500" />
+              <div className="p-2 rounded-lg bg-[#00D4FF]/10">
+                <Landmark className="w-5 h-5 text-[#00D4FF]" />
               </div>
               <div>
                 <p className="text-2xl font-bold">{filteredByType("bank").length}</p>
@@ -311,7 +311,7 @@ export default function Banking() {
 
                 <Button
                   type="submit"
-                  className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
+                  className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                   disabled={createMutation.isPending}
                   size="sm"
                 >

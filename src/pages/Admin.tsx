@@ -80,8 +80,8 @@ export default function Admin() {
       label: "Active Subs",
       value: stats?.activeSubscriptions ?? 0,
       icon: CreditCard,
-      color: "text-indigo-500",
-      bg: "bg-indigo-500/10",
+      color: "text-[#00D4FF]",
+      bg: "bg-[#00D4FF]/10",
     },
     {
       label: "Total Revenue",
@@ -131,7 +131,7 @@ export default function Admin() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Shield className="w-6 h-6 text-indigo-500" />
+            <Shield className="w-6 h-6 text-[#00D4FF]" />
             Admin Dashboard
           </h1>
           <p className="text-muted-foreground mt-1">
@@ -227,7 +227,7 @@ export default function Admin() {
                           <span className="text-xs text-muted-foreground w-16 shrink-0">{r.month}</span>
                           <div className="flex-1 h-6 bg-muted rounded-full overflow-hidden">
                             <div
-                              className="h-full bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full transition-all"
+                              className="h-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] rounded-full transition-all"
                               style={{
                                 width: `${Math.min(100, (r.amount / Math.max(...revenueByMonth.map(x => x.amount))) * 100)}%`,
                               }}
@@ -309,7 +309,7 @@ export default function Admin() {
                         <TableRow key={u.id}>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
+                              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center text-white text-xs font-bold">
                                 {u.name?.charAt(0)?.toUpperCase() || "?"}
                               </div>
                               <span className="text-sm font-medium">{u.name || "Unnamed"}</span>
@@ -319,7 +319,7 @@ export default function Admin() {
                           <TableCell>
                             <Badge
                               variant={u.role === "admin" ? "default" : "secondary"}
-                              className={u.role === "admin" ? "bg-indigo-500/10 text-indigo-600" : ""}
+                              className={u.role === "admin" ? "bg-[#00D4FF]/10 text-[#00D4FF]" : ""}
                             >
                               {u.role === "admin" ? (
                                 <Crown className="w-3 h-3 mr-1" />

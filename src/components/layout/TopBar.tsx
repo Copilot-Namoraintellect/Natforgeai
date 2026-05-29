@@ -27,7 +27,7 @@ export function TopBar() {
     : "U";
 
   return (
-    <header className="h-16 border-b border-border bg-card/50 backdrop-blur-sm flex items-center justify-between px-6 shrink-0">
+    <header className="h-16 border-b border-border bg-white/80 backdrop-blur-sm flex items-center justify-between px-6 shrink-0">
       {/* Left: Breadcrumb area */}
       <div />
 
@@ -36,7 +36,7 @@ export function TopBar() {
         {/* Admin Badge */}
         {isAdmin && (
           <Link to="/admin">
-            <Badge className="bg-indigo-500/10 text-indigo-600 hover:bg-indigo-500/20 cursor-pointer border-indigo-500/20">
+            <Badge className="bg-[#00D4FF]/10 text-[#00D4FF] hover:bg-[#00D4FF]/20 cursor-pointer border-[#00D4FF]/20">
               <Shield className="w-3 h-3 mr-1" />
               Admin
             </Badge>
@@ -52,7 +52,7 @@ export function TopBar() {
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="flex items-center gap-2 px-2">
               <Avatar className="w-8 h-8">
-                <AvatarFallback className="bg-gradient-to-br from-indigo-500 to-purple-600 text-white text-xs font-bold">
+                <AvatarFallback className="bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] text-white text-xs font-bold">
                   {initials}
                 </AvatarFallback>
               </Avatar>

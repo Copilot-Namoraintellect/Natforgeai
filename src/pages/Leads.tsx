@@ -38,7 +38,7 @@ import { toast } from "sonner";
 const statusColors: Record<string, string> = {
   new: "bg-blue-500/10 text-blue-600",
   contacted: "bg-amber-500/10 text-amber-600",
-  qualified: "bg-indigo-500/10 text-indigo-600",
+  qualified: "bg-[#00D4FF]/10 text-[#00D4FF]",
   proposal: "bg-purple-500/10 text-purple-600",
   negotiation: "bg-orange-500/10 text-orange-600",
   won: "bg-emerald-500/10 text-emerald-600",
@@ -69,8 +69,12 @@ export default function Leads() {
   const updateMutation = trpc.lead.update.useMutation({
     onSuccess: () => {
       utils.lead.list.invalidate();
+      utils.subscription.myUsage.invalidate();
       setEditLead(null);
       toast.success("Lead updated!");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to update lead");
     },
   });
 
@@ -135,7 +139,7 @@ export default function Leads() {
         </div>
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700">
+            <Button className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90">
               <Plus className="w-4 h-4 mr-2" />
               Add Lead
             </Button>
@@ -185,7 +189,7 @@ export default function Leads() {
               </div>
               <Button
                 type="submit"
-                className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
+                className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                 disabled={createMutation.isPending}
               >
                 {createMutation.isPending ? "Adding..." : "Add Lead"}
@@ -289,7 +293,7 @@ export default function Leads() {
               <CardContent className="p-5">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center text-white text-xs font-bold">
                       {lead.name.charAt(0).toUpperCase()}
                     </div>
                     <div>
@@ -406,7 +410,7 @@ export default function Leads() {
               </div>
               <Button
                 type="submit"
-                className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
+                className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                 disabled={updateMutation.isPending}
               >
                 {updateMutation.isPending ? "Saving..." : "Update Lead"}

@@ -7,6 +7,7 @@ import { eq, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { signLocalToken, verifyLocalToken } from "./lib/session";
 import { env } from "./lib/env";
+import { ensureFreeSubscription } from "./lib/subscription";
 
 // ─── Local Auth Router ───
 export const localAuthRouter = createRouter({
@@ -63,6 +64,9 @@ export const localAuthRouter = createRouter({
       });
 
       const userId = Number(result.insertId);
+
+      // Auto-assign free tier and usage tracking
+      await ensureFreeSubscription(userId);
 
       // Generate JWT
       const token = await signLocalToken({ userId, type: "local" });
@@ -203,6 +207,9 @@ export const localAuthRouter = createRouter({
             updatedAt: new Date(),
             lastSignInAt: new Date(),
           };
+
+          // Auto-assign free tier and usage tracking for new Google users
+          await ensureFreeSubscription(userId);
         }
       }
 
@@ -294,6 +301,9 @@ export const localAuthRouter = createRouter({
             updatedAt: new Date(),
             lastSignInAt: new Date(),
           };
+
+          // Auto-assign free tier and usage tracking for new Firebase users
+          await ensureFreeSubscription(userId);
         }
       }
 
