@@ -109,13 +109,13 @@ export default function Settings() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
-                <User className="w-4 h-4 text-indigo-500" />
+                <User className="w-4 h-4 text-[#00D4FF]" />
                 Profile Information
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center gap-4">
-                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xl font-bold">
+                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center text-white text-xl font-bold">
                   {user?.name?.charAt(0)?.toUpperCase() || "U"}
                 </div>
                 <div>
@@ -201,7 +201,7 @@ export default function Settings() {
                   </div>
                   <Button
                     type="submit"
-                    className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
+                    className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                     disabled={createBiz.isPending}
                   >
                     {createBiz.isPending ? "Adding..." : "Add Business"}
@@ -227,7 +227,7 @@ export default function Settings() {
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm">
+                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center text-white font-bold text-sm">
                         {biz.name.charAt(0).toUpperCase()}
                       </div>
                       <div>
@@ -291,7 +291,7 @@ export default function Settings() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
-                <Bell className="w-4 h-4 text-indigo-500" />
+                <Bell className="w-4 h-4 text-[#00D4FF]" />
                 Notifications
               </CardTitle>
             </CardHeader>
@@ -415,7 +415,7 @@ export default function Settings() {
               </div>
               <Button
                 type="submit"
-                className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
+                className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                 disabled={updateBiz.isPending}
               >
                 {updateBiz.isPending ? "Saving..." : "Update Business"}

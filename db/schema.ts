@@ -55,6 +55,7 @@ export const subscriptionTiers = mysqlTable("subscription_tiers", {
   maxLeads: int("maxLeads").default(100),
   maxContent: int("maxContent").default(50),
   maxAutomations: int("maxAutomations").default(3),
+  maxResults: int("maxResults").default(5),
   aiGeneration: boolean("aiGeneration").default(false),
   analytics: boolean("analytics").default(false),
   teamMembers: int("teamMembers").default(1),
@@ -411,3 +412,18 @@ export const generatedImages = mysqlTable("generated_images", {
 });
 
 export type GeneratedImage = typeof generatedImages.$inferSelect;
+
+// ─── User Usage (for freemium tracking) ───
+export const userUsage = mysqlTable("user_usage", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull().unique(),
+  campaignsCreated: int("campaignsCreated").default(0),
+  successfulResults: int("successfulResults").default(0),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+});
+
+export type UserUsage = typeof userUsage.$inferSelect;

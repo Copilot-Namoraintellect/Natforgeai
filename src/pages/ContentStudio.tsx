@@ -93,7 +93,7 @@ export default function ContentStudio() {
   );
 
   const typeColors: Record<string, string> = {
-    social_post: "bg-indigo-500/10 text-indigo-600",
+    social_post: "bg-[#00D4FF]/10 text-[#00D4FF]",
     ad_copy: "bg-amber-500/10 text-amber-600",
     email: "bg-emerald-500/10 text-emerald-600",
     script: "bg-purple-500/10 text-purple-600",
@@ -193,7 +193,7 @@ Include:
             <DialogTrigger asChild>
               <Button
                 variant="outline"
-                className="border-indigo-500/50 text-indigo-600 hover:bg-indigo-500/10"
+                className="border-[#00D4FF]/50 text-[#00D4FF] hover:bg-[#00D4FF]/10"
               >
                 <Sparkles className="w-4 h-4 mr-2" />
                 AI Generate
@@ -299,7 +299,7 @@ Include:
                 <Button
                   onClick={generateWithAI}
                   disabled={aiLoading || !aiForm.business}
-                  className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
+                  className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                 >
                   {aiLoading ? (
                     <>
@@ -363,7 +363,7 @@ Include:
 
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
-              <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700">
+              <Button className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90">
                 <Plus className="w-4 h-4 mr-2" />
                 Add Content
               </Button>
@@ -428,7 +428,7 @@ Include:
                 </div>
                 <Button
                   type="submit"
-                  className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
+                  className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                   disabled={createMutation.isPending}
                 >
                   {createMutation.isPending ? "Saving..." : "Save Content"}
@@ -556,7 +556,7 @@ Include:
                   </p>
                 )}
                 {content.cta && (
-                  <p className="text-xs font-medium text-indigo-600 mt-1">
+                  <p className="text-xs font-medium text-[#00D4FF] mt-1">
                     CTA: {content.cta}
                   </p>
                 )}

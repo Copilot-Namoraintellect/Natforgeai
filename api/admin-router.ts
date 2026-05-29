@@ -10,8 +10,15 @@ import {
   leads,
   contentPosts,
   businesses,
+  schedules,
+  automations,
+  analytics,
+  generatedImages,
+  bankingDetails,
+  userUsage,
 } from "@db/schema";
-import { eq, desc, sql, count } from "drizzle-orm";
+import { eq, desc, sql, count, and } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 
 export const adminRouter = createRouter({
   // ─── Dashboard Stats ───
@@ -238,5 +245,152 @@ export const adminRouter = createRouter({
         paidAt: new Date(),
       });
       return { success: true };
+    }),
+
+  // ─── Delete User (and all related data) ───
+  deleteUser: adminQuery
+    .input(z.object({ userId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const targetId = input.userId;
+      const adminId = ctx.user.id;
+
+      // Prevent self-deletion
+      if (targetId === adminId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You cannot delete your own admin account.",
+        });
+      }
+
+      // Get user info before deletion for logging
+      const [targetUser] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, targetId))
+        .limit(1);
+
+      if (!targetUser) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "User not found.",
+        });
+      }
+
+      // Delete all related data
+      await db.delete(campaigns).where(eq(campaigns.userId, targetId));
+      await db.delete(contentPosts).where(eq(contentPosts.userId, targetId));
+      await db.delete(leads).where(eq(leads.userId, targetId));
+      await db.delete(schedules).where(eq(schedules.userId, targetId));
+      await db.delete(automations).where(eq(automations.userId, targetId));
+      await db.delete(analytics).where(eq(analytics.userId, targetId));
+      await db.delete(generatedImages).where(eq(generatedImages.userId, targetId));
+      await db.delete(businesses).where(eq(businesses.userId, targetId));
+      await db.delete(subscriptions).where(eq(subscriptions.userId, targetId));
+      await db.delete(payments).where(eq(payments.userId, targetId));
+      await db.delete(bankingDetails).where(eq(bankingDetails.adminUserId, targetId));
+
+      // Delete user usage record
+      await db.delete(userUsage).where(eq(userUsage.userId, targetId));
+
+      // Finally delete the user
+      await db.delete(users).where(eq(users.id, targetId));
+
+      return {
+        success: true,
+        deletedUser: {
+          id: targetUser.id,
+          name: targetUser.name,
+          email: targetUser.email,
+          username: targetUser.username,
+        },
+      };
+    }),
+
+  // ─── Create User (admin-only) ───
+  createUser: adminQuery
+    .input(
+      z.object({
+        name: z.string().min(1),
+        username: z.string().min(3),
+        email: z.string().email(),
+        password: z.string().min(6),
+        role: z.enum(["user", "admin"]).default("user"),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const db = getDb();
+
+      // Check for existing username or email
+      const [existing] = await db
+        .select()
+        .from(users)
+        .where(
+          and(
+            eq(users.email, input.email)
+          )
+        )
+        .limit(1);
+
+      if (existing) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "A user with this email already exists.",
+        });
+      }
+
+      const bcrypt = await import("bcryptjs");
+      const passwordHash = await bcrypt.hash(input.password, 12);
+
+      const [result] = await db.insert(users).values({
+        username: input.username,
+        email: input.email,
+        passwordHash,
+        name: input.name,
+        authType: "local",
+        role: input.role,
+        lastSignInAt: new Date(),
+      });
+
+      const userId = Number(result.insertId);
+
+      // Auto-assign free tier
+      const [freeTier] = await db
+        .select()
+        .from(subscriptionTiers)
+        .where(eq(subscriptionTiers.slug, "free"))
+        .limit(1);
+
+      if (freeTier) {
+        const now = new Date();
+        const periodEnd = new Date(now);
+        periodEnd.setMonth(periodEnd.getMonth() + 1);
+        await db.insert(subscriptions).values({
+          userId,
+          tierId: freeTier.id,
+          status: "active",
+          currentPeriodStart: now,
+          currentPeriodEnd: periodEnd,
+          paymentMethod: "manual",
+        });
+      }
+
+      // Create usage tracking
+      await db.insert(userUsage).values({
+        userId,
+        campaignsCreated: 0,
+        successfulResults: 0,
+      });
+
+      return {
+        success: true,
+        user: {
+          id: userId,
+          name: input.name,
+          email: input.email,
+          username: input.username,
+          role: input.role,
+        },
+      };
     }),
 });

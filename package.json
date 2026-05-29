@@ -15,6 +15,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
+    "create:superadmin": "npx tsx scripts/create-superadmin.ts",
+    "reset:superadmin": "npx tsx scripts/reset-superadmin-password.ts",
     "package": "bash package-for-upload.sh",
     "deploy": "bash deploy.sh"
   },

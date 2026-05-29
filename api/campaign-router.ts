@@ -3,6 +3,8 @@ import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { campaigns } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { checkLimit, incrementCampaignUsage, incrementResultUsage } from "./lib/subscription";
+import { TRPCError } from "@trpc/server";
 
 export const campaignRouter = createRouter({
   list: authedQuery.query(async ({ ctx }) => {
@@ -54,6 +56,16 @@ export const campaignRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
+
+      // Check campaign limit
+      const campaignCheck = await checkLimit(ctx.user.id, "campaign");
+      if (!campaignCheck.allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: campaignCheck.reason!,
+        });
+      }
+
       const data: any = {
         userId: ctx.user.id,
         businessId: input.businessId,
@@ -75,6 +87,10 @@ export const campaignRouter = createRouter({
       if (input.startDate) data.startDate = new Date(input.startDate);
       if (input.endDate) data.endDate = new Date(input.endDate);
       const [camp] = await db.insert(campaigns).values(data);
+
+      // Increment campaign usage
+      await incrementCampaignUsage(ctx.user.id);
+
       return { id: Number(camp.insertId), success: true };
     }),
 
@@ -103,6 +119,28 @@ export const campaignRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const { id, ...rawData } = input;
+
+      // Check if status is changing to completed
+      if (rawData.status === "completed") {
+        const [current] = await db
+          .select()
+          .from(campaigns)
+          .where(and(eq(campaigns.id, id), eq(campaigns.userId, ctx.user.id)))
+          .limit(1);
+
+        if (current && current.status !== "completed") {
+          // Check result limit before allowing completion
+          const resultCheck = await checkLimit(ctx.user.id, "result");
+          if (!resultCheck.allowed) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: resultCheck.reason!,
+            });
+          }
+          await incrementResultUsage(ctx.user.id);
+        }
+      }
+
       const data: any = { ...rawData };
       if (input.startDate) data.startDate = new Date(input.startDate);
       if (input.endDate) data.endDate = new Date(input.endDate);

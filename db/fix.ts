@@ -42,6 +42,15 @@ async function main() {
       \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (\`id\`)
     )`,
+    `CREATE TABLE IF NOT EXISTS \`user_usage\` (
+      \`id\` bigint unsigned NOT NULL AUTO_INCREMENT,
+      \`userId\` bigint unsigned NOT NULL UNIQUE,
+      \`campaignsCreated\` int DEFAULT 0,
+      \`successfulResults\` int DEFAULT 0,
+      \`createdAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      \`updatedAt\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (\`id\`)
+    )`,
     `CREATE TABLE IF NOT EXISTS \`payments\` (
       \`id\` bigint unsigned NOT NULL AUTO_INCREMENT,
       \`userId\` bigint unsigned NOT NULL,
@@ -89,6 +98,18 @@ async function main() {
     }
   }
 
+  // Add maxResults column to subscription_tiers if it doesn't exist
+  try {
+    await db.execute(`ALTER TABLE subscription_tiers ADD COLUMN maxResults int DEFAULT 5`);
+    console.log("Added maxResults column to subscription_tiers");
+  } catch (e: any) {
+    if (e.message?.includes("Duplicate column")) {
+      console.log("maxResults column already exists");
+    } else {
+      console.log("Error adding maxResults:", e.message);
+    }
+  }
+
   // Seed subscription tiers
   console.log("Seeding subscription tiers...");
 
@@ -103,11 +124,13 @@ async function main() {
       maxLeads: 20,
       maxContent: 10,
       maxAutomations: 0,
+      maxResults: 5,
       aiGeneration: false,
       analytics: false,
       teamMembers: 1,
       features: JSON.stringify([
         "2 active campaigns",
+        "5 successful results",
         "20 leads",
         "10 content pieces",
         "Basic content calendar",

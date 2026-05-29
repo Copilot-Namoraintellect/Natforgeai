@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Link } from "react-router";
+import { useUsage } from "@/hooks/useUsage";
 import {
   Megaphone,
   PenTool,
@@ -12,10 +13,12 @@ import {
   BarChart3,
   Calendar,
   Sparkles,
+  Crown,
 } from "lucide-react";
 
 export default function Dashboard() {
   const { data: summary } = trpc.analytics.summary.useQuery();
+  const { campaigns: campaignUsage, results: resultUsage, isLoading: usageLoading } = useUsage();
 
   const campaignCounts = {
     total: summary?.campaigns?.length ?? 0,
@@ -41,8 +44,8 @@ export default function Dashboard() {
       value: campaignCounts.total,
       active: campaignCounts.active,
       icon: Megaphone,
-      color: "text-indigo-500",
-      bg: "bg-indigo-500/10",
+      color: "text-[#00D4FF]",
+      bg: "bg-[#00D4FF]/10",
       link: "/campaigns",
     },
     {
@@ -94,13 +97,46 @@ export default function Dashboard() {
             Welcome back! Here's your marketing overview.
           </p>
         </div>
-        <Button asChild className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700">
+        <Button asChild className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90">
           <Link to="/campaigns">
             <Sparkles className="w-4 h-4 mr-2" />
             New Campaign
           </Link>
         </Button>
       </div>
+
+      {/* Usage Widget */}
+      {!usageLoading && (campaignUsage.atLimit || resultUsage.atLimit || campaignUsage.used > 0) && (
+        <Card className="border-[#00D4FF]/20 bg-gradient-to-r from-[#00D4FF]/5 to-[#7C3AED]/5">
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Crown className="w-5 h-5 text-[#7C3AED]" />
+                <h3 className="font-semibold text-[#0F172A]">Plan Usage</h3>
+              </div>
+              <Button asChild variant="outline" size="sm" className="rounded-xl">
+                <Link to="/pricing">View Plans</Link>
+              </Button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <div className="flex justify-between text-sm mb-1.5">
+                  <span className="text-muted-foreground">Campaigns</span>
+                  <span className="font-medium">{campaignUsage.used} / {campaignUsage.limit}</span>
+                </div>
+                <Progress value={campaignUsage.percent} className="h-2" />
+              </div>
+              <div>
+                <div className="flex justify-between text-sm mb-1.5">
+                  <span className="text-muted-foreground">Successful Results</span>
+                  <span className="font-medium">{resultUsage.used} / {resultUsage.limit}</span>
+                </div>
+                <Progress value={resultUsage.percent} className="h-2" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -170,7 +206,7 @@ export default function Dashboard() {
                 className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 rounded-full bg-indigo-500" />
+                  <div className="w-2 h-2 rounded-full bg-[#00D4FF]" />
                   <div>
                     <p className="text-sm font-medium">{camp.name}</p>
                     <p className="text-xs text-muted-foreground">{camp.goal}</p>

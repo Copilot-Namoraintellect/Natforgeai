@@ -35,7 +35,7 @@ const categoryIcons: Record<string, any> = {
 };
 
 const categoryColors: Record<string, string> = {
-  strategy: "bg-indigo-500/10 text-indigo-600",
+  strategy: "bg-[#00D4FF]/10 text-[#00D4FF]",
   content: "bg-blue-500/10 text-blue-600",
   ads: "bg-amber-500/10 text-amber-600",
   design: "bg-pink-500/10 text-pink-600",
@@ -216,7 +216,7 @@ export default function Templates() {
                       </div>
                       <Button
                         size="sm"
-                        className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
+                        className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                         onClick={(e) => {
                           e.stopPropagation();
                           copyPrompt(template.prompt, template.id);

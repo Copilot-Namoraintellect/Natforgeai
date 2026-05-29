@@ -121,7 +121,7 @@ export default function CalendarPage() {
         </div>
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700">
+            <Button className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90">
               <Plus className="w-4 h-4 mr-2" />
               Schedule Post
             </Button>
@@ -183,7 +183,7 @@ export default function CalendarPage() {
               </div>
               <Button
                 type="submit"
-                className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
+                className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                 disabled={createMutation.isPending}
               >
                 {createMutation.isPending ? "Scheduling..." : "Schedule"}
@@ -241,7 +241,7 @@ export default function CalendarPage() {
               const day = i + 1;
               const daySchedules = getSchedulesForDate(day);
               const todayClass = isToday(day)
-                ? "ring-2 ring-indigo-500 ring-offset-1"
+                ? "ring-2 ring-[#00D4FF] ring-offset-1"
                 : "";
 
               return (
@@ -253,7 +253,7 @@ export default function CalendarPage() {
                   <div className="p-1.5">
                     <span
                       className={`text-xs font-medium ${
-                        isToday(day) ? "text-indigo-600" : "text-muted-foreground"
+                        isToday(day) ? "text-[#00D4FF]" : "text-muted-foreground"
                       }`}
                     >
                       {day}

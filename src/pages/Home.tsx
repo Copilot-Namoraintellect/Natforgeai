@@ -1,93 +1,64 @@
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
+import { Logo } from "@/components/Logo";
 import {
-  Sparkles,
-  Megaphone,
-  PenTool,
-  Calendar,
-  Users,
-  Zap,
-  BarChart3,
   ArrowRight,
-  Check,
+  Play,
+  Upload,
+  Wand2,
+  Target,
+  Rocket,
+  TrendingUp,
+  Brain,
+  FileText,
+  Users,
+  MessageSquare,
+  ShoppingCart,
+  MousePointerClick,
+  TrendingUp as TrendIcon,
+  DollarSign,
 } from "lucide-react";
 
-const features = [
-  {
-    icon: Megaphone,
-    title: "Campaign Builder",
-    description: "Build complete marketing campaigns with AI-powered strategy generation.",
-    color: "from-indigo-500 to-blue-600",
-  },
-  {
-    icon: PenTool,
-    title: "Content Studio",
-    description: "Generate social posts, ad copy, emails, and scripts with AI.",
-    color: "from-amber-500 to-orange-600",
-  },
-  {
-    icon: Calendar,
-    title: "Content Calendar",
-    description: "Schedule and manage your content across all platforms.",
-    color: "from-purple-500 to-pink-600",
-  },
-  {
-    icon: Users,
-    title: "Lead CRM",
-    description: "Track leads through your sales pipeline from first contact to close.",
-    color: "from-emerald-500 to-teal-600",
-  },
-  {
-    icon: Zap,
-    title: "Automations",
-    description: "Build workflows that trigger actions based on events.",
-    color: "from-orange-500 to-red-600",
-  },
-  {
-    icon: BarChart3,
-    title: "Analytics",
-    description: "Track performance metrics and optimize your marketing.",
-    color: "from-cyan-500 to-blue-600",
-  },
+const howItWorks = [
+  { step: "01", title: "Upload Strategy", description: "Upload your marketing strategy or brief.", icon: Upload },
+  { step: "02", title: "Generate Campaign", description: "AI builds complete campaigns from your strategy.", icon: Wand2 },
+  { step: "03", title: "Find Customers", description: "Identify and target your ideal audience.", icon: Target },
+  { step: "04", title: "Launch Everywhere", description: "Deploy across all channels automatically.", icon: Rocket },
+  { step: "05", title: "Convert Leads", description: "Turn engagement into revenue.", icon: TrendingUp },
 ];
 
-const promptLibrary = [
-  "Master Campaign Strategy",
-  "Social Media Posts",
-  "Ad Copy Generator",
-  "Canva Design Prompt",
-  "Video Script Generator",
-  "Meta Ads Targeting",
-  "B2B Lead Targeting",
-  "CRM Follow-up Sequence",
-  "Chatbot Auto-Reply",
-  "Daily Power Prompt",
+const aiAgents = [
+  { title: "Strategy Agent", description: "Analyzes markets and crafts winning strategies.", icon: Brain, color: "from-[#00D4FF] to-[#7C3AED]" },
+  { title: "Content Agent", description: "Generates copy, creatives, and campaigns.", icon: FileText, color: "from-[#7C3AED] to-[#00D4FF]" },
+  { title: "Audience Agent", description: "Finds and segments your ideal customers.", icon: Users, color: "from-[#00D4FF] to-[#10B981]" },
+  { title: "Engagement Agent", description: "Automates outreach and nurtures leads.", icon: MessageSquare, color: "from-[#10B981] to-[#00D4FF]" },
+  { title: "Sales Agent", description: "Closes deals and optimizes conversions.", icon: ShoppingCart, color: "from-[#7C3AED] to-[#10B981]" },
+];
+
+const analytics = [
+  { label: "Leads Generated", value: "12,450", change: "+24%", icon: Users },
+  { label: "Engagement Rate", value: "68.2%", change: "+12%", icon: MousePointerClick },
+  { label: "Conversion Rate", value: "14.8%", change: "+8%", icon: TrendIcon },
+  { label: "Revenue Influenced", value: "$2.4M", change: "+32%", icon: DollarSign },
 ];
 
 export default function Home() {
   const { isAuthenticated } = useAuth();
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-[#F8FAFC]">
       {/* Navbar */}
-      <nav className="border-b border-border bg-card/50 backdrop-blur-sm fixed w-full z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
-            <span className="font-bold text-lg bg-gradient-to-r from-indigo-500 to-purple-600 bg-clip-text text-transparent">
-              AI Marketer
-            </span>
-          </div>
+      <nav className="border-b border-border/40 bg-white/70 backdrop-blur-xl fixed w-full z-50">
+        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <Logo />
           <div className="flex items-center gap-4">
             {isAuthenticated ? (
-              <Button asChild className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700">
+              <Button asChild className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white rounded-xl">
                 <Link to="/dashboard">Dashboard</Link>
               </Button>
             ) : (
-              <Button asChild variant="outline">
+              <Button asChild variant="outline" className="rounded-xl">
                 <Link to="/login">Login</Link>
               </Button>
             )}
@@ -97,112 +68,122 @@ export default function Home() {
 
       {/* Hero */}
       <section className="pt-32 pb-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-5xl mx-auto text-center">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500/10 text-indigo-600 text-sm font-medium mb-6">
-            <Sparkles className="w-4 h-4" />
-            Your AI-Powered Marketing Command Center
+        <div className="max-w-[1280px] mx-auto text-center">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#00D4FF]/10 text-[#0F172A] text-sm font-medium mb-6 border border-[#00D4FF]/20">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00D4FF] opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00D4FF]"></span>
+            </span>
+            Autonomous Marketing. Real Results.
           </div>
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight mb-6">
-            Turn Strategy Into{" "}
-            <span className="bg-gradient-to-r from-indigo-500 to-purple-600 bg-clip-text text-transparent">
-              Execution
+          <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight mb-6 text-[#0F172A]">
+            Forge Strategy{" "}
+            <span className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] bg-clip-text text-transparent">
+              Into Sales
             </span>
           </h1>
-          <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-8">
-            From campaign strategy to content creation, scheduling, lead management,
-            and analytics — run your entire marketing operation from one platform.
+          <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-10">
+            NatForge AI transforms marketing strategies into complete campaigns,
+            identifies customers, creates content, engages prospects and drives conversions.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            {isAuthenticated ? (
-              <Button
-                size="lg"
-                asChild
-                className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-lg px-8"
-              >
-                <Link to="/dashboard">
-                  Go to Dashboard
-                  <ArrowRight className="w-5 h-5 ml-2" />
-                </Link>
-              </Button>
-            ) : (
-              <>
-                <Button
-                  size="lg"
-                  asChild
-                  className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-lg px-8"
-                >
-                  <Link to="/login">
-                    Get Started Free
-                    <ArrowRight className="w-5 h-5 ml-2" />
-                  </Link>
-                </Button>
-                <Button size="lg" variant="outline" className="text-lg px-8" asChild>
-                  <Link to="/login">Login</Link>
-                </Button>
-              </>
-            )}
+            <Button
+              size="lg"
+              asChild
+              className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white text-lg px-8 rounded-xl h-14"
+            >
+              <Link to={isAuthenticated ? "/dashboard" : "/login"}>
+                Start Free Trial
+                <ArrowRight className="w-5 h-5 ml-2" />
+              </Link>
+            </Button>
+            <Button size="lg" variant="outline" className="text-lg px-8 rounded-xl h-14 border-[#0F172A]/20" asChild>
+              <Link to="/login">
+                <Play className="w-5 h-5 mr-2" />
+                Watch Demo
+              </Link>
+            </Button>
           </div>
         </div>
       </section>
 
-      {/* Features */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-muted/30">
-        <div className="max-w-7xl mx-auto">
+      {/* How It Works */}
+      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-white">
+        <div className="max-w-[1280px] mx-auto">
           <div className="text-center mb-16">
-            <h2 className="text-3xl font-bold tracking-tight mb-4">
-              Everything You Need to Market Smarter
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4 text-[#0F172A]">
+              How It Works
             </h2>
             <p className="text-muted-foreground max-w-2xl mx-auto">
-              A complete toolkit that takes you from strategy to sales — powered by AI,
-              organized for action.
+              From strategy to revenue in five simple steps.
             </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {features.map((feature) => (
-              <Card
-                key={feature.title}
-                className="group hover:shadow-lg transition-all border-0 bg-card shadow-sm"
-              >
-                <CardContent className="p-6">
-                  <div
-                    className={`w-12 h-12 rounded-lg bg-gradient-to-br ${feature.color} flex items-center justify-center mb-4 group-hover:scale-110 transition-transform`}
-                  >
-                    <feature.icon className="w-6 h-6 text-white" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+            {howItWorks.map((item) => (
+              <div key={item.step} className="relative group">
+                <div className="rounded-[20px] bg-[#F8FAFC] border border-border p-6 h-full hover:shadow-lg transition-all">
+                  <div className="text-4xl font-bold text-[#00D4FF]/20 mb-4">{item.step}</div>
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center mb-4">
+                    <item.icon className="w-5 h-5 text-white" />
                   </div>
-                  <h3 className="text-lg font-semibold mb-2">{feature.title}</h3>
-                  <p className="text-sm text-muted-foreground">
-                    {feature.description}
-                  </p>
-                </CardContent>
-              </Card>
+                  <h3 className="text-lg font-semibold mb-2 text-[#0F172A]">{item.title}</h3>
+                  <p className="text-sm text-muted-foreground">{item.description}</p>
+                </div>
+              </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* Prompt Library */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold tracking-tight mb-4">
-              Pre-Built Prompt Library
+      {/* AI Agents */}
+      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-[#F8FAFC]">
+        <div className="max-w-[1280px] mx-auto">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4 text-[#0F172A]">
+              AI Agents
             </h2>
             <p className="text-muted-foreground max-w-2xl mx-auto">
-              13 battle-tested prompts ready to deploy across your marketing stack.
-              Copy, customize, and execute.
+              Specialized AI agents that work together to grow your business.
             </p>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {promptLibrary.map((prompt, i) => (
-              <div
-                key={prompt}
-                className="flex items-center gap-3 p-4 rounded-lg bg-card border border-border hover:border-primary/50 transition-colors"
-              >
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500/10 to-purple-600/10 flex items-center justify-center text-sm font-bold text-indigo-600">
-                  {i + 1}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {aiAgents.map((agent) => (
+              <div key={agent.title} className="rounded-[20px] bg-white border border-border p-6 hover:shadow-xl transition-all group">
+                <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${agent.color} flex items-center justify-center mb-4 group-hover:scale-110 transition-transform`}>
+                  <agent.icon className="w-6 h-6 text-white" />
                 </div>
-                <span className="text-sm font-medium">{prompt}</span>
-                <Check className="w-4 h-4 text-emerald-500 ml-auto shrink-0" />
+                <h3 className="text-lg font-semibold mb-2 text-[#0F172A]">{agent.title}</h3>
+                <p className="text-sm text-muted-foreground">{agent.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Analytics */}
+      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-white">
+        <div className="max-w-[1280px] mx-auto">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4 text-[#0F172A]">
+              Analytics
+            </h2>
+            <p className="text-muted-foreground max-w-2xl mx-auto">
+              Track what matters and optimize for growth.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {analytics.map((metric) => (
+              <div key={metric.label} className="rounded-[20px] bg-[#F8FAFC] border border-border p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center">
+                    <metric.icon className="w-5 h-5 text-white" />
+                  </div>
+                  <span className="text-xs font-semibold text-[#10B981] bg-[#10B981]/10 px-2 py-1 rounded-full">
+                    {metric.change}
+                  </span>
+                </div>
+                <div className="text-3xl font-bold text-[#0F172A] mb-1">{metric.value}</div>
+                <div className="text-sm text-muted-foreground">{metric.label}</div>
               </div>
             ))}
           </div>
@@ -210,22 +191,21 @@ export default function Home() {
       </section>
 
       {/* CTA */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-indigo-500/5 to-purple-600/5">
-        <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-3xl font-bold tracking-tight mb-4">
-            Ready to Transform Your Marketing?
+      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-[#0F172A] to-[#111827]">
+        <div className="max-w-[1280px] mx-auto text-center">
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4 text-white">
+            Ready to Forge Your Growth?
           </h2>
-          <p className="text-muted-foreground mb-8">
-            Join marketers who are already using AI Marketer to plan, create,
-            and execute campaigns faster than ever.
+          <p className="text-gray-400 mb-10 max-w-2xl mx-auto">
+            Join businesses using NatForge AI to turn strategy into revenue.
           </p>
           <Button
             size="lg"
             asChild
-            className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-lg px-8"
+            className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white text-lg px-8 rounded-xl h-14"
           >
             <Link to={isAuthenticated ? "/dashboard" : "/login"}>
-              {isAuthenticated ? "Go to Dashboard" : "Get Started Free"}
+              Start Free Trial
               <ArrowRight className="w-5 h-5 ml-2" />
             </Link>
           </Button>
@@ -233,37 +213,14 @@ export default function Home() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-border py-8 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-              <Sparkles className="w-3 h-3 text-white" />
-            </div>
-            <span className="text-sm font-semibold bg-gradient-to-r from-indigo-500 to-purple-600 bg-clip-text text-transparent">
-              AI Marketer
-            </span>
-          </div>
+      <footer className="border-t border-border py-8 px-4 sm:px-6 lg:px-8 bg-white">
+        <div className="max-w-[1440px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+          <Logo size="sm" />
           <p className="text-sm text-muted-foreground">
-            Your AI-powered marketing command center.
+            Forge Strategy Into Sales.
           </p>
         </div>
       </footer>
-    </div>
-  );
-}
-
-function Card({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <div className={`rounded-xl ${className}`}>
-      {children}
-    </div>
-  );
-}
-
-function CardContent({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <div className={className}>
-      {children}
     </div>
   );
 }

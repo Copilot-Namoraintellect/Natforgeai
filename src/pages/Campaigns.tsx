@@ -6,6 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Link } from "react-router";
+import { useUsage } from "@/hooks/useUsage";
 import {
   Dialog,
   DialogContent,
@@ -22,6 +25,8 @@ import {
   Eye,
   Target,
   DollarSign,
+  Crown,
+  AlertCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -30,13 +35,18 @@ export default function Campaigns() {
   const [createOpen, setCreateOpen] = useState(false);
   const [viewCampaign, setViewCampaign] = useState<any>(null);
   const utils = trpc.useUtils();
+  const { campaigns: campaignUsage, results: resultUsage, isLoading: usageLoading } = useUsage();
 
   const { data: campaigns, isLoading } = trpc.campaign.list.useQuery();
   const createMutation = trpc.campaign.create.useMutation({
     onSuccess: () => {
       utils.campaign.list.invalidate();
+      utils.subscription.myUsage.invalidate();
       setCreateOpen(false);
       toast.success("Campaign created successfully!");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to create campaign");
     },
   });
   const deleteMutation = trpc.campaign.delete.useMutation({
@@ -70,8 +80,54 @@ export default function Campaigns() {
     });
   }
 
+  const isCampaignLimitReached = campaignUsage.atLimit;
+
   return (
     <div className="space-y-6">
+      {/* Usage Banner */}
+      {!usageLoading && (
+        <Card className="border-[#00D4FF]/20 bg-gradient-to-r from-[#00D4FF]/5 to-[#7C3AED]/5">
+          <CardContent className="p-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center">
+                  <Crown className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-[#0F172A]">
+                    Free Plan Usage
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {campaignUsage.used}/{campaignUsage.limit} campaigns · {resultUsage.used}/{resultUsage.limit} results
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 flex-1 max-w-md">
+                <div className="flex-1">
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-muted-foreground">Campaigns</span>
+                    <span className="font-medium">{campaignUsage.remaining} left</span>
+                  </div>
+                  <Progress value={campaignUsage.percent} className="h-2" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-muted-foreground">Results</span>
+                    <span className="font-medium">{resultUsage.remaining} left</span>
+                  </div>
+                  <Progress value={resultUsage.percent} className="h-2" />
+                </div>
+              </div>
+              {isCampaignLimitReached && (
+                <Button asChild size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white shrink-0">
+                  <Link to="/pricing">Upgrade</Link>
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Campaigns</h1>
@@ -81,7 +137,10 @@ export default function Campaigns() {
         </div>
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700">
+            <Button
+              className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90"
+              disabled={isCampaignLimitReached}
+            >
               <Plus className="w-4 h-4 mr-2" />
               New Campaign
             </Button>
@@ -90,39 +149,56 @@ export default function Campaigns() {
             <DialogHeader>
               <DialogTitle>Create Campaign</DialogTitle>
             </DialogHeader>
-            <form onSubmit={handleCreate} className="space-y-4 mt-4">
-              <div>
-                <Label>Campaign Name</Label>
-                <Input name="name" placeholder="Summer Sale 2025" required />
+            {isCampaignLimitReached ? (
+              <div className="py-8 text-center space-y-4">
+                <AlertCircle className="w-12 h-12 text-[#7C3AED] mx-auto" />
+                <div>
+                  <p className="text-lg font-semibold text-[#0F172A]">Campaign Limit Reached</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    You've used all {campaignUsage.limit} campaigns on your free plan.
+                  </p>
+                </div>
+                <Button asChild className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white">
+                  <Link to="/pricing" onClick={() => setCreateOpen(false)}>
+                    Upgrade to Create More
+                  </Link>
+                </Button>
               </div>
-              <div>
-                <Label>Goal</Label>
-                <Input name="goal" placeholder="Increase walk-ins by 30%" required />
-              </div>
-              <div>
-                <Label>Target Audience</Label>
-                <Textarea name="targetAudience" placeholder="Young professionals aged 25-40..." />
-              </div>
-              <div>
-                <Label>Platforms</Label>
-                <Input name="platforms" placeholder="Instagram, TikTok, Facebook" />
-              </div>
-              <div>
-                <Label>Budget ($)</Label>
-                <Input name="budget" type="number" placeholder="5000" />
-              </div>
-              <div>
-                <Label>Core Message</Label>
-                <Textarea name="coreMessage" placeholder="Your main value proposition..." />
-              </div>
-              <Button
-                type="submit"
-                className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
-                disabled={createMutation.isPending}
-              >
-                {createMutation.isPending ? "Creating..." : "Create Campaign"}
-              </Button>
-            </form>
+            ) : (
+              <form onSubmit={handleCreate} className="space-y-4 mt-4">
+                <div>
+                  <Label>Campaign Name</Label>
+                  <Input name="name" placeholder="Summer Sale 2025" required />
+                </div>
+                <div>
+                  <Label>Goal</Label>
+                  <Input name="goal" placeholder="Increase walk-ins by 30%" required />
+                </div>
+                <div>
+                  <Label>Target Audience</Label>
+                  <Textarea name="targetAudience" placeholder="Young professionals aged 25-40..." />
+                </div>
+                <div>
+                  <Label>Platforms</Label>
+                  <Input name="platforms" placeholder="Instagram, TikTok, Facebook" />
+                </div>
+                <div>
+                  <Label>Budget ($)</Label>
+                  <Input name="budget" type="number" placeholder="5000" />
+                </div>
+                <div>
+                  <Label>Core Message</Label>
+                  <Textarea name="coreMessage" placeholder="Your main value proposition..." />
+                </div>
+                <Button
+                  type="submit"
+                  className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
+                  disabled={createMutation.isPending}
+                >
+                  {createMutation.isPending ? "Creating..." : "Create Campaign"}
+                </Button>
+              </form>
+            )}
           </DialogContent>
         </Dialog>
       </div>
@@ -155,7 +231,7 @@ export default function Campaigns() {
             <p className="text-sm text-muted-foreground mt-1 mb-4">
               Create your first marketing campaign to get started.
             </p>
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button onClick={() => setCreateOpen(true)} disabled={isCampaignLimitReached}>
               <Plus className="w-4 h-4 mr-2" />
               Create Campaign
             </Button>

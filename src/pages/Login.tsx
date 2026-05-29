@@ -10,8 +10,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { signInWithPopup } from "firebase/auth";
 import { auth, googleProvider } from "@/lib/firebase";
+import { Logo } from "@/components/Logo";
 import {
-  Sparkles,
   Mail,
   Lock,
   User,
@@ -20,12 +20,16 @@ import {
   ArrowRight,
   Chrome,
   Loader2,
+  Activity,
 } from "lucide-react";
 
 export default function Login() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<"login" | "register">("login");
   const [showPassword, setShowPassword] = useState(false);
+  const [firebaseError, setFirebaseError] = useState<string | null>(null);
+  const [diagnosticResult, setDiagnosticResult] = useState<any>(null);
+  const [runningDiagnostic, setRunningDiagnostic] = useState(false);
 
   // Login form state
   const [loginForm, setLoginForm] = useState({
@@ -65,6 +69,36 @@ export default function Login() {
     },
   });
 
+  const firebaseAuthMutation = trpc.auth.firebaseAuth.useMutation({
+    onSuccess: (data) => {
+      localStorage.setItem("auth_token", data.token);
+      toast.success("Welcome!");
+      setFirebaseError(null);
+      navigate("/dashboard");
+    },
+    onError: (err) => {
+      console.error("[Firebase Auth] Backend error:", err);
+      const msg = err.message || "Firebase authentication failed";
+      setFirebaseError(msg);
+      toast.error(msg);
+    },
+  });
+
+  async function runDiagnostic() {
+    setRunningDiagnostic(true);
+    setDiagnosticResult(null);
+    try {
+      const res = await fetch("/api/trpc/ping.firebaseStatus");
+      const json = await res.json();
+      console.log("[Diagnostic] Backend Firebase status:", json);
+      setDiagnosticResult(json.result?.data || json);
+    } catch (e: any) {
+      console.error("[Diagnostic] Failed:", e);
+      setDiagnosticResult({ status: "error", error: e.message });
+    }
+    setRunningDiagnostic(false);
+  }
+
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     if (!loginForm.usernameOrEmail || !loginForm.password) {
@@ -99,49 +133,97 @@ export default function Login() {
     });
   }
 
-  const firebaseAuthMutation = trpc.auth.firebaseAuth.useMutation({
-    onSuccess: (data) => {
-      localStorage.setItem("auth_token", data.token);
-      toast.success("Welcome!");
-      navigate("/dashboard");
-    },
-    onError: (err) => {
-      toast.error(err.message || "Firebase authentication failed");
-    },
-  });
-
   async function handleFirebaseGoogleAuth() {
+    setFirebaseError(null);
+    console.log("[Firebase Auth] Starting Google sign-in popup...");
+
     try {
       const result = await signInWithPopup(auth, googleProvider);
+      console.log("[Firebase Auth] Popup succeeded. User:", result.user.uid, result.user.email);
+
       const idToken = await result.user.getIdToken();
+      console.log("[Firebase Auth] ID token obtained (length:", idToken.length, ")");
+
       firebaseAuthMutation.mutate({ idToken });
     } catch (err: any) {
-      toast.error(err.message || "Google sign-in failed");
+      console.error("[Firebase Auth] Client-side error:", err);
+      console.error("[Firebase Auth] Error code:", err.code);
+      console.error("[Firebase Auth] Error message:", err.message);
+
+      let userMessage = err.message || "Google sign-in failed";
+
+      // Provide clearer messages for common Firebase Auth errors
+      if (err.code === "auth/popup-closed-by-user") {
+        userMessage = "Sign-in popup was closed. Please try again.";
+      } else if (err.code === "auth/popup-blocked") {
+        userMessage = "Popup was blocked by your browser. Please allow popups for this site.";
+      } else if (err.code === "auth/unauthorized-domain") {
+        userMessage = "This domain is not authorized for Firebase Auth. Please add it in your Firebase Console > Authentication > Settings > Authorized domains.";
+      } else if (err.code === "auth/operation-not-supported-in-this-environment") {
+        userMessage = "Google sign-in is not supported in this environment.";
+      } else if (err.code === "auth/cancelled-popup-request") {
+        userMessage = "Sign-in was cancelled. Please try again.";
+      } else if (err.code === "auth/account-exists-with-different-credential") {
+        userMessage = "An account already exists with the same email address but different sign-in credentials.";
+      } else if (err.code === "auth/network-request-failed") {
+        userMessage = "Network error. Please check your internet connection.";
+      }
+
+      setFirebaseError(userMessage);
+      toast.error(userMessage);
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-indigo-50/30 to-purple-50/30 dark:from-slate-950 dark:via-indigo-950/20 dark:to-purple-950/20 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC] p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
           <Link to="/" className="inline-flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-xl font-bold bg-gradient-to-r from-indigo-500 to-purple-600 bg-clip-text text-transparent">
-              AI Marketer
-            </span>
+            <Logo size="lg" />
           </Link>
           <p className="text-sm text-muted-foreground mt-2">
-            Your AI-powered marketing command center
+            Forge Strategy Into Sales
           </p>
         </div>
 
-        <Card className="border-0 shadow-xl shadow-indigo-500/5">
+        {/* Firebase Error Banner */}
+        {firebaseError && (
+          <div className="mb-4 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+            <p className="font-semibold mb-1">Google Sign-in Failed</p>
+            <p>{firebaseError}</p>
+            <div className="mt-3 flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                onClick={runDiagnostic}
+                disabled={runningDiagnostic}
+              >
+                <Activity className="w-3 h-3 mr-1" />
+                {runningDiagnostic ? "Running..." : "Run Diagnostic"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                onClick={() => setFirebaseError(null)}
+              >
+                Dismiss
+              </Button>
+            </div>
+            {diagnosticResult && (
+              <div className="mt-3 p-2 rounded bg-white/80 text-xs font-mono overflow-auto">
+                <pre>{JSON.stringify(diagnosticResult, null, 2)}</pre>
+              </div>
+            )}
+          </div>
+        )}
+
+        <Card className="border-0 shadow-xl shadow-[#0F172A]/5 rounded-[20px]">
           <CardContent className="p-6">
             <Tabs value={tab} onValueChange={(v) => setTab(v as "login" | "register")}>
-              <TabsList className="grid w-full grid-cols-2 mb-6">
+              <TabsList className="grid w-full grid-cols-2 mb-6 rounded-xl">
                 <TabsTrigger value="login">Login</TabsTrigger>
                 <TabsTrigger value="register">Register</TabsTrigger>
               </TabsList>
@@ -158,7 +240,7 @@ export default function Login() {
                       <Input
                         id="login-user"
                         placeholder="Enter username or email"
-                        className="pl-9"
+                        className="pl-9 rounded-xl"
                         value={loginForm.usernameOrEmail}
                         onChange={(e) =>
                           setLoginForm({ ...loginForm, usernameOrEmail: e.target.value })
@@ -177,7 +259,7 @@ export default function Login() {
                         id="login-password"
                         type={showPassword ? "text" : "password"}
                         placeholder="Enter password"
-                        className="pl-9 pr-10"
+                        className="pl-9 pr-10 rounded-xl"
                         value={loginForm.password}
                         onChange={(e) =>
                           setLoginForm({ ...loginForm, password: e.target.value })
@@ -214,7 +296,7 @@ export default function Login() {
 
                   <Button
                     type="submit"
-                    className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700"
+                    className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white rounded-xl"
                     disabled={loginMutation.isPending}
                   >
                     {loginMutation.isPending ? (
@@ -237,7 +319,7 @@ export default function Login() {
 
                 <Button
                   variant="outline"
-                  className="w-full"
+                  className="w-full rounded-xl"
                   onClick={handleFirebaseGoogleAuth}
                   disabled={firebaseAuthMutation.isPending}
                 >
@@ -262,7 +344,7 @@ export default function Login() {
                       <Input
                         id="reg-name"
                         placeholder="John Smith"
-                        className="pl-9"
+                        className="pl-9 rounded-xl"
                         value={registerForm.name}
                         onChange={(e) =>
                           setRegisterForm({ ...registerForm, name: e.target.value })
@@ -280,7 +362,7 @@ export default function Login() {
                       <Input
                         id="reg-username"
                         placeholder="johnsmith"
-                        className="pl-9"
+                        className="pl-9 rounded-xl"
                         value={registerForm.username}
                         onChange={(e) =>
                           setRegisterForm({ ...registerForm, username: e.target.value })
@@ -299,7 +381,7 @@ export default function Login() {
                         id="reg-email"
                         type="email"
                         placeholder="john@example.com"
-                        className="pl-9"
+                        className="pl-9 rounded-xl"
                         value={registerForm.email}
                         onChange={(e) =>
                           setRegisterForm({ ...registerForm, email: e.target.value })
@@ -318,7 +400,7 @@ export default function Login() {
                         id="reg-password"
                         type={showPassword ? "text" : "password"}
                         placeholder="Min 6 characters"
-                        className="pl-9 pr-10"
+                        className="pl-9 pr-10 rounded-xl"
                         value={registerForm.password}
                         onChange={(e) =>
                           setRegisterForm({ ...registerForm, password: e.target.value })
@@ -348,7 +430,7 @@ export default function Login() {
                         id="reg-confirm"
                         type="password"
                         placeholder="Confirm password"
-                        className="pl-9"
+                        className="pl-9 rounded-xl"
                         value={registerForm.confirmPassword}
                         onChange={(e) =>
                           setRegisterForm({ ...registerForm, confirmPassword: e.target.value })
@@ -359,7 +441,7 @@ export default function Login() {
 
                   <Button
                     type="submit"
-                    className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700"
+                    className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white rounded-xl"
                     disabled={registerMutation.isPending}
                   >
                     {registerMutation.isPending ? (
@@ -382,7 +464,7 @@ export default function Login() {
 
                 <Button
                   variant="outline"
-                  className="w-full"
+                  className="w-full rounded-xl"
                   onClick={handleFirebaseGoogleAuth}
                   disabled={firebaseAuthMutation.isPending}
                 >
@@ -398,7 +480,7 @@ export default function Login() {
                   Already have an account?{" "}
                   <button
                     onClick={() => setTab("login")}
-                    className="text-indigo-600 hover:underline font-medium"
+                    className="text-[#00D4FF] hover:underline font-medium"
                   >
                     Sign in
                   </button>

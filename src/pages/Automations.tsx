@@ -114,7 +114,7 @@ export default function Automations() {
         </div>
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700">
+            <Button className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90">
               <Plus className="w-4 h-4 mr-2" />
               New Workflow
             </Button>
@@ -180,7 +180,7 @@ export default function Automations() {
               </div>
               <Button
                 type="submit"
-                className="w-full bg-gradient-to-r from-indigo-500 to-purple-600"
+                className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                 disabled={createMutation.isPending}
               >
                 {createMutation.isPending ? "Creating..." : "Create Workflow"}
