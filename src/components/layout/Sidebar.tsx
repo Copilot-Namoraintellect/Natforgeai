@@ -55,17 +55,7 @@ export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
     >
       {/* Logo */}
       <div className="flex items-center justify-between h-16 px-4 border-b border-[#1E293B] shrink-0">
-        <Link to="/dashboard" className="flex items-center gap-2 overflow-hidden">
-          <div className="shrink-0">
-            <Logo showText={false} size="md" />
-          </div>
-          {!collapsed && (
-            <span className="font-bold text-lg truncate whitespace-nowrap">
-              <span className="text-white">NatForge</span>
-              <span className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] bg-clip-text text-transparent">AI</span>
-            </span>
-          )}
-        </Link>
+        <Logo size="md" dark />
         <Button
           variant="ghost"
           size="icon"

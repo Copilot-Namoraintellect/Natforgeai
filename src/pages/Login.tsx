@@ -179,9 +179,7 @@ export default function Login() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <Link to="/" className="inline-flex items-center gap-2.5">
-            <Logo size="lg" />
-          </Link>
+          <Logo size="lg" className="justify-center" />
           <p className="text-sm text-muted-foreground mt-2">
             Forge Strategy Into Sales
           </p>

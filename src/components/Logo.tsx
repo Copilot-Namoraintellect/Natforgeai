@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { cn } from "@/lib/utils";
 
 interface LogoProps {
@@ -5,14 +6,15 @@ interface LogoProps {
   showText?: boolean;
   size?: "sm" | "md" | "lg";
   dark?: boolean;
+  to?: string;
 }
 
-export function Logo({ className, showText = true, size = "md", dark = false }: LogoProps) {
+export function Logo({ className, showText = true, size = "md", dark = false, to = "/" }: LogoProps) {
   const sizes = { sm: 24, md: 32, lg: 40 };
   const s = sizes[size];
 
   return (
-    <div className={cn("flex items-center gap-2.5", className)}>
+    <Link to={to} className={cn("flex items-center gap-2.5", className)}>
       <svg
         width={s}
         height={s}
@@ -45,6 +47,6 @@ export function Logo({ className, showText = true, size = "md", dark = false }: 
           <span className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] bg-clip-text text-transparent">AI</span>
         </span>
       )}
-    </div>
+    </Link>
   );
 }
