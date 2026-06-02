@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, ChevronLeft, ChevronRight, Clock, Trash2 } from "lucide-react";
+import { Plus, ChevronLeft, ChevronRight, Clock, Trash2, Sparkles, Shield, RotateCcw, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
 const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -43,6 +43,7 @@ export default function CalendarPage() {
   const { data: schedules, isLoading } = trpc.schedule.list.useQuery({
     month: monthStr,
   });
+  const { data: publishingQueue } = trpc.publishing.getPublishingQueue.useQuery();
 
   const createMutation = trpc.schedule.create.useMutation({
     onSuccess: () => {
@@ -75,6 +76,17 @@ export default function CalendarPage() {
         ? s.scheduledDate.toISOString().slice(0, 10)
         : String(s.scheduledDate).slice(0, 10);
       return sDate === dateStr;
+    }) ?? [];
+  };
+
+  const getQueueForDate = (day: number) => {
+    const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    return publishingQueue?.filter((q) => {
+      if (!q.scheduledAt) return false;
+      const qDate = q.scheduledAt instanceof Date
+        ? q.scheduledAt.toISOString().slice(0, 10)
+        : String(q.scheduledAt).slice(0, 10);
+      return qDate === dateStr;
     }) ?? [];
   };
 
@@ -240,6 +252,7 @@ export default function CalendarPage() {
             {Array.from({ length: daysInMonth }).map((_, i) => {
               const day = i + 1;
               const daySchedules = getSchedulesForDate(day);
+              const dayQueue = getQueueForDate(day);
               const todayClass = isToday(day)
                 ? "ring-2 ring-[#00D4FF] ring-offset-1"
                 : "";
@@ -259,7 +272,7 @@ export default function CalendarPage() {
                       {day}
                     </span>
                     <div className="mt-0.5 space-y-0.5">
-                      {daySchedules.slice(0, 3).map((s) => (
+                      {daySchedules.slice(0, 2).map((s) => (
                         <div
                           key={s.id}
                           className={`h-1.5 rounded-full ${
@@ -269,9 +282,22 @@ export default function CalendarPage() {
                           title={s.title}
                         />
                       ))}
-                      {daySchedules.length > 3 && (
+                      {dayQueue.slice(0, 2).map((q) => (
+                        <div
+                          key={`q-${q.id}`}
+                          className={`h-1.5 rounded-full ${
+                            q.status === "published"
+                              ? "bg-emerald-400"
+                              : q.status === "approved"
+                              ? "bg-purple-400"
+                              : "bg-amber-400"
+                          }`}
+                          title={`AI Scheduled: ${q.platform}`}
+                        />
+                      ))}
+                      {(daySchedules.length + dayQueue.length) > 3 && (
                         <p className="text-[9px] text-muted-foreground">
-                          +{daySchedules.length - 3} more
+                          +{(daySchedules.length + dayQueue.length) - 3} more
                         </p>
                       )}
                     </div>
@@ -334,6 +360,85 @@ export default function CalendarPage() {
                 </div>
               </div>
             ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* AI Scheduled Posts */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-purple-400" />
+            AI Scheduled Posts
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {!publishingQueue || publishingQueue.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-6">
+              No AI-scheduled posts yet. Approve a campaign launch to generate a publishing schedule.
+            </p>
+          ) : (
+            publishingQueue
+              .filter((q) => q.status !== "published")
+              .sort((a, b) => {
+                const dateA = a.scheduledAt ? new Date(a.scheduledAt).getTime() : 0;
+                const dateB = b.scheduledAt ? new Date(b.scheduledAt).getTime() : 0;
+                return dateA - dateB;
+              })
+              .slice(0, 10)
+              .map((q) => {
+                const statusColor =
+                  q.status === "approved" ? "bg-purple-400" :
+                  q.status === "pending_approval" ? "bg-amber-400" :
+                  q.status === "safety_blocked" ? "bg-red-400" :
+                  q.status === "retrying" ? "bg-blue-400" :
+                  q.status === "failed" ? "bg-red-500" :
+                  "bg-gray-300";
+                return (
+                  <div
+                    key={q.id}
+                    className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-3 h-3 rounded-full ${statusColor}`} />
+                      <div>
+                        <p className="text-sm font-medium">{q.platform}</p>
+                        <p className="text-xs text-muted-foreground capitalize">
+                          {q.status.replace(/_/g, " ")}
+                        </p>
+                        {q.safetyStatus && q.safetyStatus !== "low" && (
+                          <p className={`text-[10px] flex items-center gap-0.5 mt-0.5 ${
+                            q.safetyStatus === "high" ? "text-red-400" : "text-amber-400"
+                          }`}>
+                            <Shield className="w-2.5 h-2.5" />
+                            Safety: {q.safetyStatus}
+                          </p>
+                        )}
+                        {q.retryCount > 0 && q.status === "retrying" && (
+                          <p className="text-[10px] text-blue-400 flex items-center gap-0.5 mt-0.5">
+                            <RotateCcw className="w-2.5 h-2.5" />
+                            Retry {q.retryCount}/{q.maxRetries}
+                          </p>
+                        )}
+                        {q.lastError && q.status === "failed" && (
+                          <p className="text-[10px] text-red-400 flex items-center gap-0.5 mt-0.5">
+                            <XCircle className="w-2.5 h-2.5" />
+                            {q.lastError.substring(0, 60)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {q.scheduledAt
+                          ? new Date(q.scheduledAt).toLocaleDateString()
+                          : "Not scheduled"}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
           )}
         </CardContent>
       </Card>

@@ -55,6 +55,24 @@ export default function Campaigns() {
       toast.success("Campaign deleted!");
     },
   });
+  const updateMutation = trpc.campaign.update.useMutation({
+    onSuccess: () => {
+      utils.campaign.list.invalidate();
+      toast.success("Campaign updated!");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to update campaign");
+    },
+  });
+  const runCreativeAgent = trpc.agent.runCreativeAgent.useMutation({
+    onSuccess: () => {
+      toast.success("Creative generation started!");
+      utils.campaign.list.invalidate();
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to start creative generation");
+    },
+  });
 
   const filtered = campaigns?.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase())
@@ -65,6 +83,24 @@ export default function Campaigns() {
     active: "bg-emerald-500/10 text-emerald-600",
     paused: "bg-orange-500/10 text-orange-600",
     completed: "bg-blue-500/10 text-blue-600",
+  };
+
+  const workflowStateLabels: Record<string, { label: string; color: string; step: number }> = {
+    business_onboarding: { label: "Onboarding", color: "bg-amber-500/10 text-amber-600", step: 1 },
+    strategy_pending: { label: "Strategy Pending", color: "bg-blue-500/10 text-blue-600", step: 2 },
+    strategy_generated: { label: "Strategy Ready", color: "bg-purple-500/10 text-purple-600", step: 3 },
+    strategy_approved: { label: "Strategy Approved", color: "bg-emerald-500/10 text-emerald-600", step: 4 },
+    creatives_generating: { label: "Generating Creatives", color: "bg-blue-500/10 text-blue-600", step: 5 },
+    creatives_ready: { label: "Creatives Ready", color: "bg-purple-500/10 text-purple-600", step: 6 },
+    audience_generating: { label: "Finding Audience", color: "bg-blue-500/10 text-blue-600", step: 7 },
+    audience_ready: { label: "Audience Ready", color: "bg-purple-500/10 text-purple-600", step: 8 },
+    schedule_generated: { label: "Schedule Ready", color: "bg-cyan-500/10 text-cyan-600", step: 9 },
+    launch_approval_required: { label: "Awaiting Approval", color: "bg-amber-500/10 text-amber-600", step: 10 },
+    campaign_live: { label: "Campaign Live", color: "bg-emerald-500/10 text-emerald-600", step: 11 },
+    engagement_active: { label: "Engagement Active", color: "bg-pink-500/10 text-pink-600", step: 12 },
+    leads_converting: { label: "Leads Converting", color: "bg-orange-500/10 text-orange-600", step: 13 },
+    optimisation_active: { label: "Optimising", color: "bg-indigo-500/10 text-indigo-600", step: 14 },
+    completed: { label: "Completed", color: "bg-gray-500/10 text-gray-600", step: 15 },
   };
 
   function handleCreate(e: React.FormEvent<HTMLFormElement>) {
@@ -243,12 +279,22 @@ export default function Campaigns() {
             <Card key={camp.id} className="group hover:shadow-lg transition-all">
               <CardContent className="p-5">
                 <div className="flex items-start justify-between mb-3">
-                  <Badge
-                    variant="secondary"
-                    className={statusColors[camp.status] || "bg-muted"}
-                  >
-                    {camp.status}
-                  </Badge>
+                  <div className="flex gap-1.5 flex-wrap">
+                    <Badge
+                      variant="secondary"
+                      className={statusColors[camp.status] || "bg-muted"}
+                    >
+                      {camp.status}
+                    </Badge>
+                    {camp.aiGenerated && camp.workflowState && (
+                      <Badge
+                        variant="secondary"
+                        className={workflowStateLabels[camp.workflowState]?.color || "bg-muted"}
+                      >
+                        {workflowStateLabels[camp.workflowState]?.label || camp.workflowState}
+                      </Badge>
+                    )}
+                  </div>
                   <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Button
                       variant="ghost"
@@ -272,7 +318,19 @@ export default function Campaigns() {
                 <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
                   {camp.goal}
                 </p>
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                {camp.aiGenerated && camp.workflowState && (
+                  <div className="mt-3">
+                    <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+                      <span>Workflow</span>
+                      <span>{Math.round((workflowStateLabels[camp.workflowState]?.step || 1) / 15 * 100)}%</span>
+                    </div>
+                    <Progress
+                      value={(workflowStateLabels[camp.workflowState]?.step || 1) / 15 * 100}
+                      className="h-1"
+                    />
+                  </div>
+                )}
+                <div className="flex items-center gap-4 text-xs text-muted-foreground mt-3">
                   {camp.platforms && (
                     <span className="flex items-center gap-1">
                       <Target className="w-3 h-3" />
@@ -300,7 +358,7 @@ export default function Campaigns() {
               <DialogTitle>{viewCampaign.name}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 mt-4">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Badge className={statusColors[viewCampaign.status] || "bg-muted"}>
                   {viewCampaign.status}
                 </Badge>
@@ -310,7 +368,21 @@ export default function Campaigns() {
                     AI Generated
                   </Badge>
                 )}
+                {viewCampaign.workflowState && (
+                  <Badge className={workflowStateLabels[viewCampaign.workflowState]?.color || "bg-muted"}>
+                    {workflowStateLabels[viewCampaign.workflowState]?.label || viewCampaign.workflowState}
+                  </Badge>
+                )}
               </div>
+              {viewCampaign.aiGenerated && viewCampaign.workflowState && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Workflow Progress</span>
+                    <span>{Math.round((workflowStateLabels[viewCampaign.workflowState]?.step || 1) / 15 * 100)}%</span>
+                  </div>
+                  <Progress value={(workflowStateLabels[viewCampaign.workflowState]?.step || 1) / 15 * 100} className="h-2" />
+                </div>
+              )}
               <div>
                 <h4 className="text-sm font-semibold mb-1">Goal</h4>
                 <p className="text-sm text-muted-foreground">{viewCampaign.goal}</p>
@@ -327,10 +399,10 @@ export default function Campaigns() {
                   <p className="text-sm text-muted-foreground">{viewCampaign.coreMessage}</p>
                 </div>
               )}
-              {viewCampaign.strategy && (
+              {viewCampaign.strategyDocument && (
                 <div>
-                  <h4 className="text-sm font-semibold mb-1">Strategy</h4>
-                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{viewCampaign.strategy}</p>
+                  <h4 className="text-sm font-semibold mb-1">Strategy Document</h4>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{viewCampaign.strategyDocument}</p>
                 </div>
               )}
               {viewCampaign.personas && (
@@ -341,21 +413,79 @@ export default function Campaigns() {
                   </pre>
                 </div>
               )}
-              <div className="flex gap-3 pt-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    const newStatus =
-                      viewCampaign.status === "active" ? "paused" : "active";
-                    trpc.campaign.update.useMutation().mutate({
-                      id: viewCampaign.id,
-                      status: newStatus as any,
-                    });
-                    setViewCampaign({ ...viewCampaign, status: newStatus });
-                  }}
-                >
-                  {viewCampaign.status === "active" ? "Pause" : "Activate"}
-                </Button>
+              {viewCampaign.funnelStages && (
+                <div>
+                  <h4 className="text-sm font-semibold mb-1">Funnel Stages</h4>
+                  <pre className="text-xs text-muted-foreground bg-muted p-3 rounded-lg overflow-auto">
+                    {JSON.stringify(viewCampaign.funnelStages, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {viewCampaign.offers && (
+                <div>
+                  <h4 className="text-sm font-semibold mb-1">Offers</h4>
+                  <pre className="text-xs text-muted-foreground bg-muted p-3 rounded-lg overflow-auto">
+                    {JSON.stringify(viewCampaign.offers, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {viewCampaign.ctaStrategy && (
+                <div>
+                  <h4 className="text-sm font-semibold mb-1">CTA Strategy</h4>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{viewCampaign.ctaStrategy}</p>
+                </div>
+              )}
+              <div className="flex gap-3 pt-2 flex-wrap">
+                {!viewCampaign.aiGenerated && (
+                  <Button
+                    variant="outline"
+                    disabled={updateMutation.isPending}
+                    onClick={() => {
+                      const newStatus =
+                        viewCampaign.status === "active" ? "paused" : "active";
+                      updateMutation.mutate({
+                        id: viewCampaign.id,
+                        status: newStatus as any,
+                      });
+                      setViewCampaign({ ...viewCampaign, status: newStatus });
+                    }}
+                  >
+                    {viewCampaign.status === "active" ? "Pause" : "Activate"}
+                  </Button>
+                )}
+                {viewCampaign.workflowState === "strategy_generated" && (
+                  <Button
+                    className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
+                    onClick={() => {
+                      updateMutation.mutate({
+                        id: viewCampaign.id,
+                        status: "active",
+                        workflowState: "strategy_approved",
+                      } as any);
+                      setViewCampaign({ ...viewCampaign, status: "active", workflowState: "strategy_approved" });
+                      runCreativeAgent.mutate({ campaignId: viewCampaign.id });
+                      toast.success("Strategy approved! Generating creative assets...");
+                    }}
+                  >
+                    Approve Strategy
+                  </Button>
+                )}
+                {viewCampaign.workflowState === "launch_approval_required" && (
+                  <Button
+                    className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
+                    onClick={() => {
+                      updateMutation.mutate({
+                        id: viewCampaign.id,
+                        status: "active",
+                        workflowState: "campaign_live",
+                      } as any);
+                      setViewCampaign({ ...viewCampaign, status: "active", workflowState: "campaign_live" });
+                      toast.success("Campaign launched!");
+                    }}
+                  >
+                    Approve Launch
+                  </Button>
+                )}
               </div>
             </div>
           </DialogContent>

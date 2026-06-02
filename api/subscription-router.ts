@@ -4,6 +4,7 @@ import { getDb } from "./queries/connection";
 import { subscriptions, subscriptionTiers } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { getUserTier, getUserUsage, ensureFreeSubscription } from "./lib/subscription";
+import { allocateMonthlyCredits } from "./lib/billing/credit-engine";
 
 export const subscriptionRouter = createRouter({
   // List all available tiers
@@ -87,7 +88,14 @@ export const subscriptionRouter = createRouter({
         paymentMethod: (input.paymentMethod as any) || "manual",
       });
 
-      return { id: Number(result.insertId), tier, periodEnd };
+      const subId = Number(result.insertId);
+
+      // Allocate monthly credits for the tier
+      if (tier.monthlyCredits > 0) {
+        await allocateMonthlyCredits(ctx.user.id);
+      }
+
+      return { id: subId, tier, periodEnd };
     }),
 
   // Cancel subscription

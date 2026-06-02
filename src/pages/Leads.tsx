@@ -32,6 +32,10 @@ import {
   Trash2,
   Pencil,
   Check,
+  Sparkles,
+  Send,
+  FileText,
+  Calendar,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -83,6 +87,12 @@ export default function Leads() {
       utils.lead.list.invalidate();
       toast.success("Lead removed!");
     },
+  });
+  const salesAgentMutation = trpc.agent.runSalesAgent.useMutation({
+    onSuccess: () => {
+      toast.success("AI sales action completed!");
+    },
+    onError: (err) => toast.error(err.message || "Sales agent failed"),
   });
 
   const filtered = leads?.filter((l) =>
@@ -341,16 +351,30 @@ export default function Leads() {
                   )}
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <Badge
-                    variant="secondary"
-                    className={statusColors[lead.status] || "bg-muted"}
-                  >
-                    {lead.status}
-                  </Badge>
-                  <div className="flex items-center gap-1">
-                    <Star className="w-3 h-3 text-amber-500" />
-                    <span className="text-xs font-medium">{lead.score}</span>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Badge
+                      variant="secondary"
+                      className={statusColors[lead.status] || "bg-muted"}
+                    >
+                      {lead.status}
+                    </Badge>
+                    <div className="flex items-center gap-1">
+                      <Star className="w-3 h-3 text-amber-500" />
+                      <span className="text-xs font-medium">{lead.score}/100</span>
+                    </div>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-1.5">
+                    <div
+                      className={`h-1.5 rounded-full ${
+                        (lead.score || 0) >= 80
+                          ? "bg-emerald-500"
+                          : (lead.score || 0) >= 50
+                          ? "bg-amber-500"
+                          : "bg-red-500"
+                      }`}
+                      style={{ width: `${lead.score || 0}%` }}
+                    />
                   </div>
                 </div>
               </CardContent>
@@ -416,6 +440,64 @@ export default function Leads() {
                 {updateMutation.isPending ? "Saving..." : "Update Lead"}
               </Button>
             </form>
+
+            {/* AI Sales Actions */}
+            <div className="mt-4 pt-4 border-t">
+              <p className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-purple-400" />
+                AI Sales Actions
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                  onClick={() =>
+                    salesAgentMutation.mutate({
+                      campaignId: editLead.campaignId || 0,
+                      leadId: editLead.id,
+                      action: "follow_up",
+                    })
+                  }
+                  disabled={salesAgentMutation.isPending}
+                >
+                  <Send className="w-3.5 h-3.5 mr-1" />
+                  Follow-up
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                  onClick={() =>
+                    salesAgentMutation.mutate({
+                      campaignId: editLead.campaignId || 0,
+                      leadId: editLead.id,
+                      action: "proposal",
+                    })
+                  }
+                  disabled={salesAgentMutation.isPending}
+                >
+                  <FileText className="w-3.5 h-3.5 mr-1" />
+                  Proposal
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                  onClick={() =>
+                    salesAgentMutation.mutate({
+                      campaignId: editLead.campaignId || 0,
+                      leadId: editLead.id,
+                      action: "meeting",
+                    })
+                  }
+                  disabled={salesAgentMutation.isPending}
+                >
+                  <Calendar className="w-3.5 h-3.5 mr-1" />
+                  Meeting
+                </Button>
+              </div>
+            </div>
           </DialogContent>
         </Dialog>
       )}

@@ -128,6 +128,16 @@ async function main() {
       aiGeneration: false,
       analytics: false,
       teamMembers: 1,
+      monthlyCredits: 50,
+      strategyAgent: false,
+      creativeAgent: false,
+      audienceAgent: false,
+      distributionAgent: false,
+      engagementAgent: false,
+      salesAgent: false,
+      optimisationAgent: false,
+      approvalCentre: false,
+      autonomousMode: false,
       features: JSON.stringify([
         "2 active campaigns",
         "5 successful results",
@@ -153,6 +163,16 @@ async function main() {
       aiGeneration: true,
       analytics: true,
       teamMembers: 2,
+      monthlyCredits: 500,
+      strategyAgent: true,
+      creativeAgent: true,
+      audienceAgent: false,
+      distributionAgent: true,
+      engagementAgent: false,
+      salesAgent: false,
+      optimisationAgent: false,
+      approvalCentre: false,
+      autonomousMode: false,
       features: JSON.stringify([
         "10 active campaigns",
         "500 leads",
@@ -180,6 +200,16 @@ async function main() {
       aiGeneration: true,
       analytics: true,
       teamMembers: 5,
+      monthlyCredits: 2500,
+      strategyAgent: true,
+      creativeAgent: true,
+      audienceAgent: true,
+      distributionAgent: true,
+      engagementAgent: true,
+      salesAgent: true,
+      optimisationAgent: true,
+      approvalCentre: true,
+      autonomousMode: false,
       features: JSON.stringify([
         "50 active campaigns",
         "2,000 leads",
@@ -209,6 +239,16 @@ async function main() {
       aiGeneration: true,
       analytics: true,
       teamMembers: 20,
+      monthlyCredits: 10000,
+      strategyAgent: true,
+      creativeAgent: true,
+      audienceAgent: true,
+      distributionAgent: true,
+      engagementAgent: true,
+      salesAgent: true,
+      optimisationAgent: true,
+      approvalCentre: true,
+      autonomousMode: true,
       features: JSON.stringify([
         "Unlimited campaigns",
         "Unlimited leads",
@@ -239,8 +279,8 @@ async function main() {
       if (!rows || rows.length === 0) {
         await db.execute(`
           INSERT INTO subscription_tiers 
-          (name, slug, description, priceUsd, billingCycle, maxCampaigns, maxLeads, maxContent, maxAutomations, aiGeneration, analytics, teamMembers, features, isActive, isDefault, displayOrder)
-          VALUES ('${tier.name}', '${tier.slug}', '${tier.description}', ${tier.priceUsd}, '${tier.billingCycle}', ${tier.maxCampaigns}, ${tier.maxLeads}, ${tier.maxContent}, ${tier.maxAutomations}, ${tier.aiGeneration}, ${tier.analytics}, ${tier.teamMembers}, '${tier.features}', ${tier.isActive}, ${tier.isDefault}, ${tier.displayOrder})
+          (name, slug, description, priceUsd, billingCycle, maxCampaigns, maxLeads, maxContent, maxAutomations, maxResults, aiGeneration, analytics, teamMembers, monthlyCredits, strategyAgent, creativeAgent, audienceAgent, distributionAgent, engagementAgent, salesAgent, optimisationAgent, approvalCentre, autonomousMode, features, isActive, isDefault, displayOrder)
+          VALUES ('${tier.name}', '${tier.slug}', '${tier.description}', ${tier.priceUsd}, '${tier.billingCycle}', ${tier.maxCampaigns}, ${tier.maxLeads}, ${tier.maxContent}, ${tier.maxAutomations}, ${tier.maxResults ?? 5}, ${tier.aiGeneration}, ${tier.analytics}, ${tier.teamMembers}, ${tier.monthlyCredits ?? 0}, ${tier.strategyAgent ?? false}, ${tier.creativeAgent ?? false}, ${tier.audienceAgent ?? false}, ${tier.distributionAgent ?? false}, ${tier.engagementAgent ?? false}, ${tier.salesAgent ?? false}, ${tier.optimisationAgent ?? false}, ${tier.approvalCentre ?? false}, ${tier.autonomousMode ?? false}, '${tier.features}', ${tier.isActive}, ${tier.isDefault}, ${tier.displayOrder})
         `);
         console.log(`Created tier: ${tier.name}`);
       } else {

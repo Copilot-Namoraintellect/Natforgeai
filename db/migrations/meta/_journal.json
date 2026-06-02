@@ -8,6 +8,20 @@
       "when": 1779900649982,
       "tag": "0000_vengeful_triathlon",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1780324454630,
+      "tag": "0001_parallel_tinkerer",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1780324500000,
+      "tag": "0002_hardening_sprint",
+      "breakpoints": true
     }
   ]
 }

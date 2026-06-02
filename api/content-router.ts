@@ -16,6 +16,7 @@ export const contentRouter = createRouter({
             .enum(["draft", "scheduled", "published", "archived"])
             .optional(),
           campaignId: z.number().optional(),
+          aiGenerated: z.boolean().optional(),
         })
         .optional()
     )
@@ -33,6 +34,8 @@ export const contentRouter = createRouter({
         if (input?.type && post.type !== input.type) return false;
         if (input?.status && post.status !== input.status) return false;
         if (input?.campaignId && post.campaignId !== input.campaignId)
+          return false;
+        if (input?.aiGenerated !== undefined && post.aiGenerated !== input.aiGenerated)
           return false;
         return true;
       });

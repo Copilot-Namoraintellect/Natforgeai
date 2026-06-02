@@ -1,8 +1,11 @@
 import { z } from "zod";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { generatedImages } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { checkCredits, deductCredits, recordAiUsage } from "./lib/billing/credit-engine";
+import { calculateFixedCost } from "./lib/billing/cost-tracker";
+import { TRPCError } from "@trpc/server";
 
 export const imageRouter = createRouter({
   list: authedQuery
@@ -30,7 +33,7 @@ export const imageRouter = createRouter({
       });
     }),
 
-  create: authedQuery
+  create: aiActionQuery
     .input(
       z.object({
         prompt: z.string().min(1),
@@ -42,6 +45,26 @@ export const imageRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
+
+      // Pre-flight credit check
+      const IMAGE_COST = 2; // 2 credits per image generation
+      const preCheck = await checkCredits(ctx.user.id, IMAGE_COST);
+      if (!preCheck.hasCredits) {
+        throw new TRPCError({
+          code: "PAYMENT_REQUIRED",
+          message: `Insufficient credits. You have ${preCheck.balance} credits. Image generation requires ${IMAGE_COST} credits.`,
+        });
+      }
+
+      // Deduct credits
+      await deductCredits({
+        userId: ctx.user.id,
+        amount: IMAGE_COST,
+        type: "image_generation",
+        description: "AI image generation",
+        metadata: { prompt: input.prompt, campaignId: input.campaignId },
+      });
+
       const [img] = await db.insert(generatedImages).values({
         userId: ctx.user.id,
         campaignId: input.campaignId,
@@ -52,7 +75,25 @@ export const imageRouter = createRouter({
         style: input.style,
         status: "pending",
       });
-      return { id: Number(img.insertId), success: true };
+
+      const imageId = Number(img.insertId);
+
+      // Record AI usage for cost tracking
+      const { actualCostUsdMicro, estimatedCostUsdMicro } = calculateFixedCost("estimated-image", 1);
+      await recordAiUsage({
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+        agentType: "image_generation",
+        model: "dall-e-3",
+        promptTokens: 500,
+        completionTokens: 100,
+        actualCostUsdMicro,
+        estimatedCostUsdMicro,
+        creditsDeducted: IMAGE_COST,
+        metadata: { imageId, prompt: input.prompt },
+      });
+
+      return { id: imageId, success: true };
     }),
 
   update: authedQuery

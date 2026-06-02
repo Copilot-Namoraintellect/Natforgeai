@@ -15,4 +15,17 @@ export const env = {
   databaseUrl: required("DATABASE_URL"),
   firebaseServiceAccount: required("FIREBASE_SERVICE_ACCOUNT"),
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
+  openaiApiKey: process.env.OPENAI_API_KEY ?? "",
+  tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY ?? "",
+  smtpHost: process.env.SMTP_HOST ?? "",
+  smtpPort: parseInt(process.env.SMTP_PORT || "587"),
+  smtpUser: process.env.SMTP_USER ?? "",
+  smtpPass: process.env.SMTP_PASS ?? "",
+  sendgridApiKey: process.env.SENDGRID_API_KEY ?? "",
+  redisUrl: process.env.REDIS_URL ?? "",
 };
+
+// Validate Redis in production
+if (env.isProduction && !env.redisUrl) {
+  throw new Error("Missing required environment variable: REDIS_URL");
+}

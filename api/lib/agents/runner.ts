@@ -1,0 +1,171 @@
+import { generateObject } from "ai";
+import { z } from "zod";
+import { defaultModel } from "./openai";
+import { getDb } from "../../queries/connection";
+import { agentRuns } from "@db/schema";
+import { eq } from "drizzle-orm";
+import { deductCredits, recordAiUsage, checkCredits } from "../billing/credit-engine";
+import { getEstimatedAgentCost, calculateTokenCost } from "../billing/cost-tracker";
+import { enforceCostControl } from "../billing/cost-control";
+import { createAlert } from "../alerts";
+import { TRPCError } from "@trpc/server";
+
+export type AgentType =
+  | "strategy"
+  | "creative"
+  | "audience"
+  | "distribution"
+  | "engagement"
+  | "sales"
+  | "optimisation";
+
+export interface AgentRunOptions<TOutput> {
+  userId: number;
+  campaignId?: number;
+  agentType: AgentType;
+  prompt: string;
+  schema: z.ZodSchema<TOutput>;
+  system?: string;
+  skipBilling?: boolean;
+}
+
+export interface AgentRunResult<TOutput> {
+  runId: number;
+  output: TOutput;
+}
+
+export async function runAgent<TOutput>({
+  userId,
+  campaignId,
+  agentType,
+  prompt,
+  schema,
+  system,
+  skipBilling,
+}: AgentRunOptions<TOutput>): Promise<AgentRunResult<TOutput>> {
+  const db = getDb();
+
+  // Pre-flight billing check with cost control enforcement
+  let creditsDeducted = 0;
+  if (!skipBilling) {
+    const estimatedCost = getEstimatedAgentCost(agentType);
+
+    // Enforce daily/monthly limits
+    const costControl = await enforceCostControl(userId, estimatedCost);
+    if (!costControl.allowed) {
+      throw new TRPCError({
+        code: "PAYMENT_REQUIRED",
+        message: costControl.reason || `Insufficient credits.`,
+      });
+    }
+
+    const preCheck = await checkCredits(userId, estimatedCost);
+    if (!preCheck.hasCredits) {
+      throw new TRPCError({
+        code: "PAYMENT_REQUIRED",
+        message: `Insufficient credits. You have ${preCheck.balance} credits. This operation requires ${estimatedCost} credits. Upgrade your plan or purchase more credits.`,
+      });
+    }
+    await deductCredits({
+      userId,
+      amount: estimatedCost,
+      type: "agent_deduction",
+      description: `${agentType} agent execution`,
+      metadata: { agentType, campaignId, estimatedCost },
+    });
+    creditsDeducted = estimatedCost;
+  }
+
+  // Create agent run record
+  const [insertResult] = await db.insert(agentRuns).values({
+    userId,
+    campaignId: campaignId ?? null,
+    agentType,
+    status: "running",
+    input: { prompt, system },
+    startedAt: new Date(),
+  });
+
+  const runId = Number(insertResult.insertId);
+
+  try {
+    const result = await generateObject({
+      model: defaultModel,
+      system:
+        system ??
+        "You are an expert marketing AI agent. Respond with structured, actionable output.",
+      prompt,
+      schema,
+    });
+
+    const object = result.object;
+    const usage = (result as any).usage;
+
+    const promptTokens = usage?.promptTokens ?? 0;
+    const completionTokens = usage?.completionTokens ?? 0;
+
+    // Calculate actual cost
+    const { actualCostUsdMicro, estimatedCostUsdMicro } = calculateTokenCost(
+      defaultModel as any,
+      promptTokens,
+      completionTokens
+    );
+
+    // Record AI usage
+    if (!skipBilling) {
+      await recordAiUsage({
+        userId,
+        campaignId,
+        agentType,
+        model: "gpt-4o-mini",
+        promptTokens,
+        completionTokens,
+        actualCostUsdMicro,
+        estimatedCostUsdMicro,
+        creditsDeducted,
+        metadata: { runId },
+      });
+    }
+
+    // Update run as completed
+    await db
+      .update(agentRuns)
+      .set({
+        status: "completed",
+        output: object as any,
+        completedAt: new Date(),
+      })
+      .where(eq(agentRuns.id, runId));
+
+    return { runId, output: object };
+  } catch (error: any) {
+    // Update run as failed
+    await db
+      .update(agentRuns)
+      .set({
+        status: "failed",
+        error: error.message || String(error),
+        completedAt: new Date(),
+      })
+      .where(eq(agentRuns.id, runId));
+
+    // Create alert for OpenAI/provider failures
+    const isProviderError =
+      error.message?.includes("OpenAI") ||
+      error.message?.includes("fetch") ||
+      error.message?.includes("timeout") ||
+      error.message?.includes("ECONNREFUSED") ||
+      error.statusCode >= 500;
+
+    if (isProviderError) {
+      await createAlert({
+        severity: "critical",
+        category: "openai",
+        message: `AI provider error: ${error.message}`,
+        details: { agentType, runId, userId },
+      }).catch(() => {});
+    }
+
+    throw error;
+  }
+}

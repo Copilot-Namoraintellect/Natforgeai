@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router'
+import { Routes, Route, Navigate } from 'react-router'
 import { Suspense, lazy } from 'react'
 import { AppLayout } from './components/layout/AppLayout'
 import Home from './pages/Home'
@@ -6,7 +6,7 @@ import Login from './pages/Login'
 import Pricing from './pages/Pricing'
 import NotFound from './pages/NotFound'
 
-const Dashboard = lazy(() => import('./pages/Dashboard'))
+const MissionControl = lazy(() => import('./pages/MissionControl'))
 const Campaigns = lazy(() => import('./pages/Campaigns'))
 const ContentStudio = lazy(() => import('./pages/ContentStudio'))
 const Calendar = lazy(() => import('./pages/Calendar'))
@@ -17,6 +17,14 @@ const Analytics = lazy(() => import('./pages/Analytics'))
 const Settings = lazy(() => import('./pages/Settings'))
 const Admin = lazy(() => import('./pages/Admin'))
 const Banking = lazy(() => import('./pages/Banking'))
+const Onboarding = lazy(() => import('./pages/Onboarding'))
+const ApprovalCentre = lazy(() => import('./pages/ApprovalCentre'))
+const AgentActivity = lazy(() => import('./pages/AgentActivity'))
+const Integrations = lazy(() => import('./pages/Integrations'))
+const AutonomousSettings = lazy(() => import('./pages/AutonomousSettings'))
+const Credits = lazy(() => import('./pages/Credits'))
+const SystemHealth = lazy(() => import('./pages/SystemHealth'))
+const AdminAlerts = lazy(() => import('./pages/AdminAlerts'))
 
 export default function App() {
   return (
@@ -25,7 +33,8 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/pricing" element={<Pricing />} />
       <Route element={<AppLayout />}>
-        <Route path="/dashboard" element={<Suspense fallback={<PageLoader />}><Dashboard /></Suspense>} />
+        <Route path="/dashboard" element={<Suspense fallback={<PageLoader />}><Navigate to="/mission-control" replace /></Suspense>} />
+        <Route path="/mission-control" element={<Suspense fallback={<PageLoader />}><MissionControl /></Suspense>} />
         <Route path="/campaigns" element={<Suspense fallback={<PageLoader />}><Campaigns /></Suspense>} />
         <Route path="/content" element={<Suspense fallback={<PageLoader />}><ContentStudio /></Suspense>} />
         <Route path="/calendar" element={<Suspense fallback={<PageLoader />}><Calendar /></Suspense>} />
@@ -34,8 +43,16 @@ export default function App() {
         <Route path="/templates" element={<Suspense fallback={<PageLoader />}><Templates /></Suspense>} />
         <Route path="/analytics" element={<Suspense fallback={<PageLoader />}><Analytics /></Suspense>} />
         <Route path="/settings" element={<Suspense fallback={<PageLoader />}><Settings /></Suspense>} />
+        <Route path="/approvals" element={<Suspense fallback={<PageLoader />}><ApprovalCentre /></Suspense>} />
+        <Route path="/agent-activity" element={<Suspense fallback={<PageLoader />}><AgentActivity /></Suspense>} />
+        <Route path="/integrations" element={<Suspense fallback={<PageLoader />}><Integrations /></Suspense>} />
+        <Route path="/autonomous-settings" element={<Suspense fallback={<PageLoader />}><AutonomousSettings /></Suspense>} />
+        <Route path="/credits" element={<Suspense fallback={<PageLoader />}><Credits /></Suspense>} />
+        <Route path="/admin/system-health" element={<Suspense fallback={<PageLoader />}><SystemHealth /></Suspense>} />
+        <Route path="/admin/alerts" element={<Suspense fallback={<PageLoader />}><AdminAlerts /></Suspense>} />
         <Route path="/admin" element={<Suspense fallback={<PageLoader />}><Admin /></Suspense>} />
         <Route path="/banking" element={<Suspense fallback={<PageLoader />}><Banking /></Suspense>} />
+        <Route path="/onboarding" element={<Suspense fallback={<PageLoader />}><Onboarding /></Suspense>} />
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>

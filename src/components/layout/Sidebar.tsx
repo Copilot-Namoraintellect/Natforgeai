@@ -4,8 +4,8 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/hooks/useAuth";
 import { Logo } from "@/components/Logo";
+import { trpc } from "@/providers/trpc";
 import {
-  LayoutDashboard,
   Megaphone,
   PenTool,
   CalendarDays,
@@ -18,6 +18,12 @@ import {
   Shield,
   Landmark,
   CreditCard,
+  Rocket,
+  CheckCircle,
+  Activity,
+  Plug,
+  Settings2,
+  Coins,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -26,18 +32,24 @@ interface SidebarProps {
 }
 
 const mainNavItems = [
-  { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { path: "/mission-control", label: "Mission Control", icon: Rocket },
   { path: "/campaigns", label: "Campaigns", icon: Megaphone },
+  { path: "/approvals", label: "Approval Centre", icon: CheckCircle, badge: "pendingApprovals" },
   { path: "/content", label: "Content Studio", icon: PenTool },
   { path: "/calendar", label: "Calendar", icon: CalendarDays },
   { path: "/leads", label: "Leads", icon: Users },
-  { path: "/automations", label: "Automations", icon: Zap },
-  { path: "/templates", label: "Templates", icon: FileText },
+  { path: "/agent-activity", label: "Agent Activity", icon: Activity },
   { path: "/analytics", label: "Analytics", icon: BarChart3 },
+  { path: "/templates", label: "Templates", icon: FileText },
+  { path: "/integrations", label: "Integrations", icon: Plug },
+  { path: "/automations", label: "Automations", icon: Zap },
+  { path: "/credits", label: "Credits", icon: Coins },
+  { path: "/settings", label: "Settings", icon: Settings2 },
 ];
 
 const adminNavItems = [
   { path: "/admin", label: "Admin Panel", icon: Shield },
+  { path: "/admin/system-health", label: "System Health", icon: Activity },
   { path: "/banking", label: "Banking", icon: Landmark },
 ];
 
@@ -45,6 +57,18 @@ export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
   const location = useLocation();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+
+  const { data: pendingApprovals } = trpc.approval.listApprovals.useQuery(
+    { status: "pending" },
+    { enabled: !!user }
+  );
+
+  const { data: wallet } = trpc.billing.myWallet.useQuery(undefined, {
+    enabled: !!user,
+    refetchInterval: 30000,
+  });
+
+  const approvalCount = pendingApprovals?.length ?? 0;
 
   return (
     <div
@@ -72,6 +96,7 @@ export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
           {mainNavItems.map((item) => {
             const isActive = location.pathname === item.path;
             const Icon = item.icon;
+            const badgeCount = item.badge === "pendingApprovals" ? approvalCount : 0;
             return (
               <Link
                 key={item.path}
@@ -85,6 +110,11 @@ export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
               >
                 <Icon className={cn("w-5 h-5 shrink-0", isActive && "text-[#00D4FF]")} />
                 {!collapsed && <span className="truncate">{item.label}</span>}
+                {!collapsed && badgeCount > 0 && (
+                  <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-red-500 text-white font-semibold">
+                    {badgeCount}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -139,6 +169,15 @@ export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
                 {isAdmin ? "Admin Account" : "Your Plan"}
               </p>
             </div>
+            {/* Credit Balance */}
+            {!isAdmin && wallet && (
+              <Link to="/credits" className="flex items-center gap-2 mb-1 group">
+                <Coins className="w-3 h-3 text-amber-400" />
+                <p className="text-xs text-amber-400 font-medium group-hover:underline">
+                  {wallet.balance.toLocaleString()} credits
+                </p>
+              </Link>
+            )}
             <p className="text-xs text-gray-400">
               {isAdmin ? "Full system access" : "Manage your subscription"}
             </p>

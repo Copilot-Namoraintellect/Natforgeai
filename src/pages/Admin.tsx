@@ -32,6 +32,9 @@ import {
   User,
   Loader2,
   BarChart3,
+  Coins,
+  Activity,
+  ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -48,6 +51,7 @@ export default function Admin() {
   const { data: allSubs } = trpc.admin.subscriptions.useQuery();
   const { data: revenueByMonth } = trpc.admin.revenueByMonth.useQuery();
   const { data: subsByTier } = trpc.admin.subscriptionsByTier.useQuery();
+  const { data: profitability } = trpc.billing.adminProfitability.useQuery();
 
   const utils = trpc.useUtils();
 
@@ -206,6 +210,8 @@ export default function Admin() {
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="payments">Payments</TabsTrigger>
           <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
+          <TabsTrigger value="profitability">AI Profitability</TabsTrigger>
+          <TabsTrigger value="systemHealth">System Health</TabsTrigger>
         </TabsList>
 
         {/* OVERVIEW TAB */}
@@ -475,6 +481,135 @@ export default function Admin() {
                 </div>
               </CardContent>
             </Card>
+          )}
+
+          {/* SYSTEM HEALTH TAB */}
+          {activeTab === "systemHealth" && (
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">System Health</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    View detailed system health metrics on the dedicated System Health page.
+                  </p>
+                  <a
+                    href="/admin/system-health"
+                    className="text-sm text-[#00D4FF] hover:underline inline-flex items-center gap-1"
+                  >
+                    Open System Health Dashboard <ArrowRight className="w-3 h-3" />
+                  </a>
+                  <a
+                    href="/admin/alerts"
+                    className="text-sm text-[#00D4FF] hover:underline inline-flex items-center gap-1 mt-2"
+                  >
+                    Open Alerts Dashboard <ArrowRight className="w-3 h-3" />
+                  </a>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {/* PROFITABILITY TAB */}
+          {activeTab === "profitability" && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <Card>
+                  <CardContent className="p-4">
+                    <div className="p-2 rounded-lg bg-blue-500/10 w-fit mb-2">
+                      <Activity className="w-4 h-4 text-blue-500" />
+                    </div>
+                    <p className="text-xl font-bold">{profitability?.usage?.totalCalls ?? 0}</p>
+                    <p className="text-xs text-muted-foreground">Total AI Calls</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <div className="p-2 rounded-lg bg-purple-500/10 w-fit mb-2">
+                      <Coins className="w-4 h-4 text-purple-500" />
+                    </div>
+                    <p className="text-xl font-bold">{(profitability?.usage?.totalCreditsIssued ?? 0).toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground">Credits Issued</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <div className="p-2 rounded-lg bg-red-500/10 w-fit mb-2">
+                      <DollarSign className="w-4 h-4 text-red-500" />
+                    </div>
+                    <p className="text-xl font-bold">${profitability?.profitability?.actualCostUsd?.toFixed(2) ?? "0.00"}</p>
+                    <p className="text-xs text-muted-foreground">Actual AI Cost</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <div className="p-2 rounded-lg bg-emerald-500/10 w-fit mb-2">
+                      <TrendingUp className="w-4 h-4 text-emerald-500" />
+                    </div>
+                    <p className="text-xl font-bold">
+                      {profitability?.profitability?.marginPercent?.toFixed(1) ?? "0.0"}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">Margin</p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Cost vs Revenue</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Actual AI Cost</span>
+                      <span className="text-sm font-medium">${profitability?.profitability?.actualCostUsd?.toFixed(2) ?? "0.00"}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Credit Value (USD)</span>
+                      <span className="text-sm font-medium">${profitability?.profitability?.creditValueUsd?.toFixed(2) ?? "0.00"}</span>
+                    </div>
+                    <div className="h-px bg-border" />
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium">Margin</span>
+                      <span className={`text-sm font-bold ${(profitability?.profitability?.marginUsd ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                        ${profitability?.profitability?.marginUsd?.toFixed(2) ?? "0.00"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium">Margin %</span>
+                      <span className={`text-sm font-bold ${(profitability?.profitability?.marginPercent ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                        {profitability?.profitability?.marginPercent?.toFixed(1) ?? "0.0"}%
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Wallet Summary</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Total Users with Wallets</span>
+                      <span className="text-sm font-medium">{profitability?.wallets?.totalUsers ?? 0}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Total Balance</span>
+                      <span className="text-sm font-medium">{(profitability?.wallets?.totalBalance ?? 0).toLocaleString()} credits</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Total Earned (Lifetime)</span>
+                      <span className="text-sm font-medium">{(profitability?.wallets?.totalEarned ?? 0).toLocaleString()} credits</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Total Spent (Lifetime)</span>
+                      <span className="text-sm font-medium">{(profitability?.wallets?.totalSpent ?? 0).toLocaleString()} credits</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
           )}
         </div>
       </Tabs>

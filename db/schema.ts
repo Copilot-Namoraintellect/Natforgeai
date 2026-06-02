@@ -38,6 +38,7 @@ export const users = mysqlTable("users", {
     .notNull()
     .$onUpdate(() => new Date()),
   lastSignInAt: timestamp("lastSignInAt").defaultNow().notNull(),
+  onboardingComplete: boolean("onboardingComplete").default(false).notNull(),
 });
 
 export type User = typeof users.$inferSelect;
@@ -60,6 +61,16 @@ export const subscriptionTiers = mysqlTable("subscription_tiers", {
   analytics: boolean("analytics").default(false),
   teamMembers: int("teamMembers").default(1),
   features: json("features"),
+  strategyAgent: boolean("strategyAgent").default(false).notNull(),
+  creativeAgent: boolean("creativeAgent").default(false).notNull(),
+  audienceAgent: boolean("audienceAgent").default(false).notNull(),
+  distributionAgent: boolean("distributionAgent").default(false).notNull(),
+  engagementAgent: boolean("engagementAgent").default(false).notNull(),
+  salesAgent: boolean("salesAgent").default(false).notNull(),
+  optimisationAgent: boolean("optimisationAgent").default(false).notNull(),
+  approvalCentre: boolean("approvalCentre").default(false).notNull(),
+  autonomousMode: boolean("autonomousMode").default(false).notNull(),
+  monthlyCredits: int("monthlyCredits").default(0).notNull(),
   isActive: boolean("isActive").default(true).notNull(),
   isDefault: boolean("isDefault").default(false),
   displayOrder: int("displayOrder").default(0),
@@ -81,6 +92,8 @@ export const subscriptions = mysqlTable("subscriptions", {
   paymentReference: varchar("paymentReference", { length: 255 }),
   cancelledAt: timestamp("cancelledAt"),
   cancelAtPeriodEnd: boolean("cancelAtPeriodEnd").default(false),
+  lastCreditAllocationAt: timestamp("lastCreditAllocationAt"),
+  nextCreditAllocationAt: timestamp("nextCreditAllocationAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
 });
@@ -141,7 +154,16 @@ export const businesses = mysqlTable("businesses", {
   targetAudience: text("targetAudience"),
   tone: varchar("tone", { length: 50 }).default("professional"),
   logo: text("logo"),
-  website: varchar("website", { length: 255 }),
+  website: varchar("website", { length: 500 }),
+  productOrService: text("productOrService"),
+  targetCustomer: text("targetCustomer"),
+  monthlyBudget: int("monthlyBudget"),
+  brandTone: varchar("brandTone", { length: 50 }),
+  mainGoal: text("mainGoal"),
+  socialLinks: json("socialLinks"),
+  whatsappNumber: varchar("whatsappNumber", { length: 50 }),
+  preferredPlatforms: text("preferredPlatforms"),
+  onboardingComplete: boolean("onboardingComplete").default(false).notNull(),
   isActive: boolean("isActive").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
@@ -175,6 +197,31 @@ export const campaigns = mysqlTable("campaigns", {
   funnelStages: json("funnelStages"),
   offers: json("offers"),
   ctaStrategy: text("ctaStrategy"),
+  workflowState: mysqlEnum("workflowState", [
+    "business_onboarding",
+    "strategy_pending",
+    "strategy_generated",
+    "strategy_approved",
+    "creatives_generating",
+    "creatives_ready",
+    "audience_generating",
+    "audience_ready",
+    "schedule_generated",
+    "launch_approval_required",
+    "campaign_live",
+    "engagement_active",
+    "leads_converting",
+    "optimisation_active",
+    "completed",
+  ])
+    .default("business_onboarding")
+    .notNull(),
+  workflowContext: json("workflowContext"),
+  strategyDocument: text("strategyDocument"),
+  autoPublish: boolean("autoPublish").default(false).notNull(),
+  approvalMode: mysqlEnum("approvalMode", ["assisted", "autonomous"])
+    .default("assisted")
+    .notNull(),
   aiGenerated: boolean("aiGenerated").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
@@ -427,3 +474,293 @@ export const userUsage = mysqlTable("user_usage", {
 });
 
 export type UserUsage = typeof userUsage.$inferSelect;
+
+// ─── Agent Runs ───
+export const agentRuns = mysqlTable("agent_runs", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+  agentType: mysqlEnum("agentType", [
+    "strategy",
+    "creative",
+    "audience",
+    "distribution",
+    "engagement",
+    "sales",
+    "optimisation",
+  ]).notNull(),
+  status: mysqlEnum("status", ["pending", "running", "completed", "failed"])
+    .default("pending")
+    .notNull(),
+  input: json("input"),
+  output: json("output"),
+  error: text("error"),
+  startedAt: timestamp("startedAt"),
+  completedAt: timestamp("completedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AgentRun = typeof agentRuns.$inferSelect;
+
+// ─── Approval Requests ───
+export const approvalRequests = mysqlTable("approval_requests", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+  approvalType: mysqlEnum("approvalType", [
+    "campaign_launch",
+    "budget_increase",
+    "sensitive_reply",
+    "high_value_proposal",
+    "ad_spend",
+    "shutdown",
+    "brand_risk",
+  ]).notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description"),
+  aiRecommendation: text("aiRecommendation"),
+  riskLevel: mysqlEnum("riskLevel", ["low", "medium", "high"]).notNull(),
+  status: mysqlEnum("status", ["pending", "approved", "rejected", "edited"])
+    .default("pending")
+    .notNull(),
+  approvedAt: timestamp("approvedAt"),
+  rejectedAt: timestamp("rejectedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ApprovalRequest = typeof approvalRequests.$inferSelect;
+
+// ─── Campaign Assets ───
+export const campaignAssets = mysqlTable("campaign_assets", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
+  assetType: mysqlEnum("assetType", [
+    "image",
+    "video_script",
+    "carousel",
+    "ad_copy",
+    "caption",
+    "hashtag_set",
+    "cta_variant",
+    "email_copy",
+    "whatsapp_copy",
+  ]).notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  url: text("url"),
+  prompt: text("prompt"),
+  status: mysqlEnum("status", ["generating", "ready", "approved", "rejected"])
+    .default("generating")
+    .notNull(),
+  metadata: json("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type CampaignAsset = typeof campaignAssets.$inferSelect;
+
+// ─── Publishing Queue ───
+export const publishingQueue = mysqlTable("publishing_queue", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
+  contentPostId: bigint("contentPostId", { mode: "number", unsigned: true }),
+  platform: varchar("platform", { length: 50 }).notNull(),
+  scheduledAt: timestamp("scheduledAt"),
+  status: mysqlEnum("status", [
+    "draft",
+    "pending_approval",
+    "approved",
+    "published",
+    "failed",
+    "safety_blocked",
+    "retrying",
+  ])
+    .default("draft")
+    .notNull(),
+  approvalRequired: boolean("approvalRequired").default(false).notNull(),
+  publishedAt: timestamp("publishedAt"),
+  externalPostId: text("externalPostId"),
+  // Retry logic
+  retryCount: int("retryCount").default(0).notNull(),
+  maxRetries: int("maxRetries").default(3).notNull(),
+  nextRetryAt: timestamp("nextRetryAt"),
+  lastError: text("lastError"),
+  // Content safety
+  safetyStatus: mysqlEnum("safetyStatus", ["pending", "low", "medium", "high"]),
+  safetyReasons: json("safetyReasons"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type PublishingQueueItem = typeof publishingQueue.$inferSelect;
+
+// ─── Social Integrations ───
+export const socialIntegrations = mysqlTable("social_integrations", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  platform: mysqlEnum("platform", [
+    "facebook",
+    "instagram",
+    "linkedin",
+    "tiktok",
+    "twitter",
+    "whatsapp",
+    "email",
+  ]).notNull(),
+  accountName: varchar("accountName", { length: 255 }),
+  accessTokenEncrypted: text("accessTokenEncrypted"),
+  refreshTokenEncrypted: text("refreshTokenEncrypted"),
+  permissions: json("permissions"),
+  status: mysqlEnum("status", ["connected", "expired", "disconnected"])
+    .default("disconnected")
+    .notNull(),
+  lastSyncAt: timestamp("lastSyncAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type SocialIntegration = typeof socialIntegrations.$inferSelect;
+
+// ─── Conversation Threads ───
+export const conversationThreads = mysqlTable("conversation_threads", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+  leadId: bigint("leadId", { mode: "number", unsigned: true }),
+  platform: varchar("platform", { length: 50 }).notNull(),
+  externalThreadId: varchar("externalThreadId", { length: 255 }).notNull(),
+  status: mysqlEnum("status", ["open", "ai_handled", "escalated", "closed"])
+    .default("open")
+    .notNull(),
+  aiHandled: boolean("aiHandled").default(false).notNull(),
+  escalationRequired: boolean("escalationRequired").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ConversationThread = typeof conversationThreads.$inferSelect;
+
+// ─── Conversation Messages ───
+export const conversationMessages = mysqlTable("conversation_messages", {
+  id: serial("id").primaryKey(),
+  threadId: bigint("threadId", { mode: "number", unsigned: true }).notNull(),
+  senderType: mysqlEnum("senderType", ["lead", "ai", "user"]).notNull(),
+  messageText: text("messageText").notNull(),
+  aiGenerated: boolean("aiGenerated").default(false).notNull(),
+  sentiment: mysqlEnum("sentiment", [
+    "positive",
+    "neutral",
+    "negative",
+    "urgent",
+  ]),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ConversationMessage = typeof conversationMessages.$inferSelect;
+
+// ─── Optimisation Logs ───
+export const optimisationLogs = mysqlTable("optimisation_logs", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
+  summary: text("summary").notNull(),
+  recommendedActions: json("recommendedActions"),
+  appliedActions: json("appliedActions"),
+  performanceSnapshot: json("performanceSnapshot"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type OptimisationLog = typeof optimisationLogs.$inferSelect;
+
+// ─── AI Usage ───
+export const aiUsage = mysqlTable("ai_usage", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+  agentType: mysqlEnum("agentType", [
+    "strategy",
+    "creative",
+    "audience",
+    "distribution",
+    "engagement",
+    "sales",
+    "optimisation",
+    "safety_check",
+    "image_generation",
+    "video_generation",
+  ]).notNull(),
+  model: varchar("model", { length: 50 }).notNull(),
+  promptTokens: int("promptTokens").default(0).notNull(),
+  completionTokens: int("completionTokens").default(0).notNull(),
+  totalTokens: int("totalTokens").default(0).notNull(),
+  actualCostUsd: int("actualCostUsd").default(0).notNull(), // stored in cents * 10000 (e.g. 0.01 USD = 10000)
+  estimatedCostUsd: int("estimatedCostUsd").default(0).notNull(), // same precision
+  creditsDeducted: int("creditsDeducted").default(0).notNull(),
+  metadata: json("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AiUsage = typeof aiUsage.$inferSelect;
+
+// ─── Credit Wallets ───
+export const creditWallets = mysqlTable("credit_wallets", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull().unique(),
+  balance: int("balance").default(0).notNull(),
+  lifetimeEarned: int("lifetimeEarned").default(0).notNull(),
+  lifetimeSpent: int("lifetimeSpent").default(0).notNull(),
+  monthlyAllocation: int("monthlyAllocation").default(0).notNull(),
+  monthlyResetAt: timestamp("monthlyResetAt"),
+  spendLimit: int("spendLimit"), // null = unlimited
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+});
+
+export type CreditWallet = typeof creditWallets.$inferSelect;
+
+// ─── Credit Transactions ───
+export const creditTransactions = mysqlTable("credit_transactions", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  walletId: bigint("walletId", { mode: "number", unsigned: true }).notNull(),
+  type: mysqlEnum("type", [
+    "subscription_allocation",
+    "purchase",
+    "agent_deduction",
+    "publishing_deduction",
+    "image_generation",
+    "video_generation",
+    "refund",
+    "admin_adjustment",
+    "rollover",
+  ]).notNull(),
+  amount: int("amount").notNull(), // positive = credit added, negative = credit spent
+  balanceAfter: int("balanceAfter").notNull(),
+  description: text("description"),
+  metadata: json("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type CreditTransaction = typeof creditTransactions.$inferSelect;
+
+// ─── System Alerts ───
+export const systemAlerts = mysqlTable("system_alerts", {
+  id: serial("id").primaryKey(),
+  severity: mysqlEnum("severity", ["critical", "warning", "info"]).notNull(),
+  category: mysqlEnum("category", [
+    "publishing",
+    "queue",
+    "worker",
+    "redis",
+    "openai",
+    "billing",
+    "system",
+  ]).notNull(),
+  message: text("message").notNull(),
+  details: json("details"),
+  resolvedAt: timestamp("resolvedAt"),
+  acknowledgedAt: timestamp("acknowledgedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type SystemAlert = typeof systemAlerts.$inferSelect;

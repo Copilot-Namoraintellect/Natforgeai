@@ -11,6 +11,14 @@ import { imageRouter } from "./image-router";
 import { subscriptionRouter } from "./subscription-router";
 import { adminRouter } from "./admin-router";
 import { bankingRouter } from "./banking-router";
+import { agentRouter } from "./agent-router";
+import { approvalRouter } from "./approval-router";
+import { autonomousWorkflowRouter } from "./autonomous-workflow-router";
+import { integrationRouter } from "./integration-router";
+import { publishingRouter } from "./publishing-router";
+import { conversationRouter } from "./conversation-router";
+import { billingRouter } from "./billing-router";
+import { healthRouter } from "./health-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -47,6 +55,14 @@ export const appRouter = createRouter({
   subscription: subscriptionRouter,
   admin: adminRouter,
   banking: bankingRouter,
+  agent: agentRouter,
+  approval: approvalRouter,
+  autonomousWorkflow: autonomousWorkflowRouter,
+  integration: integrationRouter,
+  publishing: publishingRouter,
+  conversation: conversationRouter,
+  billing: billingRouter,
+  health: healthRouter,
 });
 
 export type AppRouter = typeof appRouter;

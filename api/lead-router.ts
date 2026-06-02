@@ -200,4 +200,142 @@ export const leadRouter = createRouter({
       });
       return { success: true };
     }),
+
+  // Auto-score lead based on engagement data
+  autoScore: authedQuery
+    .input(z.object({ leadId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const [lead] = await db
+        .select()
+        .from(leads)
+        .where(and(eq(leads.id, input.leadId), eq(leads.userId, ctx.user.id)))
+        .limit(1);
+
+      if (!lead) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Lead not found" });
+      }
+
+      // Get activities
+      const activities = await db
+        .select()
+        .from(leadActivities)
+        .where(eq(leadActivities.leadId, input.leadId));
+
+      // Simple scoring algorithm
+      let score = lead.score || 0;
+      const activityCount = activities.length;
+
+      // Base score from source
+      const sourceScores: Record<string, number> = {
+        instagram: 15,
+        facebook: 15,
+        linkedin: 25,
+        tiktok: 10,
+        twitter: 10,
+        whatsapp: 30,
+        email: 20,
+        referral: 40,
+        website: 35,
+      };
+      score += sourceScores[lead.source || ""] || 10;
+
+      // Activity engagement
+      score += activityCount * 5;
+
+      // Contact info completeness
+      if (lead.email) score += 10;
+      if (lead.phone) score += 10;
+      if (lead.company) score += 15;
+      if (lead.jobTitle) score += 10;
+
+      // Cap at 100
+      score = Math.min(score, 100);
+
+      // Auto-update status based on score
+      let newStatus = lead.status;
+      if (score >= 80 && lead.status === "new") {
+        newStatus = "qualified";
+      } else if (score >= 50 && lead.status === "new") {
+        newStatus = "contacted";
+      }
+
+      await db
+        .update(leads)
+        .set({ score, status: newStatus })
+        .where(eq(leads.id, input.leadId));
+
+      if (newStatus !== lead.status) {
+        await db.insert(leadActivities).values({
+          leadId: input.leadId,
+          type: "status_change",
+          description: `Auto-updated status from ${lead.status} to ${newStatus} based on engagement score: ${score}`,
+        });
+      }
+
+      return { success: true, score, status: newStatus };
+    }),
+
+  // Bulk auto-score all leads
+  bulkAutoScore: authedQuery.mutation(async ({ ctx }) => {
+    const db = getDb();
+    const userLeads = await db
+      .select()
+      .from(leads)
+      .where(eq(leads.userId, ctx.user.id));
+
+    const results = [];
+    for (const lead of userLeads) {
+      const activities = await db
+        .select()
+        .from(leadActivities)
+        .where(eq(leadActivities.leadId, lead.id));
+
+      let score = lead.score || 0;
+      const activityCount = activities.length;
+
+      const sourceScores: Record<string, number> = {
+        instagram: 15,
+        facebook: 15,
+        linkedin: 25,
+        tiktok: 10,
+        twitter: 10,
+        whatsapp: 30,
+        email: 20,
+        referral: 40,
+        website: 35,
+      };
+      score += sourceScores[lead.source || ""] || 10;
+      score += activityCount * 5;
+      if (lead.email) score += 10;
+      if (lead.phone) score += 10;
+      if (lead.company) score += 15;
+      if (lead.jobTitle) score += 10;
+      score = Math.min(score, 100);
+
+      let newStatus = lead.status;
+      if (score >= 80 && lead.status === "new") {
+        newStatus = "qualified";
+      } else if (score >= 50 && lead.status === "new") {
+        newStatus = "contacted";
+      }
+
+      await db
+        .update(leads)
+        .set({ score, status: newStatus })
+        .where(eq(leads.id, lead.id));
+
+      if (newStatus !== lead.status) {
+        await db.insert(leadActivities).values({
+          leadId: lead.id,
+          type: "status_change",
+          description: `Auto-updated status from ${lead.status} to ${newStatus} based on engagement score: ${score}`,
+        });
+      }
+
+      results.push({ id: lead.id, score, status: newStatus });
+    }
+
+    return { success: true, results };
+  }),
 });

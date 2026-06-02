@@ -1,0 +1,315 @@
+import { useState } from "react";
+import { trpc } from "@/providers/trpc";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Activity,
+  Sparkles,
+  Users,
+  Megaphone,
+  MessageSquare,
+  TrendingUp,
+  DollarSign,
+  Target,
+  RotateCcw,
+  Clock,
+  CheckCircle,
+  XCircle,
+  Loader2,
+  AlertTriangle,
+  Palette,
+  Hash,
+  BarChart3,
+} from "lucide-react";
+
+const agentTypeConfig: Record<string, { icon: any; color: string; label: string }> = {
+  strategy: { icon: Target, color: "text-blue-400", label: "Strategy Agent" },
+  creative: { icon: Sparkles, color: "text-purple-400", label: "Creative Agent" },
+  audience: { icon: Users, color: "text-pink-400", label: "Audience Agent" },
+  distribution: { icon: Megaphone, color: "text-cyan-400", label: "Distribution Agent" },
+  engagement: { icon: MessageSquare, color: "text-amber-400", label: "Engagement Agent" },
+  sales: { icon: DollarSign, color: "text-emerald-400", label: "Sales Agent" },
+  optimisation: { icon: TrendingUp, color: "text-indigo-400", label: "Optimisation Agent" },
+};
+
+const statusConfig: Record<string, { color: string; icon: any }> = {
+  pending: { color: "bg-amber-500/10 text-amber-600", icon: Clock },
+  running: { color: "bg-blue-500/10 text-blue-600", icon: Loader2 },
+  completed: { color: "bg-emerald-500/10 text-emerald-600", icon: CheckCircle },
+  failed: { color: "bg-red-500/10 text-red-600", icon: XCircle },
+};
+
+function FormattedAgentOutput({ agentType, output }: { agentType: string; output: any }) {
+  if (!output) return null;
+
+  if (agentType === "strategy") {
+    return (
+      <div className="space-y-2">
+        {output.personas && (
+          <div>
+            <p className="text-xs font-semibold text-[#00D4FF] flex items-center gap-1"><Users className="w-3 h-3" /> Personas</p>
+            <div className="flex flex-wrap gap-1 mt-1">
+              {output.personas.slice(0, 3).map((p: any, i: number) => (
+                <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-300 border border-blue-500/20">{p.name}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {output.coreMessage && <p className="text-xs text-gray-300"><span className="text-gray-500">Core Message:</span> {output.coreMessage}</p>}
+        {output.valueProposition && <p className="text-xs text-gray-300"><span className="text-gray-500">Value Prop:</span> {output.valueProposition}</p>}
+        {output.budgetRecommendation && (
+          <p className="text-xs text-gray-300"><span className="text-gray-500">Budget:</span> ${output.budgetRecommendation.total?.toLocaleString?.() || output.budgetRecommendation.total}</p>
+        )}
+      </div>
+    );
+  }
+
+  if (agentType === "creative") {
+    const days = output.days || (output.calendar?.days);
+    const assets = output.assets;
+    return (
+      <div className="space-y-2">
+        {days && (
+          <div>
+            <p className="text-xs font-semibold text-purple-400 flex items-center gap-1"><Palette className="w-3 h-3" /> Content Calendar</p>
+            <p className="text-xs text-gray-300">{days.length} days scheduled with {days.reduce((acc: number, d: any) => acc + (d.posts?.length || 0), 0)} posts</p>
+          </div>
+        )}
+        {assets && (
+          <div>
+            <p className="text-xs font-semibold text-purple-400 flex items-center gap-1"><Sparkles className="w-3 h-3" /> Assets</p>
+            <p className="text-xs text-gray-300">{assets.length} creative assets generated</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (agentType === "audience") {
+    return (
+      <div className="space-y-2">
+        {output.audienceProfiles && (
+          <div>
+            <p className="text-xs font-semibold text-pink-400 flex items-center gap-1"><Users className="w-3 h-3" /> Audience Profiles</p>
+            <div className="flex flex-wrap gap-1 mt-1">
+              {output.audienceProfiles.slice(0, 3).map((p: any, i: number) => (
+                <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-pink-500/10 text-pink-300 border border-pink-500/20">{p.name}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {output.hashtagStrategy && (
+          <div>
+            <p className="text-xs font-semibold text-pink-400 flex items-center gap-1"><Hash className="w-3 h-3" /> Hashtags</p>
+            <p className="text-xs text-gray-300">{output.hashtagStrategy.primary?.slice(0, 5).join(" ")}</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (agentType === "distribution") {
+    const schedule = output.schedule;
+    return (
+      <div className="space-y-2">
+        {schedule && (
+          <div>
+            <p className="text-xs font-semibold text-cyan-400 flex items-center gap-1"><BarChart3 className="w-3 h-3" /> Publishing Schedule</p>
+            <p className="text-xs text-gray-300">{schedule.length} posts queued across platforms</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (agentType === "engagement") {
+    return (
+      <div className="space-y-2">
+        {output.reply && <p className="text-xs text-gray-300"><span className="text-gray-500">Reply:</span> {output.reply.substring(0, 120)}...</p>}
+        {output.sentiment && <p className="text-xs text-gray-300"><span className="text-gray-500">Sentiment:</span> {output.sentiment}</p>}
+        {output.shouldEscalate && (
+          <p className="text-xs text-amber-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Escalation required</p>
+        )}
+      </div>
+    );
+  }
+
+  if (agentType === "sales") {
+    const messages = output.messages;
+    return (
+      <div className="space-y-2">
+        {messages && (
+          <div>
+            <p className="text-xs font-semibold text-emerald-400 flex items-center gap-1"><DollarSign className="w-3 h-3" /> Follow-up Sequence</p>
+            <p className="text-xs text-gray-300">{messages.length} messages over {messages[messages.length - 1]?.day} days</p>
+          </div>
+        )}
+        {output.title && <p className="text-xs text-gray-300"><span className="text-gray-500">Proposal:</span> {output.title}</p>}
+      </div>
+    );
+  }
+
+  // Fallback for unknown agent types
+  return (
+    <div className="space-y-1">
+      {Object.entries(output).slice(0, 4).map(([key, value]) => (
+        <p key={key} className="text-xs text-gray-300">
+          <span className="text-gray-500">{key}:</span>{" "}
+          {typeof value === "string" ? value.substring(0, 100) : JSON.stringify(value).substring(0, 100)}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+export default function AgentActivity() {
+  const [filterType, setFilterType] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = useState<string>("all");
+
+  const { data: agentRuns, isLoading } = trpc.agent.getAgentRuns.useQuery({
+    agentType: filterType !== "all" ? (filterType as any) : undefined,
+    status: filterStatus !== "all" ? (filterStatus as any) : undefined,
+  });
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+            <Activity className="w-6 h-6 text-[#00D4FF]" />
+            Agent Activity
+          </h1>
+          <p className="text-gray-400 mt-1">
+            Timeline of all AI agent executions and tasks
+          </p>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3">
+        <Select value={filterType} onValueChange={setFilterType}>
+          <SelectTrigger className="w-[180px] bg-[#1E293B] border-[#334155] text-white">
+            <SelectValue placeholder="Agent Type" />
+          </SelectTrigger>
+          <SelectContent className="bg-[#1E293B] border-[#334155]">
+            <SelectItem value="all" className="text-white">All Agents</SelectItem>
+            {Object.entries(agentTypeConfig).map(([key, config]) => (
+              <SelectItem key={key} value={key} className="text-white">
+                {config.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={filterStatus} onValueChange={setFilterStatus}>
+          <SelectTrigger className="w-[180px] bg-[#1E293B] border-[#334155] text-white">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent className="bg-[#1E293B] border-[#334155]">
+            <SelectItem value="all" className="text-white">All Statuses</SelectItem>
+            <SelectItem value="pending" className="text-white">Pending</SelectItem>
+            <SelectItem value="running" className="text-white">Running</SelectItem>
+            <SelectItem value="completed" className="text-white">Completed</SelectItem>
+            <SelectItem value="failed" className="text-white">Failed</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Activity Timeline */}
+      <div className="space-y-3">
+        {isLoading ? (
+          <div className="p-8 text-center text-gray-400">Loading activity...</div>
+        ) : agentRuns && agentRuns.length > 0 ? (
+          agentRuns.map((run) => {
+            const agentConfig = agentTypeConfig[run.agentType] || {
+              icon: Activity,
+              color: "text-gray-400",
+              label: run.agentType,
+            };
+            const statusConfigItem = statusConfig[run.status] || {
+              color: "bg-gray-500/10 text-gray-600",
+              icon: Clock,
+            };
+            const AgentIcon = agentConfig.icon;
+            const StatusIcon = statusConfigItem.icon;
+
+            return (
+              <Card
+                key={run.id}
+                className="bg-[#1E293B] border-[#334155] hover:border-[#00D4FF]/20 transition-colors"
+              >
+                <CardContent className="p-4">
+                  <div className="flex items-start gap-4">
+                    <div className={`p-2.5 rounded-xl bg-[#0F172A] ${agentConfig.color}`}>
+                      <AgentIcon className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold text-white">{agentConfig.label}</span>
+                        <Badge className={statusConfigItem.color}>
+                          <StatusIcon className="w-3 h-3 mr-1" />
+                          {run.status}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-gray-400">
+                        Campaign #{run.campaignId} •{" "}
+                        {run.createdAt
+                          ? new Date(run.createdAt).toLocaleString()
+                          : "Unknown date"}
+                      </p>
+
+                      {run.error && (
+                        <div className="mt-2 p-2 rounded-lg bg-red-500/10 border border-red-500/20">
+                          <p className="text-sm text-red-400">{run.error}</p>
+                        </div>
+                      )}
+
+                      {!!run.output && (
+                        <div className="mt-2 p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+                          <p className="text-xs text-gray-500 mb-2 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" /> Output Preview
+                          </p>
+                          <FormattedAgentOutput agentType={run.agentType} output={run.output as any} />
+                        </div>
+                      )}
+                    </div>
+
+                    {run.status === "failed" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-[#334155] text-gray-300 hover:text-white shrink-0"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                        Retry
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })
+        ) : (
+          <Card className="bg-[#1E293B] border-[#334155]">
+            <CardContent className="p-8 text-center">
+              <Activity className="w-12 h-12 text-gray-500/50 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-white mb-2">No activity yet</h3>
+              <p className="text-gray-400">
+                Agent activity will appear here once campaigns start running.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}

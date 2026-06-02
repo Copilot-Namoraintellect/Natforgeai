@@ -40,6 +40,14 @@ export const businessRouter = createRouter({
         targetAudience: z.string().optional(),
         tone: z.string().optional(),
         website: z.string().optional(),
+        productOrService: z.string().optional(),
+        targetCustomer: z.string().optional(),
+        monthlyBudget: z.number().optional(),
+        brandTone: z.string().optional(),
+        mainGoal: z.string().optional(),
+        socialLinks: z.any().optional(),
+        whatsappNumber: z.string().optional(),
+        preferredPlatforms: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -53,6 +61,15 @@ export const businessRouter = createRouter({
         targetAudience: input.targetAudience,
         tone: input.tone ?? "professional",
         website: input.website,
+        productOrService: input.productOrService,
+        targetCustomer: input.targetCustomer,
+        monthlyBudget: input.monthlyBudget,
+        brandTone: input.brandTone,
+        mainGoal: input.mainGoal,
+        socialLinks: input.socialLinks,
+        whatsappNumber: input.whatsappNumber,
+        preferredPlatforms: input.preferredPlatforms,
+        onboardingComplete: true,
       });
       return { id: Number(biz.insertId), success: true };
     }),
@@ -68,6 +85,15 @@ export const businessRouter = createRouter({
         targetAudience: z.string().optional(),
         tone: z.string().optional(),
         website: z.string().optional(),
+        productOrService: z.string().optional(),
+        targetCustomer: z.string().optional(),
+        monthlyBudget: z.number().optional(),
+        brandTone: z.string().optional(),
+        mainGoal: z.string().optional(),
+        socialLinks: z.any().optional(),
+        whatsappNumber: z.string().optional(),
+        preferredPlatforms: z.string().optional(),
+        onboardingComplete: z.boolean().optional(),
         isActive: z.boolean().optional(),
       })
     )

@@ -1,6 +1,7 @@
 import { getDb } from "../queries/connection";
 import { subscriptions, subscriptionTiers, userUsage, campaigns, leads } from "@db/schema";
 import { eq, and, desc, sql } from "drizzle-orm";
+import { allocateMonthlyCredits } from "./billing/credit-engine";
 
 export async function getUserTier(userId: number) {
   const db = getDb();
@@ -115,6 +116,9 @@ export async function ensureFreeSubscription(userId: number) {
         currentPeriodEnd: periodEnd,
         paymentMethod: "manual",
       });
+
+      // Allocate free tier credits (once-off per month)
+      await allocateMonthlyCredits(userId);
     }
   }
 
@@ -137,25 +141,27 @@ export async function ensureFreeSubscription(userId: number) {
 export async function incrementCampaignUsage(userId: number) {
   const db = getDb();
   const usage = await getUserUsage(userId);
+  const current = (usage.campaignsCreated ?? 0) + 1;
 
   await db
     .update(userUsage)
-    .set({ campaignsCreated: usage.campaignsCreated + 1 })
+    .set({ campaignsCreated: current })
     .where(eq(userUsage.userId, userId));
 
-  return usage.campaignsCreated + 1;
+  return current;
 }
 
 export async function incrementResultUsage(userId: number) {
   const db = getDb();
   const usage = await getUserUsage(userId);
+  const current = (usage.successfulResults ?? 0) + 1;
 
   await db
     .update(userUsage)
-    .set({ successfulResults: usage.successfulResults + 1 })
+    .set({ successfulResults: current })
     .where(eq(userUsage.userId, userId));
 
-  return usage.successfulResults + 1;
+  return current;
 }
 
 export async function checkLimit(
@@ -167,7 +173,7 @@ export async function checkLimit(
 
   if (type === "campaign") {
     const limit = tier?.maxCampaigns ?? 2;
-    const current = usage.campaignsCreated;
+    const current = usage.campaignsCreated ?? 0;
     if (current >= limit) {
       return {
         allowed: false,
@@ -181,7 +187,7 @@ export async function checkLimit(
 
   if (type === "result") {
     const limit = tier?.maxResults ?? 5;
-    const current = usage.successfulResults;
+    const current = usage.successfulResults ?? 0;
     if (current >= limit) {
       return {
         allowed: false,

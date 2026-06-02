@@ -1,6 +1,6 @@
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { createRouter, publicQuery } from "./middleware";
+import { createRouter, publicQuery, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { users } from "@db/schema";
 import { eq, or } from "drizzle-orm";
@@ -203,6 +203,7 @@ export const localAuthRouter = createRouter({
             role: "user" as const,
             username: input.email.split("@")[0],
             passwordHash: null,
+            onboardingComplete: false,
             createdAt: new Date(),
             updatedAt: new Date(),
             lastSignInAt: new Date(),
@@ -297,6 +298,7 @@ export const localAuthRouter = createRouter({
             role: "user" as const,
             username: email.split("@")[0],
             passwordHash: null,
+            onboardingComplete: false,
             createdAt: new Date(),
             updatedAt: new Date(),
             lastSignInAt: new Date(),
@@ -364,8 +366,31 @@ export const localAuthRouter = createRouter({
       avatar: user.avatar,
       role: user.role,
       authType: user.authType,
+      onboardingComplete: user.onboardingComplete,
       createdAt: user.createdAt,
       lastSignInAt: user.lastSignInAt,
     };
   }),
+
+  updateMe: authedQuery
+    .input(
+      z.object({
+        name: z.string().optional(),
+        onboardingComplete: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const { name, onboardingComplete } = input;
+      const updateData: any = {};
+      if (name !== undefined) updateData.name = name;
+      if (onboardingComplete !== undefined) updateData.onboardingComplete = onboardingComplete;
+
+      await db
+        .update(users)
+        .set(updateData)
+        .where(eq(users.id, ctx.user.id));
+
+      return { success: true };
+    }),
 });

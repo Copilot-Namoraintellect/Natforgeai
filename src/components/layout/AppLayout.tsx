@@ -27,6 +27,11 @@ export function AppLayout() {
     return <Navigate to="/login" replace />;
   }
 
+  // Redirect to onboarding if not completed
+  if (user && !user.onboardingComplete && location.pathname !== "/onboarding") {
+    return <Navigate to="/onboarding" replace />;
+  }
+
   // Check admin routes
   const isAdminRoute = location.pathname.startsWith("/admin") || location.pathname === "/banking";
   if (isAdminRoute && user?.role !== "admin") {

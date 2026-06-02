@@ -70,7 +70,11 @@ export default function ContentStudio() {
 
   const utils = trpc.useUtils();
   const { data: contents, isLoading } = trpc.content.list.useQuery(
-    activeTab === "all" ? undefined : { type: activeTab as any }
+    activeTab === "all"
+      ? undefined
+      : activeTab === "ai_generated"
+      ? { aiGenerated: true }
+      : { type: activeTab as any }
   );
 
   const createMutation = trpc.content.create.useMutation({
@@ -448,6 +452,7 @@ Include:
         >
           <TabsList className="flex-wrap h-auto">
             <TabsTrigger value="all">All</TabsTrigger>
+            <TabsTrigger value="ai_generated" className="text-purple-400">AI Generated</TabsTrigger>
             <TabsTrigger value="social_post">Social</TabsTrigger>
             <TabsTrigger value="ad_copy">Ads</TabsTrigger>
             <TabsTrigger value="email">Email</TabsTrigger>
