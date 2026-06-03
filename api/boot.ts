@@ -212,8 +212,16 @@ if (env.isProduction) {
   const { serveStaticFiles } = await import("./lib/vite");
   serveStaticFiles(app);
 
-  const port = parseInt(process.env.PORT || "3000");
-  serve({ fetch: app.fetch, port }, () => {
-    console.log(`Server running on http://localhost:${port}/`);
-  });
+  const port = parseInt(process.env.PORT || "3001", 10);
+
+  serve(
+    {
+      fetch: app.fetch,
+      port,
+      hostname: "127.0.0.1",
+    },
+    () => {
+      console.log(`[API] NatForgeAI backend listening on http://127.0.0.1:${port}`);
+    }
+  );
 }
