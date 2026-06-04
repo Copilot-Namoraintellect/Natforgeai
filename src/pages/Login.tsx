@@ -51,7 +51,8 @@ export default function Login() {
     onSuccess: (data) => {
       localStorage.setItem("auth_token", data.token);
       toast.success("Welcome back!");
-      navigate("/dashboard");
+      
+      navigate("/mission-control");
     },
     onError: (err) => {
       toast.error(err.message || "Login failed");
@@ -62,27 +63,15 @@ export default function Login() {
     onSuccess: (data) => {
       localStorage.setItem("auth_token", data.token);
       toast.success("Account created! Welcome aboard.");
-      navigate("/dashboard");
+      
+      navigate("/mission-control");
     },
     onError: (err) => {
       toast.error(err.message || "Registration failed");
     },
   });
 
-  const firebaseAuthMutation = trpc.auth.firebaseAuth.useMutation({
-    onSuccess: (data) => {
-      localStorage.setItem("auth_token", data.token);
-      toast.success("Welcome!");
-      setFirebaseError(null);
-      navigate("/dashboard");
-    },
-    onError: (err) => {
-      console.error("[Firebase Auth] Backend error:", err);
-      const msg = err.message || "Firebase authentication failed";
-      setFirebaseError(msg);
-      toast.error(msg);
-    },
-  });
+  const firebaseAuthMutation = trpc.auth.firebaseAuth.useMutation();
 
   async function runDiagnostic() {
     setRunningDiagnostic(true);
@@ -144,7 +133,25 @@ export default function Login() {
       const idToken = await result.user.getIdToken();
       console.log("[Firebase Auth] ID token obtained (length:", idToken.length, ")");
 
-      firebaseAuthMutation.mutate({ idToken });
+      const appAuth = await firebaseAuthMutation.mutateAsync({ idToken });
+
+        if (!appAuth?.token) {
+          throw new Error("Google sign-in succeeded, but no app session token was returned.");
+        }
+
+        localStorage.setItem("auth_token", appAuth.token);
+
+        const savedToken = localStorage.getItem("auth_token");
+        if (!savedToken) {
+          throw new Error("Google sign-in succeeded, but the app could not save the session.");
+        }
+
+        toast.success("Welcome!");
+        setFirebaseError(null);
+
+        // Force a full reload so the tRPC provider and route guards read the new token.
+        window.location.href = "/mission-control";
+
     } catch (err: any) {
       console.error("[Firebase Auth] Client-side error:", err);
       console.error("[Firebase Auth] Error code:", err.code);
