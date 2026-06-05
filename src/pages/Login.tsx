@@ -71,7 +71,37 @@ export default function Login() {
     },
   });
 
-  const firebaseAuthMutation = trpc.auth.firebaseAuth.useMutation();
+  const utils = trpc.useUtils();
+
+  const firebaseAuthMutation = trpc.auth.firebaseAuth.useMutation({
+    onSuccess: async (data) => {
+      if (!data?.token) {
+        toast.error("Google sign-in succeeded, but no session token was returned. Please try again.");
+        return;
+      }
+
+      localStorage.setItem("auth_token", data.token);
+      toast.success("Welcome!");
+      setFirebaseError(null);
+
+      try {
+        utils.auth.me.invalidate();
+        const user = await utils.auth.me.fetch(undefined);
+        if (user && !user.onboardingComplete) {
+          navigate("/onboarding");
+        } else {
+          navigate("/mission-control");
+        }
+      } catch {
+        navigate("/mission-control");
+      }
+    },
+    onError: (err) => {
+      const msg = err.message || "Google sign-in failed";
+      setFirebaseError(msg);
+      toast.error(msg);
+    },
+  });
 
   async function runDiagnostic() {
     setRunningDiagnostic(true);
@@ -79,10 +109,8 @@ export default function Login() {
     try {
       const res = await fetch("/api/trpc/ping.firebaseStatus");
       const json = await res.json();
-      console.log("[Diagnostic] Backend Firebase status:", json);
       setDiagnosticResult(json.result?.data || json);
     } catch (e: any) {
-      console.error("[Diagnostic] Failed:", e);
       setDiagnosticResult({ status: "error", error: e.message });
     }
     setRunningDiagnostic(false);
@@ -124,42 +152,17 @@ export default function Login() {
 
   async function handleFirebaseGoogleAuth() {
     setFirebaseError(null);
-    console.log("[Firebase Auth] Starting Google sign-in popup...");
 
     try {
       const result = await signInWithPopup(auth, googleProvider);
-      console.log("[Firebase Auth] Popup succeeded. User:", result.user.uid, result.user.email);
-
       const idToken = await result.user.getIdToken();
-      console.log("[Firebase Auth] ID token obtained (length:", idToken.length, ")");
-
-      const appAuth = await firebaseAuthMutation.mutateAsync({ idToken });
-
-        if (!appAuth?.token) {
-          throw new Error("Google sign-in succeeded, but no app session token was returned.");
-        }
-
-        localStorage.setItem("auth_token", appAuth.token);
-
-        const savedToken = localStorage.getItem("auth_token");
-        if (!savedToken) {
-          throw new Error("Google sign-in succeeded, but the app could not save the session.");
-        }
-
-        toast.success("Welcome!");
-        setFirebaseError(null);
-
-        // Force a full reload so the tRPC provider and route guards read the new token.
-        window.location.href = "/mission-control";
-
+      await firebaseAuthMutation.mutateAsync({ idToken });
     } catch (err: any) {
-      console.error("[Firebase Auth] Client-side error:", err);
-      console.error("[Firebase Auth] Error code:", err.code);
-      console.error("[Firebase Auth] Error message:", err.message);
+      // tRPC/backend errors are handled by the mutation's onError.
+      if (err.code && !err.code.startsWith("auth/")) return;
 
       let userMessage = err.message || "Google sign-in failed";
 
-      // Provide clearer messages for common Firebase Auth errors
       if (err.code === "auth/popup-closed-by-user") {
         userMessage = "Sign-in popup was closed. Please try again.";
       } else if (err.code === "auth/popup-blocked") {
