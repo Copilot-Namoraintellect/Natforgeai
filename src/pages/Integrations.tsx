@@ -100,9 +100,7 @@ export default function Integrations() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const { data: integrations } = trpc.integration.getConnectedPlatforms.useQuery();
-
-  // Platforms that require backend API configuration
-  const platformsNeedingSetup = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
+  const { data: platformStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
 
   // Handle OAuth callback results
   useEffect(() => {
@@ -181,11 +179,11 @@ export default function Integrations() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+        <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
           <Plug className="w-6 h-6 text-[#00D4FF]" />
           Integrations
         </h1>
-        <p className="text-gray-400 mt-1">
+        <p className="text-slate-600 mt-1">
           Connect your social media, messaging, and email platforms
         </p>
       </div>
@@ -293,7 +291,7 @@ export default function Integrations() {
                   ))}
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   {isConnected ? (
                     <>
                       <Button
@@ -316,39 +314,47 @@ export default function Integrations() {
                     </>
                   ) : (
                     <>
-                      {platformsNeedingSetup.includes(platform) && !isAdmin && (
-                        <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/20">
-                          Setup required
-                        </Badge>
-                      )}
-                      <Button
-                        size="sm"
-                        className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white hover:opacity-90"
-                        onClick={() => handleConnect(platform)}
-                        disabled={connectingPlatform === platform}
-                      >
-                        {connectingPlatform === platform ? (
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        ) : (
-                          <Plug className="w-4 h-4 mr-2" />
-                        )}
-                        Connect
-                      </Button>
-                      {config.setupUrl && (
-                        <a
-                          href={config.setupUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
+                      {platformStatus?.find((p) => p.platform === platform)?.configured === false && !isAdmin ? (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/20">
+                            Publishing setup required
+                          </Badge>
+                          <span className="text-xs text-gray-500">
+                            Strategy & content generation work without this
+                          </span>
+                        </div>
+                      ) : (
+                        <>
                           <Button
-                            variant="outline"
                             size="sm"
-                            className="border-[#334155] text-gray-300 hover:text-white hover:bg-[#334155]"
+                            className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white hover:opacity-90"
+                            onClick={() => handleConnect(platform)}
+                            disabled={connectingPlatform === platform}
                           >
-                            <ExternalLink className="w-3.5 h-3.5 mr-1" />
-                            Setup
+                            {connectingPlatform === platform ? (
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            ) : (
+                              <Plug className="w-4 h-4 mr-2" />
+                            )}
+                            Connect
                           </Button>
-                        </a>
+                          {config.setupUrl && isAdmin && (
+                            <a
+                              href={config.setupUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-[#334155] text-gray-300 hover:text-white hover:bg-[#334155]"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5 mr-1" />
+                                Setup
+                              </Button>
+                            </a>
+                          )}
+                        </>
                       )}
                     </>
                   )}

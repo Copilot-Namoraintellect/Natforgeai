@@ -258,11 +258,11 @@ export default function AgentActivity() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
             <Activity className="w-6 h-6 text-[#00D4FF]" />
             Agent Activity
           </h1>
-          <p className="text-gray-400 mt-1">
+          <p className="text-slate-600 mt-1">
             Timeline of all AI agent executions and tasks
           </p>
         </div>
@@ -350,12 +350,14 @@ export default function AgentActivity() {
 
                       {run.status === "completed" && (
                         <div className="mt-2 flex items-center gap-2 flex-wrap">
-                          <Link to="/campaigns">
-                            <Button size="sm" variant="outline" className="border-[#334155] text-gray-300 hover:text-white h-7 text-xs">
-                              Open Campaign
-                              <ArrowRight className="w-3 h-3 ml-1" />
-                            </Button>
-                          </Link>
+                          {run.campaignId && (
+                            <Link to={`/campaigns?campaignId=${run.campaignId}`}>
+                              <Button size="sm" variant="outline" className="border-[#334155] text-gray-300 hover:text-white h-7 text-xs">
+                                Open Campaign
+                                <ArrowRight className="w-3 h-3 ml-1" />
+                              </Button>
+                            </Link>
+                          )}
                           {run.agentType === "strategy" && (
                             <Link to="/approvals">
                               <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
@@ -363,8 +365,8 @@ export default function AgentActivity() {
                               </Button>
                             </Link>
                           )}
-                          {run.agentType === "creative" && (
-                            <Link to="/content">
+                          {run.agentType === "creative" && run.campaignId && (
+                            <Link to={`/content?campaignId=${run.campaignId}`}>
                               <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
                                 View Content
                               </Button>

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,7 +8,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Link } from "react-router";
 import { useUsage } from "@/hooks/useUsage";
 import {
   Dialog,
@@ -34,15 +34,57 @@ import {
 import { toast } from "sonner";
 
 export default function Campaigns() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlCampaignId = searchParams.get("campaignId");
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [viewCampaign, setViewCampaign] = useState<any>(null);
   const [highlightedId, setHighlightedId] = useState<number | null>(null);
   const [filter, setFilter] = useState<string>("all");
   const utils = trpc.useUtils();
-  const { campaigns: campaignUsage, results: resultUsage, isLoading: usageLoading } = useUsage();
+  const { campaigns: campaignUsage, results: resultUsage, isLoading: usageLoading, tierName } = useUsage();
 
   const { data: campaigns, isLoading } = trpc.campaign.list.useQuery();
+
+  // Fetch pending approvals for the viewed campaign to wire strategy approval into workflow
+  const { data: campaignPendingApprovals } = trpc.approval.listApprovals.useQuery(
+    { campaignId: viewCampaign?.id ?? 0, status: "pending" },
+    { enabled: !!viewCampaign }
+  );
+  const strategyApproval = campaignPendingApprovals?.find(
+    (a) => a.approvalType === "strategy_review"
+  );
+
+  const approveStrategyMutation = trpc.approval.approveAction.useMutation({
+    onSuccess: () => {
+      toast.success("Strategy approved. NatForgeAI is generating your content plan.");
+      utils.campaign.list.invalidate();
+      utils.agent.getAgentRuns.invalidate();
+      utils.content.list.invalidate();
+      utils.approval.listApprovals.invalidate();
+      setViewCampaign(null);
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to approve strategy");
+    },
+  });
+
+  // Auto-open campaign detail when navigated with ?campaignId=xxx
+  useEffect(() => {
+    if (urlCampaignId && campaigns) {
+      const id = Number(urlCampaignId);
+      const camp = campaigns.find((c) => c.id === id);
+      if (camp) {
+        setViewCampaign(camp);
+        setHighlightedId(id);
+        setTimeout(() => setHighlightedId(null), 4000);
+        // Clean up URL
+        searchParams.delete("campaignId");
+        setSearchParams(searchParams, { replace: true });
+      }
+    }
+  }, [urlCampaignId, campaigns]);
+
   const createMutation = trpc.campaign.create.useMutation({
     onSuccess: async (data) => {
       utils.campaign.list.invalidate();
@@ -78,11 +120,13 @@ export default function Campaigns() {
   });
   const runCreativeAgent = trpc.agent.runCreativeAgent.useMutation({
     onSuccess: () => {
-      toast.success("Creative generation started!");
+      toast.success("Strategy approved. NatForgeAI is generating your content plan.");
       utils.campaign.list.invalidate();
+      utils.agent.getAgentRuns.invalidate();
+      utils.content.list.invalidate();
     },
     onError: (err) => {
-      toast.error(err.message || "Failed to start creative generation");
+      toast.error(err.message || "Failed to generate creative content. The campaign is blocked. Please retry from Mission Control.");
     },
   });
 
@@ -172,6 +216,7 @@ export default function Campaigns() {
   function getContinueAction(camp: any) {
     const state = camp.workflowState;
     if (state === "strategy_generated") return { label: "Review Strategy", href: "/approvals" };
+    if (state === "creatives_ready") return { label: "Review Content", href: `/content?campaignId=${camp.id}` };
     if (state === "launch_approval_required") return { label: "Approve Launch", href: "/approvals" };
     if (state === "strategy_pending" || state === "creatives_generating" || state === "audience_generating") return { label: "View Progress", href: "/agent-activity" };
     if (state === "campaign_live" || state === "engagement_active" || state === "leads_converting" || state === "optimisation_active") return { label: "View Analytics", href: "/analytics" };
@@ -236,7 +281,7 @@ export default function Campaigns() {
                     </div>
                     <div>
                       <p className="text-sm font-semibold text-[#0F172A]">
-                        Free Plan Usage
+                        {tierName} Plan Usage
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {campaignUsage.used}/{campaignUsage.limit} campaigns · {resultUsage.used}/{resultUsage.limit} results
@@ -296,7 +341,7 @@ export default function Campaigns() {
                 <div>
                   <p className="text-lg font-semibold text-[#0F172A]">Campaign Limit Reached</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    You've used all {campaignUsage.limit} campaigns on your free plan.
+                    You've used all {campaignUsage.limit} campaigns on your {tierName} plan.
                   </p>
                 </div>
                 <Button asChild className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white">
@@ -646,18 +691,37 @@ export default function Campaigns() {
                 {viewCampaign.workflowState === "strategy_generated" && (
                   <Button
                     className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
+                    disabled={approveStrategyMutation.isPending}
                     onClick={() => {
-                      updateMutation.mutate({
-                        id: viewCampaign.id,
-                        status: "active",
-                        workflowState: "strategy_approved",
-                      } as any);
-                      setViewCampaign({ ...viewCampaign, status: "active", workflowState: "strategy_approved" });
-                      runCreativeAgent.mutate({ campaignId: viewCampaign.id });
-                      toast.success("Strategy approved! Generating creative assets...");
+                      if (strategyApproval) {
+                        approveStrategyMutation.mutate({ approvalId: strategyApproval.id });
+                      } else {
+                        // Fallback for legacy campaigns without approval request
+                        updateMutation.mutate(
+                          {
+                            id: viewCampaign.id,
+                            status: "active",
+                            workflowState: "strategy_approved",
+                          },
+                          {
+                            onSuccess: () => {
+                              runCreativeAgent.mutate({ campaignId: viewCampaign.id });
+                            },
+                          }
+                        );
+                        setViewCampaign({ ...viewCampaign, status: "active", workflowState: "strategy_approved" });
+                        toast.info("Approving strategy and starting content generation...");
+                      }
                     }}
                   >
-                    Approve Strategy
+                    {approveStrategyMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Approving...
+                      </>
+                    ) : (
+                      "Approve Strategy"
+                    )}
                   </Button>
                 )}
                 {viewCampaign.workflowState === "launch_approval_required" && (

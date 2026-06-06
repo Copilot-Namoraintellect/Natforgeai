@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,8 +40,8 @@ import {
   Trash2,
   Search,
   ArrowRight,
+  X,
 } from "lucide-react";
-import { Link } from "react-router";
 import { toast } from "sonner";
 
 const platforms = [
@@ -55,6 +56,8 @@ const platforms = [
 const tones = ["friendly", "premium", "bold", "professional", "casual", "urgent"];
 
 export default function ContentStudio() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlCampaignId = searchParams.get("campaignId");
   const [activeTab, setActiveTab] = useState("all");
   const [createOpen, setCreateOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
@@ -72,13 +75,14 @@ export default function ContentStudio() {
   const [search, setSearch] = useState("");
 
   const utils = trpc.useUtils();
-  const { data: contents, isLoading } = trpc.content.list.useQuery(
-    activeTab === "all"
-      ? undefined
-      : activeTab === "ai_generated"
-      ? { aiGenerated: true }
-      : { type: activeTab as any }
-  );
+  const listInput = (() => {
+    const base: any = {};
+    if (urlCampaignId) base.campaignId = Number(urlCampaignId);
+    if (activeTab === "ai_generated") base.aiGenerated = true;
+    else if (activeTab !== "all") base.type = activeTab;
+    return Object.keys(base).length > 0 ? base : undefined;
+  })();
+  const { data: contents, isLoading } = trpc.content.list.useQuery(listInput);
 
   const createMutation = trpc.content.create.useMutation({
     onSuccess: () => {
@@ -194,6 +198,25 @@ Include:
           <p className="text-muted-foreground mt-1">
             Create, generate, and manage your marketing content.
           </p>
+          {urlCampaignId && (
+            <div className="mt-2 flex items-center gap-2">
+              <Badge variant="secondary" className="text-xs">
+                Filtered by Campaign #{urlCampaignId}
+              </Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={() => {
+                  searchParams.delete("campaignId");
+                  setSearchParams(searchParams);
+                }}
+              >
+                <X className="w-3 h-3 mr-1" />
+                Clear filter
+              </Button>
+            </div>
+          )}
         </div>
         <div className="flex gap-2">
           <Dialog open={aiOpen} onOpenChange={setAiOpen}>

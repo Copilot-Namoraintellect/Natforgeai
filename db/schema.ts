@@ -515,6 +515,7 @@ export const approvalRequests = mysqlTable("approval_requests", {
     "ad_spend",
     "shutdown",
     "brand_risk",
+    "strategy_review",
   ]).notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   description: text("description"),

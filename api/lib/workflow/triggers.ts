@@ -33,6 +33,25 @@ export async function onAgentRunComplete(runId: number) {
   // Auto-advance workflow based on agent completion
   if (state === "strategy_pending" && run.agentType === "strategy") {
     await transitionCampaignState(run.campaignId, run.userId, "generate_strategy");
+
+    // Create strategy approval request
+    const [updatedCampaign] = await db
+      .select()
+      .from(campaigns)
+      .where(eq(campaigns.id, run.campaignId))
+      .limit(1);
+
+    if (updatedCampaign) {
+      await createApprovalRequest({
+        userId: run.userId,
+        campaignId: run.campaignId,
+        approvalType: "strategy_review",
+        title: `Approve Strategy: ${updatedCampaign.name}`,
+        description: `The strategy for "${updatedCampaign.name}" has been generated. Review and approve to continue to creative content generation.`,
+        aiRecommendation: "Based on the campaign goal and target audience, this strategy aligns with best practices for the selected platforms.",
+        riskLevel: "low",
+      });
+    }
   } else if (state === "creatives_generating" && run.agentType === "creative") {
     await transitionCampaignState(run.campaignId, run.userId, "creatives_complete");
 
@@ -119,6 +138,12 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
       }
     }
     // If rejected, leave them as pending_approval / safety_blocked
+  } else if (request.approvalType === "strategy_review") {
+    if (decision === "approved") {
+      await onStrategyApproved(campaignId, userId);
+    } else {
+      await transitionCampaignState(campaignId, userId, "request_strategy_changes");
+    }
   }
 }
 
@@ -141,6 +166,9 @@ export async function onStrategyApproved(campaignId: number, userId: number) {
 
   // Transition to strategy_approved
   await transitionCampaignState(campaignId, userId, "approve_strategy");
+
+  // Transition to creatives_generating before running the creative agent
+  await transitionCampaignState(campaignId, userId, "generate_creatives");
 
   // Auto-trigger creative agent
   try {

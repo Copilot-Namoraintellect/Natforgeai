@@ -36,6 +36,7 @@ const approvalTypeLabels: Record<string, string> = {
   ad_spend: "Paid Ad Spend",
   shutdown: "Campaign Shutdown",
   brand_risk: "Brand Risk Content",
+  strategy_review: "Strategy Review",
 };
 
 export default function ApprovalCentre() {

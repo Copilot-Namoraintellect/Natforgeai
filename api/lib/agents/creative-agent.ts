@@ -2,7 +2,7 @@ import { z } from "zod";
 import { runAgent } from "./runner";
 import { getDb } from "../../queries/connection";
 import { campaigns, contentPosts, campaignAssets } from "@db/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 
 const ContentCalendarSchema = z.object({
   days: z.array(
@@ -43,9 +43,9 @@ const CreativeAssetsSchema = z.object({
       ]),
       title: z.string(),
       content: z.string(),
-      prompt: z.string().optional(),
-      platform: z.string().optional(),
-      variations: z.array(z.string()).optional(),
+      prompt: z.string().nullable(),
+      platform: z.string().nullable(),
+      variations: z.array(z.string()).nullable(),
     })
   ),
 });
@@ -113,7 +113,64 @@ Respond with structured data.`;
       "You are an expert content strategist who creates engaging, platform-optimized social media content calendars. You understand Instagram, TikTok, Facebook, LinkedIn, Twitter/X, and email marketing. Always respond with valid structured data.",
   });
 
-  // Step 2: Generate additional creative assets
+  // Save content calendar to campaign immediately (before assets)
+  await db
+    .update(campaigns)
+    .set({
+      contentCalendar: calendarResult.output.days as any,
+      workflowContext: {
+        ...(strategyContext || {}),
+        creativeGeneratedAt: new Date().toISOString(),
+        creativeRunId: calendarResult.runId,
+      } as any,
+    })
+    .where(eq(campaigns.id, campaignId));
+
+  // Prevent duplicate content posts on retry: delete existing aiGenerated drafts
+  const existingDrafts = await db
+    .select()
+    .from(contentPosts)
+    .where(
+      and(
+        eq(contentPosts.campaignId, campaignId),
+        eq(contentPosts.aiGenerated, true),
+        eq(contentPosts.status, "draft")
+      )
+    );
+
+  for (const draft of existingDrafts) {
+    await db.delete(contentPosts).where(eq(contentPosts.id, draft.id));
+  }
+
+  // Create content_posts records from calendar (best-effort)
+  let savedPosts = 0;
+  for (const day of calendarResult.output.days) {
+    for (const post of day.posts) {
+      try {
+        await db.insert(contentPosts).values({
+          userId,
+          campaignId,
+          title: post.title,
+          type: post.type,
+          platform: post.platform,
+          hook: post.hook,
+          caption: post.caption,
+          cta: post.cta,
+          hashtags: Array.isArray(post.hashtags) ? post.hashtags.join(" ") : post.hashtags,
+          visualPrompt: post.visualPrompt,
+          status: "draft",
+          aiGenerated: true,
+          scheduledFor: new Date(day.date),
+        });
+        savedPosts++;
+      } catch (err: any) {
+        console.error("[CreativeAgent] Failed to save content post:", err.message);
+      }
+    }
+  }
+  console.log(`[CreativeAgent] Saved ${savedPosts} content posts for campaign ${campaignId}`);
+
+  // Step 2: Generate additional creative assets (optional - don't fail the whole workflow)
   const assetsPrompt = `You are a creative director. Generate additional marketing assets for this campaign.
 
 CAMPAIGN DETAILS:
@@ -132,75 +189,72 @@ Generate:
 5. A carousel post outline (5 slides)
 6. 3 CTA variations for different funnel stages
 
-Respond with structured data.`;
+Respond with structured data. Always include prompt, platform, and variations keys for every asset. Use null when they do not apply.`;
 
-  const assetsResult = await runAgent({
-    userId,
-    campaignId,
-    agentType: "creative",
-    prompt: assetsPrompt,
-    schema: CreativeAssetsSchema,
-    system:
-      "You are an expert copywriter and creative director. You create high-converting marketing assets across all channels. Always respond with valid structured data.",
-  });
+  let assetsResult: { runId: number; output: z.infer<typeof CreativeAssetsSchema> } | undefined;
+  let assetsError: string | undefined;
+  try {
+    assetsResult = await runAgent({
+      userId,
+      campaignId,
+      agentType: "creative",
+      prompt: assetsPrompt,
+      schema: CreativeAssetsSchema,
+      system:
+        "You are an expert copywriter and creative director. You create high-converting marketing assets across all channels. Always respond with valid structured data. Always include prompt, platform, and variations keys. Use null when a field does not apply.",
+    });
+  } catch (err: any) {
+    console.error("[CreativeAgent] Assets generation failed:", err.message);
+    assetsError = err.message;
+    // Continue without assets - calendar and posts are the core deliverables
+  }
 
-  // Save content calendar to campaign
+  // Update campaign with final context including assets info
   await db
     .update(campaigns)
     .set({
-      contentCalendar: calendarResult.output.days as any,
-      workflowState: "creatives_ready",
       workflowContext: {
         ...(strategyContext || {}),
         creativeGeneratedAt: new Date().toISOString(),
         creativeRunId: calendarResult.runId,
-        assetsRunId: assetsResult.runId,
+        assetsRunId: assetsResult?.runId ?? null,
+        assetsGenerationError: assetsError ?? null,
       } as any,
     })
     .where(eq(campaigns.id, campaignId));
 
-  // Create content_posts records from calendar
-  for (const day of calendarResult.output.days) {
-    for (const post of day.posts) {
-      await db.insert(contentPosts).values({
-        userId,
-        campaignId,
-        title: post.title,
-        type: post.type,
-        platform: post.platform,
-        hook: post.hook,
-        caption: post.caption,
-        cta: post.cta,
-        hashtags: post.hashtags.join(" "),
-        visualPrompt: post.visualPrompt,
-        status: "draft",
-        aiGenerated: true,
-        scheduledFor: new Date(day.date),
-      });
+  // Create campaign_assets records (best-effort)
+  let savedAssets = 0;
+  if (assetsResult) {
+    for (const asset of assetsResult.output.assets) {
+      try {
+        await db.insert(campaignAssets).values({
+          userId,
+          campaignId,
+          assetType: asset.assetType,
+          title: asset.title,
+          prompt: asset.prompt ?? null,
+          status: "ready",
+          metadata: {
+            content: asset.content,
+            platform: asset.platform,
+            variations: asset.variations,
+          } as any,
+        });
+        savedAssets++;
+      } catch (err: any) {
+        console.error("[CreativeAgent] Failed to save campaign asset:", err.message);
+      }
     }
   }
-
-  // Create campaign_assets records
-  for (const asset of assetsResult.output.assets) {
-    await db.insert(campaignAssets).values({
-      userId,
-      campaignId,
-      assetType: asset.assetType,
-      title: asset.title,
-      prompt: asset.prompt || null,
-      status: "ready",
-      metadata: {
-        content: asset.content,
-        platform: asset.platform,
-        variations: asset.variations,
-      } as any,
-    });
-  }
+  console.log(`[CreativeAgent] Saved ${savedAssets} campaign assets for campaign ${campaignId}`);
 
   return {
     calendarRunId: calendarResult.runId,
-    assetsRunId: assetsResult.runId,
+    assetsRunId: assetsResult?.runId ?? null,
     calendar: calendarResult.output,
-    assets: assetsResult.output,
+    assets: assetsResult?.output ?? null,
+    savedPosts,
+    savedAssets,
   };
 }

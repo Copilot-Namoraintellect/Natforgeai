@@ -10,6 +10,7 @@ import { runAudienceAgent } from "./lib/agents/audience-agent";
 import { generateReply } from "./lib/agents/engagement-agent";
 import { generateFollowUpSequence, generateProposal, generateMeetingPrompt } from "./lib/agents/sales-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
+import { transitionCampaignState } from "./lib/workflow/engine";
 import { TRPCError } from "@trpc/server";
 
 export const agentRouter = createRouter({
@@ -120,12 +121,23 @@ export const agentRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
 
+      // Transition campaign to creatives_generating before starting
+      try {
+        await transitionCampaignState(input.campaignId, ctx.user.id, "generate_creatives");
+      } catch {
+        // If transition fails (wrong current state), continue anyway and let the agent run
+      }
+
       const result = await runCreativeAgent({
         userId: ctx.user.id,
         campaignId: input.campaignId,
       });
 
-      await onAgentRunComplete(result.calendarRunId);
+      try {
+        await onAgentRunComplete(result.calendarRunId);
+      } catch (err: any) {
+        console.error("[AgentRouter] onAgentRunComplete failed:", err.message);
+      }
 
       return { success: true, ...result };
     }),

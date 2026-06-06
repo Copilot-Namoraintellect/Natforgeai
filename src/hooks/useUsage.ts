@@ -19,6 +19,7 @@ export function useUsage() {
   return {
     isLoading,
     tier,
+    tierName: tier?.name ?? "Free",
     usage,
     campaigns: {
       used: campaignsUsed,

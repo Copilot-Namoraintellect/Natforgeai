@@ -114,6 +114,23 @@ export const campaignRouter = createRouter({
         funnelStages: z.any().optional(),
         offers: z.any().optional(),
         ctaStrategy: z.string().optional(),
+        workflowState: z.enum([
+          "business_onboarding",
+          "strategy_pending",
+          "strategy_generated",
+          "strategy_approved",
+          "creatives_generating",
+          "creatives_ready",
+          "audience_generating",
+          "audience_ready",
+          "schedule_generated",
+          "launch_approval_required",
+          "campaign_live",
+          "engagement_active",
+          "leads_converting",
+          "optimisation_active",
+          "completed",
+        ]).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {

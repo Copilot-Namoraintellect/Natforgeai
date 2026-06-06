@@ -20,6 +20,13 @@ import { setOAuthState, getOAuthState, deleteOAuthState } from "./lib/integratio
 import { encryptToken, decryptToken } from "./lib/crypto";
 
 export const integrationRouter = createRouter({
+  getPlatformConfigStatus: authedQuery.query(async () => {
+    return Object.entries(platformConfigs).map(([platform, config]) => ({
+      platform,
+      configured: !!(config && config.clientId),
+    }));
+  }),
+
   getOAuthUrl: authedQuery
     .input(
       z.object({

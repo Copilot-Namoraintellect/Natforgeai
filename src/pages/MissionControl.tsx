@@ -44,7 +44,7 @@ const workflowNextAction: Record<string, { text: string; actionLabel?: string; a
   strategy_generated: { text: "Review your strategy before continuing.", actionLabel: "Review Strategy", actionHref: "/approvals" },
   strategy_approved: { text: "Creative assets are being generated." },
   creatives_generating: { text: "NatForgeAI is generating creative content." },
-  creatives_ready: { text: "Creative content is ready for review." },
+  creatives_ready: { text: "Creative content is ready for review.", actionLabel: "Review Content", actionHref: "/content" },
   audience_generating: { text: "Audience segments are being identified." },
   audience_ready: { text: "Audience profiles are ready." },
   schedule_generated: { text: "Publishing schedule is ready for approval.", actionLabel: "Review Schedule", actionHref: "/approvals" },
@@ -77,6 +77,7 @@ const journeyStage: Record<string, string> = {
 function getContinueAction(campaign: any) {
   const state = campaign.workflowState;
   if (state === "strategy_generated") return { label: "Review Strategy", href: "/approvals" };
+  if (state === "creatives_ready") return { label: "Review Content", href: `/content?campaignId=${campaign.id}` };
   if (state === "launch_approval_required") return { label: "Approve Launch", href: "/approvals" };
   if (state === "strategy_pending" || state === "creatives_generating" || state === "audience_generating") return { label: "View Progress", href: "/agent-activity" };
   if (state === "campaign_live" || state === "engagement_active" || state === "leads_converting" || state === "optimisation_active") return { label: "View Analytics", href: "/analytics" };
@@ -180,11 +181,11 @@ export default function MissionControl() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
             <Rocket className="w-6 h-6 text-[#00D4FF]" />
             Mission Control
           </h1>
-          <p className="text-gray-400 mt-1">{dailySummary}</p>
+          <p className="text-slate-600 mt-1">{dailySummary}</p>
         </div>
         <div className="flex items-center gap-3">
           {approvalCount > 0 && (
@@ -231,7 +232,7 @@ export default function MissionControl() {
       {/* Active Campaigns */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+          <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
             <Megaphone className="w-5 h-5 text-[#00D4FF]" />
             Campaign Workflow
           </h2>
