@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { subscriptions, subscriptionTiers } from "@db/schema";
@@ -58,6 +59,14 @@ export const subscriptionRouter = createRouter({
 
       if (!tier) throw new Error("Tier not found");
 
+      // Block paid tier subscriptions until payment flow is implemented
+      if (tier.priceUsd > 0) {
+        throw new TRPCError({
+          code: "NOT_IMPLEMENTED",
+          message: "Online subscription payments are not enabled yet. Please contact support to upgrade.",
+        });
+      }
+
       // Cancel any existing active subscription
       await db
         .update(subscriptions)
@@ -82,7 +91,7 @@ export const subscriptionRouter = createRouter({
       const [result] = await db.insert(subscriptions).values({
         userId: ctx.user.id,
         tierId: input.tierId,
-        status: tier.priceUsd === 0 ? "active" : "active",
+        status: "active",
         currentPeriodStart: now,
         currentPeriodEnd: periodEnd,
         paymentMethod: (input.paymentMethod as any) || "manual",

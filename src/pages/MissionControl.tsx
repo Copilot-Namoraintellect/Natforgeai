@@ -17,6 +17,7 @@ import {
   ArrowRight,
   BarChart3,
   Loader2,
+  Target,
 } from "lucide-react";
 
 const workflowStateLabels: Record<string, { label: string; color: string; step: number }> = {
@@ -55,11 +56,40 @@ const workflowNextAction: Record<string, { text: string; actionLabel?: string; a
   completed: { text: "Campaign cycle completed." },
 };
 
+const journeyStage: Record<string, string> = {
+  business_onboarding: "Draft",
+  strategy_pending: "Strategy Generating",
+  strategy_generated: "Strategy Ready",
+  strategy_approved: "Content Plan Ready",
+  creatives_generating: "Content Generating",
+  creatives_ready: "Content Ready for Review",
+  audience_generating: "Audience Research",
+  audience_ready: "Audience Ready",
+  schedule_generated: "Scheduled",
+  launch_approval_required: "Awaiting Launch Approval",
+  campaign_live: "Published",
+  engagement_active: "Leads Captured",
+  leads_converting: "Leads Captured",
+  optimisation_active: "Optimising",
+  completed: "Completed",
+};
+
+function getContinueAction(campaign: any) {
+  const state = campaign.workflowState;
+  if (state === "strategy_generated") return { label: "Review Strategy", href: "/approvals" };
+  if (state === "launch_approval_required") return { label: "Approve Launch", href: "/approvals" };
+  if (state === "strategy_pending" || state === "creatives_generating" || state === "audience_generating") return { label: "View Progress", href: "/agent-activity" };
+  if (state === "campaign_live" || state === "engagement_active" || state === "leads_converting" || state === "optimisation_active") return { label: "View Analytics", href: "/analytics" };
+  return null;
+}
+
 export default function MissionControl() {
   const { data: campaigns, isLoading: campaignsLoading } = trpc.campaign.list.useQuery();
   const { data: agentRuns } = trpc.agent.getAgentRuns.useQuery({ status: "completed" });
+  const { data: runningAgents } = trpc.agent.getAgentRuns.useQuery({ status: "running" });
   const { data: pendingApprovals } = trpc.approval.listApprovals.useQuery({ status: "pending" });
   const { data: leads } = trpc.lead.list.useQuery();
+  const { data: wallet } = trpc.billing.myWallet.useQuery();
 
   const aiCampaigns = useMemo(
     () => campaigns?.filter((c) => c.aiGenerated) || [],
@@ -92,21 +122,23 @@ export default function MissionControl() {
   const completedAgentRuns = agentRuns?.length ?? 0;
 
   const dailySummary = useMemo(() => {
-    const postsGenerated = agentRuns?.filter((r) => r.agentType === "creative").length ?? 0;
-    const prospectsIdentified = agentRuns?.filter((r) => r.agentType === "audience").length ?? 0;
+    const runningCount = runningAgents?.length ?? 0;
+    const pendingReviewCount = pendingReviews.length;
     const hotLeads = leads?.filter((l) => l.score && l.score > 80).length ?? 0;
 
     let message = "NatForge is ready to launch your first campaign.";
-    if (completedAgentRuns > 0) {
-      message = `NatForge has generated ${postsGenerated * 5} posts, identified ${prospectsIdentified * 10} prospects`;
-      if (hotLeads > 0) message += ` and found ${hotLeads} hot lead${hotLeads !== 1 ? "s" : ""}`;
-      message += ".";
-    }
-    if (approvalCount > 0) {
-      message += ` ${approvalCount} approval${approvalCount !== 1 ? "s" : ""} needed.`;
+    if (aiCampaigns.length > 0) {
+      if (runningCount > 0) {
+        message = `NatForgeAI is working on ${runningCount} active task${runningCount !== 1 ? "s" : ""}.`;
+      } else if (pendingReviewCount > 0) {
+        message = `You have ${pendingReviewCount} campaign${pendingReviewCount !== 1 ? "s" : ""} waiting for your review.`;
+      } else {
+        message = "Your campaigns are running smoothly.";
+      }
+      if (hotLeads > 0) message += ` ${hotLeads} hot lead${hotLeads !== 1 ? "s" : ""} captured.`;
     }
     return message;
-  }, [agentRuns, leads, approvalCount, completedAgentRuns]);
+  }, [aiCampaigns.length, runningAgents, pendingReviews.length, leads]);
 
   const stats = [
     {
@@ -230,6 +262,8 @@ export default function MissionControl() {
               };
               const progressPercent = (stateInfo.step / 15) * 100;
               const nextAction = workflowNextAction[campaign.workflowState];
+              const continueAction = getContinueAction(campaign);
+              const stage = journeyStage[campaign.workflowState] || "Draft";
 
               return (
                 <Card key={campaign.id} className="bg-[#1E293B] border-[#334155]">
@@ -239,12 +273,15 @@ export default function MissionControl() {
                         <h3 className="font-semibold text-white">{campaign.name}</h3>
                         <p className="text-sm text-gray-400">{campaign.goal}</p>
                       </div>
-                      <Badge className={stateInfo.color}>{stateInfo.label}</Badge>
+                      <div className="flex flex-col items-end gap-1">
+                        <Badge className={stateInfo.color}>{stateInfo.label}</Badge>
+                        <span className="text-[10px] text-gray-500">{stage}</span>
+                      </div>
                     </div>
 
                     <div className="space-y-2">
                       <div className="flex justify-between text-xs text-gray-400">
-                        <span>Workflow Progress</span>
+                        <span>Journey Progress</span>
                         <span>{Math.round(progressPercent)}%</span>
                       </div>
                       <Progress value={progressPercent} className="h-1.5" />
@@ -257,23 +294,35 @@ export default function MissionControl() {
                     )}
 
                     <div className="flex items-center gap-3 mt-3">
-                      <Link to={`/campaigns`}>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="border-[#334155] text-gray-300 hover:text-white hover:bg-[#334155]"
-                        >
-                          View Details
-                          <ArrowRight className="w-3 h-3 ml-1" />
-                        </Button>
-                      </Link>
+                      {continueAction ? (
+                        <Link to={continueAction.href}>
+                          <Button
+                            size="sm"
+                            className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
+                          >
+                            <Rocket className="w-3 h-3 mr-1" />
+                            Continue Campaign
+                          </Button>
+                        </Link>
+                      ) : (
+                        <Link to={`/campaigns`}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-[#334155] text-gray-300 hover:text-white hover:bg-[#334155]"
+                          >
+                            View Details
+                            <ArrowRight className="w-3 h-3 ml-1" />
+                          </Button>
+                        </Link>
+                      )}
                       {campaign.workflowState === "strategy_pending" && (
                         <Button size="sm" variant="outline" disabled className="border-[#334155] text-gray-400">
                           <Loader2 className="w-3 h-3 mr-1 animate-spin" />
                           Preparing Strategy
                         </Button>
                       )}
-                      {nextAction?.actionLabel && nextAction?.actionHref && (
+                      {nextAction?.actionLabel && nextAction?.actionHref && !continueAction && (
                         <Link to={nextAction.actionHref}>
                           <Button
                             size="sm"
@@ -293,12 +342,73 @@ export default function MissionControl() {
 
         {/* Side Panel */}
         <div className="space-y-4">
-          {/* Agent Activity */}
+          {/* Status Overview */}
+          <Card className="bg-[#1E293B] border-[#334155]">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-white text-base flex items-center gap-2">
+                <Target className="w-4 h-4 text-[#00D4FF]" />
+                Status Overview
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {runningAgents && runningAgents.length > 0 ? (
+                <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />
+                    <span className="text-xs font-medium text-blue-400">AI Working</span>
+                  </div>
+                  <p className="text-xs text-gray-300">
+                    {runningAgents.length} task{runningAgents.length !== 1 ? "s" : ""} running
+                  </p>
+                </div>
+              ) : null}
+              {pendingReviews.length + approvalCount > 0 && (
+                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                  <div className="flex items-center gap-2 mb-1">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
+                    <span className="text-xs font-medium text-amber-400">Action Needed</span>
+                  </div>
+                  <p className="text-xs text-gray-300">
+                    {pendingReviews.length + approvalCount} item{pendingReviews.length + approvalCount !== 1 ? "s" : ""} need your attention
+                  </p>
+                </div>
+              )}
+              {wallet && wallet.balance < 10 && (
+                <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+                  <div className="flex items-center gap-2 mb-1">
+                    <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+                    <span className="text-xs font-medium text-red-400">Low Credits</span>
+                  </div>
+                  <p className="text-xs text-gray-300">
+                    {wallet.balance} credits remaining
+                  </p>
+                  <Link to="/pricing">
+                    <Button size="sm" variant="outline" className="mt-2 w-full text-xs border-red-500/30 text-red-400 hover:bg-red-500/10">
+                      Get Credits
+                    </Button>
+                  </Link>
+                </div>
+              )}
+              {runningAgents?.length === 0 && pendingReviews.length + approvalCount === 0 && (!wallet || wallet.balance >= 10) && (
+                <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                  <div className="flex items-center gap-2 mb-1">
+                    <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-xs font-medium text-emerald-400">All Good</span>
+                  </div>
+                  <p className="text-xs text-gray-300">
+                    No blockers. NatForgeAI is running smoothly.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Recent Agent Activity */}
           <Card className="bg-[#1E293B] border-[#334155]">
             <CardHeader className="pb-3">
               <CardTitle className="text-white text-base flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-purple-400" />
-                Recent Agent Activity
+                Recent Completed Work
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -308,16 +418,17 @@ export default function MissionControl() {
                     <div className="w-2 h-2 rounded-full bg-purple-400 mt-1.5 shrink-0" />
                     <div>
                       <p className="text-sm text-gray-300 capitalize">
-                        {run.agentType} Agent {run.status}
+                        {run.agentType} Agent completed
                       </p>
                       <p className="text-xs text-gray-500">
-                        {run.createdAt ? new Date(run.createdAt).toLocaleDateString() : "Recently"}
+                        {run.campaignId ? `Campaign #${run.campaignId}` : ""}
+                        {run.createdAt ? ` · ${new Date(run.createdAt).toLocaleDateString()}` : ""}
                       </p>
                     </div>
                   </div>
                 ))
               ) : (
-                <p className="text-sm text-gray-500">No agent activity yet</p>
+                <p className="text-sm text-gray-500">No completed work yet</p>
               )}
               <Link to="/agent-activity">
                 <Button

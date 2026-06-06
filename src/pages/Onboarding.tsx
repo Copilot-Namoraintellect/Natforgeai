@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,7 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
+import { useUsage } from "@/hooks/useUsage";
 import {
   Building2,
   Target,
@@ -28,6 +29,8 @@ import {
   Wallet,
   MessageSquare,
   Check,
+  AlertTriangle,
+  Megaphone,
 } from "lucide-react";
 
 const brandTones = [
@@ -70,7 +73,8 @@ export default function Onboarding() {
   const utils = trpc.useUtils();
   const [step, setStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
+  const [limitBlocked, setLimitBlocked] = useState(false);
+  const { campaigns: campaignUsage } = useUsage();
   const [businessForm, setBusinessForm] = useState({
     name: "",
     website: "",
@@ -162,7 +166,10 @@ export default function Onboarding() {
   const handleComplete = async () => {
     setIsSubmitting(true);
     try {
-      // Create business
+      // Check campaign limit BEFORE creating anything
+      const atLimit = campaignUsage.atLimit;
+
+      // Always create business profile first
       const businessResult = await createBusiness.mutateAsync({
         name: businessForm.name,
         website: businessForm.website || undefined,
@@ -177,6 +184,15 @@ export default function Onboarding() {
         preferredPlatforms: businessForm.preferredPlatforms.join(","),
       });
 
+      // Mark user onboarding as complete regardless of campaign limit
+      await updateUser.mutateAsync({ onboardingComplete: true });
+
+      if (atLimit) {
+        setLimitBlocked(true);
+        toast.info("Your business profile is saved. Campaign launch is blocked because your plan limit has been reached.");
+        return;
+      }
+
       const businessId = businessResult.id;
 
       // Start campaign workflow
@@ -188,9 +204,6 @@ export default function Onboarding() {
         approvalMode: automationForm.approvalMode,
         autoPublish: automationForm.approvalMode === "autonomous",
       });
-
-      // Mark user onboarding as complete
-      await updateUser.mutateAsync({ onboardingComplete: true });
 
       toast.success("Onboarding complete! Welcome to NatForge AI.");
       navigate("/mission-control");
@@ -631,6 +644,36 @@ export default function Onboarding() {
                     campaign. You will be notified of any actions requiring your approval.
                   </p>
                 </div>
+
+                {limitBlocked && (
+                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium text-amber-200">
+                          Campaign Launch Blocked
+                        </p>
+                        <p className="text-xs text-amber-200/70 mt-1">
+                          You have reached your plan limit ({campaignUsage.used}/{campaignUsage.limit} campaigns).
+                          Upgrade your plan or remove an existing campaign before creating another one.
+                        </p>
+                        <div className="flex gap-2 mt-3">
+                          <Link to="/pricing">
+                            <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white">
+                              View Plans
+                            </Button>
+                          </Link>
+                          <Link to="/campaigns">
+                            <Button size="sm" variant="outline" className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10">
+                              <Megaphone className="w-3.5 h-3.5 mr-1" />
+                              Go to Campaigns
+                            </Button>
+                          </Link>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

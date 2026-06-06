@@ -28,8 +28,8 @@ import {
   DollarSign,
   Crown,
   AlertCircle,
-  ArrowRight,
   Loader2,
+  Rocket,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -38,6 +38,7 @@ export default function Campaigns() {
   const [createOpen, setCreateOpen] = useState(false);
   const [viewCampaign, setViewCampaign] = useState<any>(null);
   const [highlightedId, setHighlightedId] = useState<number | null>(null);
+  const [filter, setFilter] = useState<string>("all");
   const utils = trpc.useUtils();
   const { campaigns: campaignUsage, results: resultUsage, isLoading: usageLoading } = useUsage();
 
@@ -85,9 +86,17 @@ export default function Campaigns() {
     },
   });
 
-  const filtered = campaigns?.filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = campaigns?.filter((c) => {
+    const matchesSearch = c.name.toLowerCase().includes(search.toLowerCase());
+    if (!matchesSearch) return false;
+    if (filter === "all") return true;
+    if (filter === "draft") return c.status === "draft" || c.workflowState === "business_onboarding";
+    if (filter === "strategy_pending") return c.workflowState === "strategy_pending";
+    if (filter === "strategy_ready") return c.workflowState === "strategy_generated";
+    if (filter === "active") return c.status === "active" || ["strategy_approved","creatives_generating","creatives_ready","audience_generating","audience_ready","schedule_generated","launch_approval_required","campaign_live","engagement_active","leads_converting","optimisation_active"].includes(c.workflowState);
+    if (filter === "completed") return c.workflowState === "completed" || c.status === "completed";
+    return true;
+  });
 
   const statusColors: Record<string, string> = {
     draft: "bg-amber-500/10 text-amber-600",
@@ -132,6 +141,43 @@ export default function Campaigns() {
     completed: { explanation: "This campaign has completed its cycle.", nextAction: "Review results or create a new campaign." },
   };
 
+  // User-facing autonomous journey stages
+  const journeyStage: Record<string, string> = {
+    business_onboarding: "Draft",
+    strategy_pending: "Strategy Generating",
+    strategy_generated: "Strategy Ready",
+    strategy_approved: "Content Plan Ready",
+    creatives_generating: "Content Generating",
+    creatives_ready: "Content Ready for Review",
+    audience_generating: "Audience Research",
+    audience_ready: "Audience Ready",
+    schedule_generated: "Scheduled",
+    launch_approval_required: "Awaiting Launch Approval",
+    campaign_live: "Published",
+    engagement_active: "Leads Captured",
+    leads_converting: "Leads Captured",
+    optimisation_active: "Optimising",
+    completed: "Completed",
+  };
+
+  const filterTabs = [
+    { key: "all", label: "All" },
+    { key: "draft", label: "Draft" },
+    { key: "strategy_pending", label: "Strategy Pending" },
+    { key: "strategy_ready", label: "Strategy Ready" },
+    { key: "active", label: "Active" },
+    { key: "completed", label: "Completed" },
+  ];
+
+  function getContinueAction(camp: any) {
+    const state = camp.workflowState;
+    if (state === "strategy_generated") return { label: "Review Strategy", href: "/approvals" };
+    if (state === "launch_approval_required") return { label: "Approve Launch", href: "/approvals" };
+    if (state === "strategy_pending" || state === "creatives_generating" || state === "audience_generating") return { label: "View Progress", href: "/agent-activity" };
+    if (state === "campaign_live" || state === "engagement_active" || state === "leads_converting" || state === "optimisation_active") return { label: "View Analytics", href: "/analytics" };
+    return null;
+  }
+
   function handleCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
@@ -149,48 +195,75 @@ export default function Campaigns() {
 
   return (
     <div className="space-y-6">
-      {/* Usage Banner */}
+      {/* Usage / Limit Banner */}
       {!usageLoading && (
-        <Card className="border-[#00D4FF]/20 bg-gradient-to-r from-[#00D4FF]/5 to-[#7C3AED]/5">
-          <CardContent className="p-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center">
-                  <Crown className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-[#0F172A]">
-                    Free Plan Usage
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {campaignUsage.used}/{campaignUsage.limit} campaigns · {resultUsage.used}/{resultUsage.limit} results
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-4 flex-1 max-w-md">
-                <div className="flex-1">
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-muted-foreground">Campaigns</span>
-                    <span className="font-medium">{campaignUsage.remaining} left</span>
+        <>
+          {isCampaignLimitReached ? (
+            <Card className="border-amber-500/30 bg-amber-500/5">
+              <CardContent className="p-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
+                      <AlertCircle className="w-5 h-5 text-amber-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-amber-700">
+                        Plan Limit Reached
+                      </p>
+                      <p className="text-xs text-amber-600/80">
+                        You have reached your plan limit ({campaignUsage.used}/{campaignUsage.limit} campaigns). Upgrade your plan or remove an existing campaign before creating another one.
+                      </p>
+                    </div>
                   </div>
-                  <Progress value={campaignUsage.percent} className="h-2" />
-                </div>
-                <div className="flex-1">
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-muted-foreground">Results</span>
-                    <span className="font-medium">{resultUsage.remaining} left</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button asChild size="sm" variant="outline" className="border-amber-500/30 text-amber-600 hover:bg-amber-500/10">
+                      <Link to="/pricing">View Plans</Link>
+                    </Button>
+                    <Button asChild size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white">
+                      <Link to="/pricing">Contact Support</Link>
+                    </Button>
                   </div>
-                  <Progress value={resultUsage.percent} className="h-2" />
                 </div>
-              </div>
-              {isCampaignLimitReached && (
-                <Button asChild size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white shrink-0">
-                  <Link to="/pricing">Upgrade</Link>
-                </Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="border-[#00D4FF]/20 bg-gradient-to-r from-[#00D4FF]/5 to-[#7C3AED]/5">
+              <CardContent className="p-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center">
+                      <Crown className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-[#0F172A]">
+                        Free Plan Usage
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {campaignUsage.used}/{campaignUsage.limit} campaigns · {resultUsage.used}/{resultUsage.limit} results
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 flex-1 max-w-md">
+                    <div className="flex-1">
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-muted-foreground">Campaigns</span>
+                        <span className="font-medium">{campaignUsage.remaining} left</span>
+                      </div>
+                      <Progress value={campaignUsage.percent} className="h-2" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-muted-foreground">Results</span>
+                        <span className="font-medium">{resultUsage.remaining} left</span>
+                      </div>
+                      <Progress value={resultUsage.percent} className="h-2" />
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </>
       )}
 
       <div className="flex items-center justify-between">
@@ -271,15 +344,30 @@ export default function Campaigns() {
         </Dialog>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <Input
-          className="pl-9"
-          placeholder="Search campaigns..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+      {/* Filters & Search */}
+      <div className="flex flex-col sm:flex-row gap-4">
+        <div className="flex flex-wrap gap-2">
+          {filterTabs.map((tab) => (
+            <Button
+              key={tab.key}
+              size="sm"
+              variant={filter === tab.key ? "default" : "outline"}
+              className={filter === tab.key ? "bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white" : ""}
+              onClick={() => setFilter(tab.key)}
+            >
+              {tab.label}
+            </Button>
+          ))}
+        </div>
+        <div className="relative flex-1 max-w-sm ml-auto">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            placeholder="Search campaigns..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
       </div>
 
       {/* Campaigns Grid */}
@@ -295,20 +383,36 @@ export default function Campaigns() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16">
             <Megaphone className="w-12 h-12 text-muted-foreground mb-4" />
-            <p className="text-lg font-medium">No campaigns yet</p>
-            <p className="text-sm text-muted-foreground mt-1 mb-4">
-              Create your first marketing campaign to get started.
+            <p className="text-lg font-medium">
+              {filter === "all" ? "No campaigns yet" : `No ${filterTabs.find(t => t.key === filter)?.label?.toLowerCase()} campaigns`}
             </p>
-            <Button onClick={() => setCreateOpen(true)} disabled={isCampaignLimitReached}>
-              <Plus className="w-4 h-4 mr-2" />
-              Create Campaign
-            </Button>
+            <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+              {filter === "all"
+                ? "Create your first marketing campaign to get started."
+                : filter === "draft"
+                ? "Draft campaigns will appear here once you start creating a campaign."
+                : filter === "strategy_pending"
+                ? "Campaigns with strategy generation in progress will appear here."
+                : filter === "strategy_ready"
+                ? "Campaigns ready for strategy review will appear here."
+                : filter === "active"
+                ? "Active campaigns that are live or in progress will appear here."
+                : "Completed campaigns will appear here."}
+            </p>
+            {filter === "all" && (
+              <Button onClick={() => setCreateOpen(true)} disabled={isCampaignLimitReached}>
+                <Plus className="w-4 h-4 mr-2" />
+                Create Campaign
+              </Button>
+            )}
           </CardContent>
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {(filtered ?? []).map((camp) => {
             const guidance = camp.workflowState ? workflowGuidance[camp.workflowState] : null;
+            const stage = camp.workflowState ? journeyStage[camp.workflowState] : "Draft";
+            const continueAction = getContinueAction(camp);
             return (
               <Card key={camp.id} className={`group hover:shadow-lg transition-all ${highlightedId === camp.id ? "ring-2 ring-[#00D4FF] shadow-[#00D4FF]/20" : ""}`}>
                 <CardContent className="p-5">
@@ -320,14 +424,9 @@ export default function Campaigns() {
                       >
                         {camp.status}
                       </Badge>
-                      {camp.aiGenerated && camp.workflowState && (
-                        <Badge
-                          variant="secondary"
-                          className={workflowStateLabels[camp.workflowState]?.color || "bg-muted"}
-                        >
-                          {workflowStateLabels[camp.workflowState]?.label || camp.workflowState}
-                        </Badge>
-                      )}
+                      <Badge variant="outline" className="text-[10px]">
+                        {stage}
+                      </Badge>
                     </div>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <Button
@@ -360,7 +459,7 @@ export default function Campaigns() {
                   {camp.aiGenerated && camp.workflowState && (
                     <div className="mt-2">
                       <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
-                        <span>Workflow</span>
+                        <span>Autonomous Journey</span>
                         <span>{Math.round((workflowStateLabels[camp.workflowState]?.step || 1) / 15 * 100)}%</span>
                       </div>
                       <Progress
@@ -370,11 +469,11 @@ export default function Campaigns() {
                     </div>
                   )}
                   <div className="flex items-center gap-2 mt-3 flex-wrap">
-                    {guidance?.actionLabel && guidance.actionHref && (
-                      <Link to={guidance.actionHref}>
+                    {continueAction && (
+                      <Link to={continueAction.href}>
                         <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
-                          {guidance.actionLabel}
-                          <ArrowRight className="w-3 h-3 ml-1" />
+                          <Rocket className="w-3 h-3 mr-1" />
+                          Continue Campaign
                         </Button>
                       </Link>
                     )}
@@ -421,7 +520,7 @@ export default function Campaigns() {
             <DialogHeader>
               <DialogTitle>{viewCampaign.name}</DialogTitle>
               <DialogDescription>
-                Campaign details and strategy document.
+                {viewCampaign.workflowState ? journeyStage[viewCampaign.workflowState] : "Campaign details and strategy document."}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-4">
@@ -437,7 +536,7 @@ export default function Campaigns() {
                 )}
                 {viewCampaign.workflowState && (
                   <Badge className={workflowStateLabels[viewCampaign.workflowState]?.color || "bg-muted"}>
-                    {workflowStateLabels[viewCampaign.workflowState]?.label || viewCampaign.workflowState}
+                    {journeyStage[viewCampaign.workflowState] || workflowStateLabels[viewCampaign.workflowState]?.label || viewCampaign.workflowState}
                   </Badge>
                 )}
               </div>
@@ -513,6 +612,20 @@ export default function Campaigns() {
                 </div>
               )}
               <div className="flex gap-3 pt-2 flex-wrap">
+                {(() => {
+                  const continueAction = getContinueAction(viewCampaign);
+                  if (continueAction) {
+                    return (
+                      <Link to={continueAction.href}>
+                        <Button className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white">
+                          <Rocket className="w-4 h-4 mr-2" />
+                          Continue Campaign
+                        </Button>
+                      </Link>
+                    );
+                  }
+                  return null;
+                })()}
                 {!viewCampaign.aiGenerated && (
                   <Button
                     variant="outline"
