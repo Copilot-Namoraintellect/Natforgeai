@@ -262,6 +262,7 @@ export const contentPosts = mysqlTable("content_posts", {
   publishedAt: timestamp("publishedAt"),
   engagementScore: int("engagementScore"),
   aiGenerated: boolean("aiGenerated").default(true).notNull(),
+  metadata: json("metadata"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
     .defaultNow()

@@ -14,12 +14,11 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useUsage } from "@/hooks/useUsage";
 import {
   Building2,
-  Target,
-  Sparkles,
   Rocket,
   ChevronRight,
   ChevronLeft,
@@ -31,6 +30,12 @@ import {
   Check,
   AlertTriangle,
   Megaphone,
+  Package,
+  Palette,
+  Plug,
+  TrendingUp,
+  ExternalLink,
+  AlertCircle,
 } from "lucide-react";
 
 const brandTones = [
@@ -68,6 +73,25 @@ const platforms = [
   { value: "email", label: "Email" },
 ];
 
+const campaignGoals = [
+  "Increase sales and revenue",
+  "Generate more leads",
+  "Build brand awareness",
+  "Grow social media following",
+  "Drive website traffic",
+  "Launch a new product",
+  "Retain existing customers",
+  "Enter a new market",
+];
+
+const assetTypes = [
+  { key: "logo", label: "Logo / Brand Assets" },
+  { key: "product_images", label: "Product Photos" },
+  { key: "testimonials", label: "Customer Testimonials" },
+  { key: "past_ads", label: "Past Ads / Content" },
+  { key: "brand_guide", label: "Brand Guidelines" },
+];
+
 export default function Onboarding() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
@@ -89,12 +113,38 @@ export default function Onboarding() {
     preferredPlatforms: [] as string[],
   });
 
-  const [strategyForm, setStrategyForm] = useState({
+  const [assetForm, setAssetForm] = useState({
+    selectedAssets: [] as string[],
+    productDescription: "",
+    uniqueSellingPoint: "",
+    pricePoint: "",
+  });
+
+  const [goalForm, setGoalForm] = useState({
+    primaryGoal: "",
+    secondaryGoal: "",
+    successMetric: "",
+    targetRevenue: "",
+  });
+
+  const [brandForm, setBrandForm] = useState({
+    brandTone: "",
+    visualStyle: "" as "modern" | "classic" | "minimal" | "bold" | "luxury" | "playful" | "",
+    colorPalette: "",
+    brandVoiceNotes: "",
+    avoidWords: "",
+  });
+
+  const [integrationForm, setIntegrationForm] = useState({
+    interestedPlatforms: [] as string[],
+  });
+
+  const [strategyForm] = useState({
     mode: "generate" as "upload" | "paste" | "generate",
     strategyText: "",
   });
 
-  const [automationForm, setAutomationForm] = useState({
+  const [automationForm] = useState({
     approvalMode: "assisted" as "assisted" | "autonomous",
     maxDailyAdSpend: "50",
     toneStrictness: "medium" as "low" | "medium" | "high",
@@ -102,6 +152,9 @@ export default function Onboarding() {
     requireApprovalBeforeReplying: true,
     requireApprovalForHighValueLeads: true,
   });
+
+  const { data: platformConfigStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
+  const { data: connectedIntegrations } = trpc.integration.getConnectedPlatforms.useQuery();
 
   const createBusiness = trpc.business.create.useMutation({
     onSuccess: () => {
@@ -117,7 +170,6 @@ export default function Onboarding() {
 
   const startWorkflow = trpc.autonomousWorkflow.startCampaignWorkflow.useMutation({
     onSuccess: (data) => {
-      // Trigger strategy generation if requested
       if (strategyForm.mode === "generate" && data.id) {
         generateStrategy.mutate({
           campaignId: data.id,
@@ -136,29 +188,87 @@ export default function Onboarding() {
     },
   });
 
-  const togglePlatform = (platform: string) => {
+  const totalSteps = 6;
+  const progress = (step / totalSteps) * 100;
+
+  const stepLabels = [
+    "Business Profile",
+    "Product Assets",
+    "Campaign Goal",
+    "Brand Style",
+    "Integrations",
+    "Review/Launch",
+  ];
+
+  const stepIcons = [Building2, Package, TrendingUp, Palette, Plug, Check];
+
+  function togglePlatform(platform: string) {
     setBusinessForm((prev) => ({
       ...prev,
       preferredPlatforms: prev.preferredPlatforms.includes(platform)
         ? prev.preferredPlatforms.filter((p) => p !== platform)
         : [...prev.preferredPlatforms, platform],
     }));
-  };
+  }
 
-  const handleNext = () => {
+  function toggleInterestedPlatform(platform: string) {
+    setIntegrationForm((prev) => ({
+      ...prev,
+      interestedPlatforms: prev.interestedPlatforms.includes(platform)
+        ? prev.interestedPlatforms.filter((p) => p !== platform)
+        : [...prev.interestedPlatforms, platform],
+    }));
+  }
+
+  function toggleAsset(assetKey: string) {
+    setAssetForm((prev) => ({
+      ...prev,
+      selectedAssets: prev.selectedAssets.includes(assetKey)
+        ? prev.selectedAssets.filter((a) => a !== assetKey)
+        : [...prev.selectedAssets, assetKey],
+    }));
+  }
+
+  function isPlatformConfigured(platform: string) {
+    return platformConfigStatus?.find((p) => p.platform === platform)?.configured === true;
+  }
+
+  function isPlatformConnected(platform: string) {
+    return connectedIntegrations?.some(
+      (i) => i.platform === platform && i.status === "connected"
+    );
+  }
+
+  function getStepValidationError() {
     if (step === 1) {
       if (!businessForm.name || !businessForm.industry) {
-        toast.error("Please fill in at least business name and industry");
-        return;
+        return "Please fill in at least business name and industry";
       }
     }
-    if (step === 2) {
-      if (strategyForm.mode === "paste" && !strategyForm.strategyText.trim()) {
-        toast.error("Please paste your strategy or choose another option");
-        return;
+    if (step === 3) {
+      if (!goalForm.primaryGoal) {
+        return "Please select a primary campaign goal";
       }
     }
-    setStep((s) => Math.min(s + 1, 4));
+    if (step === 4) {
+      if (!brandForm.brandTone) {
+        return "Please select a brand tone";
+      }
+    }
+    return null;
+  }
+
+  const handleNext = () => {
+    const error = getStepValidationError();
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    if (step === 2 && strategyForm.mode === "paste" && !strategyForm.strategyText.trim()) {
+      toast.error("Please paste your strategy or choose another option");
+      return;
+    }
+    setStep((s) => Math.min(s + 1, totalSteps));
   };
 
   const handleBack = () => setStep((s) => Math.max(s - 1, 1));
@@ -166,25 +276,22 @@ export default function Onboarding() {
   const handleComplete = async () => {
     setIsSubmitting(true);
     try {
-      // Check campaign limit BEFORE creating anything
       const atLimit = campaignUsage.atLimit;
 
-      // Always create business profile first
       const businessResult = await createBusiness.mutateAsync({
         name: businessForm.name,
         website: businessForm.website || undefined,
         industry: businessForm.industry || undefined,
         location: businessForm.location || undefined,
-        productOrService: businessForm.productOrService || undefined,
+        productOrService: businessForm.productOrService || assetForm.productDescription || undefined,
         targetCustomer: businessForm.targetCustomer || undefined,
         monthlyBudget: businessForm.monthlyBudget ? Number(businessForm.monthlyBudget) : undefined,
-        brandTone: businessForm.brandTone || undefined,
-        mainGoal: businessForm.mainGoal || undefined,
+        brandTone: brandForm.brandTone || businessForm.brandTone || undefined,
+        mainGoal: goalForm.primaryGoal || businessForm.mainGoal || undefined,
         whatsappNumber: businessForm.whatsappNumber || undefined,
         preferredPlatforms: businessForm.preferredPlatforms.join(","),
       });
 
-      // Mark user onboarding as complete regardless of campaign limit
       await updateUser.mutateAsync({ onboardingComplete: true });
 
       if (atLimit) {
@@ -195,11 +302,10 @@ export default function Onboarding() {
 
       const businessId = businessResult.id;
 
-      // Start campaign workflow
       await startWorkflow.mutateAsync({
         businessId,
         name: `${businessForm.name} Marketing Campaign`,
-        goal: businessForm.mainGoal || "Grow brand awareness and drive conversions",
+        goal: goalForm.primaryGoal || businessForm.mainGoal || "Grow brand awareness and drive conversions",
         strategyText: strategyForm.mode === "paste" ? strategyForm.strategyText : undefined,
         approvalMode: automationForm.approvalMode,
         autoPublish: automationForm.approvalMode === "autonomous",
@@ -214,40 +320,82 @@ export default function Onboarding() {
     }
   };
 
-  const progress = (step / 4) * 100;
+  function renderStepIndicator() {
+    return (
+      <div className="mb-8">
+        <div className="flex justify-between text-xs sm:text-sm text-gray-400 mb-3">
+          {stepLabels.map((label, idx) => {
+            const s = idx + 1;
+            const active = s === step;
+            const completed = s < step;
+            return (
+              <div
+                key={label}
+                className={`hidden sm:flex flex-col items-center gap-1 min-w-[80px] ${
+                  active ? "text-[#00D4FF]" : completed ? "text-emerald-400" : ""
+                }`}
+              >
+                <span className="font-medium">{label}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="relative">
+          <Progress value={progress} className="h-2" />
+          <div className="absolute top-0 left-0 w-full h-full flex justify-between items-center px-0">
+            {stepLabels.map((_, idx) => {
+              const s = idx + 1;
+              const active = s === step;
+              const completed = s < step;
+              const Icon = stepIcons[idx];
+              return (
+                <div
+                  key={s}
+                  className={`w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center text-[10px] sm:text-xs border-2 -mt-2.5 ${
+                    active
+                      ? "bg-[#00D4FF] border-[#00D4FF] text-white"
+                      : completed
+                      ? "bg-emerald-500 border-emerald-500 text-white"
+                      : "bg-[#1E293B] border-[#334155] text-gray-500"
+                  }`}
+                >
+                  {completed ? <Check className="w-3.5 h-3.5" /> : <Icon className="w-3 h-3 sm:w-3.5 sm:h-3.5" />}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <p className="text-center text-sm text-[#00D4FF] mt-3 font-medium sm:hidden">
+          Step {step} of {totalSteps}: {stepLabels[step - 1]}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#0F172A] via-[#1E293B] to-[#0F172A] flex items-center justify-center p-4">
-      <div className="w-full max-w-3xl">
+      <div className="w-full max-w-4xl">
         {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] mb-4">
             <Rocket className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-3xl font-bold text-white mb-2">Welcome to NatForge AI</h1>
-          <p className="text-gray-400">Let&apos;s set up your autonomous marketing system in a few steps</p>
+          <p className="text-gray-400">Set up your autonomous marketing system in {totalSteps} steps</p>
         </div>
 
-        {/* Progress */}
-        <div className="mb-8">
-          <div className="flex justify-between text-sm text-gray-400 mb-2">
-            <span>Business Info</span>
-            <span>Strategy</span>
-            <span>Preferences</span>
-            <span>Review</span>
-          </div>
-          <Progress value={progress} className="h-2" />
-        </div>
+        {renderStepIndicator()}
 
         {/* Step Content */}
         <Card className="border-[#334155] bg-[#1E293B]/80 backdrop-blur">
-          <CardContent className="p-8">
+          <CardContent className="p-6 sm:p-8">
             {step === 1 && (
               <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-6">
+                <div className="flex items-center gap-3 mb-2">
                   <Building2 className="w-6 h-6 text-[#00D4FF]" />
-                  <h2 className="text-xl font-semibold text-white">Business Information</h2>
+                  <h2 className="text-xl font-semibold text-white">Business Profile</h2>
                 </div>
+                <p className="text-sm text-gray-400 -mt-3">Tell us about your business so AI can market it accurately.</p>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -326,48 +474,15 @@ export default function Onboarding() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Monthly Marketing Budget (USD)</Label>
-                    <div className="relative">
-                      <Wallet className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
-                      <Input
-                        type="number"
-                        placeholder="5000"
-                        value={businessForm.monthlyBudget}
-                        onChange={(e) => setBusinessForm((p) => ({ ...p, monthlyBudget: e.target.value }))}
-                        className="bg-[#0F172A] border-[#334155] text-white pl-10"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Brand Tone</Label>
-                    <Select
-                      value={businessForm.brandTone}
-                      onValueChange={(v) => setBusinessForm((p) => ({ ...p, brandTone: v }))}
-                    >
-                      <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
-                        <SelectValue placeholder="Select tone" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#1E293B] border-[#334155]">
-                        {brandTones.map((t) => (
-                          <SelectItem key={t} value={t} className="text-white">
-                            {t.charAt(0).toUpperCase() + t.slice(1)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
                 <div className="space-y-2">
-                  <Label className="text-gray-300">Main Goal</Label>
+                  <Label className="text-gray-300">Monthly Marketing Budget (USD)</Label>
                   <div className="relative">
-                    <Target className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
+                    <Wallet className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
                     <Input
-                      placeholder="e.g. Increase sales by 30% in Q4"
-                      value={businessForm.mainGoal}
-                      onChange={(e) => setBusinessForm((p) => ({ ...p, mainGoal: e.target.value }))}
+                      type="number"
+                      placeholder="5000"
+                      value={businessForm.monthlyBudget}
+                      onChange={(e) => setBusinessForm((p) => ({ ...p, monthlyBudget: e.target.value }))}
                       className="bg-[#0F172A] border-[#334155] text-white pl-10"
                     />
                   </div>
@@ -384,6 +499,228 @@ export default function Onboarding() {
                       className="bg-[#0F172A] border-[#334155] text-white pl-10"
                     />
                   </div>
+                </div>
+              </div>
+            )}
+
+            {step === 2 && (
+              <div className="space-y-6">
+                <div className="flex items-center gap-3 mb-2">
+                  <Package className="w-6 h-6 text-[#00D4FF]" />
+                  <h2 className="text-xl font-semibold text-white">Product Assets</h2>
+                </div>
+                <p className="text-sm text-gray-400 -mt-3">
+                  Help AI understand what you sell and why customers should buy it.
+                </p>
+
+                <div className="space-y-2">
+                  <Label className="text-gray-300">Product or Service Description</Label>
+                  <Textarea
+                    placeholder="Describe your main product or service. What problem does it solve?"
+                    value={assetForm.productDescription}
+                    onChange={(e) => setAssetForm((p) => ({ ...p, productDescription: e.target.value }))}
+                    className="bg-[#0F172A] border-[#334155] text-white min-h-[120px]"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-gray-300">Unique Selling Point</Label>
+                    <Input
+                      placeholder="What makes you different from competitors?"
+                      value={assetForm.uniqueSellingPoint}
+                      onChange={(e) => setAssetForm((p) => ({ ...p, uniqueSellingPoint: e.target.value }))}
+                      className="bg-[#0F172A] border-[#334155] text-white"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-gray-300">Price Point / Offer</Label>
+                    <Input
+                      placeholder="e.g. R599/month, R2,500 once-off"
+                      value={assetForm.pricePoint}
+                      onChange={(e) => setAssetForm((p) => ({ ...p, pricePoint: e.target.value }))}
+                      className="bg-[#0F172A] border-[#334155] text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-gray-300">Available Marketing Assets</Label>
+                  <p className="text-xs text-gray-500">Select what you have. You can upload these later.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                    {assetTypes.map((asset) => (
+                      <label
+                        key={asset.key}
+                        className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                          assetForm.selectedAssets.includes(asset.key)
+                            ? "border-[#00D4FF] bg-[#00D4FF]/10"
+                            : "border-[#334155] bg-[#0F172A] hover:border-gray-500"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={assetForm.selectedAssets.includes(asset.key)}
+                          onChange={() => toggleAsset(asset.key)}
+                          className="w-4 h-4 rounded border-[#334155] bg-[#1E293B] text-[#00D4FF]"
+                        />
+                        <span className="text-gray-300 text-sm">{asset.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {step === 3 && (
+              <div className="space-y-6">
+                <div className="flex items-center gap-3 mb-2">
+                  <TrendingUp className="w-6 h-6 text-[#00D4FF]" />
+                  <h2 className="text-xl font-semibold text-white">Campaign Goal</h2>
+                </div>
+                <p className="text-sm text-gray-400 -mt-3">Define what success looks like for this campaign.</p>
+
+                <div className="space-y-2">
+                  <Label className="text-gray-300">Primary Goal *</Label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {campaignGoals.map((goal) => (
+                      <button
+                        key={goal}
+                        onClick={() => setGoalForm((p) => ({ ...p, primaryGoal: goal }))}
+                        className={`p-3 rounded-lg border text-left text-sm transition-all ${
+                          goalForm.primaryGoal === goal
+                            ? "border-[#00D4FF] bg-[#00D4FF]/10 text-white"
+                            : "border-[#334155] bg-[#0F172A] text-gray-400 hover:text-white"
+                        }`}
+                      >
+                        {goal}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-gray-300">Secondary Goal (optional)</Label>
+                  <Input
+                    placeholder="e.g. Build our email list"
+                    value={goalForm.secondaryGoal}
+                    onChange={(e) => setGoalForm((p) => ({ ...p, secondaryGoal: e.target.value }))}
+                    className="bg-[#0F172A] border-[#334155] text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-gray-300">Success Metric</Label>
+                    <Select
+                      value={goalForm.successMetric}
+                      onValueChange={(v) => setGoalForm((p) => ({ ...p, successMetric: v }))}
+                    >
+                      <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
+                        <SelectValue placeholder="Select metric" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1E293B] border-[#334155]">
+                        <SelectItem value="conversions" className="text-white">Sales / Conversions</SelectItem>
+                        <SelectItem value="leads" className="text-white">Leads Generated</SelectItem>
+                        <SelectItem value="traffic" className="text-white">Website Traffic</SelectItem>
+                        <SelectItem value="engagement" className="text-white">Engagement Rate</SelectItem>
+                        <SelectItem value="reach" className="text-white">Reach / Impressions</SelectItem>
+                        <SelectItem value="followers" className="text-white">Follower Growth</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-gray-300">Target Revenue / Value (USD)</Label>
+                    <Input
+                      type="number"
+                      placeholder="10000"
+                      value={goalForm.targetRevenue}
+                      onChange={(e) => setGoalForm((p) => ({ ...p, targetRevenue: e.target.value }))}
+                      className="bg-[#0F172A] border-[#334155] text-white"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {step === 4 && (
+              <div className="space-y-6">
+                <div className="flex items-center gap-3 mb-2">
+                  <Palette className="w-6 h-6 text-[#00D4FF]" />
+                  <h2 className="text-xl font-semibold text-white">Brand Style</h2>
+                </div>
+                <p className="text-sm text-gray-400 -mt-3">Shape how AI sounds and feels when marketing your brand.</p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-gray-300">Brand Tone *</Label>
+                    <Select
+                      value={brandForm.brandTone}
+                      onValueChange={(v) => {
+                        setBrandForm((p) => ({ ...p, brandTone: v }));
+                        setBusinessForm((p) => ({ ...p, brandTone: v }));
+                      }}
+                    >
+                      <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
+                        <SelectValue placeholder="Select tone" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1E293B] border-[#334155]">
+                        {brandTones.map((t) => (
+                          <SelectItem key={t} value={t} className="text-white">
+                            {t.charAt(0).toUpperCase() + t.slice(1)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-gray-300">Visual Style</Label>
+                    <Select
+                      value={brandForm.visualStyle}
+                      onValueChange={(v) => setBrandForm((p) => ({ ...p, visualStyle: v as any }))}
+                    >
+                      <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
+                        <SelectValue placeholder="Select style" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1E293B] border-[#334155]">
+                        <SelectItem value="modern" className="text-white">Modern</SelectItem>
+                        <SelectItem value="classic" className="text-white">Classic</SelectItem>
+                        <SelectItem value="minimal" className="text-white">Minimal</SelectItem>
+                        <SelectItem value="bold" className="text-white">Bold & Vibrant</SelectItem>
+                        <SelectItem value="luxury" className="text-white">Luxury</SelectItem>
+                        <SelectItem value="playful" className="text-white">Playful</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-gray-300">Color Palette (optional)</Label>
+                  <Input
+                    placeholder="e.g. Navy blue, gold, white"
+                    value={brandForm.colorPalette}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, colorPalette: e.target.value }))}
+                    className="bg-[#0F172A] border-[#334155] text-white"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-gray-300">Brand Voice Notes</Label>
+                  <Textarea
+                    placeholder="e.g. We use short sentences. We never use slang. We always lead with benefits."
+                    value={brandForm.brandVoiceNotes}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, brandVoiceNotes: e.target.value }))}
+                    className="bg-[#0F172A] border-[#334155] text-white"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-gray-300">Words or Phrases to Avoid</Label>
+                  <Input
+                    placeholder="e.g. cheap, discount, guaranteed"
+                    value={brandForm.avoidWords}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, avoidWords: e.target.value }))}
+                    className="bg-[#0F172A] border-[#334155] text-white"
+                  />
                 </div>
 
                 <div className="space-y-2">
@@ -407,226 +744,130 @@ export default function Onboarding() {
               </div>
             )}
 
-            {step === 2 && (
+            {step === 5 && (
               <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <Sparkles className="w-6 h-6 text-[#00D4FF]" />
-                  <h2 className="text-xl font-semibold text-white">Marketing Strategy</h2>
+                <div className="flex items-center gap-3 mb-2">
+                  <Plug className="w-6 h-6 text-[#00D4FF]" />
+                  <h2 className="text-xl font-semibold text-white">Publishing Integrations</h2>
+                </div>
+                <p className="text-sm text-gray-400 -mt-3">
+                  Connect platforms to enable automatic publishing. You can skip this and connect later.
+                </p>
+
+                <div className="space-y-3">
+                  {platforms
+                    .filter((p) => ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp", "email"].includes(p.value))
+                    .map((p) => {
+                      const configured = p.value === "email" ? true : isPlatformConfigured(p.value);
+                      const connected = p.value === "email" ? false : isPlatformConnected(p.value);
+                      const interested = integrationForm.interestedPlatforms.includes(p.value);
+                      return (
+                        <div
+                          key={p.value}
+                          className={`flex items-center justify-between p-4 rounded-xl border transition-colors ${
+                            connected
+                              ? "border-emerald-500/30 bg-emerald-500/5"
+                              : interested
+                              ? "border-[#00D4FF]/30 bg-[#00D4FF]/5"
+                              : "border-[#334155] bg-[#0F172A]"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="checkbox"
+                              checked={interested}
+                              onChange={() => toggleInterestedPlatform(p.value)}
+                              className="w-4 h-4 rounded border-[#334155] bg-[#1E293B] text-[#00D4FF]"
+                            />
+                            <div>
+                              <p className="font-medium text-white">{p.label}</p>
+                              {connected ? (
+                                <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]">
+                                  Connected
+                                </Badge>
+                              ) : configured ? (
+                                <span className="text-xs text-gray-500">Available to connect</span>
+                              ) : p.value !== "email" ? (
+                                <span className="text-xs text-amber-500/80">Setup required by admin</span>
+                              ) : null}
+                            </div>
+                          </div>
+                          {interested && !connected && p.value !== "email" && (
+                            configured ? (
+                              <Link to="/integrations">
+                                <Button size="sm" variant="outline" className="h-8 text-xs">
+                                  <ExternalLink className="w-3 h-3 mr-1" />
+                                  Connect
+                                </Button>
+                              </Link>
+                            ) : (
+                              <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3" />
+                                Admin setup needed
+                              </span>
+                            )
+                          )}
+                        </div>
+                      );
+                    })}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {[
-                    { key: "upload" as const, label: "Upload Strategy", desc: "Upload a PDF or document" },
-                    { key: "paste" as const, label: "Paste Strategy", desc: "Copy and paste your strategy" },
-                    { key: "generate" as const, label: "Generate for Me", desc: "AI creates your strategy" },
-                  ].map((option) => (
-                    <button
-                      key={option.key}
-                      onClick={() => setStrategyForm((p) => ({ ...p, mode: option.key }))}
-                      className={`p-4 rounded-xl border text-left transition-all ${
-                        strategyForm.mode === option.key
-                          ? "border-[#00D4FF] bg-[#00D4FF]/10"
-                          : "border-[#334155] bg-[#0F172A] hover:border-gray-500"
-                      }`}
-                    >
-                      <p className="font-semibold text-white mb-1">{option.label}</p>
-                      <p className="text-sm text-gray-400">{option.desc}</p>
-                    </button>
-                  ))}
-                </div>
-
-                {strategyForm.mode === "upload" && (
-                  <div className="p-8 rounded-xl border border-dashed border-[#334155] bg-[#0F172A] text-center">
-                    <p className="text-gray-400 mb-2">Drag and drop your strategy document here</p>
-                    <p className="text-sm text-gray-500">PDF, Word, or TXT (max 10MB)</p>
-                    <Button variant="outline" className="mt-4 border-[#334155] text-white" disabled>
-                      Coming Soon
-                    </Button>
-                  </div>
-                )}
-
-                {strategyForm.mode === "paste" && (
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Paste Your Strategy</Label>
-                    <Textarea
-                      placeholder="Paste your marketing strategy here..."
-                      value={strategyForm.strategyText}
-                      onChange={(e) => setStrategyForm((p) => ({ ...p, strategyText: e.target.value }))}
-                      className="bg-[#0F172A] border-[#334155] text-white min-h-[200px]"
-                    />
-                  </div>
-                )}
-
-                {strategyForm.mode === "generate" && (
-                  <div className="p-6 rounded-xl bg-gradient-to-br from-[#00D4FF]/10 to-[#7C3AED]/10 border border-[#00D4FF]/20">
-                    <div className="flex items-center gap-3 mb-3">
-                      <Sparkles className="w-5 h-5 text-[#00D4FF]" />
-                      <h3 className="font-semibold text-white">AI Strategy Generation</h3>
-                    </div>
-                    <p className="text-gray-300 text-sm">
-                      Our Strategy Agent will analyze your business profile and generate a complete marketing
-                      strategy including target personas, positioning, funnel stages, offers, and CTAs.
-                    </p>
-                    <div className="mt-4 flex items-center gap-2 text-sm text-gray-400">
-                      <Check className="w-4 h-4 text-emerald-400" />
-                      <span>Personas &amp; targeting</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm text-gray-400">
-                      <Check className="w-4 h-4 text-emerald-400" />
-                      <span>Platform strategy</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm text-gray-400">
-                      <Check className="w-4 h-4 text-emerald-400" />
-                      <span>Budget recommendations</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {step === 3 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-6">
-                  <Target className="w-6 h-6 text-[#00D4FF]" />
-                  <h2 className="text-xl font-semibold text-white">Automation Preferences</h2>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
-                    <Label className="text-white mb-3 block">Approval Mode</Label>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <button
-                        onClick={() => setAutomationForm((p) => ({ ...p, approvalMode: "assisted" }))}
-                        className={`p-4 rounded-lg border text-left transition-all ${
-                          automationForm.approvalMode === "assisted"
-                            ? "border-[#00D4FF] bg-[#00D4FF]/10"
-                            : "border-[#334155] hover:border-gray-500"
-                        }`}
-                      >
-                        <p className="font-semibold text-white">Assisted</p>
-                        <p className="text-sm text-gray-400 mt-1">
-                          AI creates everything but asks for approval before major actions
-                        </p>
-                      </button>
-                      <button
-                        onClick={() => setAutomationForm((p) => ({ ...p, approvalMode: "autonomous" }))}
-                        className={`p-4 rounded-lg border text-left transition-all ${
-                          automationForm.approvalMode === "autonomous"
-                            ? "border-[#00D4FF] bg-[#00D4FF]/10"
-                            : "border-[#334155] hover:border-gray-500"
-                        }`}
-                      >
-                        <p className="font-semibold text-white">Autonomous</p>
-                        <p className="text-sm text-gray-400 mt-1">
-                          AI operates within your rules with minimal intervention
-                        </p>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155] space-y-4">
-                    <div className="space-y-2">
-                      <Label className="text-gray-300">Maximum Daily Ad Spend (USD)</Label>
-                      <Input
-                        type="number"
-                        value={automationForm.maxDailyAdSpend}
-                        onChange={(e) =>
-                          setAutomationForm((p) => ({ ...p, maxDailyAdSpend: e.target.value }))
-                        }
-                        className="bg-[#1E293B] border-[#334155] text-white"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label className="text-gray-300">Tone Strictness</Label>
-                      <Select
-                        value={automationForm.toneStrictness}
-                        onValueChange={(v) =>
-                          setAutomationForm((p) => ({ ...p, toneStrictness: v as any }))
-                        }
-                      >
-                        <SelectTrigger className="bg-[#1E293B] border-[#334155] text-white">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="bg-[#1E293B] border-[#334155]">
-                          <SelectItem value="low" className="text-white">Low — Allow creative freedom</SelectItem>
-                          <SelectItem value="medium" className="text-white">Medium — Balance creativity and brand</SelectItem>
-                          <SelectItem value="high" className="text-white">High — Strict brand adherence</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155] space-y-3">
-                    <Label className="text-white block mb-2">Approval Requirements</Label>
-                    {[
-                      {
-                        key: "requireApprovalBeforePosting" as const,
-                        label: "Require approval before publishing posts",
-                      },
-                      {
-                        key: "requireApprovalBeforeReplying" as const,
-                        label: "Require approval before public replies",
-                      },
-                      {
-                        key: "requireApprovalForHighValueLeads" as const,
-                        label: "Require approval for high-value lead actions",
-                      },
-                    ].map((item) => (
-                      <label key={item.key} className="flex items-center gap-3 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={automationForm[item.key]}
-                          onChange={(e) =>
-                            setAutomationForm((p) => ({ ...p, [item.key]: e.target.checked }))
-                          }
-                          className="w-4 h-4 rounded border-[#334155] bg-[#1E293B] text-[#00D4FF]"
-                        />
-                        <span className="text-gray-300 text-sm">{item.label}</span>
-                      </label>
-                    ))}
-                  </div>
+                <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155] text-xs text-gray-400 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-[#00D4FF] shrink-0 mt-0.5" />
+                  <p>
+                    Integrations are only required for automatic publishing and inbox management.
+                    You can still generate content, approve posts, and publish manually without connecting anything.
+                  </p>
                 </div>
               </div>
             )}
 
-            {step === 4 && (
+            {step === 6 && (
               <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-6">
+                <div className="flex items-center gap-3 mb-2">
                   <Check className="w-6 h-6 text-emerald-400" />
                   <h2 className="text-xl font-semibold text-white">Review & Launch</h2>
                 </div>
 
-                <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
                     <h3 className="font-semibold text-white mb-3">Business Profile</h3>
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <span className="text-gray-500">Name</span>
-                      <span className="text-gray-300">{businessForm.name}</span>
+                      <span className="text-gray-300">{businessForm.name || "—"}</span>
                       <span className="text-gray-500">Industry</span>
-                      <span className="text-gray-300 capitalize">{businessForm.industry}</span>
-                      <span className="text-gray-500">Brand Tone</span>
-                      <span className="text-gray-300 capitalize">{businessForm.brandTone || "Professional"}</span>
-                      <span className="text-gray-500">Platforms</span>
-                      <span className="text-gray-300">
-                        {businessForm.preferredPlatforms.join(", ") || "All platforms"}
-                      </span>
+                      <span className="text-gray-300 capitalize">{businessForm.industry || "—"}</span>
+                      <span className="text-gray-500">Location</span>
+                      <span className="text-gray-300">{businessForm.location || "—"}</span>
                     </div>
                   </div>
 
                   <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
-                    <h3 className="font-semibold text-white mb-3">Strategy</h3>
-                    <p className="text-sm text-gray-300">
-                      {strategyForm.mode === "generate"
-                        ? "AI will generate your marketing strategy automatically."
-                        : strategyForm.mode === "paste"
-                        ? "Your provided strategy will be used as the foundation."
-                        : "Your uploaded strategy document will be analyzed."}
-                    </p>
+                    <h3 className="font-semibold text-white mb-3">Product & Goal</h3>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <span className="text-gray-500">Primary Goal</span>
+                      <span className="text-gray-300">{goalForm.primaryGoal || "—"}</span>
+                      <span className="text-gray-500">Success Metric</span>
+                      <span className="text-gray-300">{goalForm.successMetric || "—"}</span>
+                      <span className="text-gray-500">USP</span>
+                      <span className="text-gray-300 line-clamp-2">{assetForm.uniqueSellingPoint || "—"}</span>
+                    </div>
                   </div>
 
                   <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
-                    <h3 className="font-semibold text-white mb-3">Automation Settings</h3>
+                    <h3 className="font-semibold text-white mb-3">Brand Style</h3>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <span className="text-gray-500">Tone</span>
+                      <span className="text-gray-300 capitalize">{brandForm.brandTone || "—"}</span>
+                      <span className="text-gray-500">Visual Style</span>
+                      <span className="text-gray-300 capitalize">{brandForm.visualStyle || "—"}</span>
+                      <span className="text-gray-500">Platforms</span>
+                      <span className="text-gray-300">{businessForm.preferredPlatforms.join(", ") || "—"}</span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
+                    <h3 className="font-semibold text-white mb-3">Automation</h3>
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <span className="text-gray-500">Mode</span>
                       <span className="text-gray-300 capitalize">{automationForm.approvalMode}</span>
@@ -689,7 +930,7 @@ export default function Onboarding() {
                 Back
               </Button>
 
-              {step < 4 ? (
+              {step < totalSteps ? (
                 <Button
                   onClick={handleNext}
                   className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white hover:opacity-90"

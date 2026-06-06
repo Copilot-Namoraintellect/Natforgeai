@@ -179,12 +179,15 @@ export default function Integrations() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-          <Plug className="w-6 h-6 text-[#00D4FF]" />
-          Integrations
-        </h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+            <Plug className="w-6 h-6 text-[#00D4FF]" />
+            Integrations
+          </h1>
+          <Badge variant="outline" className="text-[10px] text-[#00D4FF] border-[#00D4FF]/30">Premium</Badge>
+        </div>
         <p className="text-slate-600 mt-1">
-          Connect your social media, messaging, and email platforms
+          Connect your social media, messaging, and email platforms for autonomous publishing.
         </p>
       </div>
 
@@ -253,7 +256,7 @@ export default function Integrations() {
       )}
 
       {/* Platform Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {Object.entries(platformConfig).map(([platform, config]) => {
           const status = getIntegrationStatus(platform);
           const statusInfo = statusConfig[status];
@@ -272,12 +275,12 @@ export default function Integrations() {
               <CardContent className="p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center gap-3">
-                    <div className="p-2.5 rounded-xl bg-[#0F172A]">
-                      <PlatformIcon className="w-6 h-6 text-[#00D4FF]" />
+                    <div className={`p-2.5 rounded-xl ${isConnected ? "bg-emerald-500/10" : "bg-[#0F172A]"}`}>
+                      <PlatformIcon className={`w-6 h-6 ${isConnected ? "text-emerald-400" : "text-[#00D4FF]"}`} />
                     </div>
                     <div>
                       <h3 className="font-semibold text-white">{config.name}</h3>
-                      <Badge className={`${statusInfo.color} mt-1`}>
+                      <Badge className={`${statusInfo.color} mt-1 border`}>
                         <StatusIcon className="w-3 h-3 mr-1" />
                         {statusInfo.label}
                       </Badge>
@@ -365,7 +368,7 @@ export default function Integrations() {
                             ) : (
                               <Plug className="w-4 h-4 mr-2" />
                             )}
-                            Connect
+                            {isConnected ? "Reconnect" : "Connect"}
                           </Button>
                           {config.setupUrl && isAdmin && (
                             <a

@@ -111,19 +111,95 @@ export const contentRouter = createRouter({
         visualPrompt: z.string().optional(),
         status: z.enum(["draft", "scheduled", "published", "archived"]).optional(),
         scheduledFor: z.string().optional(),
+        metadata: z.record(z.string(), z.any()).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
-      const { id, scheduledFor, ...data } = input;
+      const { id, scheduledFor, metadata, ...data } = input;
       const updateData: any = { ...data };
       if (scheduledFor) updateData.scheduledFor = new Date(scheduledFor);
+      if (metadata !== undefined) updateData.metadata = metadata;
       await db
         .update(contentPosts)
         .set(updateData)
         .where(
           and(eq(contentPosts.id, id), eq(contentPosts.userId, ctx.user.id))
         );
+      return { success: true };
+    }),
+
+  approve: authedQuery
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const [post] = await db
+        .select()
+        .from(contentPosts)
+        .where(
+          and(
+            eq(contentPosts.id, input.id),
+            eq(contentPosts.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!post) {
+        throw new Error("Content post not found");
+      }
+
+      const currentMetadata = (post.metadata || {}) as any;
+      await db
+        .update(contentPosts)
+        .set({
+          metadata: {
+            ...currentMetadata,
+            approved: true,
+            approvedAt: new Date().toISOString(),
+          },
+        })
+        .where(
+          and(eq(contentPosts.id, input.id), eq(contentPosts.userId, ctx.user.id))
+        );
+
+      return { success: true };
+    }),
+
+  markAsManuallyPosted: authedQuery
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const [post] = await db
+        .select()
+        .from(contentPosts)
+        .where(
+          and(
+            eq(contentPosts.id, input.id),
+            eq(contentPosts.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!post) {
+        throw new Error("Content post not found");
+      }
+
+      const currentMetadata = (post.metadata || {}) as any;
+      await db
+        .update(contentPosts)
+        .set({
+          status: "published",
+          publishedAt: new Date(),
+          metadata: {
+            ...currentMetadata,
+            publishMode: "manual",
+            manuallyPostedAt: new Date().toISOString(),
+          },
+        })
+        .where(
+          and(eq(contentPosts.id, input.id), eq(contentPosts.userId, ctx.user.id))
+        );
+
       return { success: true };
     }),
 

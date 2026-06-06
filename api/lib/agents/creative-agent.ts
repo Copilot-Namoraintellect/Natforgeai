@@ -79,7 +79,7 @@ export async function runCreativeAgent({
   const ctaStrategy = campaign.ctaStrategy;
 
   // Step 1: Generate 30-day content calendar
-  const calendarPrompt = `You are a content strategist and social media manager. Create a detailed 30-day content calendar for this marketing campaign.
+  const calendarPrompt = `You are a sales-focused content strategist who creates high-converting marketing calendars. Every post must be designed to drive revenue — no generic brand awareness filler.
 
 CAMPAIGN DETAILS:
 - Name: ${campaign.name}
@@ -93,13 +93,23 @@ CAMPAIGN DETAILS:
 ${strategyContext?.campaignTheme ? `Campaign Theme: ${strategyContext.campaignTheme}` : ""}
 ${strategyContext?.platformStrategy ? `Platform Strategy: ${JSON.stringify(strategyContext.platformStrategy)}` : ""}
 
-Create a 30-day content calendar with:
+Create a 30-day sales-driven content calendar with:
 - Each day should have 1-3 posts across different platforms
-- Mix of educational, promotional, engagement, and awareness content
-- Include hooks, captions, CTAs, and hashtags for each post
-- Include a visual/image generation prompt for each post
-- Specify best time to post for each piece
-- Themes should progress through the funnel: awareness → consideration → conversion → retention
+- 60% direct-response content (pain-point hooks, urgency-driven CTAs, limited-time offers)
+- 20% authority-building (results, case studies, testimonials)
+- 20% engagement (but with clear path to purchase)
+- EVERY post must include: a scroll-stopping HOOK, body copy that addresses a pain point, a clear CTA with urgency, and relevant hashtags
+- Include a detailed visual generation prompt for each post (describe the image/video content explicitly)
+- Specify best time to post for maximum reach
+- Include Instagram Reels and TikTok scripts where relevant
+- Progress through: hook → agitate pain → present solution → add urgency → strong CTA
+
+Post structure rules:
+- HOOK: First line must be bold, emotional, or controversial (max 12 words)
+- CAPTION: 2-4 short paragraphs max. Use line breaks. Speak directly to the reader. No fluff.
+- CTA: Must specify exact action and create urgency ("Link in bio — only 20 spots", "DM 'YES' now", etc.)
+- HASHTAGS: 5-10 targeted tags, mixing niche + trending
+- VISUAL PROMPT: Describe the image/video scene in detail for AI image generation tools
 
 Respond with structured data.`;
 
@@ -110,7 +120,7 @@ Respond with structured data.`;
     prompt: calendarPrompt,
     schema: ContentCalendarSchema,
     system:
-      "You are an expert content strategist who creates engaging, platform-optimized social media content calendars. You understand Instagram, TikTok, Facebook, LinkedIn, Twitter/X, and email marketing. Always respond with valid structured data.",
+      "You are an expert performance marketer who creates high-converting, sales-driven content calendars. You specialize in Instagram Reels, TikTok, Facebook ads, and direct-response copywriting. Every post must drive action, not just engagement. Always respond with valid structured data.",
   });
 
   // Save content calendar to campaign immediately (before assets)
@@ -171,7 +181,7 @@ Respond with structured data.`;
   console.log(`[CreativeAgent] Saved ${savedPosts} content posts for campaign ${campaignId}`);
 
   // Step 2: Generate additional creative assets (optional - don't fail the whole workflow)
-  const assetsPrompt = `You are a creative director. Generate additional marketing assets for this campaign.
+  const assetsPrompt = `You are a conversion-focused creative director. Generate high-performing sales assets for this campaign. Every asset must be designed to drive clicks, leads, or purchases.
 
 CAMPAIGN DETAILS:
 - Name: ${campaign.name}
@@ -182,12 +192,13 @@ CAMPAIGN DETAILS:
 - Platforms: ${campaign.platforms || "Instagram, Facebook, TikTok"}
 
 Generate:
-1. 3 ad copy variations (different angles/approaches)
-2. 3 email subject lines + body copy for a welcome sequence
-3. 3 WhatsApp message templates for follow-ups
-4. 5 image generation prompts for hero visuals
-5. A carousel post outline (5 slides)
-6. 3 CTA variations for different funnel stages
+1. 3 high-converting ad copy variations (different psychological angles: fear of missing out, social proof, direct benefit)
+2. 3 email subject lines + body copy for a sales sequence (subject lines must be under 40 chars, body under 150 words each)
+3. 3 WhatsApp message templates for follow-ups and closing (casual but persuasive tone)
+4. 5 image generation prompts for conversion-focused hero visuals (describe exact scene, colors, text overlay, emotional trigger)
+5. A sales carousel post outline (5 slides: hook → problem → solution → proof → CTA)
+6. 3 CTA variations for different funnel stages (awareness, consideration, decision)
+7. 2 Instagram Reel scripts with exact hook text, 15-30 second structure, and on-screen text suggestions
 
 Respond with structured data. Always include prompt, platform, and variations keys for every asset. Use null when they do not apply.`;
 

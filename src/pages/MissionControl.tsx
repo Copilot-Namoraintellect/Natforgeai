@@ -74,6 +74,10 @@ const journeyStage: Record<string, string> = {
   completed: "Completed",
 };
 
+function itemText(count: number) {
+  return count !== 1 ? "s" : "";
+}
+
 function getContinueAction(campaign: any) {
   const state = campaign.workflowState;
   if (state === "business_onboarding") return { label: "Complete Business Profile", href: "/onboarding" };
@@ -207,6 +211,68 @@ export default function MissionControl() {
           </Link>
         </div>
       </div>
+
+      {/* Next Best Action Banner */}
+      {!campaignsLoading && aiCampaigns.length > 0 && (
+        <Card className="bg-gradient-to-r from-[#00D4FF]/10 to-[#7C3AED]/10 border-[#00D4FF]/20">
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-slate-900">Recommended next step</p>
+                {pendingReviews.length + approvalCount > 0 ? (
+                  <>
+                    <p className="text-sm text-slate-600 mt-1">
+                      You have {pendingReviews.length + approvalCount} campaign{itemText(pendingReviews.length + approvalCount)} waiting for review. Approve them to keep your workflow moving.
+                    </p>
+                    <Link to="/approvals" className="inline-block mt-3">
+                      <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white">
+                        <AlertCircle className="w-3.5 h-3.5 mr-1.5" />
+                        Review Now
+                      </Button>
+                    </Link>
+                  </>
+                ) : campaignsInProgress.length > 0 ? (
+                  <>
+                    <p className="text-sm text-slate-600 mt-1">
+                      {campaignsInProgress.length} campaign{itemText(campaignsInProgress.length)} in progress. Check Agent Activity for live updates.
+                    </p>
+                    <Link to="/agent-activity" className="inline-block mt-3">
+                      <Button size="sm" variant="outline" className="border-[#00D4FF]/30 text-[#00D4FF] hover:bg-[#00D4FF]/10">
+                        <Loader2 className="w-3.5 h-3.5 mr-1.5" />
+                        View Live Activity
+                      </Button>
+                    </Link>
+                  </>
+                ) : liveCampaigns.length > 0 ? (
+                  <>
+                    <p className="text-sm text-slate-600 mt-1">
+                      {liveCampaigns.length} campaign{itemText(liveCampaigns.length)} live. Head to Analytics to see performance.
+                    </p>
+                    <Link to="/analytics" className="inline-block mt-3">
+                      <Button size="sm" variant="outline" className="border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10">
+                        <BarChart3 className="w-3.5 h-3.5 mr-1.5" />
+                        View Analytics
+                      </Button>
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-slate-600 mt-1">
+                      Your campaigns are up to date. Ready to launch a new one?
+                    </p>
+                    <Link to="/campaigns" className="inline-block mt-3">
+                      <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white">
+                        <Rocket className="w-3.5 h-3.5 mr-1.5" />
+                        New Campaign
+                      </Button>
+                    </Link>
+                  </>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

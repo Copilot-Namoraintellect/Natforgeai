@@ -31,6 +31,7 @@ import {
   Sparkles,
   Copy,
   Check,
+  CheckCircle2,
   Instagram,
   Linkedin,
   Facebook,
@@ -41,6 +42,10 @@ import {
   Search,
   ArrowRight,
   X,
+  Upload,
+  CalendarClock,
+  ExternalLink,
+  AlertCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -73,6 +78,11 @@ export default function ContentStudio() {
   const [aiResult, setAiResult] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [search, setSearch] = useState("");
+  const [scheduleOpen, setScheduleOpen] = useState<{ open: boolean; contentId: number | null }>({
+    open: false,
+    contentId: null,
+  });
+  const [scheduleDate, setScheduleDate] = useState("");
 
   const utils = trpc.useUtils();
   const listInput = (() => {
@@ -90,6 +100,9 @@ export default function ContentStudio() {
     { status: "pending" },
     { enabled: (contents?.length ?? 0) === 0 }
   );
+
+  const { data: connectedIntegrations } = trpc.integration.getConnectedPlatforms.useQuery();
+  const { data: platformConfigStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
 
   const strategyPendingApproval = approvals?.find((a) => a.approvalType === "strategy_review");
   const strategyGeneratedCampaign = campaigns?.find((c) => c.workflowState === "strategy_generated");
@@ -110,6 +123,36 @@ export default function ContentStudio() {
     },
   });
 
+  const approveMutation = trpc.content.approve.useMutation({
+    onSuccess: () => {
+      utils.content.list.invalidate();
+      toast.success("Content approved and ready to publish!");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to approve content");
+    },
+  });
+
+  const markManuallyPostedMutation = trpc.content.markAsManuallyPosted.useMutation({
+    onSuccess: () => {
+      utils.content.list.invalidate();
+      toast.success("Marked as manually posted!");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to update content");
+    },
+  });
+
+  const updateMutation = trpc.content.update.useMutation({
+    onSuccess: () => {
+      utils.content.list.invalidate();
+      toast.success("Content updated!");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to update content");
+    },
+  });
+
   const filtered = contents?.filter((c) =>
     c.title.toLowerCase().includes(search.toLowerCase())
   );
@@ -123,6 +166,30 @@ export default function ContentStudio() {
     story: "bg-pink-500/10 text-pink-600",
   };
 
+  const statusColors: Record<string, string> = {
+    draft: "bg-slate-500/10 text-slate-600 border-slate-200",
+    scheduled: "bg-blue-500/10 text-blue-600 border-blue-200",
+    published: "bg-emerald-500/10 text-emerald-600 border-emerald-200",
+    archived: "bg-gray-500/10 text-gray-600 border-gray-200",
+  };
+
+  function isPlatformConnected(platform?: string | null) {
+    if (!platform) return false;
+    // Social platforms that require connection
+    const connectable = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
+    if (!connectable.includes(platform)) return true; // email/blog don't need OAuth
+    return connectedIntegrations?.some(
+      (i) => i.platform === platform && i.status === "connected"
+    );
+  }
+
+  function isPlatformConfigurable(platform?: string | null) {
+    if (!platform) return true;
+    const connectable = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
+    if (!connectable.includes(platform)) return true;
+    return platformConfigStatus?.find((p) => p.platform === platform)?.configured !== false;
+  }
+
   async function generateWithAI() {
     setAiLoading(true);
     try {
@@ -134,12 +201,12 @@ Audience: ${aiForm.audience}
 Tone: ${aiForm.tone}
 
 For each post provide:
-- Hook (attention-grabbing first line)
-- Caption (main content)
-- CTA (call-to-action)
-- Relevant hashtags
+- Hook (attention-grabbing first line, max 12 words, bold or emotional)
+- Caption (2-4 short paragraphs, line breaks, address a pain point)
+- CTA (specific action + urgency, e.g. "DM 'YES' now — only 10 spots")
+- Relevant hashtags (5-10 targeted)
 
-Make them engaging and action-oriented.`;
+Make them sales-focused and conversion-oriented. Progress through: hook → agitate pain → present solution → urgency → strong CTA.`;
       } else if (aiForm.type === "ad_copy") {
         prompt = `Create 3 high-converting ad copies for ${aiForm.business}.
 Goal: ${aiForm.goal || "Conversions"}
@@ -147,23 +214,23 @@ Audience: ${aiForm.audience}
 Tone: ${aiForm.tone}
 
 For each ad provide:
-- Scroll-stopping headline
-- Pain point
-- Solution
-- Strong CTA
+- Scroll-stopping headline (max 8 words)
+- Pain point (1 sentence)
+- Solution/benefit (1-2 sentences)
+- Strong CTA with urgency
 
-Keep them short, punchy, and conversion-focused.`;
+Use different psychological angles: FOMO, social proof, direct benefit. Keep them punchy.`;
       } else {
-        prompt = `Create a professional email for ${aiForm.business}.
-Goal: ${aiForm.goal || "Engagement"}
+        prompt = `Create a high-converting email for ${aiForm.business}.
+Goal: ${aiForm.goal || "Sales"}
 Audience: ${aiForm.audience}
 Tone: ${aiForm.tone}
 
 Include:
-- Subject line
-- Opening hook
-- Body content
-- Call-to-action
+- Subject line (under 40 chars, curiosity or urgency driven)
+- Opening hook (first line must demand attention)
+- Body content (under 150 words, clear value proposition)
+- Call-to-action (single, specific action)
 - Professional sign-off`;
       }
 
@@ -187,6 +254,17 @@ Include:
     toast.success("Copied to clipboard!");
   }
 
+  function getCaptionText(content: any) {
+    const parts = [
+      content.hook,
+      content.caption,
+      content.cta,
+      content.body,
+      content.hashtags,
+    ].filter(Boolean);
+    return parts.join("\n\n");
+  }
+
   function handleCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
@@ -201,13 +279,41 @@ Include:
     });
   }
 
+  function openSchedule(contentId: number, currentDate?: Date | string | null) {
+    setScheduleOpen({ open: true, contentId });
+    if (currentDate) {
+      const d = new Date(currentDate);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      setScheduleDate(
+        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+      );
+    } else {
+      setScheduleDate("");
+    }
+  }
+
+  function handleScheduleSave() {
+    if (!scheduleOpen.contentId || !scheduleDate) return;
+    updateMutation.mutate({
+      id: scheduleOpen.contentId,
+      status: "scheduled",
+      scheduledFor: new Date(scheduleDate).toISOString(),
+    });
+    setScheduleOpen({ open: false, contentId: null });
+  }
+
+  function getApprovalState(content: any) {
+    const metadata = (content.metadata || {}) as any;
+    return !!metadata.approved;
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Content Studio</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Content Studio</h1>
           <p className="text-muted-foreground mt-1">
-            Create, generate, and manage your marketing content.
+            Approve, schedule, and publish content that converts.
           </p>
           {urlCampaignId && (
             <div className="mt-2 flex items-center gap-2">
@@ -244,7 +350,7 @@ Include:
               <DialogHeader>
                 <DialogTitle>AI Content Generator</DialogTitle>
                 <DialogDescription>
-                  Generate marketing content using AI for your chosen platform and tone.
+                  Generate sales-driven marketing content designed to convert.
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 mt-4">
@@ -353,7 +459,7 @@ Include:
                   ) : (
                     <>
                       <Sparkles className="w-4 h-4 mr-2" />
-                      Generate Content
+                      Generate Sales Content
                     </>
                   )}
                 </Button>
@@ -514,6 +620,31 @@ Include:
         </div>
       </div>
 
+      {/* Schedule Dialog */}
+      <Dialog open={scheduleOpen.open} onOpenChange={(open) => !open && setScheduleOpen({ open: false, contentId: null })}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Schedule Post</DialogTitle>
+            <DialogDescription>Choose a date and time to publish.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <Input
+              type="datetime-local"
+              value={scheduleDate}
+              onChange={(e) => setScheduleDate(e.target.value)}
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setScheduleOpen({ open: false, contentId: null })}>
+                Cancel
+              </Button>
+              <Button className="flex-1" onClick={handleScheduleSave} disabled={!scheduleDate || updateMutation.isPending}>
+                {updateMutation.isPending ? "Saving..." : "Schedule"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Content Grid */}
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -527,7 +658,7 @@ Include:
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16">
             <PenTool className="w-12 h-12 text-muted-foreground mb-4" />
-            <p className="text-lg font-medium">No content yet</p>
+            <p className="text-lg font-medium text-slate-900">No content yet</p>
             {strategyPendingApproval ? (
               <>
                 <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
@@ -573,7 +704,7 @@ Include:
             ) : (
               <>
                 <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
-                  No content has been generated yet. Review your campaign strategy first, then NatForgeAI can generate content.
+                  No content has been generated yet. Review your campaign strategy first, then NatForgeAI can generate sales-focused content.
                 </p>
                 <div className="flex gap-2 flex-wrap justify-center">
                   <Link to="/campaigns">
@@ -597,77 +728,200 @@ Include:
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {(filtered ?? []).map((content) => (
-            <Card key={content.id} className="group hover:shadow-md transition-all">
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Badge
-                      variant="secondary"
-                      className={typeColors[content.type] || "bg-muted"}
-                    >
-                      {content.type.replace("_", " ")}
-                    </Badge>
-                    {content.aiGenerated && (
-                      <Badge variant="outline" className="flex items-center gap-1">
-                        <Sparkles className="w-3 h-3" />
-                        AI
+          {(filtered ?? []).map((content) => {
+            const approved = getApprovalState(content);
+            const connected = isPlatformConnected(content.platform);
+            const configurable = isPlatformConfigurable(content.platform);
+            const showConnectGuard = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform) && !connected;
+            const captionText = getCaptionText(content);
+
+            return (
+              <Card key={content.id} className="group hover:shadow-md transition-all">
+                <CardContent className="p-5">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant="secondary"
+                        className={typeColors[content.type] || "bg-muted"}
+                      >
+                        {content.type.replace("_", " ")}
                       </Badge>
-                    )}
+                      {content.aiGenerated && (
+                        <Badge variant="outline" className="flex items-center gap-1">
+                          <Sparkles className="w-3 h-3" />
+                          AI
+                        </Badge>
+                      )}
+                      <Badge
+                        variant="outline"
+                        className={statusColors[content.status] || statusColors.draft}
+                      >
+                        {content.status}
+                      </Badge>
+                      {approved && (
+                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" />
+                          Approved
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() =>
+                          copyToClipboard(captionText, content.id)
+                        }
+                        title="Copy caption"
+                      >
+                        {copiedId === content.id ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-500" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-red-500 hover:text-red-600"
+                        onClick={() => deleteMutation.mutate({ id: content.id })}
+                        title="Delete"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+
+                  <h3 className="font-semibold text-sm mb-2 text-slate-900">{content.title}</h3>
+                  {content.hook && (
+                    <p className="text-sm text-muted-foreground line-clamp-1 mb-1">
+                      <span className="font-medium text-foreground">Hook:</span>{" "}
+                      {content.hook}
+                    </p>
+                  )}
+                  {content.caption && (
+                    <p className="text-sm text-muted-foreground line-clamp-2 mb-1">
+                      {content.caption}
+                    </p>
+                  )}
+                  {content.cta && (
+                    <p className="text-xs font-medium text-[#00D4FF] mt-1">
+                      CTA: {content.cta}
+                    </p>
+                  )}
+
+                  {showConnectGuard && (
+                    <div className="mt-3 p-2.5 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="font-medium">Publishing setup required</p>
+                        <p className="text-amber-700/80">
+                          Connect {content.platform} in Integrations to publish automatically, or mark as manually posted.
+                        </p>
+                        <div className="mt-2 flex gap-2">
+                          {configurable ? (
+                            <Link to="/integrations">
+                              <Button size="sm" variant="outline" className="h-7 text-xs">
+                                <ExternalLink className="w-3 h-3 mr-1" />
+                                Connect {content.platform}
+                              </Button>
+                            </Link>
+                          ) : (
+                            <span className="text-[11px] text-amber-700/70">Admin needs to configure this platform before it can be connected.</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    {!approved && content.status !== "published" && (
+                      <Button
+                        size="sm"
+                        className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white"
+                        onClick={() => approveMutation.mutate({ id: content.id })}
+                        disabled={approveMutation.isPending}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                        Approve
+                      </Button>
+                    )}
+
                     <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() =>
-                        copyToClipboard(
-                          `${content.hook || ""}\n${content.caption || ""}\n${content.cta || ""}\n${content.body || ""}`,
-                          content.id
-                        )
-                      }
+                      size="sm"
+                      variant="outline"
+                      className="h-8"
+                      onClick={() => copyToClipboard(captionText, content.id)}
                     >
                       {copiedId === content.id ? (
-                        <Check className="w-3.5 h-3.5 text-emerald-500" />
+                        <Check className="w-3.5 h-3.5 mr-1.5" />
                       ) : (
-                        <Copy className="w-3.5 h-3.5" />
+                        <Copy className="w-3.5 h-3.5 mr-1.5" />
                       )}
+                      Copy caption
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-red-500 hover:text-red-600"
-                      onClick={() => deleteMutation.mutate({ id: content.id })}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
+
+                    {content.status !== "published" && content.status !== "archived" && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8"
+                          onClick={() => openSchedule(content.id, content.scheduledFor)}
+                        >
+                          <CalendarClock className="w-3.5 h-3.5 mr-1.5" />
+                          {content.status === "scheduled" ? "Reschedule" : "Schedule"}
+                        </Button>
+
+                        {showConnectGuard ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8"
+                            onClick={() => markManuallyPostedMutation.mutate({ id: content.id })}
+                            disabled={markManuallyPostedMutation.isPending}
+                          >
+                            <Upload className="w-3.5 h-3.5 mr-1.5" />
+                            Mark as posted
+                          </Button>
+                        ) : connected ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8"
+                            onClick={() => {
+                              toast.info("Auto-publishing is coming soon. Use 'Mark as posted' if you published manually.");
+                            }}
+                          >
+                            <Upload className="w-3.5 h-3.5 mr-1.5" />
+                            Publish now
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8"
+                            onClick={() => markManuallyPostedMutation.mutate({ id: content.id })}
+                            disabled={markManuallyPostedMutation.isPending}
+                          >
+                            <Upload className="w-3.5 h-3.5 mr-1.5" />
+                            Mark as posted
+                          </Button>
+                        )}
+                      </>
+                    )}
+
+                    {content.platform && (
+                      <span className="ml-auto text-xs text-muted-foreground capitalize">
+                        {content.platform}
+                      </span>
+                    )}
                   </div>
-                </div>
-                <h3 className="font-semibold text-sm mb-2">{content.title}</h3>
-                {content.hook && (
-                  <p className="text-sm text-muted-foreground line-clamp-1 mb-1">
-                    <span className="font-medium text-foreground">Hook:</span>{" "}
-                    {content.hook}
-                  </p>
-                )}
-                {content.caption && (
-                  <p className="text-sm text-muted-foreground line-clamp-2 mb-1">
-                    {content.caption}
-                  </p>
-                )}
-                {content.cta && (
-                  <p className="text-xs font-medium text-[#00D4FF] mt-1">
-                    CTA: {content.cta}
-                  </p>
-                )}
-                {content.platform && (
-                  <p className="text-xs text-muted-foreground mt-2 capitalize">
-                    Platform: {content.platform}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>
