@@ -7,12 +7,21 @@ import { useAuth } from "@/hooks/useAuth";
 import { Logo } from "@/components/Logo";
 import { Link } from "react-router";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Check,
   Zap,
   Crown,
   Rocket,
   ArrowRight,
   Loader2,
+  Mail,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -34,6 +43,8 @@ export default function Pricing() {
   const { isAuthenticated } = useAuth();
   const utils = trpc.useUtils();
   const [subscribingId, setSubscribingId] = useState<number | null>(null);
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+  const [selectedTier, setSelectedTier] = useState<any>(null);
 
   const { data: tiers, isLoading } = trpc.subscription.tiers.useQuery();
   const { data: mySub } = trpc.subscription.mySubscription.useQuery(undefined, {
@@ -52,13 +63,14 @@ export default function Pricing() {
     },
   });
 
-  function handleSubscribe(tierId: number, priceUsd: number) {
+  function handleSubscribe(tierId: number, priceUsd: number, tier?: any) {
     if (!isAuthenticated) {
       toast.info("Please log in to subscribe");
       return;
     }
     if (priceUsd > 0) {
-      toast.info("Payment setup is required to upgrade. Please contact support to complete your subscription.");
+      setSelectedTier(tier);
+      setPaymentDialogOpen(true);
       return;
     }
     setSubscribingId(tierId);
@@ -170,7 +182,7 @@ export default function Pricing() {
                     }`}
                     variant={isCurrent ? "secondary" : tier.slug === "startup" ? "default" : "outline"}
                     disabled={isCurrent || isSubscribing}
-                    onClick={() => handleSubscribe(tier.id, tier.priceUsd)}
+                    onClick={() => handleSubscribe(tier.id, tier.priceUsd, tier)}
                   >
                     {isSubscribing ? (
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -240,6 +252,47 @@ export default function Pricing() {
             </p>
           </div>
         </div>
+
+        {/* Payment Setup Required Dialog */}
+        <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Crown className="w-5 h-5 text-[#7C3AED]" />
+                Payment Setup Required
+              </DialogTitle>
+              <DialogDescription>
+                Online subscription payments are not enabled yet. Please contact support to upgrade your plan.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              {selectedTier && (
+                <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                  <p className="text-sm font-medium">{selectedTier.name} Plan</p>
+                  <p className="text-xs text-muted-foreground">
+                    ${(selectedTier.priceUsd / 100).toFixed(0)}/month
+                  </p>
+                </div>
+              )}
+              <div className="flex gap-3 justify-end">
+                <Button variant="outline" onClick={() => setPaymentDialogOpen(false)}>
+                  <X className="w-4 h-4 mr-2" />
+                  Close
+                </Button>
+                <Button
+                  className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
+                  onClick={() => {
+                    setPaymentDialogOpen(false);
+                    toast.info("Please contact support via email or chat to complete your upgrade.");
+                  }}
+                >
+                  <Mail className="w-4 h-4 mr-2" />
+                  Contact Support
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

@@ -188,13 +188,26 @@ export default function Integrations() {
         </p>
       </div>
 
+      {/* Page-level explanation */}
+      <Card className="bg-blue-500/5 border-blue-500/20">
+        <CardContent className="p-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-blue-500 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm text-blue-700 font-medium">Integrations are only required for automatic publishing and inbox management</p>
+            <p className="text-xs text-blue-600/80 mt-1">
+              You can still generate strategy and content without connecting platforms. Connect integrations when you are ready to publish automatically or manage replies.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Setup notice */}
       <Card className="bg-amber-500/5 border-amber-500/20">
         <CardContent className="p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
           <div>
-            <p className="text-sm text-amber-200 font-medium">Setup Required</p>
-            <p className="text-xs text-amber-200/70 mt-1">
+            <p className="text-sm text-amber-700 font-medium">Publishing Setup Required</p>
+            <p className="text-xs text-amber-600/80 mt-1">
               Social platform publishing is not yet connected. You can continue creating campaigns and generating content. Platform connections will be available once your workspace is configured.
             </p>
           </div>
@@ -314,7 +327,7 @@ export default function Integrations() {
                     </>
                   ) : (
                     <>
-                      {platformStatus?.find((p) => p.platform === platform)?.configured === false && !isAdmin ? (
+                      {platformStatus?.find((p) => p.platform === platform)?.configured === false ? (
                         <div className="flex items-center gap-2 flex-wrap">
                           <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/20">
                             Publishing setup required
@@ -322,6 +335,22 @@ export default function Integrations() {
                           <span className="text-xs text-gray-500">
                             Strategy & content generation work without this
                           </span>
+                          {config.setupUrl && isAdmin && (
+                            <a
+                              href={config.setupUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-[#334155] text-gray-300 hover:text-white hover:bg-[#334155]"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5 mr-1" />
+                                Setup
+                              </Button>
+                            </a>
+                          )}
                         </div>
                       ) : (
                         <>

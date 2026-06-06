@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useSearchParams, Link } from "react-router";
+import { useSearchParams, useNavigate, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,7 @@ export default function Campaigns() {
   const [highlightedId, setHighlightedId] = useState<number | null>(null);
   const [filter, setFilter] = useState<string>("all");
   const utils = trpc.useUtils();
+  const navigate = useNavigate();
   const { campaigns: campaignUsage, results: resultUsage, isLoading: usageLoading, tierName } = useUsage();
 
   const { data: campaigns, isLoading } = trpc.campaign.list.useQuery();
@@ -96,7 +97,17 @@ export default function Campaigns() {
         setTimeout(() => setHighlightedId(null), 4000);
         const fresh = await utils.campaign.list.fetch(undefined);
         const newCamp = fresh.find((c) => c.id === data.id);
-        if (newCamp) setViewCampaign(newCamp);
+        if (newCamp) {
+          setViewCampaign(newCamp);
+          // Route to the correct next screen based on campaign state
+          if (newCamp.workflowState === "business_onboarding") {
+            navigate("/onboarding");
+          } else if (newCamp.workflowState === "strategy_pending") {
+            navigate("/agent-activity");
+          } else if (newCamp.workflowState === "strategy_generated") {
+            navigate("/approvals");
+          }
+        }
       }
     },
     onError: (err) => {
@@ -215,10 +226,13 @@ export default function Campaigns() {
 
   function getContinueAction(camp: any) {
     const state = camp.workflowState;
+    if (state === "business_onboarding") return { label: "Complete Business Profile", href: "/onboarding" };
+    if (state === "strategy_pending") return { label: "View Progress", href: "/agent-activity" };
     if (state === "strategy_generated") return { label: "Review Strategy", href: "/approvals" };
-    if (state === "creatives_ready") return { label: "Review Content", href: `/content?campaignId=${camp.id}` };
+    if (state === "strategy_approved" || state === "creatives_generating") return { label: "View Content Generation Progress", href: "/agent-activity" };
+    if (state === "creatives_ready") return { label: "View Generated Content", href: `/content?campaignId=${camp.id}` };
     if (state === "launch_approval_required") return { label: "Approve Launch", href: "/approvals" };
-    if (state === "strategy_pending" || state === "creatives_generating" || state === "audience_generating") return { label: "View Progress", href: "/agent-activity" };
+    if (state === "audience_generating" || state === "audience_ready" || state === "schedule_generated") return { label: "View Progress", href: "/agent-activity" };
     if (state === "campaign_live" || state === "engagement_active" || state === "leads_converting" || state === "optimisation_active") return { label: "View Analytics", href: "/analytics" };
     return null;
   }
@@ -256,7 +270,7 @@ export default function Campaigns() {
                         Plan Limit Reached
                       </p>
                       <p className="text-xs text-amber-600/80">
-                        You have reached your plan limit ({campaignUsage.used}/{campaignUsage.limit} campaigns). Upgrade your plan or remove an existing campaign before creating another one.
+                        You have used the campaign allowance included in your current plan. Upgrade your plan to create additional campaigns.
                       </p>
                     </div>
                   </div>
@@ -518,7 +532,7 @@ export default function Campaigns() {
                       <Link to={continueAction.href}>
                         <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
                           <Rocket className="w-3 h-3 mr-1" />
-                          Continue Campaign
+                          {continueAction.label}
                         </Button>
                       </Link>
                     )}
@@ -664,14 +678,14 @@ export default function Campaigns() {
                       <Link to={continueAction.href}>
                         <Button className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white">
                           <Rocket className="w-4 h-4 mr-2" />
-                          Continue Campaign
+                          {continueAction.label}
                         </Button>
                       </Link>
                     );
                   }
                   return null;
                 })()}
-                {!viewCampaign.aiGenerated && (
+                {!viewCampaign.aiGenerated && (viewCampaign.status === "active" || viewCampaign.status === "paused") && (
                   <Button
                     variant="outline"
                     disabled={updateMutation.isPending}

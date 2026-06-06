@@ -1,10 +1,86 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { approvalRequests } from "@db/schema";
+import { approvalRequests, campaigns } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { onApprovalResolved } from "./lib/workflow/triggers";
+import { createApprovalRequest } from "./lib/workflow/engine";
+
+async function syncPendingApprovals(userId: number) {
+  const db = getDb();
+
+  // Find campaigns that should have pending approvals but don't
+  const stuckCampaigns = await db
+    .select()
+    .from(campaigns)
+    .where(
+      and(
+        eq(campaigns.userId, userId),
+        eq(campaigns.aiGenerated, true)
+      )
+    );
+
+  for (const campaign of stuckCampaigns) {
+    const state = campaign.workflowState;
+
+    // Repair missing strategy_review approvals
+    if (state === "strategy_generated") {
+      const existing = await db
+        .select()
+        .from(approvalRequests)
+        .where(
+          and(
+            eq(approvalRequests.campaignId, campaign.id),
+            eq(approvalRequests.userId, userId),
+            eq(approvalRequests.approvalType, "strategy_review"),
+            eq(approvalRequests.status, "pending")
+          )
+        )
+        .limit(1);
+
+      if (existing.length === 0) {
+        await createApprovalRequest({
+          userId,
+          campaignId: campaign.id,
+          approvalType: "strategy_review",
+          title: `Approve Strategy: ${campaign.name}`,
+          description: `The strategy for "${campaign.name}" has been generated. Review and approve to continue to creative content generation.`,
+          aiRecommendation: "Based on the campaign goal and target audience, this strategy aligns with best practices for the selected platforms.",
+          riskLevel: "low",
+        });
+      }
+    }
+
+    // Repair missing campaign_launch approvals
+    if (state === "launch_approval_required") {
+      const existing = await db
+        .select()
+        .from(approvalRequests)
+        .where(
+          and(
+            eq(approvalRequests.campaignId, campaign.id),
+            eq(approvalRequests.userId, userId),
+            eq(approvalRequests.approvalType, "campaign_launch"),
+            eq(approvalRequests.status, "pending")
+          )
+        )
+        .limit(1);
+
+      if (existing.length === 0) {
+        await createApprovalRequest({
+          userId,
+          campaignId: campaign.id,
+          approvalType: "campaign_launch",
+          title: `Approve Launch: ${campaign.name}`,
+          description: `The campaign "${campaign.name}" is ready to launch. All strategy, creative, audience, and schedule assets have been generated.`,
+          aiRecommendation: "Based on the generated strategy and content, this campaign is ready to go live. Expected reach aligns with budget allocation.",
+          riskLevel: "low",
+        });
+      }
+    }
+  }
+}
 
 export const approvalRouter = createRouter({
   listApprovals: authedQuery
@@ -19,6 +95,10 @@ export const approvalRouter = createRouter({
     )
     .query(async ({ ctx, input }) => {
       const db = getDb();
+
+      // Repair missing approvals for stuck campaigns before listing
+      await syncPendingApprovals(ctx.user.id);
+
       const results = await db
         .select()
         .from(approvalRequests)

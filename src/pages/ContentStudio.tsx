@@ -84,6 +84,17 @@ export default function ContentStudio() {
   })();
   const { data: contents, isLoading } = trpc.content.list.useQuery(listInput);
 
+  // Fetch campaigns and approvals to show contextual empty-state guidance
+  const { data: campaigns } = trpc.campaign.list.useQuery();
+  const { data: approvals } = trpc.approval.listApprovals.useQuery(
+    { status: "pending" },
+    { enabled: (contents?.length ?? 0) === 0 }
+  );
+
+  const strategyPendingApproval = approvals?.find((a) => a.approvalType === "strategy_review");
+  const strategyGeneratedCampaign = campaigns?.find((c) => c.workflowState === "strategy_generated");
+  const strategyPendingCampaign = campaigns?.find((c) => c.workflowState === "strategy_pending");
+
   const createMutation = trpc.content.create.useMutation({
     onSuccess: () => {
       utils.content.list.invalidate();
@@ -517,25 +528,71 @@ Include:
           <CardContent className="flex flex-col items-center justify-center py-16">
             <PenTool className="w-12 h-12 text-muted-foreground mb-4" />
             <p className="text-lg font-medium">No content yet</p>
-            <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
-              No content has been generated yet. Review your campaign strategy first, then NatForgeAI can generate content.
-            </p>
-            <div className="flex gap-2 flex-wrap justify-center">
-              <Link to="/campaigns">
-                <Button variant="outline">
-                  <ArrowRight className="w-4 h-4 mr-2" />
-                  Go to Campaign Strategy
-                </Button>
-              </Link>
-              <Button variant="outline" onClick={() => setAiOpen(true)}>
-                <Sparkles className="w-4 h-4 mr-2" />
-                AI Generate
-              </Button>
-              <Button onClick={() => setCreateOpen(true)}>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Manually
-              </Button>
-            </div>
+            {strategyPendingApproval ? (
+              <>
+                <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+                  Your strategy is ready for review. Approve it to start content generation.
+                </p>
+                <div className="flex gap-2 flex-wrap justify-center">
+                  <Link to="/approvals">
+                    <Button variant="outline">
+                      <ArrowRight className="w-4 h-4 mr-2" />
+                      Review Strategy
+                    </Button>
+                  </Link>
+                </div>
+              </>
+            ) : strategyGeneratedCampaign ? (
+              <>
+                <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+                  Your strategy is ready, but the review item needs to be prepared. Refresh or go to Campaigns.
+                </p>
+                <div className="flex gap-2 flex-wrap justify-center">
+                  <Link to="/campaigns">
+                    <Button variant="outline">
+                      <ArrowRight className="w-4 h-4 mr-2" />
+                      Go to Campaigns
+                    </Button>
+                  </Link>
+                </div>
+              </>
+            ) : strategyPendingCampaign ? (
+              <>
+                <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+                  NatForgeAI is preparing your strategy. Content will appear here once strategy is approved.
+                </p>
+                <div className="flex gap-2 flex-wrap justify-center">
+                  <Link to="/agent-activity">
+                    <Button variant="outline">
+                      <ArrowRight className="w-4 h-4 mr-2" />
+                      View Progress
+                    </Button>
+                  </Link>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+                  No content has been generated yet. Review your campaign strategy first, then NatForgeAI can generate content.
+                </p>
+                <div className="flex gap-2 flex-wrap justify-center">
+                  <Link to="/campaigns">
+                    <Button variant="outline">
+                      <ArrowRight className="w-4 h-4 mr-2" />
+                      Go to Campaign Strategy
+                    </Button>
+                  </Link>
+                  <Button variant="outline" onClick={() => setAiOpen(true)}>
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    AI Generate
+                  </Button>
+                  <Button onClick={() => setCreateOpen(true)}>
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Manually
+                  </Button>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       ) : (

@@ -76,10 +76,13 @@ const journeyStage: Record<string, string> = {
 
 function getContinueAction(campaign: any) {
   const state = campaign.workflowState;
+  if (state === "business_onboarding") return { label: "Complete Business Profile", href: "/onboarding" };
+  if (state === "strategy_pending") return { label: "View Progress", href: "/agent-activity" };
   if (state === "strategy_generated") return { label: "Review Strategy", href: "/approvals" };
-  if (state === "creatives_ready") return { label: "Review Content", href: `/content?campaignId=${campaign.id}` };
+  if (state === "strategy_approved" || state === "creatives_generating") return { label: "View Content Generation Progress", href: "/agent-activity" };
+  if (state === "creatives_ready") return { label: "View Generated Content", href: `/content?campaignId=${campaign.id}` };
   if (state === "launch_approval_required") return { label: "Approve Launch", href: "/approvals" };
-  if (state === "strategy_pending" || state === "creatives_generating" || state === "audience_generating") return { label: "View Progress", href: "/agent-activity" };
+  if (state === "audience_generating" || state === "audience_ready" || state === "schedule_generated") return { label: "View Progress", href: "/agent-activity" };
   if (state === "campaign_live" || state === "engagement_active" || state === "leads_converting" || state === "optimisation_active") return { label: "View Analytics", href: "/analytics" };
   return null;
 }
@@ -302,7 +305,7 @@ export default function MissionControl() {
                             className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
                           >
                             <Rocket className="w-3 h-3 mr-1" />
-                            Continue Campaign
+                            {continueAction.label}
                           </Button>
                         </Link>
                       ) : (

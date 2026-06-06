@@ -654,8 +654,8 @@ export default function Onboarding() {
                           Campaign Launch Blocked
                         </p>
                         <p className="text-xs text-amber-200/70 mt-1">
-                          You have reached your plan limit ({campaignUsage.used}/{campaignUsage.limit} campaigns).
-                          Upgrade your plan or remove an existing campaign before creating another one.
+                          You have used the campaign allowance included in your current plan.
+                          Upgrade your plan to create additional campaigns.
                         </p>
                         <div className="flex gap-2 mt-3">
                           <Link to="/pricing">
