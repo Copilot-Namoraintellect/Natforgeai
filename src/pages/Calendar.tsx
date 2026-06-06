@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -141,6 +142,9 @@ export default function CalendarPage() {
           <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle>Schedule Content</DialogTitle>
+              <DialogDescription>
+                Choose a date and time to publish your content.
+              </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleCreate} className="space-y-4 mt-4">
               <div>

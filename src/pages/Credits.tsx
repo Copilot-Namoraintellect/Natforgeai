@@ -31,6 +31,7 @@ export default function Credits() {
   const { data: transactions, isLoading: txLoading } = trpc.billing.myTransactions.useQuery({ limit: 50 });
   const { data: usageSummary, isLoading: usageLoading } = trpc.billing.myUsageSummary.useQuery();
   const { data: usageDetails } = trpc.billing.myUsage.useQuery();
+  const { data: campaigns } = trpc.campaign.list.useQuery();
 
   const isLoading = walletLoading || txLoading || usageLoading;
 
@@ -102,6 +103,41 @@ export default function Credits() {
     admin_adjustment: "Admin",
     rollover: "Rollover",
   };
+
+  function formatTransactionDescription(t: any): string {
+    const meta = t.metadata as Record<string, any> | null;
+    const campaignId = meta?.campaignId;
+    const campaign = campaigns?.find((c) => c.id === campaignId);
+    const campaignName = campaign?.name || (campaignId ? `Campaign #${campaignId}` : null);
+    const agentType = meta?.agentType;
+
+    if (t.type === "agent_deduction" && agentType) {
+      const agentLabel = agentType.charAt(0).toUpperCase() + agentType.slice(1);
+      if (campaignName) {
+        return `${agentLabel} generation — ${campaignName}`;
+      }
+      return `${agentLabel} generation`;
+    }
+    if (t.type === "refund") {
+      return t.description || "Credit refund";
+    }
+    if (t.type === "publishing_deduction") {
+      return t.description || "Content publishing";
+    }
+    if (t.type === "image_generation") {
+      return t.description || "AI image generation";
+    }
+    if (t.type === "video_generation") {
+      return t.description || "AI video generation";
+    }
+    if (t.type === "subscription_allocation") {
+      return "Monthly credit allocation";
+    }
+    if (t.type === "purchase") {
+      return "Credit purchase";
+    }
+    return t.description || transactionTypeLabel[t.type] || t.type;
+  }
 
   const transactionTypeColor: Record<string, string> = {
     subscription_allocation: "bg-emerald-500/10 text-emerald-600",
@@ -314,8 +350,13 @@ export default function Credits() {
                             {t.amount > 0 ? "+" : ""}{t.amount.toLocaleString()}
                           </TableCell>
                           <TableCell className="text-sm">{t.balanceAfter.toLocaleString()}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">
-                            {t.description || "-"}
+                          <TableCell className="text-sm text-muted-foreground max-w-[240px]">
+                            <div className="truncate" title={formatTransactionDescription(t)}>
+                              {formatTransactionDescription(t)}
+                            </div>
+                            {t.type === "refund" && (
+                              <span className="text-xs text-emerald-600">Credits refunded</span>
+                            )}
                           </TableCell>
                           <TableCell className="text-xs text-muted-foreground">
                             {t.createdAt ? new Date(t.createdAt).toLocaleDateString() : "-"}

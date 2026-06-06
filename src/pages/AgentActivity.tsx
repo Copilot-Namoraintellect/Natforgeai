@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "@/providers/trpc";
+import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,9 @@ import {
   Palette,
   Hash,
   BarChart3,
+  ArrowRight,
 } from "lucide-react";
+import { Link } from "react-router";
 
 const agentTypeConfig: Record<string, { icon: any; color: string; label: string }> = {
   strategy: { icon: Target, color: "text-blue-400", label: "Strategy Agent" },
@@ -173,11 +176,82 @@ function FormattedAgentOutput({ agentType, output }: { agentType: string; output
 export default function AgentActivity() {
   const [filterType, setFilterType] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const utils = trpc.useUtils();
 
   const { data: agentRuns, isLoading } = trpc.agent.getAgentRuns.useQuery({
     agentType: filterType !== "all" ? (filterType as any) : undefined,
     status: filterStatus !== "all" ? (filterStatus as any) : undefined,
   });
+
+  const runStrategyAgent = trpc.agent.runStrategyAgent.useMutation({
+    onSuccess: () => {
+      toast.success("Strategy generation restarted");
+      utils.agent.getAgentRuns.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "Retry failed"),
+  });
+  const runCreativeAgent = trpc.agent.runCreativeAgent.useMutation({
+    onSuccess: () => {
+      toast.success("Creative generation restarted");
+      utils.agent.getAgentRuns.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "Retry failed"),
+  });
+  const runAudienceAgent = trpc.agent.runAudienceAgent.useMutation({
+    onSuccess: () => {
+      toast.success("Audience generation restarted");
+      utils.agent.getAgentRuns.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "Retry failed"),
+  });
+  const runDistributionAgent = trpc.agent.runDistributionAgent.useMutation({
+    onSuccess: () => {
+      toast.success("Distribution generation restarted");
+      utils.agent.getAgentRuns.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "Retry failed"),
+  });
+
+  function handleRetry(run: any) {
+    if (!run.campaignId) return;
+    switch (run.agentType) {
+      case "strategy":
+        runStrategyAgent.mutate({ campaignId: run.campaignId, generate: true });
+        break;
+      case "creative":
+        runCreativeAgent.mutate({ campaignId: run.campaignId });
+        break;
+      case "audience":
+        runAudienceAgent.mutate({ campaignId: run.campaignId });
+        break;
+      case "distribution":
+        runDistributionAgent.mutate({ campaignId: run.campaignId });
+        break;
+      default:
+        toast.info("Retry is not available for this agent type yet.");
+    }
+  }
+
+  function friendlyErrorMessage(error: string | null): string {
+    if (!error) return "Something went wrong. Please try again.";
+    const lower = error.toLowerCase();
+    if (lower.includes("insufficient credits") || lower.includes("payment_required")) {
+      return "This task failed because you ran out of credits. Top up your balance and try again.";
+    }
+    if (lower.includes("timeout") || lower.includes("timed out")) {
+      return "NatForgeAI took too long to respond. This can happen during high demand. Please retry.";
+    }
+    if (lower.includes("rate limit") || lower.includes("too many requests")) {
+      return "Too many requests were sent in a short time. Please wait a moment and retry.";
+    }
+    if (lower.includes("network") || lower.includes("fetch") || lower.includes("connection")) {
+      return "A network issue occurred. Please check your connection and retry.";
+    }
+    if (lower.includes("invalid") && lower.includes("api key")) {
+      return "The AI service key is not configured correctly. Contact support.";
+    }
+    return "NatForgeAI encountered an issue while processing this task. You can retry or contact support if it keeps happening.";
+  }
 
   return (
     <div className="space-y-6">
@@ -267,9 +341,35 @@ export default function AgentActivity() {
                           : "Unknown date"}
                       </p>
 
-                      {run.error && (
+                      {run.status === "failed" && (
                         <div className="mt-2 p-2 rounded-lg bg-red-500/10 border border-red-500/20">
-                          <p className="text-sm text-red-400">{run.error}</p>
+                          <p className="text-sm text-red-400">{friendlyErrorMessage(run.error)}</p>
+                          <p className="text-xs text-red-400/70 mt-1">Credits were not refunded for this failed attempt.</p>
+                        </div>
+                      )}
+
+                      {run.status === "completed" && (
+                        <div className="mt-2 flex items-center gap-2 flex-wrap">
+                          <Link to="/campaigns">
+                            <Button size="sm" variant="outline" className="border-[#334155] text-gray-300 hover:text-white h-7 text-xs">
+                              Open Campaign
+                              <ArrowRight className="w-3 h-3 ml-1" />
+                            </Button>
+                          </Link>
+                          {run.agentType === "strategy" && (
+                            <Link to="/approvals">
+                              <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
+                                Review Strategy
+                              </Button>
+                            </Link>
+                          )}
+                          {run.agentType === "creative" && (
+                            <Link to="/content">
+                              <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
+                                View Content
+                              </Button>
+                            </Link>
+                          )}
                         </div>
                       )}
 
@@ -288,6 +388,8 @@ export default function AgentActivity() {
                         variant="outline"
                         size="sm"
                         className="border-[#334155] text-gray-300 hover:text-white shrink-0"
+                        onClick={() => handleRetry(run)}
+                        disabled={runStrategyAgent.isPending || runCreativeAgent.isPending || runAudienceAgent.isPending || runDistributionAgent.isPending}
                       >
                         <RotateCcw className="w-3.5 h-3.5 mr-1" />
                         Retry

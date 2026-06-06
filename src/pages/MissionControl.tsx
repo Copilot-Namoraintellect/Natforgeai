@@ -16,6 +16,7 @@ import {
   Zap,
   ArrowRight,
   BarChart3,
+  Loader2,
 } from "lucide-react";
 
 const workflowStateLabels: Record<string, { label: string; color: string; step: number }> = {
@@ -36,6 +37,24 @@ const workflowStateLabels: Record<string, { label: string; color: string; step: 
   completed: { label: "Completed", color: "bg-gray-500/10 text-gray-600", step: 15 },
 };
 
+const workflowNextAction: Record<string, { text: string; actionLabel?: string; actionHref?: string }> = {
+  business_onboarding: { text: "Finish onboarding to begin." },
+  strategy_pending: { text: "NatForgeAI is preparing your strategy." },
+  strategy_generated: { text: "Review your strategy before continuing.", actionLabel: "Review Strategy", actionHref: "/approvals" },
+  strategy_approved: { text: "Creative assets are being generated." },
+  creatives_generating: { text: "NatForgeAI is generating creative content." },
+  creatives_ready: { text: "Creative content is ready for review." },
+  audience_generating: { text: "Audience segments are being identified." },
+  audience_ready: { text: "Audience profiles are ready." },
+  schedule_generated: { text: "Publishing schedule is ready for approval.", actionLabel: "Review Schedule", actionHref: "/approvals" },
+  launch_approval_required: { text: "Approve launch to go live.", actionLabel: "Approve Launch", actionHref: "/approvals" },
+  campaign_live: { text: "Campaign is live and running." },
+  engagement_active: { text: "Engaging with your audience." },
+  leads_converting: { text: "Nurturing leads through the funnel." },
+  optimisation_active: { text: "Optimising campaign performance." },
+  completed: { text: "Campaign cycle completed." },
+};
+
 export default function MissionControl() {
   const { data: campaigns, isLoading: campaignsLoading } = trpc.campaign.list.useQuery();
   const { data: agentRuns } = trpc.agent.getAgentRuns.useQuery({ status: "completed" });
@@ -47,14 +66,30 @@ export default function MissionControl() {
     [campaigns]
   );
 
-  const activeCampaigns = useMemo(
+  const campaignsInProgress = useMemo(
+    () => aiCampaigns.filter((c) =>
+      c.workflowState &&
+      c.workflowState !== "completed" &&
+      c.workflowState !== "campaign_live" &&
+      c.workflowState !== "engagement_active" &&
+      c.workflowState !== "leads_converting" &&
+      c.workflowState !== "optimisation_active"
+    ),
+    [aiCampaigns]
+  );
+
+  const liveCampaigns = useMemo(
     () => aiCampaigns.filter((c) => c.workflowState === "campaign_live" || c.workflowState === "engagement_active" || c.workflowState === "leads_converting" || c.workflowState === "optimisation_active"),
+    [aiCampaigns]
+  );
+
+  const pendingReviews = useMemo(
+    () => aiCampaigns.filter((c) => c.workflowState === "strategy_generated" || c.workflowState === "launch_approval_required"),
     [aiCampaigns]
   );
 
   const approvalCount = pendingApprovals?.length ?? 0;
   const completedAgentRuns = agentRuns?.length ?? 0;
-  const totalLeads = leads?.length ?? 0;
 
   const dailySummary = useMemo(() => {
     const postsGenerated = agentRuns?.filter((r) => r.agentType === "creative").length ?? 0;
@@ -75,17 +110,25 @@ export default function MissionControl() {
 
   const stats = [
     {
-      title: "Active Campaigns",
-      value: activeCampaigns.length,
+      title: "Campaigns in Progress",
+      value: campaignsInProgress.length,
       icon: Megaphone,
       color: "text-[#00D4FF]",
       bg: "bg-[#00D4FF]/10",
       link: "/campaigns",
     },
     {
-      title: "Pending Approvals",
-      value: approvalCount,
+      title: "Live Campaigns",
+      value: liveCampaigns.length,
       icon: CheckCircle,
+      color: "text-emerald-500",
+      bg: "bg-emerald-500/10",
+      link: "/campaigns",
+    },
+    {
+      title: "Pending Reviews",
+      value: pendingReviews.length + approvalCount,
+      icon: AlertCircle,
       color: "text-amber-500",
       bg: "bg-amber-500/10",
       link: "/approvals",
@@ -97,14 +140,6 @@ export default function MissionControl() {
       color: "text-purple-500",
       bg: "bg-purple-500/10",
       link: "/agent-activity",
-    },
-    {
-      title: "Total Leads",
-      value: totalLeads,
-      icon: Users,
-      color: "text-emerald-500",
-      bg: "bg-emerald-500/10",
-      link: "/leads",
     },
   ];
 
@@ -194,6 +229,7 @@ export default function MissionControl() {
                 step: 1,
               };
               const progressPercent = (stateInfo.step / 15) * 100;
+              const nextAction = workflowNextAction[campaign.workflowState];
 
               return (
                 <Card key={campaign.id} className="bg-[#1E293B] border-[#334155]">
@@ -214,7 +250,13 @@ export default function MissionControl() {
                       <Progress value={progressPercent} className="h-1.5" />
                     </div>
 
-                    <div className="flex items-center gap-3 mt-4">
+                    {nextAction && (
+                      <p className="text-xs text-gray-400 mt-3">
+                        {nextAction.text}
+                      </p>
+                    )}
+
+                    <div className="flex items-center gap-3 mt-3">
                       <Link to={`/campaigns`}>
                         <Button
                           variant="outline"
@@ -225,23 +267,19 @@ export default function MissionControl() {
                           <ArrowRight className="w-3 h-3 ml-1" />
                         </Button>
                       </Link>
-                      {campaign.workflowState === "strategy_generated" && (
-                        <Link to={`/approvals`}>
-                          <Button
-                            size="sm"
-                            className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
-                          >
-                            Review Strategy
-                          </Button>
-                        </Link>
+                      {campaign.workflowState === "strategy_pending" && (
+                        <Button size="sm" variant="outline" disabled className="border-[#334155] text-gray-400">
+                          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          Preparing Strategy
+                        </Button>
                       )}
-                      {campaign.workflowState === "launch_approval_required" && (
-                        <Link to={`/approvals`}>
+                      {nextAction?.actionLabel && nextAction?.actionHref && (
+                        <Link to={nextAction.actionHref}>
                           <Button
                             size="sm"
                             className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
                           >
-                            Approve Launch
+                            {nextAction.actionLabel}
                           </Button>
                         </Link>
                       )}

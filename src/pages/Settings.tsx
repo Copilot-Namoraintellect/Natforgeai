@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -167,6 +168,9 @@ export default function Settings() {
               <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Add Business</DialogTitle>
+                  <DialogDescription>
+                    Add your business profile to use with campaigns.
+                  </DialogDescription>
                 </DialogHeader>
                 <form onSubmit={handleCreateBiz} className="space-y-4 mt-4">
                   <div>
@@ -381,6 +385,9 @@ export default function Settings() {
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Edit Business</DialogTitle>
+              <DialogDescription>
+                Update your business profile details.
+              </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleUpdateBiz} className="space-y-4 mt-4">
               <div>

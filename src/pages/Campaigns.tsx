@@ -12,6 +12,7 @@ import { useUsage } from "@/hooks/useUsage";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -27,6 +28,8 @@ import {
   DollarSign,
   Crown,
   AlertCircle,
+  ArrowRight,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -34,16 +37,24 @@ export default function Campaigns() {
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [viewCampaign, setViewCampaign] = useState<any>(null);
+  const [highlightedId, setHighlightedId] = useState<number | null>(null);
   const utils = trpc.useUtils();
   const { campaigns: campaignUsage, results: resultUsage, isLoading: usageLoading } = useUsage();
 
   const { data: campaigns, isLoading } = trpc.campaign.list.useQuery();
   const createMutation = trpc.campaign.create.useMutation({
-    onSuccess: () => {
+    onSuccess: async (data) => {
       utils.campaign.list.invalidate();
       utils.subscription.myUsage.invalidate();
       setCreateOpen(false);
-      toast.success("Campaign created successfully!");
+      toast.success("Campaign created. NatForgeAI is preparing your strategy.");
+      if (data.id) {
+        setHighlightedId(data.id);
+        setTimeout(() => setHighlightedId(null), 4000);
+        const fresh = await utils.campaign.list.fetch(undefined);
+        const newCamp = fresh.find((c) => c.id === data.id);
+        if (newCamp) setViewCampaign(newCamp);
+      }
     },
     onError: (err) => {
       toast.error(err.message || "Failed to create campaign");
@@ -101,6 +112,24 @@ export default function Campaigns() {
     leads_converting: { label: "Leads Converting", color: "bg-orange-500/10 text-orange-600", step: 13 },
     optimisation_active: { label: "Optimising", color: "bg-indigo-500/10 text-indigo-600", step: 14 },
     completed: { label: "Completed", color: "bg-gray-500/10 text-gray-600", step: 15 },
+  };
+
+  const workflowGuidance: Record<string, { explanation: string; nextAction: string; actionLabel?: string; actionHref?: string }> = {
+    business_onboarding: { explanation: "Complete your business profile to get started.", nextAction: "Finish onboarding so NatForgeAI can begin strategy work." },
+    strategy_pending: { explanation: "NatForgeAI is preparing your campaign strategy. This usually takes a short moment.", nextAction: "Your strategy is being generated. You'll be notified when it's ready." },
+    strategy_generated: { explanation: "NatForgeAI has prepared your campaign strategy. Review the strategy before content is generated.", nextAction: "Review and approve the strategy to continue.", actionLabel: "Review Strategy", actionHref: "/approvals" },
+    strategy_approved: { explanation: "Strategy approved. NatForgeAI is now generating creative content.", nextAction: "Creative assets are being prepared." },
+    creatives_generating: { explanation: "NatForgeAI is generating creative content for your campaign.", nextAction: "Creative assets are being prepared." },
+    creatives_ready: { explanation: "Creative content is ready. You can review or proceed to audience targeting.", nextAction: "Review creative assets or continue to audience targeting." },
+    audience_generating: { explanation: "NatForgeAI is identifying your ideal audience segments.", nextAction: "Audience research is in progress." },
+    audience_ready: { explanation: "Audience profiles are ready. Distribution scheduling is next.", nextAction: "Review audience profiles or proceed to scheduling." },
+    schedule_generated: { explanation: "Your publishing schedule is ready. Review before launch.", nextAction: "Approve the schedule to set your campaign live." },
+    launch_approval_required: { explanation: "Your campaign is ready to launch. Final approval is required.", nextAction: "Approve the launch to go live.", actionLabel: "Approve Launch", actionHref: "/approvals" },
+    campaign_live: { explanation: "Your campaign is live and running.", nextAction: "Monitor performance in Analytics." },
+    engagement_active: { explanation: "Your campaign is actively engaging with your audience.", nextAction: "Monitor engagement and replies." },
+    leads_converting: { explanation: "Leads are being nurtured and converted.", nextAction: "Check your Leads pipeline." },
+    optimisation_active: { explanation: "NatForgeAI is optimising your campaign performance.", nextAction: "Optimisations are being applied automatically." },
+    completed: { explanation: "This campaign has completed its cycle.", nextAction: "Review results or create a new campaign." },
   };
 
   function handleCreate(e: React.FormEvent<HTMLFormElement>) {
@@ -184,6 +213,9 @@ export default function Campaigns() {
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Create Campaign</DialogTitle>
+              <DialogDescription>
+                Fill in the details below to create a new marketing campaign.
+              </DialogDescription>
             </DialogHeader>
             {isCampaignLimitReached ? (
               <div className="py-8 text-center space-y-4">
@@ -275,78 +307,110 @@ export default function Campaigns() {
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {(filtered ?? []).map((camp) => (
-            <Card key={camp.id} className="group hover:shadow-lg transition-all">
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex gap-1.5 flex-wrap">
-                    <Badge
-                      variant="secondary"
-                      className={statusColors[camp.status] || "bg-muted"}
-                    >
-                      {camp.status}
-                    </Badge>
-                    {camp.aiGenerated && camp.workflowState && (
+          {(filtered ?? []).map((camp) => {
+            const guidance = camp.workflowState ? workflowGuidance[camp.workflowState] : null;
+            return (
+              <Card key={camp.id} className={`group hover:shadow-lg transition-all ${highlightedId === camp.id ? "ring-2 ring-[#00D4FF] shadow-[#00D4FF]/20" : ""}`}>
+                <CardContent className="p-5">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex gap-1.5 flex-wrap">
                       <Badge
                         variant="secondary"
-                        className={workflowStateLabels[camp.workflowState]?.color || "bg-muted"}
+                        className={statusColors[camp.status] || "bg-muted"}
                       >
-                        {workflowStateLabels[camp.workflowState]?.label || camp.workflowState}
+                        {camp.status}
                       </Badge>
-                    )}
+                      {camp.aiGenerated && camp.workflowState && (
+                        <Badge
+                          variant="secondary"
+                          className={workflowStateLabels[camp.workflowState]?.color || "bg-muted"}
+                        >
+                          {workflowStateLabels[camp.workflowState]?.label || camp.workflowState}
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setViewCampaign(camp)}
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-red-500 hover:text-red-600"
+                        onClick={() => deleteMutation.mutate({ id: camp.id })}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <h3 className="font-semibold text-base mb-1">{camp.name}</h3>
+                  <p className="text-sm text-muted-foreground line-clamp-2 mb-2">
+                    {camp.goal}
+                  </p>
+                  {guidance && (
+                    <p className="text-xs text-muted-foreground mb-3">
+                      {guidance.explanation}
+                    </p>
+                  )}
+                  {camp.aiGenerated && camp.workflowState && (
+                    <div className="mt-2">
+                      <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+                        <span>Workflow</span>
+                        <span>{Math.round((workflowStateLabels[camp.workflowState]?.step || 1) / 15 * 100)}%</span>
+                      </div>
+                      <Progress
+                        value={(workflowStateLabels[camp.workflowState]?.step || 1) / 15 * 100}
+                        className="h-1"
+                      />
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 mt-3 flex-wrap">
+                    {guidance?.actionLabel && guidance.actionHref && (
+                      <Link to={guidance.actionHref}>
+                        <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
+                          {guidance.actionLabel}
+                          <ArrowRight className="w-3 h-3 ml-1" />
+                        </Button>
+                      </Link>
+                    )}
+                    {camp.workflowState === "strategy_pending" && (
+                      <Button size="sm" variant="outline" disabled className="h-7 text-xs">
+                        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                        Preparing Strategy
+                      </Button>
+                    )}
                     <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
                       onClick={() => setViewCampaign(camp)}
                     >
-                      <Eye className="w-3.5 h-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-red-500 hover:text-red-600"
-                      onClick={() => deleteMutation.mutate({ id: camp.id })}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      View Details
                     </Button>
                   </div>
-                </div>
-                <h3 className="font-semibold text-base mb-1">{camp.name}</h3>
-                <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
-                  {camp.goal}
-                </p>
-                {camp.aiGenerated && camp.workflowState && (
-                  <div className="mt-3">
-                    <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
-                      <span>Workflow</span>
-                      <span>{Math.round((workflowStateLabels[camp.workflowState]?.step || 1) / 15 * 100)}%</span>
-                    </div>
-                    <Progress
-                      value={(workflowStateLabels[camp.workflowState]?.step || 1) / 15 * 100}
-                      className="h-1"
-                    />
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground mt-3">
+                    {camp.platforms && (
+                      <span className="flex items-center gap-1">
+                        <Target className="w-3 h-3" />
+                        {camp.platforms}
+                      </span>
+                    )}
+                    {camp.budget && (
+                      <span className="flex items-center gap-1">
+                        <DollarSign className="w-3 h-3" />
+                        {camp.budget.toLocaleString()}
+                      </span>
+                    )}
                   </div>
-                )}
-                <div className="flex items-center gap-4 text-xs text-muted-foreground mt-3">
-                  {camp.platforms && (
-                    <span className="flex items-center gap-1">
-                      <Target className="w-3 h-3" />
-                      {camp.platforms}
-                    </span>
-                  )}
-                  {camp.budget && (
-                    <span className="flex items-center gap-1">
-                      <DollarSign className="w-3 h-3" />
-                      {camp.budget.toLocaleString()}
-                    </span>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -356,6 +420,9 @@ export default function Campaigns() {
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{viewCampaign.name}</DialogTitle>
+              <DialogDescription>
+                Campaign details and strategy document.
+              </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-4">
               <div className="flex items-center gap-2 flex-wrap">
@@ -435,6 +502,16 @@ export default function Campaigns() {
                   <p className="text-sm text-muted-foreground whitespace-pre-wrap">{viewCampaign.ctaStrategy}</p>
                 </div>
               )}
+              {viewCampaign.workflowState && workflowGuidance[viewCampaign.workflowState] && (
+                <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                  <p className="text-sm font-medium text-foreground">
+                    {workflowGuidance[viewCampaign.workflowState].explanation}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Next: {workflowGuidance[viewCampaign.workflowState].nextAction}
+                  </p>
+                </div>
+              )}
               <div className="flex gap-3 pt-2 flex-wrap">
                 {!viewCampaign.aiGenerated && (
                   <Button
@@ -484,6 +561,12 @@ export default function Campaigns() {
                     }}
                   >
                     Approve Launch
+                  </Button>
+                )}
+                {viewCampaign.workflowState === "strategy_pending" && (
+                  <Button size="sm" variant="outline" disabled>
+                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                    Preparing Strategy
                   </Button>
                 )}
               </div>

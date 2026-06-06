@@ -17,6 +17,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -37,7 +38,9 @@ import {
   Mail,
   Trash2,
   Search,
+  ArrowRight,
 } from "lucide-react";
+import { Link } from "react-router";
 import { toast } from "sonner";
 
 const platforms = [
@@ -206,6 +209,9 @@ Include:
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>AI Content Generator</DialogTitle>
+                <DialogDescription>
+                  Generate marketing content using AI for your chosen platform and tone.
+                </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 mt-4">
                 <div className="grid grid-cols-2 gap-3">
@@ -375,6 +381,9 @@ Include:
             <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Add Content</DialogTitle>
+                <DialogDescription>
+                  Manually add marketing content to your library.
+                </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleCreate} className="space-y-4 mt-4">
                 <div>
@@ -485,10 +494,16 @@ Include:
           <CardContent className="flex flex-col items-center justify-center py-16">
             <PenTool className="w-12 h-12 text-muted-foreground mb-4" />
             <p className="text-lg font-medium">No content yet</p>
-            <p className="text-sm text-muted-foreground mt-1 mb-4">
-              Create content or use AI to generate it.
+            <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+              No content has been generated yet. Review your campaign strategy first, then NatForgeAI can generate content.
             </p>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap justify-center">
+              <Link to="/campaigns">
+                <Button variant="outline">
+                  <ArrowRight className="w-4 h-4 mr-2" />
+                  Go to Campaign Strategy
+                </Button>
+              </Link>
               <Button variant="outline" onClick={() => setAiOpen(true)}>
                 <Sparkles className="w-4 h-4 mr-2" />
                 AI Generate

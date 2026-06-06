@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -157,6 +158,9 @@ export default function Leads() {
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Add New Lead</DialogTitle>
+              <DialogDescription>
+                Enter the lead's contact information and details.
+              </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleCreate} className="space-y-4 mt-4">
               <div>
@@ -389,6 +393,9 @@ export default function Leads() {
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Edit Lead</DialogTitle>
+              <DialogDescription>
+                Update the lead's information.
+              </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleUpdate} className="space-y-4 mt-4">
               <div>

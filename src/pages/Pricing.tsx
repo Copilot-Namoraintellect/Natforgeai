@@ -52,9 +52,13 @@ export default function Pricing() {
     },
   });
 
-  function handleSubscribe(tierId: number) {
+  function handleSubscribe(tierId: number, priceUsd: number) {
     if (!isAuthenticated) {
       toast.info("Please log in to subscribe");
+      return;
+    }
+    if (priceUsd > 0) {
+      toast.info("Payment setup is required to upgrade. Please contact support to complete your subscription.");
       return;
     }
     setSubscribingId(tierId);
@@ -166,7 +170,7 @@ export default function Pricing() {
                     }`}
                     variant={isCurrent ? "secondary" : tier.slug === "startup" ? "default" : "outline"}
                     disabled={isCurrent || isSubscribing}
-                    onClick={() => handleSubscribe(tier.id)}
+                    onClick={() => handleSubscribe(tier.id, tier.priceUsd)}
                   >
                     {isSubscribing ? (
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -176,7 +180,7 @@ export default function Pricing() {
                       "Get Started"
                     ) : (
                       <>
-                        Subscribe <ArrowRight className="w-4 h-4 ml-1" />
+                        Payment Setup Required <ArrowRight className="w-4 h-4 ml-1" />
                       </>
                     )}
                   </Button>

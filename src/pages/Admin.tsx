@@ -17,6 +17,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -152,6 +153,9 @@ export default function Admin() {
           <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle>Record Manual Payment</DialogTitle>
+              <DialogDescription>
+                Enter the payment details to credit a user's account.
+              </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleRecordPayment} className="space-y-4 mt-4">
               <div>

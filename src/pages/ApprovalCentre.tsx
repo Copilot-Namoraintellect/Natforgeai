@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -111,8 +112,11 @@ export default function ApprovalCentre() {
             <CardContent className="p-8 text-center">
               <CheckCircle className="w-12 h-12 text-emerald-500/50 mx-auto mb-4" />
               <h3 className="text-lg font-semibold text-white mb-2">All caught up!</h3>
-              <p className="text-gray-400">
-                No approvals pending. The AI is working within your approved guidelines.
+              <p className="text-gray-400 mb-2">
+                No launch approvals are pending right now.
+              </p>
+              <p className="text-gray-500 text-sm">
+                When a campaign reaches a review stage — such as when a strategy is ready or a launch needs approval — it will appear here. You can also review campaigns directly from the Campaigns page.
               </p>
             </CardContent>
           </Card>
@@ -261,6 +265,9 @@ export default function ApprovalCentre() {
               {actionType === "reject" && "Reject Action"}
               {actionType === "edit" && "Edit & Approve"}
             </DialogTitle>
+            <DialogDescription>
+              Review the details below before confirming your decision.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>

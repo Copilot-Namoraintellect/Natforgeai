@@ -4,10 +4,11 @@ import { trpc } from "@/providers/trpc";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { useAuth } from "@/hooks/useAuth";
 import {
   Plug,
   Facebook,
@@ -96,7 +97,12 @@ export default function Integrations() {
   });
 
   const utils = trpc.useUtils();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const { data: integrations } = trpc.integration.getConnectedPlatforms.useQuery();
+
+  // Platforms that require backend API configuration
+  const platformsNeedingSetup = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
 
   // Handle OAuth callback results
   useEffect(() => {
@@ -189,15 +195,51 @@ export default function Integrations() {
         <CardContent className="p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
           <div>
-            <p className="text-sm text-amber-200 font-medium">Platform API Setup Required</p>
+            <p className="text-sm text-amber-200 font-medium">Setup Required</p>
             <p className="text-xs text-amber-200/70 mt-1">
-              To connect social platforms, you need to add API credentials to your environment variables:
-              FACEBOOK_APP_ID, FACEBOOK_APP_SECRET, LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, etc.
-              Without these, connections will show as "not configured."
+              Social platform publishing is not yet connected. You can continue creating campaigns and generating content. Platform connections will be available once your workspace is configured.
             </p>
           </div>
         </CardContent>
       </Card>
+
+      {/* Admin-only technical checklist */}
+      {isAdmin && (
+        <Card className="bg-[#1E293B] border-[#334155]">
+          <CardContent className="p-4">
+            <p className="text-sm font-medium text-white mb-2">Admin Setup Checklist</p>
+            <p className="text-xs text-gray-400 mb-3">
+              The following environment variables are required for platform integrations:
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono text-gray-300">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                FACEBOOK_APP_ID
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                FACEBOOK_APP_SECRET
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                LINKEDIN_CLIENT_ID
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                LINKEDIN_CLIENT_SECRET
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                TWITTER_API_KEY
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                TIKTOK_CLIENT_KEY
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Platform Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -274,6 +316,11 @@ export default function Integrations() {
                     </>
                   ) : (
                     <>
+                      {platformsNeedingSetup.includes(platform) && !isAdmin && (
+                        <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/20">
+                          Setup required
+                        </Badge>
+                      )}
                       <Button
                         size="sm"
                         className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white hover:opacity-90"
@@ -317,6 +364,9 @@ export default function Integrations() {
         <DialogContent className="bg-[#1E293B] border-[#334155] text-white">
           <DialogHeader>
             <DialogTitle>Email Provider Configuration</DialogTitle>
+            <DialogDescription>
+              Enter your SMTP settings to send marketing emails.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">

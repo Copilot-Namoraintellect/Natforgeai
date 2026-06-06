@@ -16,6 +16,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -122,6 +123,9 @@ export default function Automations() {
           <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle>Create Automation</DialogTitle>
+              <DialogDescription>
+                Set up a new automated workflow for your marketing tasks.
+              </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleCreate} className="space-y-4 mt-4">
               <div>
