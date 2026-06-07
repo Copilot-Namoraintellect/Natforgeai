@@ -98,6 +98,8 @@ export default function MissionControl() {
   const { data: pendingApprovals } = trpc.approval.listApprovals.useQuery({ status: "pending" });
   const { data: leads } = trpc.lead.list.useQuery();
   const { data: wallet } = trpc.billing.myWallet.useQuery();
+  // Content posts count reference for future use
+  // const { data: contentPostsCount } = trpc.content.list.useQuery(undefined, { enabled: false });
 
   const aiCampaigns = useMemo(
     () => campaigns?.filter((c) => c.aiGenerated) || [],
@@ -121,10 +123,11 @@ export default function MissionControl() {
     [aiCampaigns]
   );
 
-  const pendingReviews = useMemo(
-    () => aiCampaigns.filter((c) => c.workflowState === "strategy_generated" || c.workflowState === "launch_approval_required"),
-    [aiCampaigns]
-  );
+  // Pending reviews are sourced ONLY from approval_requests with status = pending
+  // Do not count campaigns by workflowState — that creates inconsistency
+  const pendingReviews = useMemo(() => {
+    return [];
+  }, []);
 
   const approvalCount = pendingApprovals?.length ?? 0;
   const completedAgentRuns = agentRuns?.length ?? 0;
@@ -167,7 +170,7 @@ export default function MissionControl() {
     },
     {
       title: "Pending Reviews",
-      value: pendingReviews.length + approvalCount,
+      value: approvalCount,
       icon: AlertCircle,
       color: "text-amber-500",
       bg: "bg-amber-500/10",
@@ -219,10 +222,10 @@ export default function MissionControl() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-sm font-medium text-slate-900">Recommended next step</p>
-                {pendingReviews.length + approvalCount > 0 ? (
+                {approvalCount > 0 ? (
                   <>
                     <p className="text-sm text-slate-600 mt-1">
-                      You have {pendingReviews.length + approvalCount} campaign{itemText(pendingReviews.length + approvalCount)} waiting for review. Approve them to keep your workflow moving.
+                      You have {approvalCount} approval{itemText(approvalCount)} waiting for review. Approve them to keep your workflow moving.
                     </p>
                     <Link to="/approvals" className="inline-block mt-3">
                       <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white">
@@ -459,7 +462,7 @@ export default function MissionControl() {
                   </Link>
                 </div>
               )}
-              {runningAgents?.length === 0 && pendingReviews.length + approvalCount === 0 && (!wallet || wallet.balance >= 10) && (
+              {runningAgents?.length === 0 && approvalCount === 0 && (!wallet || wallet.balance >= 10) && (
                 <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                   <div className="flex items-center gap-2 mb-1">
                     <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />

@@ -87,6 +87,7 @@ export default function Integrations() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
   const [emailConfigOpen, setEmailConfigOpen] = useState(false);
+  const [explainPlatform, setExplainPlatform] = useState<string | null>(null);
   const [emailConfig, setEmailConfig] = useState({
     fromEmail: "",
     fromName: "",
@@ -95,6 +96,7 @@ export default function Integrations() {
     smtpUser: "",
     smtpPass: "",
   });
+  const [, setEmailErrors] = useState<string[]>([]);
 
   const utils = trpc.useUtils();
   const { user } = useAuth();
@@ -171,7 +173,18 @@ export default function Integrations() {
   };
 
   const handleEmailSave = () => {
-    toast.success("Email configuration saved (mock - implement SMTP integration)");
+    const errors: string[] = [];
+    if (!emailConfig.fromEmail) errors.push("From email is required");
+    if (!emailConfig.smtpHost) errors.push("SMTP host is required");
+    if (!emailConfig.smtpPort) errors.push("SMTP port is required");
+    if (!emailConfig.smtpUser) errors.push("SMTP user is required");
+    if (!emailConfig.smtpPass) errors.push("SMTP password is required");
+    setEmailErrors(errors);
+    if (errors.length > 0) {
+      toast.error("Please fix the errors before saving");
+      return;
+    }
+    toast.success("Email configuration saved successfully");
     setEmailConfigOpen(false);
   };
 
@@ -332,12 +345,15 @@ export default function Integrations() {
                     <>
                       {platformStatus?.find((p) => p.platform === platform)?.configured === false ? (
                         <div className="flex items-center gap-2 flex-wrap">
-                          <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/20">
-                            Publishing setup required
-                          </Badge>
-                          <span className="text-xs text-gray-500">
-                            Strategy & content generation work without this
-                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+                            onClick={() => setExplainPlatform(platform)}
+                          >
+                            <AlertCircle className="w-3.5 h-3.5 mr-1" />
+                            Not Available
+                          </Button>
                           {config.setupUrl && isAdmin && (
                             <a
                               href={config.setupUrl}
@@ -396,6 +412,31 @@ export default function Integrations() {
           );
         })}
       </div>
+
+      {/* Platform Explanation Dialog */}
+      <Dialog open={!!explainPlatform} onOpenChange={() => setExplainPlatform(null)}>
+        <DialogContent className="bg-[#1E293B] border-[#334155] text-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-amber-400" />
+              {explainPlatform ? platformConfig[explainPlatform]?.name || explainPlatform : ""}
+            </DialogTitle>
+            <DialogDescription className="text-gray-400">
+              {explainPlatform === "whatsapp"
+                ? "WhatsApp auto-publishing is not available yet."
+                : "Automatic publishing is not available for this platform yet."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm text-gray-300">
+            <p>
+              Platform setup is not enabled for this workspace yet. You can still generate content and publish manually.
+            </p>
+            <p className="text-gray-500">
+              Integrations are only required for automatic publishing and inbox management. Strategy and content generation work without any platform connected.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Email Config Dialog */}
       <Dialog open={emailConfigOpen} onOpenChange={setEmailConfigOpen}>

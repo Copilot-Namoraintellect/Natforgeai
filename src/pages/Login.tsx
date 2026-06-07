@@ -48,11 +48,21 @@ export default function Login() {
   });
 
   const loginMutation = trpc.auth.login.useMutation({
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       localStorage.setItem("auth_token", data.token);
       toast.success("Welcome back!");
       
-      navigate("/mission-control");
+      try {
+        utils.auth.me.invalidate();
+        const user = await utils.auth.me.fetch(undefined);
+        if (user && !user.onboardingComplete) {
+          navigate("/onboarding");
+        } else {
+          navigate("/mission-control");
+        }
+      } catch {
+        navigate("/mission-control");
+      }
     },
     onError: (err) => {
       toast.error(err.message || "Login failed");
@@ -60,14 +70,31 @@ export default function Login() {
   });
 
   const registerMutation = trpc.auth.register.useMutation({
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       localStorage.setItem("auth_token", data.token);
-      toast.success("Account created! Welcome aboard.");
+      toast.success("Account created. Let's set up your first campaign.");
       
-      navigate("/mission-control");
+      try {
+        utils.auth.me.invalidate();
+        const user = await utils.auth.me.fetch(undefined);
+        if (user && !user.onboardingComplete) {
+          navigate("/onboarding");
+        } else {
+          navigate("/mission-control");
+        }
+      } catch {
+        navigate("/onboarding");
+      }
     },
     onError: (err) => {
-      toast.error(err.message || "Registration failed");
+      const msg = err.message || "Registration failed";
+      if (msg.includes("Username already taken")) {
+        toast.error("That username is already taken. Please choose another.");
+      } else if (msg.includes("Email already registered")) {
+        toast.error("That email is already registered. Try logging in instead.");
+      } else {
+        toast.error(msg);
+      }
     },
   });
 

@@ -36,7 +36,17 @@ import {
   TrendingUp,
   ExternalLink,
   AlertCircle,
+  Sparkles,
+  Lock,
+  Info,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const brandTones = [
   "friendly",
@@ -92,6 +102,72 @@ const assetTypes = [
   { key: "brand_guide", label: "Brand Guidelines" },
 ];
 
+const commonCities = [
+  "Johannesburg, Gauteng, South Africa",
+  "Cape Town, Western Cape, South Africa",
+  "Durban, KwaZulu-Natal, South Africa",
+  "Pretoria, Gauteng, South Africa",
+  "Port Elizabeth, Eastern Cape, South Africa",
+  "New York, NY, United States",
+  "Los Angeles, CA, United States",
+  "Chicago, IL, United States",
+  "Houston, TX, United States",
+  "San Francisco, CA, United States",
+  "London, England, United Kingdom",
+  "Manchester, England, United Kingdom",
+  "Birmingham, England, United Kingdom",
+  "Toronto, Ontario, Canada",
+  "Vancouver, British Columbia, Canada",
+  "Montreal, Quebec, Canada",
+  "Sydney, New South Wales, Australia",
+  "Melbourne, Victoria, Australia",
+  "Brisbane, Queensland, Australia",
+  "Dubai, Dubai, United Arab Emirates",
+  "Abu Dhabi, Abu Dhabi, United Arab Emirates",
+  "Lagos, Lagos State, Nigeria",
+  "Abuja, Federal Capital Territory, Nigeria",
+  "Nairobi, Nairobi County, Kenya",
+  "Accra, Greater Accra, Ghana",
+  "Kampala, Central Region, Uganda",
+  "Mumbai, Maharashtra, India",
+  "Delhi, Delhi, India",
+  "Bangalore, Karnataka, India",
+  "Singapore, Singapore",
+  "Hong Kong, Hong Kong",
+  "Tokyo, Tokyo, Japan",
+  "Berlin, Berlin, Germany",
+  "Paris, Île-de-France, France",
+  "Amsterdam, North Holland, Netherlands",
+  "Madrid, Madrid, Spain",
+  "Rome, Lazio, Italy",
+  "São Paulo, São Paulo, Brazil",
+  "Mexico City, Mexico City, Mexico",
+  "Buenos Aires, Buenos Aires, Argentina",
+];
+
+const countryCodes = [
+  { code: "+27", country: "South Africa", flag: "🇿🇦" },
+  { code: "+1", country: "United States", flag: "🇺🇸" },
+  { code: "+44", country: "United Kingdom", flag: "🇬🇧" },
+  { code: "+91", country: "India", flag: "🇮🇳" },
+  { code: "+234", country: "Nigeria", flag: "🇳🇬" },
+  { code: "+254", country: "Kenya", flag: "🇰🇪" },
+  { code: "+233", country: "Ghana", flag: "🇬🇭" },
+  { code: "+256", country: "Uganda", flag: "🇺🇬" },
+  { code: "+971", country: "UAE", flag: "🇦🇪" },
+  { code: "+61", country: "Australia", flag: "🇦🇺" },
+  { code: "+1", country: "Canada", flag: "🇨🇦" },
+  { code: "+49", country: "Germany", flag: "🇩🇪" },
+  { code: "+33", country: "France", flag: "🇫🇷" },
+  { code: "+39", country: "Italy", flag: "🇮🇹" },
+  { code: "+34", country: "Spain", flag: "🇪🇸" },
+  { code: "+55", country: "Brazil", flag: "🇧🇷" },
+  { code: "+52", country: "Mexico", flag: "🇲🇽" },
+  { code: "+81", country: "Japan", flag: "🇯🇵" },
+  { code: "+86", country: "China", flag: "🇨🇳" },
+  { code: "+65", country: "Singapore", flag: "🇸🇬" },
+];
+
 export default function Onboarding() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
@@ -112,6 +188,13 @@ export default function Onboarding() {
     whatsappNumber: "",
     preferredPlatforms: [] as string[],
   });
+  const [locationQuery, setLocationQuery] = useState("");
+  const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
+  const [showLocationSuggestions, setShowLocationSuggestions] = useState(false);
+  const [countryCode, setCountryCode] = useState("+27");
+  const [whatsappLocal, setWhatsappLocal] = useState("");
+  const [explainPlatform, setExplainPlatform] = useState<string | null>(null);
+  const [aiAnalyzing, setAiAnalyzing] = useState(false);
 
   const [assetForm, setAssetForm] = useState({
     selectedAssets: [] as string[],
@@ -231,6 +314,37 @@ export default function Onboarding() {
 
   function isPlatformConfigured(platform: string) {
     return platformConfigStatus?.find((p) => p.platform === platform)?.configured === true;
+  }
+
+  function handleLocationInput(value: string) {
+    setLocationQuery(value);
+    setBusinessForm((p) => ({ ...p, location: value }));
+    if (value.length >= 2) {
+      const matches = commonCities.filter((c) => c.toLowerCase().includes(value.toLowerCase())).slice(0, 6);
+      setLocationSuggestions(matches);
+      setShowLocationSuggestions(matches.length > 0);
+    } else {
+      setShowLocationSuggestions(false);
+    }
+  }
+
+  function selectLocation(city: string) {
+    setLocationQuery(city);
+    setBusinessForm((p) => ({ ...p, location: city }));
+    setShowLocationSuggestions(false);
+  }
+
+  function handleWhatsappInput(value: string) {
+    const digits = value.replace(/\D/g, "");
+    setWhatsappLocal(digits);
+    const formatted = digits ? `${countryCode} ${digits.replace(/(\d{3})(?=(\d))/g, "$1 ")}` : "";
+    setBusinessForm((p) => ({ ...p, whatsappNumber: formatted.trim() }));
+  }
+
+  function validateWhatsapp() {
+    const full = businessForm.whatsappNumber;
+    if (!full) return true;
+    return /^\+[1-9]\d{0,3}\s?\d{6,14}$/.test(full.replace(/\s/g, ""));
   }
 
   function isPlatformConnected(platform: string) {
@@ -409,14 +523,39 @@ export default function Onboarding() {
                   </div>
                   <div className="space-y-2">
                     <Label className="text-gray-300">Website URL</Label>
-                    <div className="relative">
-                      <Globe className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
+                    <div className="relative flex gap-2">
+                      <Globe className="absolute left-3 top-2.5 w-4 h-4 text-gray-500 z-10" />
                       <Input
                         placeholder="https://yourbusiness.com"
                         value={businessForm.website}
                         onChange={(e) => setBusinessForm((p) => ({ ...p, website: e.target.value }))}
-                        className="bg-[#0F172A] border-[#334155] text-white pl-10"
+                        className="bg-[#0F172A] border-[#334155] text-white pl-10 flex-1"
                       />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={aiAnalyzing || !businessForm.website}
+                        onClick={() => {
+                          if (!businessForm.website) {
+                            toast.error("Please enter a website URL first");
+                            return;
+                          }
+                          setAiAnalyzing(true);
+                          setTimeout(() => {
+                            setAiAnalyzing(false);
+                            toast.info("Website analysis is not available yet. You can continue manually.");
+                          }, 1500);
+                        }}
+                        className="border-[#334155] text-[#00D4FF] hover:bg-[#00D4FF]/10 h-10"
+                      >
+                        {aiAnalyzing ? (
+                          <Sparkles className="w-4 h-4 mr-1 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-4 h-4 mr-1" />
+                        )}
+                        AI Analyse
+                      </Button>
                     </div>
                   </div>
                   <div className="space-y-2">
@@ -437,17 +576,33 @@ export default function Onboarding() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-2 relative">
                     <Label className="text-gray-300">Location</Label>
                     <div className="relative">
-                      <MapPin className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
+                      <MapPin className="absolute left-3 top-2.5 w-4 h-4 text-gray-500 z-10" />
                       <Input
-                        placeholder="City, Country"
-                        value={businessForm.location}
-                        onChange={(e) => setBusinessForm((p) => ({ ...p, location: e.target.value }))}
+                        placeholder="Start typing a city..."
+                        value={locationQuery}
+                        onChange={(e) => handleLocationInput(e.target.value)}
+                        onFocus={() => locationQuery.length >= 2 && setShowLocationSuggestions(locationSuggestions.length > 0)}
+                        onBlur={() => setTimeout(() => setShowLocationSuggestions(false), 200)}
                         className="bg-[#0F172A] border-[#334155] text-white pl-10"
                       />
                     </div>
+                    {showLocationSuggestions && (
+                      <div className="absolute z-20 w-full mt-1 bg-[#1E293B] border border-[#334155] rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                        {locationSuggestions.map((city) => (
+                          <button
+                            key={city}
+                            type="button"
+                            onMouseDown={(e) => { e.preventDefault(); selectLocation(city); }}
+                            className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-[#0F172A] hover:text-white transition-colors"
+                          >
+                            {city}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -475,7 +630,10 @@ export default function Onboarding() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label className="text-gray-300">Monthly Marketing Budget (USD)</Label>
+                  <Label className="text-gray-300">Estimated Monthly Marketing Spend</Label>
+                  <p className="text-xs text-gray-500">
+                    This guides the AI strategy for ads and campaign promotion. It is not charged by NatForgeAI.
+                  </p>
                   <div className="relative">
                     <Wallet className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
                     <Input
@@ -490,15 +648,35 @@ export default function Onboarding() {
 
                 <div className="space-y-2">
                   <Label className="text-gray-300">WhatsApp Number</Label>
-                  <div className="relative">
-                    <MessageSquare className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
-                    <Input
-                      placeholder="+1 234 567 8900"
-                      value={businessForm.whatsappNumber}
-                      onChange={(e) => setBusinessForm((p) => ({ ...p, whatsappNumber: e.target.value }))}
-                      className="bg-[#0F172A] border-[#334155] text-white pl-10"
-                    />
+                  <p className="text-xs text-gray-500">
+                    Example: +27 82 123 4567 or +1 415 555 0100
+                  </p>
+                  <div className="flex gap-2">
+                    <Select value={countryCode} onValueChange={setCountryCode}>
+                      <SelectTrigger className="w-[140px] bg-[#0F172A] border-[#334155] text-white">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1E293B] border-[#334155]">
+                        {countryCodes.map((c) => (
+                          <SelectItem key={`${c.code}-${c.country}`} value={c.code} className="text-white">
+                            {c.flag} {c.code}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <div className="relative flex-1">
+                      <MessageSquare className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
+                      <Input
+                        placeholder="82 123 4567"
+                        value={whatsappLocal}
+                        onChange={(e) => handleWhatsappInput(e.target.value)}
+                        className={`bg-[#0F172A] border-[#334155] text-white pl-10 ${businessForm.whatsappNumber && !validateWhatsapp() ? "border-red-500" : ""}`}
+                      />
+                    </div>
                   </div>
+                  {businessForm.whatsappNumber && !validateWhatsapp() && (
+                    <p className="text-xs text-red-400">Please enter a valid phone number</p>
+                  )}
                 </div>
               </div>
             )}
@@ -536,7 +714,7 @@ export default function Onboarding() {
                   <div className="space-y-2">
                     <Label className="text-gray-300">Price Point / Offer</Label>
                     <Input
-                      placeholder="e.g. R599/month, R2,500 once-off"
+                      placeholder="e.g. $29/month, $199 once-off, 20% launch discount"
                       value={assetForm.pricePoint}
                       onChange={(e) => setAssetForm((p) => ({ ...p, pricePoint: e.target.value }))}
                       className="bg-[#0F172A] border-[#334155] text-white"
@@ -761,24 +939,36 @@ export default function Onboarding() {
                       const configured = p.value === "email" ? true : isPlatformConfigured(p.value);
                       const connected = p.value === "email" ? false : isPlatformConnected(p.value);
                       const interested = integrationForm.interestedPlatforms.includes(p.value);
+                      const unavailable = !configured && p.value !== "email";
                       return (
                         <div
                           key={p.value}
+                          onClick={() => {
+                            if (unavailable) setExplainPlatform(p.value);
+                          }}
                           className={`flex items-center justify-between p-4 rounded-xl border transition-colors ${
                             connected
                               ? "border-emerald-500/30 bg-emerald-500/5"
                               : interested
                               ? "border-[#00D4FF]/30 bg-[#00D4FF]/5"
+                              : unavailable
+                              ? "border-[#334155]/60 bg-[#0F172A]/60 cursor-pointer hover:border-amber-500/30"
                               : "border-[#334155] bg-[#0F172A]"
                           }`}
                         >
                           <div className="flex items-center gap-3">
-                            <input
-                              type="checkbox"
-                              checked={interested}
-                              onChange={() => toggleInterestedPlatform(p.value)}
-                              className="w-4 h-4 rounded border-[#334155] bg-[#1E293B] text-[#00D4FF]"
-                            />
+                            {unavailable ? (
+                              <div className="w-4 h-4 flex items-center justify-center">
+                                <Lock className="w-3.5 h-3.5 text-gray-500" />
+                              </div>
+                            ) : (
+                              <input
+                                type="checkbox"
+                                checked={interested}
+                                onChange={() => toggleInterestedPlatform(p.value)}
+                                className="w-4 h-4 rounded border-[#334155] bg-[#1E293B] text-[#00D4FF]"
+                              />
+                            )}
                             <div>
                               <p className="font-medium text-white">{p.label}</p>
                               {connected ? (
@@ -787,36 +977,59 @@ export default function Onboarding() {
                                 </Badge>
                               ) : configured ? (
                                 <span className="text-xs text-gray-500">Available to connect</span>
-                              ) : p.value !== "email" ? (
-                                <span className="text-xs text-amber-500/80">Setup required by admin</span>
-                              ) : null}
+                              ) : p.value === "email" ? (
+                                <span className="text-xs text-blue-400/80">SMTP setup required</span>
+                              ) : (
+                                <span className="text-xs text-amber-500/80">Automatic publishing is not available for this platform yet</span>
+                              )}
                             </div>
                           </div>
-                          {interested && !connected && p.value !== "email" && (
-                            configured ? (
-                              <Link to="/integrations">
-                                <Button size="sm" variant="outline" className="h-8 text-xs">
-                                  <ExternalLink className="w-3 h-3 mr-1" />
-                                  Connect
-                                </Button>
-                              </Link>
-                            ) : (
-                              <span className="text-[11px] text-gray-500 flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                Admin setup needed
-                              </span>
-                            )
+                          {interested && !connected && p.value !== "email" && configured && (
+                            <Link to="/integrations">
+                              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={(e) => e.stopPropagation()}>
+                                <ExternalLink className="w-3 h-3 mr-1" />
+                                Connect
+                              </Button>
+                            </Link>
+                          )}
+                          {unavailable && p.value === "whatsapp" && (
+                            <Badge variant="outline" className="text-[10px] text-gray-500 border-gray-500/20">
+                              Not configured
+                            </Badge>
                           )}
                         </div>
                       );
                     })}
                 </div>
 
+                <Dialog open={!!explainPlatform} onOpenChange={() => setExplainPlatform(null)}>
+                  <DialogContent className="bg-[#1E293B] border-[#334155] text-white">
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2">
+                        <Info className="w-5 h-5 text-[#00D4FF]" />
+                        {explainPlatform ? platforms.find((p) => p.value === explainPlatform)?.label : ""}
+                      </DialogTitle>
+                      <DialogDescription className="text-gray-400">
+                        Automatic publishing is not available for this platform yet.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-3 text-sm text-gray-300">
+                      <p>
+                        Platform setup is not enabled for this workspace yet. You can still generate content and publish manually.
+                      </p>
+                      <p className="text-gray-500">
+                        Integrations are only required for automatic publishing and inbox management.
+                      </p>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+
                 <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155] text-xs text-gray-400 flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 text-[#00D4FF] shrink-0 mt-0.5" />
                   <p>
                     Integrations are only required for automatic publishing and inbox management.
                     You can still generate content, approve posts, and publish manually without connecting anything.
+                    Unavailable platforms are shown with a lock icon and can be connected once workspace setup is complete.
                   </p>
                 </div>
               </div>
@@ -924,7 +1137,11 @@ export default function Onboarding() {
                 variant="outline"
                 onClick={handleBack}
                 disabled={step === 1}
-                className="border-[#334155] text-white hover:bg-[#1E293B]"
+                className={`h-10 px-5 rounded-xl transition-all ${
+                  step === 1
+                    ? "opacity-40 cursor-not-allowed border-[#334155]/40 text-gray-500 bg-transparent"
+                    : "border-[#334155] text-white hover:bg-[#1E293B] hover:border-gray-400"
+                }`}
               >
                 <ChevronLeft className="w-4 h-4 mr-1" />
                 Back

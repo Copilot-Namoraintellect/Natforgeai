@@ -46,6 +46,7 @@ import {
   CalendarClock,
   ExternalLink,
   AlertCircle,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -75,6 +76,7 @@ export default function ContentStudio() {
     type: "social_post" as "social_post" | "ad_copy" | "email",
     goal: "",
   });
+  const [listError] = useState<string | null>(null);
   const [aiResult, setAiResult] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [search, setSearch] = useState("");
@@ -92,7 +94,18 @@ export default function ContentStudio() {
     else if (activeTab !== "all") base.type = activeTab;
     return Object.keys(base).length > 0 ? base : undefined;
   })();
-  const { data: contents, isLoading } = trpc.content.list.useQuery(listInput);
+  const { data: contents, isLoading } = trpc.content.list.useQuery(listInput, {
+    retry: 1,
+  });
+
+  const { data: campaignForContext } = trpc.campaign.get.useQuery(
+    { id: Number(urlCampaignId) },
+    { enabled: !!urlCampaignId }
+  );
+  const { data: postCountForCampaign } = trpc.content.countForCampaign.useQuery(
+    { campaignId: Number(urlCampaignId) },
+    { enabled: !!urlCampaignId }
+  );
 
   // Fetch campaigns and approvals to show contextual empty-state guidance
   const { data: campaigns } = trpc.campaign.list.useQuery();
@@ -107,6 +120,21 @@ export default function ContentStudio() {
   const strategyPendingApproval = approvals?.find((a) => a.approvalType === "strategy_review");
   const strategyGeneratedCampaign = campaigns?.find((c) => c.workflowState === "strategy_generated");
   const strategyPendingCampaign = campaigns?.find((c) => c.workflowState === "strategy_pending");
+
+  const campaignNeedsRecovery = !!urlCampaignId && campaignForContext &&
+    (campaignForContext.workflowState === "creatives_generating" || campaignForContext.workflowState === "creatives_ready") &&
+    (postCountForCampaign === 0 || (contents?.length ?? 0) === 0);
+
+  const generateForCampaignMutation = trpc.content.generateForCampaign.useMutation({
+    onSuccess: (data) => {
+      utils.content.list.invalidate();
+      utils.content.countForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
+      toast.success(`Content generated successfully. ${data.postCount} posts created.`);
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to generate content for campaign");
+    },
+  });
 
   const createMutation = trpc.content.create.useMutation({
     onSuccess: () => {
@@ -336,16 +364,37 @@ Include:
           )}
         </div>
         <div className="flex gap-2">
-          <Dialog open={aiOpen} onOpenChange={setAiOpen}>
-            <DialogTrigger asChild>
-              <Button
-                variant="outline"
-                className="border-[#00D4FF]/50 text-[#00D4FF] hover:bg-[#00D4FF]/10"
-              >
+          {urlCampaignId && campaignForContext ? (
+            <Button
+              variant="outline"
+              className="border-[#00D4FF]/50 text-[#00D4FF] hover:bg-[#00D4FF]/10"
+              onClick={() => {
+                if (campaignForContext.workflowState === "strategy_approved" || campaignForContext.workflowState === "creatives_generating" || campaignForContext.workflowState === "creatives_ready") {
+                  generateForCampaignMutation.mutate({ campaignId: Number(urlCampaignId) });
+                } else {
+                  toast.info("Please approve the strategy first before generating content.");
+                }
+              }}
+              disabled={generateForCampaignMutation.isPending}
+            >
+              {generateForCampaignMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
                 <Sparkles className="w-4 h-4 mr-2" />
-                AI Generate
-              </Button>
-            </DialogTrigger>
+              )}
+              {campaignNeedsRecovery ? "Retry Content Generation" : "Generate from Approved Strategy"}
+            </Button>
+          ) : (
+            <Dialog open={aiOpen} onOpenChange={setAiOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="border-[#00D4FF]/50 text-[#00D4FF] hover:bg-[#00D4FF]/10"
+                >
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Create One-Off Content
+                </Button>
+              </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>AI Content Generator</DialogTitle>
@@ -362,7 +411,7 @@ Include:
                       onChange={(e) =>
                         setAiForm({ ...aiForm, business: e.target.value })
                       }
-                      placeholder="3@1 Newmarket"
+                      placeholder="Your business name"
                     />
                   </div>
                   <div>
@@ -510,6 +559,7 @@ Include:
               </div>
             </DialogContent>
           </Dialog>
+        )}
 
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
@@ -654,6 +704,49 @@ Include:
             </Card>
           ))}
         </div>
+      ) : listError ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16">
+            <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
+            <p className="text-lg font-medium text-slate-900">Could not load content</p>
+            <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+              {listError}
+            </p>
+            <Button variant="outline" onClick={() => utils.content.list.invalidate()}>
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      ) : campaignNeedsRecovery ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16">
+            <AlertCircle className="w-12 h-12 text-amber-400 mb-4" />
+            <p className="text-lg font-medium text-slate-900">Content generation did not complete successfully</p>
+            <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+              The Creative Agent ran but no posts were saved. You can retry content generation for this campaign.
+            </p>
+            <div className="flex gap-2 flex-wrap justify-center">
+              <Button
+                variant="outline"
+                onClick={() => generateForCampaignMutation.mutate({ campaignId: Number(urlCampaignId) })}
+                disabled={generateForCampaignMutation.isPending}
+              >
+                {generateForCampaignMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Sparkles className="w-4 h-4 mr-2" />
+                )}
+                Retry Content Generation
+              </Button>
+              <Link to="/agent-activity">
+                <Button variant="outline">
+                  <ArrowRight className="w-4 h-4 mr-2" />
+                  View Agent Activity
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
       ) : (filtered ?? []).length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16">
@@ -713,10 +806,12 @@ Include:
                       Go to Campaign Strategy
                     </Button>
                   </Link>
-                  <Button variant="outline" onClick={() => setAiOpen(true)}>
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    AI Generate
-                  </Button>
+                  {!urlCampaignId && (
+                    <Button variant="outline" onClick={() => setAiOpen(true)}>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Create One-Off Content
+                    </Button>
+                  )}
                   <Button onClick={() => setCreateOpen(true)}>
                     <Plus className="w-4 h-4 mr-2" />
                     Add Manually

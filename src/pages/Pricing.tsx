@@ -63,6 +63,21 @@ export default function Pricing() {
     },
   });
 
+  const createCheckoutSession = trpc.subscription.createCheckoutSession.useMutation({
+    onSuccess: (data) => {
+      if (data.url) {
+        window.location.href = data.url;
+      } else if (data.free) {
+        // Free tier handled by subscribe mutation
+        toast.success("Free plan activated!");
+      }
+    },
+    onError: (err) => {
+      toast.error(err.message || "Payment setup failed");
+      setPaymentDialogOpen(true);
+    },
+  });
+
   function handleSubscribe(tierId: number, priceUsd: number, tier?: any) {
     if (!isAuthenticated) {
       toast.info("Please log in to subscribe");
@@ -70,7 +85,8 @@ export default function Pricing() {
     }
     if (priceUsd > 0) {
       setSelectedTier(tier);
-      setPaymentDialogOpen(true);
+      setSubscribingId(tierId);
+      createCheckoutSession.mutate({ tierId });
       return;
     }
     setSubscribingId(tierId);
@@ -192,7 +208,10 @@ export default function Pricing() {
                       "Get Started"
                     ) : (
                       <>
-                        Payment Setup Required <ArrowRight className="w-4 h-4 ml-1" />
+                        {createCheckoutSession.isPending && subscribingId === tier.id ? (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        ) : null}
+                        Subscribe Now <ArrowRight className="w-4 h-4 ml-1" />
                       </>
                     )}
                   </Button>

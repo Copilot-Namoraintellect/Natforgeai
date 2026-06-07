@@ -154,6 +154,8 @@ Respond with structured data.`;
 
   // Create content_posts records from calendar (best-effort)
   let savedPosts = 0;
+  let failedInserts = 0;
+  const generatedPostCount = calendarResult.output.days.reduce((acc: number, d: any) => acc + (d.posts?.length || 0), 0);
   for (const day of calendarResult.output.days) {
     for (const post of day.posts) {
       try {
@@ -174,11 +176,17 @@ Respond with structured data.`;
         });
         savedPosts++;
       } catch (err: any) {
-        console.error("[CreativeAgent] Failed to save content post:", err.message);
+        failedInserts++;
+        console.error(`[CreativeAgent] Failed to save content post for campaign ${campaignId}:`, err.message);
       }
     }
   }
-  console.log(`[CreativeAgent] Saved ${savedPosts} content posts for campaign ${campaignId}`);
+  console.log(`[CreativeAgent] campaignId=${campaignId} generatedPosts=${generatedPostCount} savedPosts=${savedPosts} failedInserts=${failedInserts}`);
+
+  if (savedPosts === 0) {
+    console.error(`[CreativeAgent] CRITICAL: Content generation completed but no posts were saved for campaign ${campaignId}`);
+    throw new Error("Content generation completed but no posts were saved.");
+  }
 
   // Step 2: Generate additional creative assets (optional - don't fail the whole workflow)
   const assetsPrompt = `You are a conversion-focused creative director. Generate high-performing sales assets for this campaign. Every asset must be designed to drive clicks, leads, or purchases.
@@ -220,7 +228,7 @@ Respond with structured data. Always include prompt, platform, and variations ke
     // Continue without assets - calendar and posts are the core deliverables
   }
 
-  // Update campaign with final context including assets info
+  // Update campaign with final context including assets info and post count
   await db
     .update(campaigns)
     .set({
@@ -230,6 +238,9 @@ Respond with structured data. Always include prompt, platform, and variations ke
         creativeRunId: calendarResult.runId,
         assetsRunId: assetsResult?.runId ?? null,
         assetsGenerationError: assetsError ?? null,
+        savedPosts,
+        generatedPostCount,
+        failedInserts,
       } as any,
     })
     .where(eq(campaigns.id, campaignId));
@@ -254,7 +265,7 @@ Respond with structured data. Always include prompt, platform, and variations ke
         });
         savedAssets++;
       } catch (err: any) {
-        console.error("[CreativeAgent] Failed to save campaign asset:", err.message);
+        console.error(`[CreativeAgent] Failed to save campaign asset for campaign ${campaignId}:`, err.message);
       }
     }
   }

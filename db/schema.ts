@@ -39,6 +39,9 @@ export const users = mysqlTable("users", {
     .$onUpdate(() => new Date()),
   lastSignInAt: timestamp("lastSignInAt").defaultNow().notNull(),
   onboardingComplete: boolean("onboardingComplete").default(false).notNull(),
+  twoFactorEnabled: boolean("twoFactorEnabled").default(false).notNull(),
+  twoFactorMethod: varchar("twoFactorMethod", { length: 20 }),
+  twoFactorVerifiedAt: timestamp("twoFactorVerifiedAt"),
 });
 
 export type User = typeof users.$inferSelect;

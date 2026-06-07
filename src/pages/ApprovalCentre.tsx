@@ -20,6 +20,12 @@ import {
   Shield,
   Sparkles,
   Loader2,
+  Users,
+  Target,
+  MessageSquare,
+  Wallet,
+  Megaphone,
+  Lightbulb,
 } from "lucide-react";
 
 const riskLevelConfig = {
@@ -71,6 +77,144 @@ export default function ApprovalCentre() {
 
   const pendingApprovals = approvals?.filter((a) => a.status === "pending") || [];
   const resolvedApprovals = approvals?.filter((a) => a.status !== "pending") || [];
+
+  function StrategyDetails({ campaignId }: { campaignId?: number | null }) {
+    const { data: campaign } = trpc.campaign.get.useQuery(
+      { id: campaignId ?? 0 },
+      { enabled: !!campaignId }
+    );
+    if (!campaign) return <p className="text-sm text-gray-400">Loading strategy...</p>;
+
+    const campaignAny = campaign as any;
+    const ctx = (campaignAny.workflowContext || {}) as any;
+    const personas = (campaignAny.personas || []) as any[];
+    const offers = (campaignAny.offers || []) as any[];
+    const budget = ctx.budgetRecommendation;
+
+    return (
+      <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+        {personas.length > 0 && (
+          <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+            <div className="flex items-center gap-2 mb-2">
+              <Users className="w-4 h-4 text-[#00D4FF]" />
+              <span className="text-xs font-medium text-[#00D4FF]">Target Audience / Personas</span>
+            </div>
+            <div className="space-y-2">
+              {personas.slice(0, 3).map((p: any, i: number) => (
+                <div key={i} className="text-xs text-gray-300">
+                  <span className="font-medium text-white">{p.name}</span>
+                  {p.demographics && <span className="text-gray-500"> — {p.demographics}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {ctx.positioning && (
+          <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+            <div className="flex items-center gap-2 mb-2">
+              <Target className="w-4 h-4 text-purple-400" />
+              <span className="text-xs font-medium text-purple-400">Positioning</span>
+            </div>
+            <p className="text-xs text-gray-300">{ctx.positioning}</p>
+          </div>
+        )}
+
+        {campaign.coreMessage && (
+          <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+            <div className="flex items-center gap-2 mb-2">
+              <MessageSquare className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs font-medium text-emerald-400">Core Message</span>
+            </div>
+            <p className="text-xs text-gray-300">{campaign.coreMessage}</p>
+          </div>
+        )}
+
+        {ctx.valueProposition && (
+          <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+            <div className="flex items-center gap-2 mb-2">
+              <Lightbulb className="w-4 h-4 text-amber-400" />
+              <span className="text-xs font-medium text-amber-400">Value Proposition</span>
+            </div>
+            <p className="text-xs text-gray-300">{ctx.valueProposition}</p>
+          </div>
+        )}
+
+        {ctx.platformStrategy && Array.isArray(ctx.platformStrategy) && ctx.platformStrategy.length > 0 && (
+          <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+            <div className="flex items-center gap-2 mb-2">
+              <Megaphone className="w-4 h-4 text-cyan-400" />
+              <span className="text-xs font-medium text-cyan-400">Platform Strategy</span>
+            </div>
+            <div className="space-y-1">
+              {ctx.platformStrategy.slice(0, 4).map((ps: any, i: number) => (
+                <p key={i} className="text-xs text-gray-300">
+                  <span className="font-medium text-white">{ps.platform}:</span> {ps.purpose}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {campaignAny.campaignTheme && (
+          <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+            <div className="flex items-center gap-2 mb-2">
+              <Sparkles className="w-4 h-4 text-pink-400" />
+              <span className="text-xs font-medium text-pink-400">Content Themes</span>
+            </div>
+            <p className="text-xs text-gray-300">{campaignAny.campaignTheme}</p>
+          </div>
+        )}
+
+        {offers.length > 0 && (
+          <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+            <div className="flex items-center gap-2 mb-2">
+              <Wallet className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs font-medium text-emerald-400">Offer / CTA Recommendation</span>
+            </div>
+            <div className="space-y-1">
+              {offers.slice(0, 3).map((o: any, i: number) => (
+                <p key={i} className="text-xs text-gray-300">
+                  <span className="font-medium text-white">{o.name}:</span> {o.description}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {campaignAny.ctaStrategy && (
+          <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+            <div className="flex items-center gap-2 mb-2">
+              <Target className="w-4 h-4 text-red-400" />
+              <span className="text-xs font-medium text-red-400">CTA Strategy</span>
+            </div>
+            <p className="text-xs text-gray-300 whitespace-pre-line">{campaignAny.ctaStrategy}</p>
+          </div>
+        )}
+
+        {budget && (
+          <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+            <div className="flex items-center gap-2 mb-2">
+              <Wallet className="w-4 h-4 text-indigo-400" />
+              <span className="text-xs font-medium text-indigo-400">Budget Guidance</span>
+            </div>
+            <p className="text-xs text-gray-300">
+              Recommended total: <span className="font-medium text-white">${budget.total?.toLocaleString?.() || budget.total}</span>
+            </p>
+            {budget.allocation && (
+              <div className="mt-1 space-y-0.5">
+                {budget.allocation.slice(0, 4).map((a: any, i: number) => (
+                  <p key={i} className="text-xs text-gray-400">
+                    {a.channel}: ${a.amount?.toLocaleString?.() || a.amount} ({a.percentage}%)
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const handleAction = () => {
     if (!selectedApproval || !actionType) return;
@@ -153,7 +297,19 @@ export default function ApprovalCentre() {
                     </div>
                   )}
 
-                  {approval.aiRecommendation && (
+                  {approval.approvalType === "strategy_review" && approval.campaignId && (
+                    <div className="mb-4">
+                      <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155]">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                          <span className="text-xs font-medium text-purple-400">Generated Strategy</span>
+                        </div>
+                        <StrategyDetails campaignId={approval.campaignId} />
+                      </div>
+                    </div>
+                  )}
+
+                  {approval.aiRecommendation && approval.approvalType !== "strategy_review" && (
                     <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155] mb-4">
                       <div className="flex items-center gap-2 mb-1">
                         <Sparkles className="w-3.5 h-3.5 text-purple-400" />
@@ -267,7 +423,9 @@ export default function ApprovalCentre() {
               {actionType === "edit" && "Edit & Approve"}
             </DialogTitle>
             <DialogDescription>
-              Review the details below before confirming your decision.
+              {selectedApproval?.approvalType === "strategy_review"
+                ? "Review the full generated strategy before approving. Your notes will be saved with the approval."
+                : "Review the details below before confirming your decision."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

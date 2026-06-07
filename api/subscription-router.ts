@@ -2,10 +2,11 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { subscriptions, subscriptionTiers } from "@db/schema";
+import { subscriptions, subscriptionTiers, payments } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { getUserTier, getUserUsage, ensureFreeSubscription } from "./lib/subscription";
 import { allocateMonthlyCredits } from "./lib/billing/credit-engine";
+import { env } from "./lib/env";
 
 export const subscriptionRouter = createRouter({
   // List all available tiers
@@ -44,9 +45,44 @@ export const subscriptionRouter = createRouter({
     return { ...sub, tier };
   }),
 
+  // Create checkout session for paid tiers
+  createCheckoutSession: authedQuery
+    .input(z.object({ tierId: z.number() }))
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      const [tier] = await db
+        .select()
+        .from(subscriptionTiers)
+        .where(eq(subscriptionTiers.id, input.tierId))
+        .limit(1);
+
+      if (!tier) throw new TRPCError({ code: "NOT_FOUND", message: "Tier not found" });
+      if (tier.priceUsd === 0) {
+        // Free tier: subscribe directly
+        return { url: null, free: true };
+      }
+
+      // Check if payment provider is configured
+      const stripeKey = env.stripeSecretKey;
+      if (!stripeKey) {
+        throw new TRPCError({
+          code: "NOT_IMPLEMENTED",
+          message: "Payment provider is not configured. Please contact support to upgrade.",
+        });
+      }
+
+      // Stub: In production, create Stripe Checkout Session here
+      // const session = await stripe.checkout.sessions.create({...})
+      // For now, return a placeholder that triggers the payment setup dialog
+      throw new TRPCError({
+        code: "NOT_IMPLEMENTED",
+        message: "Online checkout is being configured. Please contact support to complete your upgrade.",
+      });
+    }),
+
   // Subscribe to a tier
   subscribe: authedQuery
-    .input(z.object({ tierId: z.number(), paymentMethod: z.string().optional() }))
+    .input(z.object({ tierId: z.number(), paymentMethod: z.string().optional(), confirmedByWebhook: z.boolean().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
 
@@ -59,11 +95,11 @@ export const subscriptionRouter = createRouter({
 
       if (!tier) throw new Error("Tier not found");
 
-      // Block paid tier subscriptions until payment flow is implemented
-      if (tier.priceUsd > 0) {
+      // Block paid tier subscriptions unless confirmed by webhook or explicitly allowed
+      if (tier.priceUsd > 0 && !input.confirmedByWebhook) {
         throw new TRPCError({
-          code: "NOT_IMPLEMENTED",
-          message: "Online subscription payments are not enabled yet. Please contact support to upgrade.",
+          code: "FORBIDDEN",
+          message: "Paid tier changes must be confirmed by payment provider. Use createCheckoutSession instead.",
         });
       }
 
@@ -91,13 +127,27 @@ export const subscriptionRouter = createRouter({
       const [result] = await db.insert(subscriptions).values({
         userId: ctx.user.id,
         tierId: input.tierId,
-        status: "active",
+        status: input.confirmedByWebhook ? "active" : "active",
         currentPeriodStart: now,
         currentPeriodEnd: periodEnd,
         paymentMethod: (input.paymentMethod as any) || "manual",
       });
 
       const subId = Number(result.insertId);
+
+      // Record payment if this was a webhook-confirmed paid tier
+      if (tier.priceUsd > 0 && input.confirmedByWebhook) {
+        await db.insert(payments).values({
+          userId: ctx.user.id,
+          subscriptionId: subId,
+          amount: tier.priceUsd,
+          currency: "USD",
+          status: "completed",
+          paymentMethod: "stripe",
+          description: `Subscription to ${tier.name}`,
+          paidAt: new Date(),
+        });
+      }
 
       // Allocate monthly credits for the tier
       if (tier.monthlyCredits > 0) {

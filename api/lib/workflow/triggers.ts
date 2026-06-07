@@ -53,6 +53,13 @@ export async function onAgentRunComplete(runId: number) {
       });
     }
   } else if (state === "creatives_generating" && run.agentType === "creative") {
+    // Verify that the creative agent actually saved posts before transitioning
+    const ctx = (campaign.workflowContext || {}) as any;
+    const savedPosts = ctx.savedPosts ?? 0;
+    if (savedPosts === 0) {
+      console.error(`[Workflow] Creative agent for campaign ${run.campaignId} completed but savedPosts=0. Not transitioning state.`);
+      return;
+    }
     await transitionCampaignState(run.campaignId, run.userId, "creatives_complete");
 
     // Auto-trigger audience agent after creatives are ready

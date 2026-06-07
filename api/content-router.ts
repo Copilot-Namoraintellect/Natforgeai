@@ -1,8 +1,10 @@
 import { z } from "zod";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { contentPosts } from "@db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { contentPosts, campaigns } from "@db/schema";
+import { eq, and, desc, count } from "drizzle-orm";
+import { runCreativeAgent } from "./lib/agents/creative-agent";
+import { onAgentRunComplete } from "./lib/workflow/triggers";
 
 export const contentRouter = createRouter({
   list: authedQuery
@@ -22,23 +24,82 @@ export const contentRouter = createRouter({
     )
     .query(async ({ ctx, input }) => {
       const db = getDb();
-      let query = db
+      try {
+        let query = db
+          .select()
+          .from(contentPosts)
+          .where(eq(contentPosts.userId, ctx.user.id))
+          .orderBy(desc(contentPosts.createdAt));
+
+        const results = await query;
+
+        return results.filter((post) => {
+          if (input?.type && post.type !== input.type) return false;
+          if (input?.status && post.status !== input.status) return false;
+          if (input?.campaignId && post.campaignId !== input.campaignId)
+            return false;
+          if (input?.aiGenerated !== undefined && post.aiGenerated !== input.aiGenerated)
+            return false;
+          return true;
+        });
+      } catch (err: any) {
+        console.error("[content.list] Query failed:", err.message);
+        return [];
+      }
+    }),
+
+  countForCampaign: authedQuery
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      try {
+        const [result] = await db
+          .select({ value: count() })
+          .from(contentPosts)
+          .where(
+            and(
+              eq(contentPosts.userId, ctx.user.id),
+              eq(contentPosts.campaignId, input.campaignId)
+            )
+          );
+        return result?.value ?? 0;
+      } catch {
+        return 0;
+      }
+    }),
+
+  generateForCampaign: aiActionQuery
+    .input(z.object({ campaignId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+
+      const [campaign] = await db
         .select()
-        .from(contentPosts)
-        .where(eq(contentPosts.userId, ctx.user.id))
-        .orderBy(desc(contentPosts.createdAt));
+        .from(campaigns)
+        .where(
+          and(
+            eq(campaigns.id, input.campaignId),
+            eq(campaigns.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
 
-      const results = await query;
+      if (!campaign) {
+        throw new Error("Campaign not found");
+      }
 
-      return results.filter((post) => {
-        if (input?.type && post.type !== input.type) return false;
-        if (input?.status && post.status !== input.status) return false;
-        if (input?.campaignId && post.campaignId !== input.campaignId)
-          return false;
-        if (input?.aiGenerated !== undefined && post.aiGenerated !== input.aiGenerated)
-          return false;
-        return true;
+      const result = await runCreativeAgent({
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
       });
+
+      try {
+        await onAgentRunComplete(result.calendarRunId);
+      } catch (err: any) {
+        console.error("[content.generateForCampaign] onAgentRunComplete failed:", err.message);
+      }
+
+      return { success: true, postCount: result.savedPosts };
     }),
 
   get: authedQuery

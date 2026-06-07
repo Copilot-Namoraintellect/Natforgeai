@@ -25,6 +25,7 @@ import {
   Sparkles,
   Bell,
   Globe,
+  Shield,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -102,6 +103,7 @@ export default function Settings() {
         <TabsList>
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="businesses">Businesses</TabsTrigger>
+          <TabsTrigger value="security">Security</TabsTrigger>
           <TabsTrigger value="preferences">Preferences</TabsTrigger>
         </TabsList>
 
@@ -288,6 +290,34 @@ export default function Settings() {
               </Card>
             ))}
           </div>
+        </TabsContent>
+
+        {/* Security Tab */}
+        <TabsContent value="security" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Shield className="w-4 h-4 text-[#00D4FF]" />
+                Two-Factor Authentication
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between py-2">
+                <div>
+                  <p className="text-sm font-medium">Status</p>
+                  <p className="text-xs text-muted-foreground">
+                    Add an extra layer of security to your account
+                  </p>
+                </div>
+                <Badge variant="outline" className="text-amber-400 border-amber-400/30">
+                  Coming Soon
+                </Badge>
+              </div>
+              <div className="p-3 rounded-lg bg-muted/50 border border-border text-xs text-muted-foreground">
+                Two-factor authentication will be available in a future update. When enabled, you will be able to use email or authenticator app verification during login.
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Preferences Tab */}

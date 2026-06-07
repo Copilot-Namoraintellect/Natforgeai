@@ -9,6 +9,9 @@ function required(name: string): string {
 }
 
 export const env = {
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY || "",
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
+  stripePublishableKey: process.env.STRIPE_PUBLISHABLE_KEY || "",
   appId: process.env.APP_ID ?? "",
   appSecret: required("APP_SECRET"),
   isProduction: process.env.NODE_ENV === "production",

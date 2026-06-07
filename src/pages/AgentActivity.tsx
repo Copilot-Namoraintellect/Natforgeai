@@ -361,7 +361,7 @@ export default function AgentActivity() {
                           {run.agentType === "strategy" && (
                             <Link to="/approvals">
                               <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
-                                Review Strategy
+                                {run.output && (run.output as any).strategyApproved ? "View Approved Strategy" : "Review Strategy"}
                               </Button>
                             </Link>
                           )}
