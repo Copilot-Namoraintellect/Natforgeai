@@ -57,6 +57,56 @@ export const agentRouter = createRouter({
         });
       }
 
+      // Prevent duplicate strategy runs
+      const blockedStates = [
+        "strategy_generated",
+        "strategy_approved",
+        "creatives_generating",
+        "creatives_ready",
+        "audience_generating",
+        "audience_ready",
+        "schedule_generated",
+        "launch_approval_required",
+        "campaign_live",
+        "engagement_active",
+        "leads_converting",
+        "optimisation_active",
+        "completed",
+      ];
+      if (blockedStates.includes(campaign.workflowState)) {
+        return {
+          success: true,
+          skipped: true,
+          reason: `Strategy already generated. Campaign is in "${campaign.workflowState}" state.`,
+          runId: null,
+          output: null,
+        };
+      }
+
+      // Check for existing running or completed strategy run
+      const existingRun = await db
+        .select()
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.campaignId, input.campaignId),
+            eq(agentRuns.agentType, "strategy"),
+            eq(agentRuns.userId, ctx.user.id)
+          )
+        )
+        .orderBy(agentRuns.createdAt)
+        .limit(1);
+
+      if (existingRun.length > 0 && ["running", "completed"].includes(existingRun[0].status)) {
+        return {
+          success: true,
+          skipped: true,
+          reason: `A strategy agent run already exists with status "${existingRun[0].status}".`,
+          runId: existingRun[0].id,
+          output: existingRun[0].output as any,
+        };
+      }
+
       // Run strategy agent
       const result = await runStrategyAgent({
         userId: ctx.user.id,

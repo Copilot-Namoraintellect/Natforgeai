@@ -183,6 +183,21 @@ export default function AgentActivity() {
     status: filterStatus !== "all" ? (filterStatus as any) : undefined,
   });
 
+  // Fetch campaigns to determine correct CTA state per run
+  const { data: allCampaigns } = trpc.campaign.list.useQuery();
+  const campaignMap = new Map(allCampaigns?.map((c) => [c.id, c]));
+
+  // Fetch pending approvals to know if strategy_review is still open
+  const { data: pendingApprovals } = trpc.approval.listApprovals.useQuery(
+    { status: "pending" },
+    { enabled: !!agentRuns && agentRuns.length > 0 }
+  );
+  const pendingStrategyApprovals = new Set(
+    pendingApprovals
+      ?.filter((a) => a.approvalType === "strategy_review")
+      .map((a) => a.campaignId) ?? []
+  );
+
   const runStrategyAgent = trpc.agent.runStrategyAgent.useMutation({
     onSuccess: () => {
       toast.success("Strategy generation restarted");
@@ -351,19 +366,57 @@ export default function AgentActivity() {
                       {run.status === "completed" && (
                         <div className="mt-2 flex items-center gap-2 flex-wrap">
                           {run.campaignId && (
-                            <Link to={`/campaigns?campaignId=${run.campaignId}`}>
-                              <Button size="sm" variant="outline" className="border-[#334155] text-gray-300 hover:text-white h-7 text-xs">
-                                Open Campaign
-                                <ArrowRight className="w-3 h-3 ml-1" />
-                              </Button>
-                            </Link>
+                            (() => {
+                              const campaign = campaignMap.get(run.campaignId);
+                              const isTerminal = campaign && ["campaign_live", "engagement_active", "leads_converting", "optimisation_active", "completed"].includes(campaign.workflowState);
+                              if (isTerminal) return null;
+                              return (
+                                <Link to={`/campaigns?campaignId=${run.campaignId}`}>
+                                  <Button size="sm" variant="outline" className="border-[#334155] text-gray-300 hover:text-white h-7 text-xs">
+                                    Open Campaign
+                                    <ArrowRight className="w-3 h-3 ml-1" />
+                                  </Button>
+                                </Link>
+                              );
+                            })()
                           )}
                           {run.agentType === "strategy" && (
-                            <Link to="/approvals">
-                              <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
-                                {run.output && (run.output as any).strategyApproved ? "View Approved Strategy" : "Review Strategy"}
-                              </Button>
-                            </Link>
+                            (() => {
+                              const campaign = run.campaignId ? campaignMap.get(run.campaignId) : null;
+                              const isBeyondApproval = campaign && [
+                                "strategy_approved", "creatives_generating", "creatives_ready",
+                                "audience_generating", "audience_ready", "schedule_generated",
+                                "launch_approval_required", "campaign_live",
+                              ].includes(campaign.workflowState);
+                              const hasPendingApproval = run.campaignId ? pendingStrategyApprovals.has(run.campaignId) : false;
+                              const isStrategyGenerated = campaign?.workflowState === "strategy_generated";
+
+                              if (isBeyondApproval) {
+                                return (
+                                  <Link to="/approvals">
+                                    <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
+                                      <CheckCircle className="w-3 h-3 mr-1" />
+                                      View Approved Strategy
+                                    </Button>
+                                  </Link>
+                                );
+                              }
+                              if (isStrategyGenerated && hasPendingApproval) {
+                                return (
+                                  <Link to="/approvals">
+                                    <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
+                                      Review Strategy
+                                    </Button>
+                                  </Link>
+                                );
+                              }
+                              return (
+                                <Button size="sm" variant="outline" className="h-7 text-xs" disabled>
+                                  <CheckCircle className="w-3 h-3 mr-1" />
+                                  Strategy Reviewed
+                                </Button>
+                              );
+                            })()
                           )}
                           {run.agentType === "creative" && run.campaignId && (
                             <Link to={`/content?campaignId=${run.campaignId}`}>

@@ -4,16 +4,222 @@ import { getDb } from "../../queries/connection";
 import { campaigns, contentPosts, campaignAssets } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 
-// ─── Premium Content Schemas ───
+// ─── Schema Normalisation Helpers ───
+// OpenAI structured output requires EVERY property to be in the `required` array.
+// .optional() breaks the JSON schema. Use .nullable() instead.
+// These helpers normalise AI output so missing/undefined nested fields become safe defaults.
+
+function normaliseScene(scene: any): any {
+  if (!scene || typeof scene !== "object") {
+    return {
+      sceneNumber: 1,
+      durationSeconds: 5,
+      visualDescription: "",
+      onScreenText: null,
+      voiceoverScript: null,
+      audioDirection: null,
+      productShotInstruction: null,
+    };
+  }
+  return {
+    sceneNumber: typeof scene.sceneNumber === "number" ? scene.sceneNumber : 1,
+    durationSeconds: typeof scene.durationSeconds === "number" ? scene.durationSeconds : 5,
+    visualDescription: String(scene.visualDescription ?? ""),
+    onScreenText: scene.onScreenText != null ? String(scene.onScreenText) : null,
+    voiceoverScript: scene.voiceoverScript != null ? String(scene.voiceoverScript) : null,
+    audioDirection: scene.audioDirection != null ? String(scene.audioDirection) : null,
+    productShotInstruction: scene.productShotInstruction != null ? String(scene.productShotInstruction) : null,
+  };
+}
+
+function normaliseVideoConcept(v: any): any {
+  if (!v || typeof v !== "object") return null;
+  const scenes = Array.isArray(v.scenes) ? v.scenes.map(normaliseScene) : [];
+  if (scenes.length === 0) {
+    scenes.push(normaliseScene(null));
+  }
+  return {
+    title: String(v.title ?? "Untitled Video Concept"),
+    platform: String(v.platform ?? "instagram"),
+    duration: ["15s", "30s", "45s", "60s"].includes(v.duration) ? v.duration : "30s",
+    hook: String(v.hook ?? ""),
+    openingHook3Sec: String(v.openingHook3Sec ?? ""),
+    scenes,
+    backgroundMusicMood: String(v.backgroundMusicMood ?? ""),
+    cta: String(v.cta ?? ""),
+    visualStyle: String(v.visualStyle ?? ""),
+    targetPersona: String(v.targetPersona ?? ""),
+    funnelStage: ["awareness", "consideration", "conversion", "retention"].includes(v.funnelStage)
+      ? v.funnelStage
+      : "awareness",
+  };
+}
+
+function normaliseCarouselSlide(s: any): any {
+  if (!s || typeof s !== "object") {
+    return { slideNumber: 1, headline: "", visualDirection: "", bodyText: "", cta: null };
+  }
+  return {
+    slideNumber: typeof s.slideNumber === "number" ? s.slideNumber : 1,
+    headline: String(s.headline ?? ""),
+    visualDirection: String(s.visualDirection ?? ""),
+    bodyText: String(s.bodyText ?? ""),
+    cta: s.cta != null ? String(s.cta) : null,
+  };
+}
+
+function normaliseCarouselAd(c: any): any {
+  if (!c || typeof c !== "object") return null;
+  const slides = Array.isArray(c.slides) ? c.slides.map(normaliseCarouselSlide) : [];
+  if (slides.length === 0) slides.push(normaliseCarouselSlide(null));
+  return {
+    title: String(c.title ?? "Untitled Carousel"),
+    platform: String(c.platform ?? "instagram"),
+    hook: String(c.hook ?? ""),
+    slides,
+    overallCta: String(c.overallCta ?? ""),
+    visualStyle: String(c.visualStyle ?? ""),
+    targetPersona: String(c.targetPersona ?? ""),
+    funnelStage: ["awareness", "consideration", "conversion", "retention"].includes(c.funnelStage)
+      ? c.funnelStage
+      : "awareness",
+    benefitSequence: String(c.benefitSequence ?? ""),
+  };
+}
+
+function normaliseSocialPost(p: any): any {
+  if (!p || typeof p !== "object") return null;
+  return {
+    platform: String(p.platform ?? "instagram"),
+    type: String(p.type ?? "social_post"),
+    title: String(p.title ?? ""),
+    hook: String(p.hook ?? ""),
+    caption: String(p.caption ?? ""),
+    cta: String(p.cta ?? ""),
+    hashtags: Array.isArray(p.hashtags) ? p.hashtags.map(String) : [],
+    visualPrompt: String(p.visualPrompt ?? ""),
+    bestTimeToPost: String(p.bestTimeToPost ?? ""),
+    salesAngle: String(p.salesAngle ?? ""),
+    targetPersona: String(p.targetPersona ?? ""),
+    funnelStage: ["awareness", "consideration", "conversion", "retention"].includes(p.funnelStage)
+      ? p.funnelStage
+      : "awareness",
+    painPoint: p.painPoint != null ? String(p.painPoint) : null,
+    transformation: p.transformation != null ? String(p.transformation) : null,
+    urgency: p.urgency != null ? String(p.urgency) : null,
+  };
+}
+
+function normaliseAdCopy(a: any): any {
+  if (!a || typeof a !== "object") return null;
+  return {
+    variantName: String(a.variantName ?? ""),
+    angle: String(a.angle ?? ""),
+    headline: String(a.headline ?? ""),
+    primaryText: String(a.primaryText ?? ""),
+    cta: String(a.cta ?? ""),
+    platform: String(a.platform ?? ""),
+    funnelStage: ["awareness", "consideration", "conversion", "retention"].includes(a.funnelStage)
+      ? a.funnelStage
+      : "awareness",
+  };
+}
+
+function normaliseWhatsApp(w: any): any {
+  if (!w || typeof w !== "object") return null;
+  return {
+    title: String(w.title ?? ""),
+    message: String(w.message ?? ""),
+    followUp: w.followUp != null ? String(w.followUp) : null,
+    cta: String(w.cta ?? ""),
+    tone: String(w.tone ?? "friendly"),
+  };
+}
+
+function normaliseEmail(e: any): any {
+  if (!e || typeof e !== "object") return null;
+  return {
+    subjectLine: String(e.subjectLine ?? ""),
+    preheader: String(e.preheader ?? ""),
+    body: String(e.body ?? ""),
+    cta: String(e.cta ?? ""),
+    tone: String(e.tone ?? "professional"),
+    segment: String(e.segment ?? ""),
+  };
+}
+
+function normaliseLaunchStep(s: any): any {
+  if (!s || typeof s !== "object") {
+    return { stepNumber: 1, channel: "", timing: "", message: "", cta: "" };
+  }
+  return {
+    stepNumber: typeof s.stepNumber === "number" ? s.stepNumber : 1,
+    channel: String(s.channel ?? ""),
+    timing: String(s.timing ?? ""),
+    message: String(s.message ?? ""),
+    cta: String(s.cta ?? ""),
+  };
+}
+
+function normaliseLaunchSequence(l: any): any {
+  if (!l || typeof l !== "object") return null;
+  const steps = Array.isArray(l.sequenceSteps) ? l.sequenceSteps.map(normaliseLaunchStep) : [];
+  if (steps.length === 0) steps.push(normaliseLaunchStep(null));
+  return { title: String(l.title ?? ""), sequenceSteps: steps };
+}
+
+function normalisePremiumPack(raw: any): any {
+  if (!raw || typeof raw !== "object") {
+    return {
+      videoConcepts: [normaliseVideoConcept(null)],
+      carouselAds: [normaliseCarouselAd(null)],
+      socialPosts: [normaliseSocialPost(null)],
+      adCopyVariations: [normaliseAdCopy(null)],
+      whatsAppPromos: [normaliseWhatsApp(null)],
+      emailCampaign: normaliseEmail(null),
+      launchSequence: normaliseLaunchSequence(null),
+      packSummary: "",
+    };
+  }
+
+  const videoConcepts = Array.isArray(raw.videoConcepts)
+    ? raw.videoConcepts.map(normaliseVideoConcept).filter(Boolean)
+    : [];
+  const carouselAds = Array.isArray(raw.carouselAds)
+    ? raw.carouselAds.map(normaliseCarouselAd).filter(Boolean)
+    : [];
+  const socialPosts = Array.isArray(raw.socialPosts)
+    ? raw.socialPosts.map(normaliseSocialPost).filter(Boolean)
+    : [];
+  const adCopyVariations = Array.isArray(raw.adCopyVariations)
+    ? raw.adCopyVariations.map(normaliseAdCopy).filter(Boolean)
+    : [];
+  const whatsAppPromos = Array.isArray(raw.whatsAppPromos)
+    ? raw.whatsAppPromos.map(normaliseWhatsApp).filter(Boolean)
+    : [];
+
+  return {
+    videoConcepts: videoConcepts.length > 0 ? videoConcepts : [normaliseVideoConcept(null)],
+    carouselAds: carouselAds.length > 0 ? carouselAds : [normaliseCarouselAd(null)],
+    socialPosts: socialPosts.length > 0 ? socialPosts : [normaliseSocialPost(null)],
+    adCopyVariations: adCopyVariations.length > 0 ? adCopyVariations : [normaliseAdCopy(null)],
+    whatsAppPromos: whatsAppPromos.length > 0 ? whatsAppPromos : [normaliseWhatsApp(null)],
+    emailCampaign: normaliseEmail(raw.emailCampaign),
+    launchSequence: normaliseLaunchSequence(raw.launchSequence),
+    packSummary: String(raw.packSummary ?? ""),
+  };
+}
+
+// ─── Premium Content Schemas (strict — no .optional(), only .nullable()) ───
 
 const SceneSchema = z.object({
   sceneNumber: z.number(),
   durationSeconds: z.number(),
   visualDescription: z.string(),
-  onScreenText: z.string().optional(),
-  voiceoverScript: z.string().optional(),
-  audioDirection: z.string().optional(),
-  productShotInstruction: z.string().optional(),
+  onScreenText: z.string().nullable(),
+  voiceoverScript: z.string().nullable(),
+  audioDirection: z.string().nullable(),
+  productShotInstruction: z.string().nullable(),
 });
 
 const VideoConceptSchema = z.object({
@@ -35,7 +241,7 @@ const CarouselSlideSchema = z.object({
   headline: z.string(),
   visualDirection: z.string(),
   bodyText: z.string(),
-  cta: z.string().optional(),
+  cta: z.string().nullable(),
 });
 
 const CarouselAdSchema = z.object({
@@ -63,9 +269,9 @@ const SocialPostSchema = z.object({
   salesAngle: z.string(),
   targetPersona: z.string(),
   funnelStage: z.enum(["awareness", "consideration", "conversion", "retention"]),
-  painPoint: z.string().optional(),
-  transformation: z.string().optional(),
-  urgency: z.string().optional(),
+  painPoint: z.string().nullable(),
+  transformation: z.string().nullable(),
+  urgency: z.string().nullable(),
 });
 
 const AdCopyVariationSchema = z.object({
@@ -81,7 +287,7 @@ const AdCopyVariationSchema = z.object({
 const WhatsAppPromoSchema = z.object({
   title: z.string(),
   message: z.string(),
-  followUp: z.string().optional(),
+  followUp: z.string().nullable(),
   cta: z.string(),
   tone: z.string(),
 });
@@ -107,11 +313,11 @@ const LaunchSequenceSchema = z.object({
 });
 
 const PremiumCampaignPackSchema = z.object({
-  videoConcepts: z.array(VideoConceptSchema).length(3),
-  carouselAds: z.array(CarouselAdSchema).length(3),
-  socialPosts: z.array(SocialPostSchema).length(5),
-  adCopyVariations: z.array(AdCopyVariationSchema).length(3),
-  whatsAppPromos: z.array(WhatsAppPromoSchema).length(2),
+  videoConcepts: z.array(VideoConceptSchema),
+  carouselAds: z.array(CarouselAdSchema),
+  socialPosts: z.array(SocialPostSchema),
+  adCopyVariations: z.array(AdCopyVariationSchema),
+  whatsAppPromos: z.array(WhatsAppPromoSchema),
   emailCampaign: EmailCampaignSchema,
   launchSequence: LaunchSequenceSchema,
   packSummary: z.string(),
@@ -121,21 +327,10 @@ const CreativeAssetsSchema = z.object({
   assets: z.array(
     z.object({
       assetType: z.enum([
-        "image",
-        "video_script",
-        "carousel",
-        "ad_copy",
-        "caption",
-        "hashtag_set",
-        "cta_variant",
-        "email_copy",
-        "whatsapp_copy",
-        "video_concept",
-        "reel_script",
-        "carousel_ad",
-        "whatsapp_promo",
-        "lead_gen_ad",
-        "launch_pack",
+        "image", "video_script", "carousel", "ad_copy", "caption",
+        "hashtag_set", "cta_variant", "email_copy", "whatsapp_copy",
+        "video_concept", "reel_script", "carousel_ad", "whatsapp_promo",
+        "lead_gen_ad", "launch_pack",
       ]),
       title: z.string(),
       content: z.string(),
@@ -213,7 +408,7 @@ For each carousel provide:
 - Title
 - Platform
 - Hook
-- 4-6 slides with: headline, visual direction, body text, optional CTA
+- 4-6 slides with: headline, visual direction, body text, optional CTA (use null if no CTA on that slide)
 - Overall CTA
 - Visual style
 - Target persona
@@ -234,9 +429,9 @@ For each post provide:
 - Sales angle (fear of missing out, social proof, direct benefit, transformation)
 - Target persona
 - Funnel stage
-- Pain point addressed
-- Transformation promised
-- Urgency driver
+- Pain point addressed (use null if not applicable)
+- Transformation promised (use null if not applicable)
+- Urgency driver (use null if not applicable)
 
 D. 3 AD COPY VARIATIONS
 - Awareness ad (problem agitation, curiosity)
@@ -246,7 +441,7 @@ Each with: variant name, angle, headline, primary text, CTA, platform, funnel st
 
 E. 2 WHATSAPP PROMO MESSAGES
 - Short, persuasive promo message
-- Follow-up message for non-responders
+- Follow-up message for non-responders (use null if not needed)
 - CTA
 - Casual but persuasive tone
 
@@ -263,27 +458,40 @@ G. 1 LAUNCH/ OFFER SEQUENCE
 - Each step: channel, timing, message, CTA
 - Progresses from teaser → announcement → urgency → last chance
 
-CRITICAL RULES:
-- EVERY asset must use strong hooks, pain points, transformation messaging, urgency, benefits over features, and clear CTAs.
-- Use modern social-media style. No corporate blandness.
-- Be platform-native: Instagram Reels feel different from LinkedIn posts.
-- Speak directly to the reader. Use "you" and "your".
-- Never use generic phrases like "unlock your potential" or "take your business to the next level".
-- Every video concept must feel like it could go viral — specific, visual, emotional.
-- Every carousel must tell a story that leads to a purchase decision.
+CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
+- Every object in the response MUST include EVERY key declared in its schema.
+- If you do not have a value for a field, return null. Do NOT omit the key.
+- Example: if a scene has no on-screen text, return "onScreenText": null.
+- Example: if a WhatsApp promo has no follow-up, return "followUp": null.
+- Example: if a social post has no pain point, return "painPoint": null.
+- Never leave out any nested field. The schema is strict and every key is required.
 - Respond with valid structured data only.`;
 
-  const packResult = await runAgent({
-    userId,
-    campaignId,
-    agentType: "creative",
-    prompt: packPrompt,
-    schema: PremiumCampaignPackSchema,
-    system:
-      "You are an elite creative director and performance marketer. You create premium, sales-focused campaign assets that drive revenue. You specialise in Instagram Reels, TikTok, Facebook ads, carousel ads, direct-response copywriting, and launch sequences. Every asset must be emotionally engaging, visually specific, platform-native, and conversion-focused. Always respond with valid structured data.",
-  });
+  let packResult: { runId: number; output: any } | undefined;
+  let packError: string | undefined;
 
-  const pack = packResult.output;
+  try {
+    packResult = await runAgent({
+      userId,
+      campaignId,
+      agentType: "creative",
+      prompt: packPrompt,
+      schema: PremiumCampaignPackSchema,
+      system:
+        "You are an elite creative director and performance marketer. You create premium, sales-focused campaign assets that drive revenue. You specialise in Instagram Reels, TikTok, Facebook ads, carousel ads, direct-response copywriting, and launch sequences. Every asset must be emotionally engaging, visually specific, platform-native, and conversion-focused. CRITICAL: You must include EVERY key in every object. Use null for fields that do not apply. Never omit a key.",
+    });
+  } catch (err: any) {
+    packError = err.message || String(err);
+    console.error(`[CreativeAgent] Schema/generation failure | campaignId=${campaignId} | userId=${userId} | error="${packError}"`);
+    throw new Error("Content generation needs to be retried. No content was published.");
+  }
+
+  if (!packResult) {
+    throw new Error("Content generation needs to be retried. No content was published.");
+  }
+
+  // Normalise the AI output so missing/undefined fields become safe defaults
+  const pack = normalisePremiumPack(packResult.output);
 
   // Save pack summary to campaign
   await db
@@ -353,13 +561,13 @@ CRITICAL RULES:
       savedPosts++;
     } catch (err: any) {
       failedInserts++;
-      console.error(`[CreativeAgent] Failed to save content post:`, err.message);
+      console.error(`[CreativeAgent] Failed to save content post | campaignId=${campaignId} | type=${type} | error="${err.message}"`);
     }
   }
 
   // Save video concepts as content posts with rich metadata
   for (const video of pack.videoConcepts) {
-    const caption = `${video.hook}\n\n${video.openingHook3Sec}\n\n${video.scenes.map((s, i) => `Scene ${i + 1}: ${s.visualDescription}`).join("\n")}\n\n${video.cta}`;
+    const caption = `${video.hook}\n\n${video.openingHook3Sec}\n\n${video.scenes.map((s: any, i: number) => `Scene ${i + 1}: ${s.visualDescription}`).join("\n")}\n\n${video.cta}`;
     await insertPost(
       video.title,
       "video_concept",
@@ -385,7 +593,7 @@ CRITICAL RULES:
 
   // Save carousel ads
   for (const carousel of pack.carouselAds) {
-    const caption = `${carousel.hook}\n\n${carousel.slides.map((s, i) => `Slide ${i + 1}: ${s.headline} — ${s.bodyText}`).join("\n")}\n\n${carousel.overallCta}`;
+    const caption = `${carousel.hook}\n\n${carousel.slides.map((s: any, i: number) => `Slide ${i + 1}: ${s.headline} — ${s.bodyText}`).join("\n")}\n\n${carousel.overallCta}`;
     await insertPost(
       carousel.title,
       "carousel_ad",
@@ -493,7 +701,7 @@ CRITICAL RULES:
     "launch_pack",
     "multi",
     pack.launchSequence.sequenceSteps[0]?.message?.slice(0, 80) || pack.launchSequence.title,
-    pack.launchSequence.sequenceSteps.map((s) => `Step ${s.stepNumber} (${s.channel}, ${s.timing}): ${s.message}`).join("\n\n"),
+    pack.launchSequence.sequenceSteps.map((s: any) => `Step ${s.stepNumber} (${s.channel}, ${s.timing}): ${s.message}`).join("\n\n"),
     pack.launchSequence.sequenceSteps[pack.launchSequence.sequenceSteps.length - 1]?.cta || "",
     [],
     "",
@@ -506,8 +714,9 @@ CRITICAL RULES:
   console.log(`[CreativeAgent] Premium pack saved: campaignId=${campaignId} savedPosts=${savedPosts} failedInserts=${failedInserts}`);
 
   if (savedPosts === 0) {
-    console.error(`[CreativeAgent] CRITICAL: No posts saved for campaign ${campaignId}`);
-    throw new Error("Content generation completed but no posts were saved.");
+    const errMsg = `Content generation completed but no posts were saved. failedInserts=${failedInserts}`;
+    console.error(`[CreativeAgent] CRITICAL: ${errMsg} | campaignId=${campaignId} | userId=${userId}`);
+    throw new Error("Content generation needs to be retried. No content was published.");
   }
 
   // Step 2: Generate additional creative assets (best-effort)
@@ -528,7 +737,8 @@ Generate:
 4. 2 testimonial frameworks (before/after structure)
 5. A competitor response angle (how to counter common objections)
 
-Respond with structured data. Always include prompt, platform, and variations keys. Use null when they do not apply.`;
+CRITICAL: Every object must include EVERY key. Use null when a field does not apply. Never omit a key.
+Respond with structured data.`;
 
   let assetsResult: { runId: number; output: z.infer<typeof CreativeAssetsSchema> } | undefined;
   let assetsError: string | undefined;
@@ -540,11 +750,11 @@ Respond with structured data. Always include prompt, platform, and variations ke
       prompt: assetsPrompt,
       schema: CreativeAssetsSchema,
       system:
-        "You are an expert copywriter and creative director. You create high-converting marketing assets across all channels. Always respond with valid structured data. Always include prompt, platform, and variations keys. Use null when a field does not apply.",
+        "You are an expert copywriter and creative director. You create high-converting marketing assets across all channels. Always respond with valid structured data. CRITICAL: Every object must include EVERY key. Use null when a field does not apply. Never omit a key.",
     });
   } catch (err: any) {
-    console.error("[CreativeAgent] Assets generation failed:", err.message);
-    assetsError = err.message;
+    assetsError = err.message || String(err);
+    console.error(`[CreativeAgent] Assets generation failed | campaignId=${campaignId} | userId=${userId} | error="${assetsError}"`);
   }
 
   // Update campaign with final context
@@ -584,7 +794,7 @@ Respond with structured data. Always include prompt, platform, and variations ke
         });
         savedAssets++;
       } catch (err: any) {
-        console.error(`[CreativeAgent] Failed to save campaign asset:`, err.message);
+        console.error(`[CreativeAgent] Failed to save campaign asset | campaignId=${campaignId} | error="${err.message}"`);
       }
     }
   }

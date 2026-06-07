@@ -164,6 +164,25 @@ export async function onStrategyApproved(campaignId: number, userId: number) {
 
   if (!campaign) return;
 
+  // Check if creative agent already ran for this campaign
+  const existingCreative = await db
+    .select()
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.campaignId, campaignId),
+        eq(agentRuns.agentType, "creative"),
+        eq(agentRuns.userId, userId)
+      )
+    )
+    .orderBy(agentRuns.createdAt)
+    .limit(1);
+
+  if (existingCreative.length > 0 && ["running", "completed"].includes(existingCreative[0].status)) {
+    console.log(`[Workflow] Skipping duplicate creative run for campaign ${campaignId}. Existing run ${existingCreative[0].id} is ${existingCreative[0].status}.`);
+    return;
+  }
+
   // Check cost control before auto-triggering
   const autoCheck = await canRunAutonomousWorkflow(userId, campaignId);
   if (!autoCheck.allowed) {
@@ -185,6 +204,6 @@ export async function onStrategyApproved(campaignId: number, userId: number) {
     });
     await onAgentRunComplete(result.packRunId);
   } catch (err: any) {
-    console.error("[Workflow] Auto-creative failed:", err.message);
+    console.error(`[Workflow] Auto-creative failed | campaignId=${campaignId} | error="${err.message}"`);
   }
 }
