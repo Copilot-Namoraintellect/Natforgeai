@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Button } from "@/components/ui/button";
@@ -34,11 +34,12 @@ import {
   Palette,
   Plug,
   TrendingUp,
-  ExternalLink,
   AlertCircle,
   Sparkles,
   Lock,
   Info,
+  Wand2,
+  Upload,
 } from "lucide-react";
 import {
   Dialog,
@@ -57,6 +58,15 @@ const brandTones = [
   "urgent",
   "playful",
   "authoritative",
+];
+
+const tonePresets = [
+  { label: "Professional", value: "professional" },
+  { label: "Friendly", value: "friendly" },
+  { label: "Premium", value: "premium" },
+  { label: "Bold", value: "bold" },
+  { label: "Playful", value: "playful" },
+  { label: "Educational", value: "authoritative" },
 ];
 
 const industries = [
@@ -97,9 +107,20 @@ const campaignGoals = [
 const assetTypes = [
   { key: "logo", label: "Logo / Brand Assets" },
   { key: "product_images", label: "Product Photos" },
+  { key: "product_videos", label: "Product Videos" },
   { key: "testimonials", label: "Customer Testimonials" },
   { key: "past_ads", label: "Past Ads / Content" },
   { key: "brand_guide", label: "Brand Guidelines" },
+];
+
+const premiumContentTypes = [
+  { key: "social_posts", label: "Social Media Posts" },
+  { key: "product_videos_reels", label: "Product Videos / Reels" },
+  { key: "carousel_ads", label: "Carousel Ads" },
+  { key: "whatsapp_promo", label: "WhatsApp Promo Messages" },
+  { key: "email_campaigns", label: "Email Campaigns" },
+  { key: "lead_gen_ads", label: "Lead Generation Ads" },
+  { key: "launch_pack", label: "Launch Campaign Pack" },
 ];
 
 const commonCities = [
@@ -168,6 +189,122 @@ const countryCodes = [
   { code: "+65", country: "Singapore", flag: "🇸🇬" },
 ];
 
+const visualStyles = [
+  { value: "modern", label: "Modern" },
+  { value: "classic", label: "Classic" },
+  { value: "minimal", label: "Minimal" },
+  { value: "bold", label: "Bold & Vibrant" },
+  { value: "luxury", label: "Luxury" },
+  { value: "playful", label: "Playful" },
+];
+
+const successMetrics = [
+  { value: "conversions", label: "Sales / Conversions" },
+  { value: "leads", label: "Leads Generated" },
+  { value: "traffic", label: "Website Traffic" },
+  { value: "engagement", label: "Engagement Rate" },
+  { value: "reach", label: "Reach / Impressions" },
+  { value: "followers", label: "Follower Growth" },
+];
+
+function mapAiAssets(aiAssets: string[]): string[] {
+  const map: Record<string, string> = {
+    logo: "logo",
+    "brand assets": "logo",
+    "brand guidelines": "brand_guide",
+    "product images": "product_images",
+    "product photos": "product_images",
+    "product images/photos": "product_images",
+    testimonials: "testimonials",
+    "customer testimonials": "testimonials",
+    "past ads": "past_ads",
+    "past content": "past_ads",
+    "previous ads": "past_ads",
+    "previous content": "past_ads",
+  };
+  const result: string[] = [];
+  for (const a of aiAssets) {
+    const key = a.toLowerCase().trim();
+    if (map[key] && !result.includes(map[key])) result.push(map[key]);
+    // Also try partial matches
+    for (const [mk, mv] of Object.entries(map)) {
+      if (key.includes(mk) && !result.includes(mv)) result.push(mv);
+    }
+  }
+  return result;
+}
+
+function mapAiMetric(metric: string): string {
+  const m = metric.toLowerCase();
+  if (m.includes("sale") || m.includes("conversion") || m.includes("purchase")) return "conversions";
+  if (m.includes("lead") || m.includes("enquiry") || m.includes("inquiry")) return "leads";
+  if (m.includes("traffic") || m.includes("visit")) return "traffic";
+  if (m.includes("engagement") || m.includes("like") || m.includes("comment")) return "engagement";
+  if (m.includes("reach") || m.includes("impression") || m.includes("view")) return "reach";
+  if (m.includes("follower") || m.includes("subscriber")) return "followers";
+  return "leads";
+}
+
+function mapAiVisualStyle(style: string): string {
+  const s = style.toLowerCase();
+  if (s.includes("modern")) return "modern";
+  if (s.includes("classic") || s.includes("traditional")) return "classic";
+  if (s.includes("minimal") || s.includes("clean")) return "minimal";
+  if (s.includes("bold") || s.includes("vibrant")) return "bold";
+  if (s.includes("luxury") || s.includes("premium") || s.includes("elegant")) return "luxury";
+  if (s.includes("playful") || s.includes("fun")) return "playful";
+  return "modern";
+}
+
+function mapAiBrandTone(tone: string): string {
+  const t = tone.toLowerCase();
+  if (t.includes("friendly") || t.includes("warm")) return "friendly";
+  if (t.includes("premium") || t.includes("luxury")) return "premium";
+  if (t.includes("bold") || t.includes("strong")) return "bold";
+  if (t.includes("professional") || t.includes("corporate")) return "professional";
+  if (t.includes("casual") || t.includes("relaxed")) return "casual";
+  if (t.includes("urgent") || t.includes("direct")) return "urgent";
+  if (t.includes("playful") || t.includes("fun")) return "playful";
+  if (t.includes("authoritative") || t.includes("educational") || t.includes("expert")) return "authoritative";
+  return "professional";
+}
+
+function mapAiPlatforms(aiPlatforms: string[]): string[] {
+  const result: string[] = [];
+  for (const p of aiPlatforms) {
+    const lower = p.toLowerCase();
+    if (lower.includes("instagram") && !result.includes("instagram")) result.push("instagram");
+    if (lower.includes("facebook") && !result.includes("facebook")) result.push("facebook");
+    if (lower.includes("linkedin") && !result.includes("linkedin")) result.push("linkedin");
+    if (lower.includes("tiktok") && !result.includes("tiktok")) result.push("tiktok");
+    if ((lower.includes("twitter") || lower.includes("x/")) && !result.includes("twitter")) result.push("twitter");
+    if (lower.includes("whatsapp") && !result.includes("whatsapp")) result.push("whatsapp");
+    if (lower.includes("email") && !result.includes("email")) result.push("email");
+  }
+  return result;
+}
+
+interface AiSuggestions {
+  productOrService: string;
+  targetCustomer: string;
+  productDescription: string;
+  uniqueSellingPoint: string;
+  pricePointOffer: string | null;
+  primaryGoal: string;
+  secondaryGoal: string | null;
+  successMetric: string;
+  targetRevenue: string | null;
+  brandTone: string;
+  visualStyle: string;
+  colorPalette: string;
+  brandVoiceNotes: string;
+  wordsToAvoid: string;
+  preferredPlatforms: string[];
+  recommendedAssetTypes: string[];
+  confidence: number;
+  assumptions: string[];
+}
+
 export default function Onboarding() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
@@ -175,6 +312,7 @@ export default function Onboarding() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [limitBlocked, setLimitBlocked] = useState(false);
   const { campaigns: campaignUsage } = useUsage();
+
   const [businessForm, setBusinessForm] = useState({
     name: "",
     website: "",
@@ -188,9 +326,12 @@ export default function Onboarding() {
     whatsappNumber: "",
     preferredPlatforms: [] as string[],
   });
+
   const [locationQuery, setLocationQuery] = useState("");
   const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
   const [showLocationSuggestions, setShowLocationSuggestions] = useState(false);
+  const locationRef = useRef<HTMLDivElement>(null);
+
   const [countryCode, setCountryCode] = useState("+27");
   const [whatsappLocal, setWhatsappLocal] = useState("");
   const [explainPlatform, setExplainPlatform] = useState<string | null>(null);
@@ -201,6 +342,7 @@ export default function Onboarding() {
     productDescription: "",
     uniqueSellingPoint: "",
     pricePoint: "",
+    premiumContentPreferences: [] as string[],
   });
 
   const [goalForm, setGoalForm] = useState({
@@ -211,7 +353,7 @@ export default function Onboarding() {
   });
 
   const [brandForm, setBrandForm] = useState({
-    brandTone: "",
+    brandTone: "" as string,
     visualStyle: "" as "modern" | "classic" | "minimal" | "bold" | "luxury" | "playful" | "",
     colorPalette: "",
     brandVoiceNotes: "",
@@ -235,6 +377,10 @@ export default function Onboarding() {
     requireApprovalBeforeReplying: true,
     requireApprovalForHighValueLeads: true,
   });
+
+  const [aiSuggestions, setAiSuggestions] = useState<AiSuggestions | null>(null);
+  const [aiSuggestedFields, setAiSuggestedFields] = useState<Record<string, boolean>>({});
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const { data: platformConfigStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
   const { data: connectedIntegrations } = trpc.integration.getConnectedPlatforms.useQuery();
@@ -271,6 +417,129 @@ export default function Onboarding() {
     },
   });
 
+  const analyseWebsite = trpc.business.analyseWebsite.useMutation({
+    onSuccess: (data) => {
+      setAiAnalyzing(false);
+      if (!data.success || !data.suggestions) {
+        toast.error(data.message || "We could not analyse this website. You can continue manually.");
+        return;
+      }
+      const sug = data.suggestions as AiSuggestions;
+      setAiSuggestions(sug);
+      toast.success("Website analysed. Please review the suggested details.");
+
+      // Auto-fill empty fields across all forms
+      const newAiSuggested: Record<string, boolean> = {};
+
+      setBusinessForm((prev) => {
+        const next = { ...prev };
+        if (!next.productOrService && sug.productOrService) {
+          next.productOrService = sug.productOrService;
+          newAiSuggested["productOrService"] = true;
+        }
+        if (!next.targetCustomer && sug.targetCustomer) {
+          next.targetCustomer = sug.targetCustomer;
+          newAiSuggested["targetCustomer"] = true;
+        }
+        if (!next.brandTone && sug.brandTone) {
+          next.brandTone = mapAiBrandTone(sug.brandTone);
+          newAiSuggested["brandTone"] = true;
+        }
+        if (!next.mainGoal && sug.primaryGoal) {
+          next.mainGoal = sug.primaryGoal;
+          newAiSuggested["mainGoal"] = true;
+        }
+        if (next.preferredPlatforms.length === 0 && sug.preferredPlatforms?.length) {
+          next.preferredPlatforms = mapAiPlatforms(sug.preferredPlatforms);
+          newAiSuggested["preferredPlatforms"] = true;
+        }
+        return next;
+      });
+
+      setAssetForm((prev) => {
+        const next = { ...prev };
+        if (!next.productDescription && sug.productDescription) {
+          next.productDescription = sug.productDescription;
+          newAiSuggested["productDescription"] = true;
+        }
+        if (!next.uniqueSellingPoint && sug.uniqueSellingPoint) {
+          next.uniqueSellingPoint = sug.uniqueSellingPoint;
+          newAiSuggested["uniqueSellingPoint"] = true;
+        }
+        if (!next.pricePoint && sug.pricePointOffer) {
+          next.pricePoint = sug.pricePointOffer;
+          newAiSuggested["pricePoint"] = true;
+        }
+        if (next.selectedAssets.length === 0 && sug.recommendedAssetTypes?.length) {
+          next.selectedAssets = mapAiAssets(sug.recommendedAssetTypes);
+          newAiSuggested["selectedAssets"] = true;
+        }
+        return next;
+      });
+
+      setGoalForm((prev) => {
+        const next = { ...prev };
+        if (!next.primaryGoal && sug.primaryGoal) {
+          next.primaryGoal = sug.primaryGoal;
+          newAiSuggested["primaryGoal"] = true;
+        }
+        if (!next.secondaryGoal && sug.secondaryGoal) {
+          next.secondaryGoal = sug.secondaryGoal;
+          newAiSuggested["secondaryGoal"] = true;
+        }
+        if (!next.successMetric && sug.successMetric) {
+          next.successMetric = mapAiMetric(sug.successMetric);
+          newAiSuggested["successMetric"] = true;
+        }
+        if (!next.targetRevenue && sug.targetRevenue) {
+          next.targetRevenue = sug.targetRevenue;
+          newAiSuggested["targetRevenue"] = true;
+        }
+        return next;
+      });
+
+      setBrandForm((prev) => {
+        const next = { ...prev };
+        if (!next.brandTone && sug.brandTone) {
+          next.brandTone = mapAiBrandTone(sug.brandTone);
+          newAiSuggested["brandTone"] = true;
+        }
+        if (!next.visualStyle && sug.visualStyle) {
+          next.visualStyle = mapAiVisualStyle(sug.visualStyle) as any;
+          newAiSuggested["visualStyle"] = true;
+        }
+        if (!next.colorPalette && sug.colorPalette) {
+          next.colorPalette = sug.colorPalette;
+          newAiSuggested["colorPalette"] = true;
+        }
+        if (!next.brandVoiceNotes && sug.brandVoiceNotes) {
+          next.brandVoiceNotes = sug.brandVoiceNotes;
+          newAiSuggested["brandVoiceNotes"] = true;
+        }
+        if (!next.avoidWords && sug.wordsToAvoid) {
+          next.avoidWords = sug.wordsToAvoid;
+          newAiSuggested["avoidWords"] = true;
+        }
+        return next;
+      });
+
+      setIntegrationForm((prev) => {
+        const next = { ...prev };
+        if (next.interestedPlatforms.length === 0 && sug.preferredPlatforms?.length) {
+          next.interestedPlatforms = mapAiPlatforms(sug.preferredPlatforms);
+          newAiSuggested["interestedPlatforms"] = true;
+        }
+        return next;
+      });
+
+      setAiSuggestedFields((prev) => ({ ...prev, ...newAiSuggested }));
+    },
+    onError: (err) => {
+      setAiAnalyzing(false);
+      toast.error(err.message || "We could not analyse this website. You can continue manually.");
+    },
+  });
+
   const totalSteps = 6;
   const progress = (step / totalSteps) * 100;
 
@@ -279,7 +548,7 @@ export default function Onboarding() {
     "Product Assets",
     "Campaign Goal",
     "Brand Style",
-    "Integrations",
+    "Publishing & Platforms",
     "Review/Launch",
   ];
 
@@ -312,8 +581,23 @@ export default function Onboarding() {
     }));
   }
 
+  function togglePremiumContent(key: string) {
+    setAssetForm((prev) => ({
+      ...prev,
+      premiumContentPreferences: prev.premiumContentPreferences.includes(key)
+        ? prev.premiumContentPreferences.filter((k) => k !== key)
+        : [...prev.premiumContentPreferences, key],
+    }));
+  }
+
   function isPlatformConfigured(platform: string) {
     return platformConfigStatus?.find((p) => p.platform === platform)?.configured === true;
+  }
+
+  function isPlatformConnected(platform: string) {
+    return connectedIntegrations?.some(
+      (i) => i.platform === platform && i.status === "connected"
+    );
   }
 
   function handleLocationInput(value: string) {
@@ -347,45 +631,41 @@ export default function Onboarding() {
     return /^\+[1-9]\d{0,3}\s?\d{6,14}$/.test(full.replace(/\s/g, ""));
   }
 
-  function isPlatformConnected(platform: string) {
-    return connectedIntegrations?.some(
-      (i) => i.platform === platform && i.status === "connected"
-    );
-  }
-
   function getStepValidationError() {
+    const errors: Record<string, string> = {};
     if (step === 1) {
-      if (!businessForm.name || !businessForm.industry) {
-        return "Please fill in at least business name and industry";
-      }
+      if (!businessForm.name.trim()) errors["name"] = "Business name is required";
+      if (!businessForm.industry) errors["industry"] = "Please select an industry";
     }
     if (step === 3) {
-      if (!goalForm.primaryGoal) {
-        return "Please select a primary campaign goal";
-      }
+      if (!goalForm.primaryGoal) errors["primaryGoal"] = "Please select a primary campaign goal";
     }
     if (step === 4) {
-      if (!brandForm.brandTone) {
-        return "Please select a brand tone";
-      }
+      if (!brandForm.brandTone) errors["brandTone"] = "Please select a brand tone";
     }
-    return null;
+    return errors;
   }
 
   const handleNext = () => {
-    const error = getStepValidationError();
-    if (error) {
-      toast.error(error);
+    const errors = getStepValidationError();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) {
+      const firstError = Object.values(errors)[0];
+      toast.error(firstError);
       return;
     }
     if (step === 2 && strategyForm.mode === "paste" && !strategyForm.strategyText.trim()) {
       toast.error("Please paste your strategy or choose another option");
       return;
     }
+    setFieldErrors({});
     setStep((s) => Math.min(s + 1, totalSteps));
   };
 
-  const handleBack = () => setStep((s) => Math.max(s - 1, 1));
+  const handleBack = () => {
+    setFieldErrors({});
+    setStep((s) => Math.max(s - 1, 1));
+  };
 
   const handleComplete = async () => {
     setIsSubmitting(true);
@@ -404,6 +684,8 @@ export default function Onboarding() {
         mainGoal: goalForm.primaryGoal || businessForm.mainGoal || undefined,
         whatsappNumber: businessForm.whatsappNumber || undefined,
         preferredPlatforms: businessForm.preferredPlatforms.join(","),
+        premiumContentPreferences: assetForm.premiumContentPreferences.join(","),
+        hasProductVideos: assetForm.selectedAssets.includes("product_videos"),
       });
 
       await updateUser.mutateAsync({ onboardingComplete: true });
@@ -433,6 +715,181 @@ export default function Onboarding() {
       setIsSubmitting(false);
     }
   };
+
+  function applyAiSuggestion(field: string, value: any) {
+    if (field === "productOrService") {
+      setBusinessForm((p) => ({ ...p, productOrService: value }));
+    } else if (field === "targetCustomer") {
+      setBusinessForm((p) => ({ ...p, targetCustomer: value }));
+    } else if (field === "brandTone") {
+      const mapped = mapAiBrandTone(value);
+      setBusinessForm((p) => ({ ...p, brandTone: mapped }));
+      setBrandForm((p) => ({ ...p, brandTone: mapped }));
+    } else if (field === "mainGoal") {
+      setBusinessForm((p) => ({ ...p, mainGoal: value }));
+    } else if (field === "preferredPlatforms") {
+      const mapped = mapAiPlatforms(value);
+      setBusinessForm((p) => ({ ...p, preferredPlatforms: mapped }));
+    } else if (field === "productDescription") {
+      setAssetForm((p) => ({ ...p, productDescription: value }));
+    } else if (field === "uniqueSellingPoint") {
+      setAssetForm((p) => ({ ...p, uniqueSellingPoint: value }));
+    } else if (field === "pricePoint") {
+      setAssetForm((p) => ({ ...p, pricePoint: value }));
+    } else if (field === "selectedAssets") {
+      const mapped = mapAiAssets(value);
+      setAssetForm((p) => ({ ...p, selectedAssets: mapped }));
+    } else if (field === "primaryGoal") {
+      setGoalForm((p) => ({ ...p, primaryGoal: value }));
+    } else if (field === "secondaryGoal") {
+      setGoalForm((p) => ({ ...p, secondaryGoal: value }));
+    } else if (field === "successMetric") {
+      setGoalForm((p) => ({ ...p, successMetric: mapAiMetric(value) }));
+    } else if (field === "targetRevenue") {
+      setGoalForm((p) => ({ ...p, targetRevenue: value }));
+    } else if (field === "visualStyle") {
+      setBrandForm((p) => ({ ...p, visualStyle: mapAiVisualStyle(value) as any }));
+    } else if (field === "colorPalette") {
+      setBrandForm((p) => ({ ...p, colorPalette: value }));
+    } else if (field === "brandVoiceNotes") {
+      setBrandForm((p) => ({ ...p, brandVoiceNotes: value }));
+    } else if (field === "avoidWords") {
+      setBrandForm((p) => ({ ...p, avoidWords: value }));
+    } else if (field === "interestedPlatforms") {
+      const mapped = mapAiPlatforms(value);
+      setIntegrationForm((p) => ({ ...p, interestedPlatforms: mapped }));
+    }
+    setAiSuggestedFields((prev) => ({ ...prev, [field]: true }));
+  }
+
+  function applyAllSuggestions() {
+    if (!aiSuggestions) return;
+    const sug = aiSuggestions;
+    applyAiSuggestion("productOrService", sug.productOrService);
+    applyAiSuggestion("targetCustomer", sug.targetCustomer);
+    applyAiSuggestion("brandTone", sug.brandTone);
+    applyAiSuggestion("mainGoal", sug.primaryGoal);
+    applyAiSuggestion("preferredPlatforms", sug.preferredPlatforms);
+    applyAiSuggestion("productDescription", sug.productDescription);
+    applyAiSuggestion("uniqueSellingPoint", sug.uniqueSellingPoint);
+    applyAiSuggestion("pricePoint", sug.pricePointOffer);
+    applyAiSuggestion("selectedAssets", sug.recommendedAssetTypes);
+    applyAiSuggestion("primaryGoal", sug.primaryGoal);
+    applyAiSuggestion("secondaryGoal", sug.secondaryGoal);
+    applyAiSuggestion("successMetric", sug.successMetric);
+    applyAiSuggestion("targetRevenue", sug.targetRevenue);
+    applyAiSuggestion("visualStyle", sug.visualStyle);
+    applyAiSuggestion("colorPalette", sug.colorPalette);
+    applyAiSuggestion("brandVoiceNotes", sug.brandVoiceNotes);
+    applyAiSuggestion("avoidWords", sug.wordsToAvoid);
+    applyAiSuggestion("interestedPlatforms", sug.preferredPlatforms);
+    toast.success("All AI suggestions applied.");
+  }
+
+  function handleAiAnalyse() {
+    if (!businessForm.website) {
+      toast.error("Please enter a website URL first");
+      return;
+    }
+    let url = businessForm.website.trim();
+    if (!/^https?:\/\//i.test(url)) {
+      url = "https://" + url;
+    }
+    try {
+      new URL(url);
+    } catch {
+      toast.error("Please enter a valid website URL");
+      return;
+    }
+    setAiAnalyzing(true);
+    analyseWebsite.mutate({
+      websiteUrl: url,
+      businessName: businessForm.name || undefined,
+      industry: businessForm.industry || undefined,
+      location: businessForm.location || undefined,
+    });
+  }
+
+  // Close location dropdown on click outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (locationRef.current && !locationRef.current.contains(e.target as Node)) {
+        setShowLocationSuggestions(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  function renderAiBadge(field: string) {
+    if (!aiSuggestedFields[field]) return null;
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-[#00D4FF] bg-[#00D4FF]/10 border border-[#00D4FF]/20 rounded-full px-2 py-0.5 ml-2">
+        <Sparkles className="w-3 h-3" />
+        AI suggested
+      </span>
+    );
+  }
+
+  function renderAiSuggestionChip(field: string, displayValue?: string) {
+    if (!aiSuggestions) return null;
+    const hasUserValue = (() => {
+      if (field === "productOrService") return !!businessForm.productOrService;
+      if (field === "targetCustomer") return !!businessForm.targetCustomer;
+      if (field === "brandTone") return !!businessForm.brandTone;
+      if (field === "mainGoal") return !!businessForm.mainGoal;
+      if (field === "preferredPlatforms") return businessForm.preferredPlatforms.length > 0;
+      if (field === "productDescription") return !!assetForm.productDescription;
+      if (field === "uniqueSellingPoint") return !!assetForm.uniqueSellingPoint;
+      if (field === "pricePoint") return !!assetForm.pricePoint;
+      if (field === "selectedAssets") return assetForm.selectedAssets.length > 0;
+      if (field === "primaryGoal") return !!goalForm.primaryGoal;
+      if (field === "secondaryGoal") return !!goalForm.secondaryGoal;
+      if (field === "successMetric") return !!goalForm.successMetric;
+      if (field === "targetRevenue") return !!goalForm.targetRevenue;
+      if (field === "visualStyle") return !!brandForm.visualStyle;
+      if (field === "colorPalette") return !!brandForm.colorPalette;
+      if (field === "brandVoiceNotes") return !!brandForm.brandVoiceNotes;
+      if (field === "avoidWords") return !!brandForm.avoidWords;
+      if (field === "interestedPlatforms") return integrationForm.interestedPlatforms.length > 0;
+      return false;
+    })();
+
+    if (!hasUserValue || aiSuggestedFields[field]) return null;
+
+    let suggestionValue: any;
+    if (field === "productOrService") suggestionValue = aiSuggestions.productOrService;
+    else if (field === "targetCustomer") suggestionValue = aiSuggestions.targetCustomer;
+    else if (field === "brandTone") suggestionValue = aiSuggestions.brandTone;
+    else if (field === "mainGoal") suggestionValue = aiSuggestions.primaryGoal;
+    else if (field === "preferredPlatforms") suggestionValue = aiSuggestions.preferredPlatforms;
+    else if (field === "productDescription") suggestionValue = aiSuggestions.productDescription;
+    else if (field === "uniqueSellingPoint") suggestionValue = aiSuggestions.uniqueSellingPoint;
+    else if (field === "pricePoint") suggestionValue = aiSuggestions.pricePointOffer;
+    else if (field === "selectedAssets") suggestionValue = aiSuggestions.recommendedAssetTypes;
+    else if (field === "primaryGoal") suggestionValue = aiSuggestions.primaryGoal;
+    else if (field === "secondaryGoal") suggestionValue = aiSuggestions.secondaryGoal;
+    else if (field === "successMetric") suggestionValue = aiSuggestions.successMetric;
+    else if (field === "targetRevenue") suggestionValue = aiSuggestions.targetRevenue;
+    else if (field === "visualStyle") suggestionValue = aiSuggestions.visualStyle;
+    else if (field === "colorPalette") suggestionValue = aiSuggestions.colorPalette;
+    else if (field === "brandVoiceNotes") suggestionValue = aiSuggestions.brandVoiceNotes;
+    else if (field === "avoidWords") suggestionValue = aiSuggestions.wordsToAvoid;
+    else if (field === "interestedPlatforms") suggestionValue = aiSuggestions.preferredPlatforms;
+
+    if (!suggestionValue || (Array.isArray(suggestionValue) && suggestionValue.length === 0)) return null;
+
+    return (
+      <button
+        type="button"
+        onClick={() => applyAiSuggestion(field, suggestionValue)}
+        className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2.5 py-0.5 mt-1 hover:bg-amber-500/20 transition-colors"
+      >
+        <Wand2 className="w-3 h-3" />
+        AI suggestion: {displayValue || (Array.isArray(suggestionValue) ? suggestionValue.join(", ") : String(suggestionValue).slice(0, 40))}
+      </button>
+    );
+  }
 
   function renderStepIndicator() {
     return (
@@ -486,6 +943,985 @@ export default function Onboarding() {
     );
   }
 
+  function renderStep1() {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-3 mb-2">
+          <Building2 className="w-6 h-6 text-[#00D4FF]" />
+          <h2 className="text-xl font-semibold text-white">Business Profile</h2>
+        </div>
+        <p className="text-sm text-gray-400 -mt-3">Tell us about your business so AI can market it accurately.</p>
+
+        {aiSuggestions && (
+          <div className="flex items-center justify-between p-3 rounded-lg bg-[#00D4FF]/5 border border-[#00D4FF]/20">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-[#00D4FF]" />
+              <span className="text-sm text-[#00D4FF]">AI analysis complete</span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={applyAllSuggestions}
+              className="h-8 text-xs border-[#00D4FF]/30 text-[#00D4FF] hover:bg-[#00D4FF]/10"
+            >
+              <Wand2 className="w-3 h-3 mr-1" />
+              Apply all suggestions
+            </Button>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label className="text-gray-300">
+              Business Name *
+              {renderAiBadge("name")}
+            </Label>
+            <Input
+              placeholder="Your business name"
+              value={businessForm.name}
+              onChange={(e) => {
+                setBusinessForm((p) => ({ ...p, name: e.target.value }));
+                if (fieldErrors.name && e.target.value.trim()) setFieldErrors((prev) => { const n = { ...prev }; delete n.name; return n; });
+              }}
+              className={`bg-[#0F172A] border-[#334155] text-white ${fieldErrors.name ? "border-red-500" : ""}`}
+            />
+            {fieldErrors.name && <p className="text-xs text-red-400">{fieldErrors.name}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label className="text-gray-300">Website URL</Label>
+            <div className="relative flex gap-2">
+              <Globe className="absolute left-3 top-2.5 w-4 h-4 text-gray-500 z-10" />
+              <Input
+                placeholder="https://yourbusiness.com"
+                value={businessForm.website}
+                onChange={(e) => setBusinessForm((p) => ({ ...p, website: e.target.value }))}
+                className="bg-[#0F172A] border-[#334155] text-white pl-10 flex-1"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={aiAnalyzing || !businessForm.website}
+                onClick={handleAiAnalyse}
+                className="border-[#334155] text-[#00D4FF] hover:bg-[#00D4FF]/10 h-10 whitespace-nowrap"
+              >
+                {aiAnalyzing ? (
+                  <>
+                    <Sparkles className="w-4 h-4 mr-1 animate-spin" />
+                    Analysing…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 mr-1" />
+                    AI Analyse
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-gray-300">
+              Industry *
+              {renderAiBadge("industry")}
+            </Label>
+            <Select
+              value={businessForm.industry}
+              onValueChange={(v) => {
+                setBusinessForm((p) => ({ ...p, industry: v }));
+                if (fieldErrors.industry) setFieldErrors((prev) => { const n = { ...prev }; delete n.industry; return n; });
+              }}
+            >
+              <SelectTrigger className={`bg-[#0F172A] border-[#334155] text-white ${fieldErrors.industry ? "border-red-500" : ""}`}>
+                <SelectValue placeholder="Select industry" />
+              </SelectTrigger>
+              <SelectContent className="bg-[#1E293B] border-[#334155]">
+                {industries.map((i) => (
+                  <SelectItem key={i} value={i.toLowerCase()} className="text-white">
+                    {i}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {fieldErrors.industry && <p className="text-xs text-red-400">{fieldErrors.industry}</p>}
+          </div>
+          <div className="space-y-2 relative" ref={locationRef}>
+            <Label className="text-gray-300">
+              Location
+              {renderAiBadge("location")}
+            </Label>
+            <div className="relative">
+              <MapPin className="absolute left-3 top-2.5 w-4 h-4 text-gray-500 z-10" />
+              <Input
+                placeholder="Start typing a city…"
+                value={locationQuery}
+                onChange={(e) => handleLocationInput(e.target.value)}
+                onFocus={() => locationQuery.length >= 2 && setShowLocationSuggestions(locationSuggestions.length > 0)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setShowLocationSuggestions(false);
+                }}
+                className="bg-[#0F172A] border-[#334155] text-white pl-10"
+              />
+            </div>
+            {showLocationSuggestions && (
+              <div className="absolute z-20 w-full mt-1 bg-[#1E293B] border border-[#334155] rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                {locationSuggestions.map((city) => (
+                  <button
+                    key={city}
+                    type="button"
+                    onMouseDown={(e) => { e.preventDefault(); selectLocation(city); }}
+                    className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-[#0F172A] hover:text-white transition-colors"
+                  >
+                    {city}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">
+            Product or Service
+            {renderAiBadge("productOrService")}
+          </Label>
+          <Textarea
+            placeholder="What do you sell or offer?"
+            value={businessForm.productOrService}
+            onChange={(e) => setBusinessForm((p) => ({ ...p, productOrService: e.target.value }))}
+            className="bg-[#0F172A] border-[#334155] text-white"
+          />
+          {renderAiSuggestionChip("productOrService")}
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">
+            Target Customer
+            {renderAiBadge("targetCustomer")}
+          </Label>
+          <div className="relative">
+            <Users className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
+            <Input
+              placeholder="e.g. Young professionals aged 25-45"
+              value={businessForm.targetCustomer}
+              onChange={(e) => setBusinessForm((p) => ({ ...p, targetCustomer: e.target.value }))}
+              className="bg-[#0F172A] border-[#334155] text-white pl-10"
+            />
+          </div>
+          {renderAiSuggestionChip("targetCustomer")}
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">Estimated Monthly Marketing Spend</Label>
+          <p className="text-xs text-gray-500">
+            This guides the AI strategy for ads and campaign promotion. It is not charged by NatForgeAI.
+          </p>
+          <div className="relative">
+            <Wallet className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
+            <Input
+              type="number"
+              placeholder="e.g. $50, $250, $1,000"
+              value={businessForm.monthlyBudget}
+              onChange={(e) => setBusinessForm((p) => ({ ...p, monthlyBudget: e.target.value }))}
+              className="bg-[#0F172A] border-[#334155] text-white pl-10"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">WhatsApp Number</Label>
+          <p className="text-xs text-gray-500">
+            Example: +27 82 123 4567 or +1 415 555 0100
+          </p>
+          <div className="flex gap-2">
+            <Select value={countryCode} onValueChange={setCountryCode}>
+              <SelectTrigger className="w-[150px] bg-[#0F172A] border-[#334155] text-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-[#1E293B] border-[#334155]">
+                {countryCodes.map((c) => (
+                  <SelectItem key={`${c.code}-${c.country}`} value={c.code} className="text-white">
+                    {c.flag} {c.code}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="relative flex-1">
+              <MessageSquare className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
+              <Input
+                placeholder={countryCode === "+27" ? "82 123 4567" : "Phone number"}
+                value={whatsappLocal}
+                onChange={(e) => handleWhatsappInput(e.target.value)}
+                className={`bg-[#0F172A] border-[#334155] text-white pl-10 ${businessForm.whatsappNumber && !validateWhatsapp() ? "border-red-500" : ""}`}
+              />
+            </div>
+          </div>
+          {businessForm.whatsappNumber && !validateWhatsapp() && (
+            <p className="text-xs text-red-400">Enter a valid WhatsApp number including country code.</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function renderStep2() {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-3 mb-2">
+          <Package className="w-6 h-6 text-[#00D4FF]" />
+          <h2 className="text-xl font-semibold text-white">Product Assets</h2>
+        </div>
+        <p className="text-sm text-gray-400 -mt-3">
+          Help AI understand what you sell and why customers should buy it.
+        </p>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">
+            Product or Service Description
+            {renderAiBadge("productDescription")}
+          </Label>
+          <Textarea
+            placeholder="Describe your main product or service. What problem does it solve?"
+            value={assetForm.productDescription}
+            onChange={(e) => setAssetForm((p) => ({ ...p, productDescription: e.target.value }))}
+            className="bg-[#0F172A] border-[#334155] text-white min-h-[120px]"
+          />
+          {renderAiSuggestionChip("productDescription")}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label className="text-gray-300">
+              Unique Selling Point
+              {renderAiBadge("uniqueSellingPoint")}
+            </Label>
+            <Input
+              placeholder="What makes you different from competitors?"
+              value={assetForm.uniqueSellingPoint}
+              onChange={(e) => setAssetForm((p) => ({ ...p, uniqueSellingPoint: e.target.value }))}
+              className="bg-[#0F172A] border-[#334155] text-white"
+            />
+            {renderAiSuggestionChip("uniqueSellingPoint")}
+          </div>
+          <div className="space-y-2">
+            <Label className="text-gray-300">
+              Price Point / Offer
+              {renderAiBadge("pricePoint")}
+            </Label>
+            <Input
+              placeholder="e.g. $29/month, $199 once-off, 20% launch discount"
+              value={assetForm.pricePoint}
+              onChange={(e) => setAssetForm((p) => ({ ...p, pricePoint: e.target.value }))}
+              className="bg-[#0F172A] border-[#334155] text-white"
+            />
+            {renderAiSuggestionChip("pricePoint")}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">Available Marketing Assets</Label>
+          <p className="text-xs text-gray-500">
+            These help NatForgeAI create richer visuals. You can upload them later.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+            {assetTypes.map((asset) => {
+              const isSelected = assetForm.selectedAssets.includes(asset.key);
+              const aiRecommended = aiSuggestedFields["selectedAssets"] && isSelected;
+              return (
+                <label
+                  key={asset.key}
+                  className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                    isSelected
+                      ? "border-[#00D4FF] bg-[#00D4FF]/10"
+                      : "border-[#334155] bg-[#0F172A] hover:border-gray-500"
+                  } ${aiRecommended ? "ring-1 ring-[#00D4FF]/30" : ""}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleAsset(asset.key)}
+                    className="w-4 h-4 rounded border-[#334155] bg-[#1E293B] text-[#00D4FF]"
+                  />
+                  <span className="text-gray-300 text-sm">{asset.label}</span>
+                  {aiRecommended && (
+                    <span className="ml-auto text-[10px] text-[#00D4FF] bg-[#00D4FF]/10 border border-[#00D4FF]/20 rounded-full px-1.5 py-0.5">
+                      AI suggested
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+          {renderAiSuggestionChip("selectedAssets", aiSuggestions?.recommendedAssetTypes?.map((a) => a.charAt(0).toUpperCase() + a.slice(1)).join(", "))}
+        </div>
+
+        <div className="p-3 rounded-lg bg-[#0F172A]/60 border border-dashed border-[#334155] text-xs text-gray-500 flex items-start gap-2">
+          <Upload className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
+          <p>Asset upload coming soon. You can continue and add assets later.</p>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">Premium Content Preferences</Label>
+          <p className="text-xs text-gray-500">
+            Choose the types of premium campaign assets NatForgeAI should create for you.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+            {premiumContentTypes.map((type) => (
+              <label
+                key={type.key}
+                className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                  assetForm.premiumContentPreferences.includes(type.key)
+                    ? "border-[#00D4FF] bg-[#00D4FF]/10"
+                    : "border-[#334155] bg-[#0F172A] hover:border-gray-500"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={assetForm.premiumContentPreferences.includes(type.key)}
+                  onChange={() => togglePremiumContent(type.key)}
+                  className="w-4 h-4 rounded border-[#334155] bg-[#1E293B] text-[#00D4FF]"
+                />
+                <span className="text-gray-300 text-sm">{type.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderStep3() {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-3 mb-2">
+          <TrendingUp className="w-6 h-6 text-[#00D4FF]" />
+          <h2 className="text-xl font-semibold text-white">Campaign Goal</h2>
+        </div>
+        <p className="text-sm text-gray-400 -mt-3">Define what success looks like for this campaign.</p>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">
+            Primary Goal *
+            {renderAiBadge("primaryGoal")}
+          </Label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {campaignGoals.map((goal) => (
+              <button
+                key={goal}
+                onClick={() => {
+                  setGoalForm((p) => ({ ...p, primaryGoal: goal }));
+                  if (fieldErrors.primaryGoal) setFieldErrors((prev) => { const n = { ...prev }; delete n.primaryGoal; return n; });
+                }}
+                className={`p-3 rounded-lg border text-left text-sm transition-all ${
+                  goalForm.primaryGoal === goal
+                    ? "border-[#00D4FF] bg-[#00D4FF]/10 text-white"
+                    : "border-[#334155] bg-[#0F172A] text-gray-400 hover:text-white"
+                } ${fieldErrors.primaryGoal && !goalForm.primaryGoal ? "border-red-500/50" : ""}`}
+              >
+                {goal}
+              </button>
+            ))}
+          </div>
+          {fieldErrors.primaryGoal && <p className="text-xs text-red-400">{fieldErrors.primaryGoal}</p>}
+          {renderAiSuggestionChip("primaryGoal")}
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">
+            Secondary Goal (optional)
+            {renderAiBadge("secondaryGoal")}
+          </Label>
+          <Input
+            placeholder="e.g. Build our email list"
+            value={goalForm.secondaryGoal}
+            onChange={(e) => setGoalForm((p) => ({ ...p, secondaryGoal: e.target.value }))}
+            className="bg-[#0F172A] border-[#334155] text-white"
+          />
+          {renderAiSuggestionChip("secondaryGoal")}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label className="text-gray-300">
+              Success Metric
+              {renderAiBadge("successMetric")}
+            </Label>
+            <Select
+              value={goalForm.successMetric}
+              onValueChange={(v) => setGoalForm((p) => ({ ...p, successMetric: v }))}
+            >
+              <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
+                <SelectValue placeholder="Select metric" />
+              </SelectTrigger>
+              <SelectContent className="bg-[#1E293B] border-[#334155]">
+                {successMetrics.map((m) => (
+                  <SelectItem key={m.value} value={m.value} className="text-white">
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {renderAiSuggestionChip("successMetric", successMetrics.find(m => m.value === mapAiMetric(aiSuggestions?.successMetric || ""))?.label)}
+          </div>
+          <div className="space-y-2">
+            <Label className="text-gray-300">
+              Target Revenue / Value (USD)
+              {renderAiBadge("targetRevenue")}
+            </Label>
+            <Input
+              type="number"
+              placeholder="10000"
+              value={goalForm.targetRevenue}
+              onChange={(e) => setGoalForm((p) => ({ ...p, targetRevenue: e.target.value }))}
+              className="bg-[#0F172A] border-[#334155] text-white"
+            />
+            {renderAiSuggestionChip("targetRevenue")}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderStep4() {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-3 mb-2">
+          <Palette className="w-6 h-6 text-[#00D4FF]" />
+          <h2 className="text-xl font-semibold text-white">Brand Style</h2>
+        </div>
+        <p className="text-sm text-gray-400 -mt-3">Shape how AI sounds and feels when marketing your brand.</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label className="text-gray-300">
+              Brand Tone *
+              {renderAiBadge("brandTone")}
+            </Label>
+            <Select
+              value={brandForm.brandTone}
+              onValueChange={(v) => {
+                setBrandForm((p) => ({ ...p, brandTone: v }));
+                setBusinessForm((p) => ({ ...p, brandTone: v }));
+                if (fieldErrors.brandTone) setFieldErrors((prev) => { const n = { ...prev }; delete n.brandTone; return n; });
+              }}
+            >
+              <SelectTrigger className={`bg-[#0F172A] border-[#334155] text-white ${fieldErrors.brandTone ? "border-red-500" : ""}`}>
+                <SelectValue placeholder="Select tone" />
+              </SelectTrigger>
+              <SelectContent className="bg-[#1E293B] border-[#334155]">
+                {brandTones.map((t) => (
+                  <SelectItem key={t} value={t} className="text-white">
+                    {t.charAt(0).toUpperCase() + t.slice(1)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {fieldErrors.brandTone && <p className="text-xs text-red-400">{fieldErrors.brandTone}</p>}
+            {renderAiSuggestionChip("brandTone")}
+
+            {!aiSuggestions && !brandForm.brandTone && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {tonePresets.map((preset) => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    onClick={() => {
+                      setBrandForm((p) => ({ ...p, brandTone: preset.value }));
+                      setBusinessForm((p) => ({ ...p, brandTone: preset.value }));
+                    }}
+                    className="px-3 py-1 rounded-full text-xs font-medium border border-[#334155] text-gray-300 hover:border-[#00D4FF]/50 hover:text-[#00D4FF] transition-colors"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label className="text-gray-300">
+              Visual Style
+              {renderAiBadge("visualStyle")}
+            </Label>
+            <Select
+              value={brandForm.visualStyle}
+              onValueChange={(v) => setBrandForm((p) => ({ ...p, visualStyle: v as any }))}
+            >
+              <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
+                <SelectValue placeholder="Select style" />
+              </SelectTrigger>
+              <SelectContent className="bg-[#1E293B] border-[#334155]">
+                {visualStyles.map((s) => (
+                  <SelectItem key={s.value} value={s.value} className="text-white">
+                    {s.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {renderAiSuggestionChip("visualStyle", visualStyles.find(s => s.value === mapAiVisualStyle(aiSuggestions?.visualStyle || ""))?.label)}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">
+            Color Palette (optional)
+            {renderAiBadge("colorPalette")}
+          </Label>
+          <Input
+            placeholder="e.g. Navy blue, gold, white"
+            value={brandForm.colorPalette}
+            onChange={(e) => setBrandForm((p) => ({ ...p, colorPalette: e.target.value }))}
+            className="bg-[#0F172A] border-[#334155] text-white"
+          />
+          {renderAiSuggestionChip("colorPalette")}
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">
+            Brand Voice Notes
+            {renderAiBadge("brandVoiceNotes")}
+          </Label>
+          <Textarea
+            placeholder="e.g. We use short sentences. We never use slang. We always lead with benefits."
+            value={brandForm.brandVoiceNotes}
+            onChange={(e) => setBrandForm((p) => ({ ...p, brandVoiceNotes: e.target.value }))}
+            className="bg-[#0F172A] border-[#334155] text-white"
+          />
+          {renderAiSuggestionChip("brandVoiceNotes")}
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">
+            Words or Phrases to Avoid
+            {renderAiBadge("avoidWords")}
+          </Label>
+          <Input
+            placeholder="e.g. cheap, discount, guaranteed"
+            value={brandForm.avoidWords}
+            onChange={(e) => setBrandForm((p) => ({ ...p, avoidWords: e.target.value }))}
+            className="bg-[#0F172A] border-[#334155] text-white"
+          />
+          {renderAiSuggestionChip("avoidWords")}
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-gray-300">
+            Preferred Platforms
+            {renderAiBadge("preferredPlatforms")}
+          </Label>
+          <p className="text-xs text-gray-500">
+            Selecting platforms guides content creation. It does not enable automatic posting.
+          </p>
+          <div className="flex flex-wrap gap-2 mt-2">
+            {platforms.map((p) => (
+              <button
+                key={p.value}
+                onClick={() => togglePlatform(p.value)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  businessForm.preferredPlatforms.includes(p.value)
+                    ? "bg-[#00D4FF]/20 text-[#00D4FF] border border-[#00D4FF]/30"
+                    : "bg-[#0F172A] text-gray-400 border border-[#334155] hover:text-white"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {renderAiSuggestionChip("preferredPlatforms", mapAiPlatforms(aiSuggestions?.preferredPlatforms || []).map(v => platforms.find(p => p.value === v)?.label).filter(Boolean).join(", "))}
+        </div>
+      </div>
+    );
+  }
+
+  function renderStep5() {
+    const contentPlatforms = platforms.filter((p) =>
+      ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp", "email"].includes(p.value)
+    );
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-3 mb-2">
+          <Plug className="w-6 h-6 text-[#00D4FF]" />
+          <h2 className="text-xl font-semibold text-white">Publishing & Platform Preferences</h2>
+        </div>
+        <p className="text-sm text-gray-400 -mt-3">
+          Choose the platforms you want NatForgeAI to create content for. Automatic publishing can be connected later where supported.
+        </p>
+
+        {/* Content Platforms */}
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-white">Content Platforms</h3>
+          <p className="text-xs text-gray-500 -mt-2">
+            Select all platforms you want content generated for. These selections guide AI content creation.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {contentPlatforms.map((p) => {
+              const interested = integrationForm.interestedPlatforms.includes(p.value);
+              return (
+                <button
+                  key={p.value}
+                  onClick={() => toggleInterestedPlatform(p.value)}
+                  className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-colors ${
+                    interested
+                      ? "border-[#00D4FF]/30 bg-[#00D4FF]/5"
+                      : "border-[#334155] bg-[#0F172A] hover:border-gray-500"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={interested}
+                    onChange={() => toggleInterestedPlatform(p.value)}
+                    className="w-4 h-4 rounded border-[#334155] bg-[#1E293B] text-[#00D4FF] shrink-0"
+                  />
+                  <div>
+                    <p className="font-medium text-white text-sm">{p.label}</p>
+                    <p className="text-[11px] text-gray-500">Content will be generated for this platform</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Automatic Publishing */}
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-white">Automatic Publishing Connection</h3>
+          <p className="text-xs text-gray-500 -mt-2">
+            These show which platforms can publish automatically. You can still generate content for all platforms above.
+          </p>
+          <div className="space-y-2">
+            {contentPlatforms.map((p) => {
+              const configured = p.value === "email" ? true : isPlatformConfigured(p.value);
+              const connected = p.value === "email" ? false : isPlatformConnected(p.value);
+              const unavailable = !configured && p.value !== "email";
+
+              return (
+                <div
+                  key={`pub-${p.value}`}
+                  className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
+                    connected
+                      ? "border-emerald-500/30 bg-emerald-500/5"
+                      : unavailable
+                      ? "border-[#334155]/60 bg-[#0F172A]/60"
+                      : "border-[#334155] bg-[#0F172A]"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    {unavailable ? (
+                      <Lock className="w-4 h-4 text-gray-500 shrink-0" />
+                    ) : connected ? (
+                      <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <div className="w-4 h-4 rounded-full border border-[#334155] bg-[#1E293B] shrink-0" />
+                    )}
+                    <div>
+                      <p className="font-medium text-white text-sm">{p.label}</p>
+                      {connected ? (
+                        <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]">
+                          Connected
+                        </Badge>
+                      ) : configured ? (
+                        <span className="text-[11px] text-gray-500">Available to connect in Settings → Integrations</span>
+                      ) : p.value === "email" ? (
+                        <span className="text-[11px] text-blue-400/80">Email can be connected using SMTP settings</span>
+                      ) : (
+                        <span className="text-[11px] text-amber-500/80">Automatic publishing not available yet</span>
+                      )}
+                    </div>
+                  </div>
+                  {unavailable && (
+                    <button
+                      type="button"
+                      onClick={() => setExplainPlatform(p.value)}
+                      className="text-[11px] text-gray-400 hover:text-white underline"
+                    >
+                      Learn more
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <Dialog open={!!explainPlatform} onOpenChange={() => setExplainPlatform(null)}>
+          <DialogContent className="bg-[#1E293B] border-[#334155] text-white max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Info className="w-5 h-5 text-[#00D4FF]" />
+                {explainPlatform ? platforms.find((p) => p.value === explainPlatform)?.label : ""}
+              </DialogTitle>
+              <DialogDescription className="text-gray-400">
+                This platform is not yet configured for automatic publishing.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 text-sm text-gray-300">
+              <p>
+                You can still generate content for this platform and publish manually. NatForgeAI will create ready-to-post drafts optimised for {explainPlatform ? platforms.find((p) => p.value === explainPlatform)?.label : "this platform"}.
+              </p>
+              <p className="text-gray-500">
+                Automatic publishing connections can be set up later from Settings → Integrations once the platform is configured for this workspace.
+              </p>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155] text-xs text-gray-400 flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 text-[#00D4FF] shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p>
+              <strong className="text-gray-300">Content vs Publishing:</strong> Selecting a platform above tells NatForgeAI to create content for it. Automatic publishing is a separate connection that lets NatForgeAI post directly on your behalf.
+            </p>
+            <p>
+              You can always generate content now and connect automatic publishing later.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderStep6() {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-3 mb-2">
+          <Check className="w-6 h-6 text-emerald-400" />
+          <h2 className="text-xl font-semibold text-white">Review & Launch</h2>
+        </div>
+
+        <div className="p-4 rounded-xl bg-gradient-to-r from-[#00D4FF]/10 to-[#7C3AED]/10 border border-[#00D4FF]/20">
+          <p className="text-sm text-gray-300">
+            NatForgeAI will generate strategy and content using these details. You will be asked to approve key outputs before publishing.
+          </p>
+          {!connectedIntegrations?.some((i) => i.status === "connected") && (
+            <p className="text-sm text-gray-400 mt-2">
+              Your content will be generated as ready-to-post drafts. You can connect publishing later.
+            </p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Business Details */}
+          <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
+            <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-[#00D4FF]" />
+              Business Details
+            </h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Name</span>
+                <span className="text-gray-300">{businessForm.name || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Industry</span>
+                <span className="text-gray-300 capitalize">{businessForm.industry || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Location</span>
+                <span className="text-gray-300">{businessForm.location || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Website</span>
+                <span className="text-gray-300 truncate max-w-[150px]">{businessForm.website || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">WhatsApp</span>
+                <span className="text-gray-300">{businessForm.whatsappNumber || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Monthly Budget</span>
+                <span className="text-gray-300">{businessForm.monthlyBudget ? `$${businessForm.monthlyBudget}` : "—"}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Product & Offer */}
+          <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
+            <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+              <Package className="w-4 h-4 text-[#00D4FF]" />
+              Product & Offer
+            </h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Description</span>
+                <span className="text-gray-300 text-right max-w-[200px] line-clamp-2">{assetForm.productDescription || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">USP</span>
+                <span className="text-gray-300 text-right max-w-[200px] line-clamp-2">{assetForm.uniqueSellingPoint || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Price / Offer</span>
+                <span className="text-gray-300">{assetForm.pricePoint || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Assets</span>
+                <span className="text-gray-300 text-right">
+                  {assetForm.selectedAssets.length > 0
+                    ? assetForm.selectedAssets.map((k) => assetTypes.find((a) => a.key === k)?.label).join(", ")
+                    : "—"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Premium Content</span>
+                <span className="text-gray-300 text-right">
+                  {assetForm.premiumContentPreferences.length > 0
+                    ? assetForm.premiumContentPreferences.map((k) => premiumContentTypes.find((t) => t.key === k)?.label).join(", ")
+                    : "—"}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Campaign Goals -->
+          <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
+            <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-[#00D4FF]" />
+              Campaign Goals
+            </h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Primary Goal</span>
+                <span className="text-gray-300 text-right max-w-[200px]">{goalForm.primaryGoal || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Secondary Goal</span>
+                <span className="text-gray-300 text-right max-w-[200px]">{goalForm.secondaryGoal || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Success Metric</span>
+                <span className="text-gray-300">
+                  {successMetrics.find((m) => m.value === goalForm.successMetric)?.label || goalForm.successMetric || "—"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Target Revenue</span>
+                <span className="text-gray-300">{goalForm.targetRevenue ? `$${goalForm.targetRevenue}` : "—"}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Brand Style */}
+          <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
+            <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+              <Palette className="w-4 h-4 text-[#00D4FF]" />
+              Brand Style
+            </h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Tone</span>
+                <span className="text-gray-300 capitalize">{brandForm.brandTone || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Visual Style</span>
+                <span className="text-gray-300 capitalize">{brandForm.visualStyle || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Color Palette</span>
+                <span className="text-gray-300">{brandForm.colorPalette || "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Words to Avoid</span>
+                <span className="text-gray-300 text-right max-w-[150px] line-clamp-1">{brandForm.avoidWords || "—"}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Content Platforms */}
+          <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
+            <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+              <Megaphone className="w-4 h-4 text-[#00D4FF]" />
+              Content Platforms
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {integrationForm.interestedPlatforms.length > 0 ? (
+                integrationForm.interestedPlatforms.map((p) => (
+                  <Badge key={p} variant="outline" className="bg-[#00D4FF]/10 text-[#00D4FF] border-[#00D4FF]/20">
+                    {platforms.find((pl) => pl.value === p)?.label || p}
+                  </Badge>
+                ))
+              ) : businessForm.preferredPlatforms.length > 0 ? (
+                businessForm.preferredPlatforms.map((p) => (
+                  <Badge key={p} variant="outline" className="bg-[#00D4FF]/10 text-[#00D4FF] border-[#00D4FF]/20">
+                    {platforms.find((pl) => pl.value === p)?.label || p}
+                  </Badge>
+                ))
+              ) : (
+                <span className="text-gray-500 text-sm">—</span>
+              )}
+            </div>
+          </div>
+
+          {/* Publishing Status */}
+          <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
+            <h3 className="font-semibold text-white mb-3 flex items-center gap-2">
+              <Plug className="w-4 h-4 text-[#00D4FF]" />
+              Publishing Status
+            </h3>
+            <div className="space-y-2 text-sm">
+              {platforms
+                .filter((p) => ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp", "email"].includes(p.value))
+                .map((p) => {
+                  const connected = isPlatformConnected(p.value);
+                  const configured = p.value === "email" ? true : isPlatformConfigured(p.value);
+                  return (
+                    <div key={p.value} className="flex justify-between items-center">
+                      <span className="text-gray-500">{p.label}</span>
+                      {connected ? (
+                        <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]">
+                          Connected
+                        </Badge>
+                      ) : configured ? (
+                        <span className="text-[11px] text-gray-500">Available</span>
+                      ) : (
+                        <span className="text-[11px] text-amber-500/80">Content only</span>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-xl bg-gradient-to-r from-[#00D4FF]/10 to-[#7C3AED]/10 border border-[#00D4FF]/20">
+          <p className="text-sm text-gray-300">
+            By launching, you agree to let NatForge AI agents create and manage your marketing
+            campaign. You will be notified of any actions requiring your approval.
+          </p>
+        </div>
+
+        {limitBlocked && (
+          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-amber-200">
+                  Campaign Launch Blocked
+                </p>
+                <p className="text-xs text-amber-200/70 mt-1">
+                  You have used the campaign allowance included in your current plan.
+                  Upgrade your plan to create additional campaigns.
+                </p>
+                <div className="flex gap-2 mt-3">
+                  <Link to="/pricing">
+                    <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white">
+                      View Plans
+                    </Button>
+                  </Link>
+                  <Link to="/campaigns">
+                    <Button size="sm" variant="outline" className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10">
+                      <Megaphone className="w-3.5 h-3.5 mr-1" />
+                      Go to Campaigns
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#0F172A] via-[#1E293B] to-[#0F172A] flex items-center justify-center p-4">
       <div className="w-full max-w-4xl">
@@ -503,644 +1939,20 @@ export default function Onboarding() {
         {/* Step Content */}
         <Card className="border-[#334155] bg-[#1E293B]/80 backdrop-blur">
           <CardContent className="p-6 sm:p-8">
-            {step === 1 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <Building2 className="w-6 h-6 text-[#00D4FF]" />
-                  <h2 className="text-xl font-semibold text-white">Business Profile</h2>
-                </div>
-                <p className="text-sm text-gray-400 -mt-3">Tell us about your business so AI can market it accurately.</p>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Business Name *</Label>
-                    <Input
-                      placeholder="Your business name"
-                      value={businessForm.name}
-                      onChange={(e) => setBusinessForm((p) => ({ ...p, name: e.target.value }))}
-                      className="bg-[#0F172A] border-[#334155] text-white"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Website URL</Label>
-                    <div className="relative flex gap-2">
-                      <Globe className="absolute left-3 top-2.5 w-4 h-4 text-gray-500 z-10" />
-                      <Input
-                        placeholder="https://yourbusiness.com"
-                        value={businessForm.website}
-                        onChange={(e) => setBusinessForm((p) => ({ ...p, website: e.target.value }))}
-                        className="bg-[#0F172A] border-[#334155] text-white pl-10 flex-1"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={aiAnalyzing || !businessForm.website}
-                        onClick={() => {
-                          if (!businessForm.website) {
-                            toast.error("Please enter a website URL first");
-                            return;
-                          }
-                          setAiAnalyzing(true);
-                          setTimeout(() => {
-                            setAiAnalyzing(false);
-                            toast.info("Website analysis is not available yet. You can continue manually.");
-                          }, 1500);
-                        }}
-                        className="border-[#334155] text-[#00D4FF] hover:bg-[#00D4FF]/10 h-10"
-                      >
-                        {aiAnalyzing ? (
-                          <Sparkles className="w-4 h-4 mr-1 animate-spin" />
-                        ) : (
-                          <Sparkles className="w-4 h-4 mr-1" />
-                        )}
-                        AI Analyse
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Industry *</Label>
-                    <Select
-                      value={businessForm.industry}
-                      onValueChange={(v) => setBusinessForm((p) => ({ ...p, industry: v }))}
-                    >
-                      <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
-                        <SelectValue placeholder="Select industry" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#1E293B] border-[#334155]">
-                        {industries.map((i) => (
-                          <SelectItem key={i} value={i.toLowerCase()} className="text-white">
-                            {i}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2 relative">
-                    <Label className="text-gray-300">Location</Label>
-                    <div className="relative">
-                      <MapPin className="absolute left-3 top-2.5 w-4 h-4 text-gray-500 z-10" />
-                      <Input
-                        placeholder="Start typing a city..."
-                        value={locationQuery}
-                        onChange={(e) => handleLocationInput(e.target.value)}
-                        onFocus={() => locationQuery.length >= 2 && setShowLocationSuggestions(locationSuggestions.length > 0)}
-                        onBlur={() => setTimeout(() => setShowLocationSuggestions(false), 200)}
-                        className="bg-[#0F172A] border-[#334155] text-white pl-10"
-                      />
-                    </div>
-                    {showLocationSuggestions && (
-                      <div className="absolute z-20 w-full mt-1 bg-[#1E293B] border border-[#334155] rounded-lg shadow-xl max-h-48 overflow-y-auto">
-                        {locationSuggestions.map((city) => (
-                          <button
-                            key={city}
-                            type="button"
-                            onMouseDown={(e) => { e.preventDefault(); selectLocation(city); }}
-                            className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-[#0F172A] hover:text-white transition-colors"
-                          >
-                            {city}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Product or Service</Label>
-                  <Textarea
-                    placeholder="What do you sell or offer?"
-                    value={businessForm.productOrService}
-                    onChange={(e) => setBusinessForm((p) => ({ ...p, productOrService: e.target.value }))}
-                    className="bg-[#0F172A] border-[#334155] text-white"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Target Customer</Label>
-                  <div className="relative">
-                    <Users className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
-                    <Input
-                      placeholder="e.g. Young professionals aged 25-45"
-                      value={businessForm.targetCustomer}
-                      onChange={(e) => setBusinessForm((p) => ({ ...p, targetCustomer: e.target.value }))}
-                      className="bg-[#0F172A] border-[#334155] text-white pl-10"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Estimated Monthly Marketing Spend</Label>
-                  <p className="text-xs text-gray-500">
-                    This guides the AI strategy for ads and campaign promotion. It is not charged by NatForgeAI.
-                  </p>
-                  <div className="relative">
-                    <Wallet className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
-                    <Input
-                      type="number"
-                      placeholder="5000"
-                      value={businessForm.monthlyBudget}
-                      onChange={(e) => setBusinessForm((p) => ({ ...p, monthlyBudget: e.target.value }))}
-                      className="bg-[#0F172A] border-[#334155] text-white pl-10"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">WhatsApp Number</Label>
-                  <p className="text-xs text-gray-500">
-                    Example: +27 82 123 4567 or +1 415 555 0100
-                  </p>
-                  <div className="flex gap-2">
-                    <Select value={countryCode} onValueChange={setCountryCode}>
-                      <SelectTrigger className="w-[140px] bg-[#0F172A] border-[#334155] text-white">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#1E293B] border-[#334155]">
-                        {countryCodes.map((c) => (
-                          <SelectItem key={`${c.code}-${c.country}`} value={c.code} className="text-white">
-                            {c.flag} {c.code}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <div className="relative flex-1">
-                      <MessageSquare className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
-                      <Input
-                        placeholder="82 123 4567"
-                        value={whatsappLocal}
-                        onChange={(e) => handleWhatsappInput(e.target.value)}
-                        className={`bg-[#0F172A] border-[#334155] text-white pl-10 ${businessForm.whatsappNumber && !validateWhatsapp() ? "border-red-500" : ""}`}
-                      />
-                    </div>
-                  </div>
-                  {businessForm.whatsappNumber && !validateWhatsapp() && (
-                    <p className="text-xs text-red-400">Please enter a valid phone number</p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {step === 2 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <Package className="w-6 h-6 text-[#00D4FF]" />
-                  <h2 className="text-xl font-semibold text-white">Product Assets</h2>
-                </div>
-                <p className="text-sm text-gray-400 -mt-3">
-                  Help AI understand what you sell and why customers should buy it.
-                </p>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Product or Service Description</Label>
-                  <Textarea
-                    placeholder="Describe your main product or service. What problem does it solve?"
-                    value={assetForm.productDescription}
-                    onChange={(e) => setAssetForm((p) => ({ ...p, productDescription: e.target.value }))}
-                    className="bg-[#0F172A] border-[#334155] text-white min-h-[120px]"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Unique Selling Point</Label>
-                    <Input
-                      placeholder="What makes you different from competitors?"
-                      value={assetForm.uniqueSellingPoint}
-                      onChange={(e) => setAssetForm((p) => ({ ...p, uniqueSellingPoint: e.target.value }))}
-                      className="bg-[#0F172A] border-[#334155] text-white"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Price Point / Offer</Label>
-                    <Input
-                      placeholder="e.g. $29/month, $199 once-off, 20% launch discount"
-                      value={assetForm.pricePoint}
-                      onChange={(e) => setAssetForm((p) => ({ ...p, pricePoint: e.target.value }))}
-                      className="bg-[#0F172A] border-[#334155] text-white"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Available Marketing Assets</Label>
-                  <p className="text-xs text-gray-500">Select what you have. You can upload these later.</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
-                    {assetTypes.map((asset) => (
-                      <label
-                        key={asset.key}
-                        className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                          assetForm.selectedAssets.includes(asset.key)
-                            ? "border-[#00D4FF] bg-[#00D4FF]/10"
-                            : "border-[#334155] bg-[#0F172A] hover:border-gray-500"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={assetForm.selectedAssets.includes(asset.key)}
-                          onChange={() => toggleAsset(asset.key)}
-                          className="w-4 h-4 rounded border-[#334155] bg-[#1E293B] text-[#00D4FF]"
-                        />
-                        <span className="text-gray-300 text-sm">{asset.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {step === 3 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <TrendingUp className="w-6 h-6 text-[#00D4FF]" />
-                  <h2 className="text-xl font-semibold text-white">Campaign Goal</h2>
-                </div>
-                <p className="text-sm text-gray-400 -mt-3">Define what success looks like for this campaign.</p>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Primary Goal *</Label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {campaignGoals.map((goal) => (
-                      <button
-                        key={goal}
-                        onClick={() => setGoalForm((p) => ({ ...p, primaryGoal: goal }))}
-                        className={`p-3 rounded-lg border text-left text-sm transition-all ${
-                          goalForm.primaryGoal === goal
-                            ? "border-[#00D4FF] bg-[#00D4FF]/10 text-white"
-                            : "border-[#334155] bg-[#0F172A] text-gray-400 hover:text-white"
-                        }`}
-                      >
-                        {goal}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Secondary Goal (optional)</Label>
-                  <Input
-                    placeholder="e.g. Build our email list"
-                    value={goalForm.secondaryGoal}
-                    onChange={(e) => setGoalForm((p) => ({ ...p, secondaryGoal: e.target.value }))}
-                    className="bg-[#0F172A] border-[#334155] text-white"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Success Metric</Label>
-                    <Select
-                      value={goalForm.successMetric}
-                      onValueChange={(v) => setGoalForm((p) => ({ ...p, successMetric: v }))}
-                    >
-                      <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
-                        <SelectValue placeholder="Select metric" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#1E293B] border-[#334155]">
-                        <SelectItem value="conversions" className="text-white">Sales / Conversions</SelectItem>
-                        <SelectItem value="leads" className="text-white">Leads Generated</SelectItem>
-                        <SelectItem value="traffic" className="text-white">Website Traffic</SelectItem>
-                        <SelectItem value="engagement" className="text-white">Engagement Rate</SelectItem>
-                        <SelectItem value="reach" className="text-white">Reach / Impressions</SelectItem>
-                        <SelectItem value="followers" className="text-white">Follower Growth</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Target Revenue / Value (USD)</Label>
-                    <Input
-                      type="number"
-                      placeholder="10000"
-                      value={goalForm.targetRevenue}
-                      onChange={(e) => setGoalForm((p) => ({ ...p, targetRevenue: e.target.value }))}
-                      className="bg-[#0F172A] border-[#334155] text-white"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {step === 4 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <Palette className="w-6 h-6 text-[#00D4FF]" />
-                  <h2 className="text-xl font-semibold text-white">Brand Style</h2>
-                </div>
-                <p className="text-sm text-gray-400 -mt-3">Shape how AI sounds and feels when marketing your brand.</p>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Brand Tone *</Label>
-                    <Select
-                      value={brandForm.brandTone}
-                      onValueChange={(v) => {
-                        setBrandForm((p) => ({ ...p, brandTone: v }));
-                        setBusinessForm((p) => ({ ...p, brandTone: v }));
-                      }}
-                    >
-                      <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
-                        <SelectValue placeholder="Select tone" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#1E293B] border-[#334155]">
-                        {brandTones.map((t) => (
-                          <SelectItem key={t} value={t} className="text-white">
-                            {t.charAt(0).toUpperCase() + t.slice(1)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-gray-300">Visual Style</Label>
-                    <Select
-                      value={brandForm.visualStyle}
-                      onValueChange={(v) => setBrandForm((p) => ({ ...p, visualStyle: v as any }))}
-                    >
-                      <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
-                        <SelectValue placeholder="Select style" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[#1E293B] border-[#334155]">
-                        <SelectItem value="modern" className="text-white">Modern</SelectItem>
-                        <SelectItem value="classic" className="text-white">Classic</SelectItem>
-                        <SelectItem value="minimal" className="text-white">Minimal</SelectItem>
-                        <SelectItem value="bold" className="text-white">Bold & Vibrant</SelectItem>
-                        <SelectItem value="luxury" className="text-white">Luxury</SelectItem>
-                        <SelectItem value="playful" className="text-white">Playful</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Color Palette (optional)</Label>
-                  <Input
-                    placeholder="e.g. Navy blue, gold, white"
-                    value={brandForm.colorPalette}
-                    onChange={(e) => setBrandForm((p) => ({ ...p, colorPalette: e.target.value }))}
-                    className="bg-[#0F172A] border-[#334155] text-white"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Brand Voice Notes</Label>
-                  <Textarea
-                    placeholder="e.g. We use short sentences. We never use slang. We always lead with benefits."
-                    value={brandForm.brandVoiceNotes}
-                    onChange={(e) => setBrandForm((p) => ({ ...p, brandVoiceNotes: e.target.value }))}
-                    className="bg-[#0F172A] border-[#334155] text-white"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Words or Phrases to Avoid</Label>
-                  <Input
-                    placeholder="e.g. cheap, discount, guaranteed"
-                    value={brandForm.avoidWords}
-                    onChange={(e) => setBrandForm((p) => ({ ...p, avoidWords: e.target.value }))}
-                    className="bg-[#0F172A] border-[#334155] text-white"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-gray-300">Preferred Platforms</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {platforms.map((p) => (
-                      <button
-                        key={p.value}
-                        onClick={() => togglePlatform(p.value)}
-                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                          businessForm.preferredPlatforms.includes(p.value)
-                            ? "bg-[#00D4FF]/20 text-[#00D4FF] border border-[#00D4FF]/30"
-                            : "bg-[#0F172A] text-gray-400 border border-[#334155] hover:text-white"
-                        }`}
-                      >
-                        {p.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {step === 5 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <Plug className="w-6 h-6 text-[#00D4FF]" />
-                  <h2 className="text-xl font-semibold text-white">Publishing Integrations</h2>
-                </div>
-                <p className="text-sm text-gray-400 -mt-3">
-                  Connect platforms to enable automatic publishing. You can skip this and connect later.
-                </p>
-
-                <div className="space-y-3">
-                  {platforms
-                    .filter((p) => ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp", "email"].includes(p.value))
-                    .map((p) => {
-                      const configured = p.value === "email" ? true : isPlatformConfigured(p.value);
-                      const connected = p.value === "email" ? false : isPlatformConnected(p.value);
-                      const interested = integrationForm.interestedPlatforms.includes(p.value);
-                      const unavailable = !configured && p.value !== "email";
-                      return (
-                        <div
-                          key={p.value}
-                          onClick={() => {
-                            if (unavailable) setExplainPlatform(p.value);
-                          }}
-                          className={`flex items-center justify-between p-4 rounded-xl border transition-colors ${
-                            connected
-                              ? "border-emerald-500/30 bg-emerald-500/5"
-                              : interested
-                              ? "border-[#00D4FF]/30 bg-[#00D4FF]/5"
-                              : unavailable
-                              ? "border-[#334155]/60 bg-[#0F172A]/60 cursor-pointer hover:border-amber-500/30"
-                              : "border-[#334155] bg-[#0F172A]"
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            {unavailable ? (
-                              <div className="w-4 h-4 flex items-center justify-center">
-                                <Lock className="w-3.5 h-3.5 text-gray-500" />
-                              </div>
-                            ) : (
-                              <input
-                                type="checkbox"
-                                checked={interested}
-                                onChange={() => toggleInterestedPlatform(p.value)}
-                                className="w-4 h-4 rounded border-[#334155] bg-[#1E293B] text-[#00D4FF]"
-                              />
-                            )}
-                            <div>
-                              <p className="font-medium text-white">{p.label}</p>
-                              {connected ? (
-                                <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]">
-                                  Connected
-                                </Badge>
-                              ) : configured ? (
-                                <span className="text-xs text-gray-500">Available to connect</span>
-                              ) : p.value === "email" ? (
-                                <span className="text-xs text-blue-400/80">SMTP setup required</span>
-                              ) : (
-                                <span className="text-xs text-amber-500/80">Automatic publishing is not available for this platform yet</span>
-                              )}
-                            </div>
-                          </div>
-                          {interested && !connected && p.value !== "email" && configured && (
-                            <Link to="/integrations">
-                              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={(e) => e.stopPropagation()}>
-                                <ExternalLink className="w-3 h-3 mr-1" />
-                                Connect
-                              </Button>
-                            </Link>
-                          )}
-                          {unavailable && p.value === "whatsapp" && (
-                            <Badge variant="outline" className="text-[10px] text-gray-500 border-gray-500/20">
-                              Not configured
-                            </Badge>
-                          )}
-                        </div>
-                      );
-                    })}
-                </div>
-
-                <Dialog open={!!explainPlatform} onOpenChange={() => setExplainPlatform(null)}>
-                  <DialogContent className="bg-[#1E293B] border-[#334155] text-white">
-                    <DialogHeader>
-                      <DialogTitle className="flex items-center gap-2">
-                        <Info className="w-5 h-5 text-[#00D4FF]" />
-                        {explainPlatform ? platforms.find((p) => p.value === explainPlatform)?.label : ""}
-                      </DialogTitle>
-                      <DialogDescription className="text-gray-400">
-                        Automatic publishing is not available for this platform yet.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-3 text-sm text-gray-300">
-                      <p>
-                        Platform setup is not enabled for this workspace yet. You can still generate content and publish manually.
-                      </p>
-                      <p className="text-gray-500">
-                        Integrations are only required for automatic publishing and inbox management.
-                      </p>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-
-                <div className="p-3 rounded-lg bg-[#0F172A] border border-[#334155] text-xs text-gray-400 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-[#00D4FF] shrink-0 mt-0.5" />
-                  <p>
-                    Integrations are only required for automatic publishing and inbox management.
-                    You can still generate content, approve posts, and publish manually without connecting anything.
-                    Unavailable platforms are shown with a lock icon and can be connected once workspace setup is complete.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {step === 6 && (
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <Check className="w-6 h-6 text-emerald-400" />
-                  <h2 className="text-xl font-semibold text-white">Review & Launch</h2>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
-                    <h3 className="font-semibold text-white mb-3">Business Profile</h3>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <span className="text-gray-500">Name</span>
-                      <span className="text-gray-300">{businessForm.name || "—"}</span>
-                      <span className="text-gray-500">Industry</span>
-                      <span className="text-gray-300 capitalize">{businessForm.industry || "—"}</span>
-                      <span className="text-gray-500">Location</span>
-                      <span className="text-gray-300">{businessForm.location || "—"}</span>
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
-                    <h3 className="font-semibold text-white mb-3">Product & Goal</h3>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <span className="text-gray-500">Primary Goal</span>
-                      <span className="text-gray-300">{goalForm.primaryGoal || "—"}</span>
-                      <span className="text-gray-500">Success Metric</span>
-                      <span className="text-gray-300">{goalForm.successMetric || "—"}</span>
-                      <span className="text-gray-500">USP</span>
-                      <span className="text-gray-300 line-clamp-2">{assetForm.uniqueSellingPoint || "—"}</span>
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
-                    <h3 className="font-semibold text-white mb-3">Brand Style</h3>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <span className="text-gray-500">Tone</span>
-                      <span className="text-gray-300 capitalize">{brandForm.brandTone || "—"}</span>
-                      <span className="text-gray-500">Visual Style</span>
-                      <span className="text-gray-300 capitalize">{brandForm.visualStyle || "—"}</span>
-                      <span className="text-gray-500">Platforms</span>
-                      <span className="text-gray-300">{businessForm.preferredPlatforms.join(", ") || "—"}</span>
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-[#0F172A] border border-[#334155]">
-                    <h3 className="font-semibold text-white mb-3">Automation</h3>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <span className="text-gray-500">Mode</span>
-                      <span className="text-gray-300 capitalize">{automationForm.approvalMode}</span>
-                      <span className="text-gray-500">Max Daily Spend</span>
-                      <span className="text-gray-300">${automationForm.maxDailyAdSpend}</span>
-                      <span className="text-gray-500">Tone Strictness</span>
-                      <span className="text-gray-300 capitalize">{automationForm.toneStrictness}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-4 rounded-xl bg-gradient-to-r from-[#00D4FF]/10 to-[#7C3AED]/10 border border-[#00D4FF]/20">
-                  <p className="text-sm text-gray-300">
-                    By launching, you agree to let NatForge AI agents create and manage your marketing
-                    campaign. You will be notified of any actions requiring your approval.
-                  </p>
-                </div>
-
-                {limitBlocked && (
-                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
-                      <div>
-                        <p className="text-sm font-medium text-amber-200">
-                          Campaign Launch Blocked
-                        </p>
-                        <p className="text-xs text-amber-200/70 mt-1">
-                          You have used the campaign allowance included in your current plan.
-                          Upgrade your plan to create additional campaigns.
-                        </p>
-                        <div className="flex gap-2 mt-3">
-                          <Link to="/pricing">
-                            <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white">
-                              View Plans
-                            </Button>
-                          </Link>
-                          <Link to="/campaigns">
-                            <Button size="sm" variant="outline" className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10">
-                              <Megaphone className="w-3.5 h-3.5 mr-1" />
-                              Go to Campaigns
-                            </Button>
-                          </Link>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+            {step === 1 && renderStep1()}
+            {step === 2 && renderStep2()}
+            {step === 3 && renderStep3()}
+            {step === 4 && renderStep4()}
+            {step === 5 && renderStep5()}
+            {step === 6 && renderStep6()}
 
             {/* Navigation */}
             <div className="flex justify-between mt-8 pt-6 border-t border-[#334155]">
               <Button
                 variant="outline"
                 onClick={handleBack}
-                disabled={step === 1}
-                className={`h-10 px-5 rounded-xl transition-all ${
-                  step === 1
-                    ? "opacity-40 cursor-not-allowed border-[#334155]/40 text-gray-500 bg-transparent"
-                    : "border-[#334155] text-white hover:bg-[#1E293B] hover:border-gray-400"
+                className={`h-11 px-6 rounded-xl border-[#334155] text-white bg-[#1E293B]/50 hover:bg-[#1E293B] hover:border-gray-300 hover:text-white transition-all shadow-sm hover:shadow-md active:scale-[0.98] ${
+                  step === 1 ? "invisible" : ""
                 }`}
               >
                 <ChevronLeft className="w-4 h-4 mr-1" />
@@ -1150,7 +1962,7 @@ export default function Onboarding() {
               {step < totalSteps ? (
                 <Button
                   onClick={handleNext}
-                  className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white hover:opacity-90"
+                  className="h-11 px-6 rounded-xl bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white hover:opacity-90 transition-all shadow-sm hover:shadow-md active:scale-[0.98]"
                 >
                   Next
                   <ChevronRight className="w-4 h-4 ml-1" />
@@ -1159,12 +1971,12 @@ export default function Onboarding() {
                 <Button
                   onClick={handleComplete}
                   disabled={isSubmitting}
-                  className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white hover:opacity-90"
+                  className="h-11 px-6 rounded-xl bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white hover:opacity-90 transition-all shadow-sm hover:shadow-md active:scale-[0.98]"
                 >
                   {isSubmitting ? (
                     <>
                       <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2" />
-                      Launching...
+                      Launching…
                     </>
                   ) : (
                     <>

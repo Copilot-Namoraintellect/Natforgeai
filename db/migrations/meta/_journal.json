@@ -22,6 +22,13 @@
       "when": 1780324500000,
       "tag": "0002_hardening_sprint",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1780831759898,
+      "tag": "0003_safe_hydra",
+      "breakpoints": true
     }
   ]
 }

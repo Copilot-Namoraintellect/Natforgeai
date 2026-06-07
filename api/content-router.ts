@@ -12,7 +12,7 @@ export const contentRouter = createRouter({
       z
         .object({
           type: z
-            .enum(["social_post", "ad_copy", "email", "script", "blog", "story"])
+            .enum(["social_post", "ad_copy", "email", "script", "blog", "story", "video_concept", "reel_script", "carousel_ad", "whatsapp_promo", "lead_gen_ad", "launch_pack"])
             .optional(),
           status: z
             .enum(["draft", "scheduled", "published", "archived"])
@@ -94,7 +94,7 @@ export const contentRouter = createRouter({
       });
 
       try {
-        await onAgentRunComplete(result.calendarRunId);
+        await onAgentRunComplete(result.packRunId);
       } catch (err: any) {
         console.error("[content.generateForCampaign] onAgentRunComplete failed:", err.message);
       }
@@ -122,7 +122,7 @@ export const contentRouter = createRouter({
     .input(
       z.object({
         title: z.string().min(1),
-        type: z.enum(["social_post", "ad_copy", "email", "script", "blog", "story"]),
+        type: z.enum(["social_post", "ad_copy", "email", "script", "blog", "story", "video_concept", "reel_script", "carousel_ad", "whatsapp_promo", "lead_gen_ad", "launch_pack"]),
         campaignId: z.number().optional(),
         businessId: z.number().optional(),
         platform: z.string().optional(),

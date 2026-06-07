@@ -98,6 +98,12 @@ export const agentRouter = createRouter({
               "cta_variant",
               "email_copy",
               "whatsapp_copy",
+              "video_concept",
+              "reel_script",
+              "carousel_ad",
+              "whatsapp_promo",
+              "lead_gen_ad",
+              "launch_pack",
             ])
           )
           .optional(),
@@ -134,7 +140,7 @@ export const agentRouter = createRouter({
       });
 
       try {
-        await onAgentRunComplete(result.calendarRunId);
+        await onAgentRunComplete(result.packRunId);
       } catch (err: any) {
         console.error("[AgentRouter] onAgentRunComplete failed:", err.message);
       }

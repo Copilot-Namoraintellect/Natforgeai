@@ -183,7 +183,7 @@ export async function onStrategyApproved(campaignId: number, userId: number) {
       userId,
       campaignId,
     });
-    await onAgentRunComplete(result.calendarRunId);
+    await onAgentRunComplete(result.packRunId);
   } catch (err: any) {
     console.error("[Workflow] Auto-creative failed:", err.message);
   }

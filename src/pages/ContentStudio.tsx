@@ -73,7 +73,7 @@ export default function ContentStudio() {
     platform: "instagram",
     audience: "",
     tone: "friendly",
-    type: "social_post" as "social_post" | "ad_copy" | "email",
+    type: "social_post" as "social_post" | "ad_copy" | "email" | "video_concept" | "carousel_ad" | "whatsapp_promo",
     goal: "",
   });
   const [listError] = useState<string | null>(null);
@@ -192,6 +192,12 @@ export default function ContentStudio() {
     script: "bg-purple-500/10 text-purple-600",
     blog: "bg-blue-500/10 text-blue-600",
     story: "bg-pink-500/10 text-pink-600",
+    video_concept: "bg-rose-500/10 text-rose-600",
+    reel_script: "bg-fuchsia-500/10 text-fuchsia-600",
+    carousel_ad: "bg-orange-500/10 text-orange-600",
+    whatsapp_promo: "bg-green-500/10 text-green-600",
+    lead_gen_ad: "bg-cyan-500/10 text-cyan-600",
+    launch_pack: "bg-violet-500/10 text-violet-600",
   };
 
   const statusColors: Record<string, string> = {
@@ -335,6 +341,111 @@ Include:
     return !!metadata.approved;
   }
 
+  function renderVideoBlueprint(content: any) {
+    const metadata = (content.metadata || {}) as any;
+    if (!metadata?.scenes?.length) return null;
+    return (
+      <div className="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Video Blueprint</span>
+          <span className="text-[10px] text-slate-500">{metadata.duration || "30s"}</span>
+        </div>
+        <p className="text-xs text-slate-600 font-medium">{metadata.openingHook3Sec || content.hook}</p>
+        <div className="space-y-1.5">
+          {metadata.scenes.map((scene: any, i: number) => (
+            <div key={i} className="flex gap-2 text-xs">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-[#00D4FF]/10 text-[#00D4FF] flex items-center justify-center font-bold text-[10px]">
+                {scene.sceneNumber || i + 1}
+              </span>
+              <div className="flex-1 min-w-0">
+                <p className="text-slate-700 truncate">{scene.visualDescription}</p>
+                {scene.onScreenText && (
+                  <p className="text-slate-500 text-[10px]">Overlay: "{scene.onScreenText}"</p>
+                )}
+                {scene.voiceoverScript && (
+                  <p className="text-slate-500 text-[10px] italic truncate">VO: {scene.voiceoverScript}</p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        {metadata.backgroundMusicMood && (
+          <p className="text-[10px] text-slate-500">Music: {metadata.backgroundMusicMood}</p>
+        )}
+        <div className="flex gap-2 pt-1">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-[11px]"
+            onClick={() => copyToClipboard(getCaptionText(content), content.id)}
+          >
+            <Copy className="w-3 h-3 mr-1" />
+            Export Brief
+          </Button>
+          <span className="text-[10px] text-slate-400 self-center">Video rendering coming soon</span>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCarouselBlueprint(content: any) {
+    const metadata = (content.metadata || {}) as any;
+    if (!metadata?.slides?.length) return null;
+    return (
+      <div className="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Carousel Structure</span>
+          <span className="text-[10px] text-slate-500">{metadata.slides.length} slides</span>
+        </div>
+        <div className="space-y-1.5">
+          {metadata.slides.map((slide: any, i: number) => (
+            <div key={i} className="flex gap-2 text-xs">
+              <span className="shrink-0 w-5 h-5 rounded bg-orange-500/10 text-orange-600 flex items-center justify-center font-bold text-[10px]">
+                {slide.slideNumber || i + 1}
+              </span>
+              <div className="flex-1 min-w-0">
+                <p className="text-slate-700 font-medium truncate">{slide.headline}</p>
+                <p className="text-slate-500 truncate">{slide.visualDirection}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        {metadata.benefitSequence && (
+          <p className="text-[10px] text-slate-500">Sequence: {metadata.benefitSequence}</p>
+        )}
+      </div>
+    );
+  }
+
+  function renderPremiumBadges(content: any) {
+    const metadata = (content.metadata || {}) as any;
+    if (!metadata) return null;
+    return (
+      <div className="flex flex-wrap gap-1.5 mt-2">
+        {metadata.funnelStage && (
+          <Badge variant="outline" className="text-[10px] h-5 border-slate-200 text-slate-600">
+            {metadata.funnelStage}
+          </Badge>
+        )}
+        {metadata.targetPersona && (
+          <Badge variant="outline" className="text-[10px] h-5 border-slate-200 text-slate-600">
+            {metadata.targetPersona}
+          </Badge>
+        )}
+        {metadata.salesAngle && (
+          <Badge variant="outline" className="text-[10px] h-5 border-amber-200 text-amber-600">
+            {metadata.salesAngle}
+          </Badge>
+        )}
+        {metadata.assetKind === "video_blueprint" && (
+          <Badge variant="outline" className="text-[10px] h-5 border-rose-200 text-rose-600 bg-rose-50">
+            Video Ready
+          </Badge>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -429,6 +540,9 @@ Include:
                         <SelectItem value="social_post">Social Post</SelectItem>
                         <SelectItem value="ad_copy">Ad Copy</SelectItem>
                         <SelectItem value="email">Email</SelectItem>
+                        <SelectItem value="video_concept">Video Concept</SelectItem>
+                        <SelectItem value="carousel_ad">Carousel Ad</SelectItem>
+                        <SelectItem value="whatsapp_promo">WhatsApp Promo</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -594,6 +708,11 @@ Include:
                         <SelectItem value="script">Script</SelectItem>
                         <SelectItem value="blog">Blog</SelectItem>
                         <SelectItem value="story">Story</SelectItem>
+                        <SelectItem value="video_concept">Video Concept</SelectItem>
+                        <SelectItem value="carousel_ad">Carousel Ad</SelectItem>
+                        <SelectItem value="whatsapp_promo">WhatsApp Promo</SelectItem>
+                        <SelectItem value="lead_gen_ad">Lead Gen Ad</SelectItem>
+                        <SelectItem value="launch_pack">Launch Pack</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -655,6 +774,8 @@ Include:
             <TabsTrigger value="social_post">Social</TabsTrigger>
             <TabsTrigger value="ad_copy">Ads</TabsTrigger>
             <TabsTrigger value="email">Email</TabsTrigger>
+            <TabsTrigger value="video_concept">Video</TabsTrigger>
+            <TabsTrigger value="carousel_ad">Carousel</TabsTrigger>
             <TabsTrigger value="script">Script</TabsTrigger>
             <TabsTrigger value="blog">Blog</TabsTrigger>
           </TabsList>
@@ -905,6 +1026,12 @@ Include:
                       CTA: {content.cta}
                     </p>
                   )}
+
+                  {renderPremiumBadges(content)}
+
+                  {content.type === "video_concept" && renderVideoBlueprint(content)}
+                  {content.type === "reel_script" && renderVideoBlueprint(content)}
+                  {content.type === "carousel_ad" && renderCarouselBlueprint(content)}
 
                   {showConnectGuard && (
                     <div className="mt-3 p-2.5 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2">
