@@ -21,10 +21,16 @@ import { encryptToken, decryptToken } from "./lib/crypto";
 
 export const integrationRouter = createRouter({
   getPlatformConfigStatus: authedQuery.query(async () => {
-    return Object.entries(platformConfigs).map(([platform, config]) => ({
+    const oauthStatuses = Object.entries(platformConfigs).map(([platform, config]) => ({
       platform,
       configured: !!(config && config.clientId),
     }));
+    // WhatsApp and Email do not have OAuth flows — always report as not configured
+    return [
+      ...oauthStatuses,
+      { platform: "whatsapp", configured: false },
+      { platform: "email", configured: false },
+    ];
   }),
 
   getOAuthUrl: authedQuery

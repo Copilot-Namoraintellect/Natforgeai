@@ -168,6 +168,41 @@ function normaliseLaunchSequence(l: any): any {
   return { title: String(l.title ?? ""), sequenceSteps: steps };
 }
 
+function normalisePlatformAdaptation(p: any): any {
+  if (!p || typeof p !== "object") return null;
+  return {
+    platform: String(p.platform ?? ""),
+    adaptedCaption: String(p.adaptedCaption ?? ""),
+    adaptedCta: String(p.adaptedCta ?? ""),
+    adaptedHashtags: Array.isArray(p.adaptedHashtags) ? p.adaptedHashtags.map(String) : [],
+    bestTimeToPost: String(p.bestTimeToPost ?? ""),
+    formatNotes: p.formatNotes != null ? String(p.formatNotes) : null,
+  };
+}
+
+function normalisePlatformHashtag(p: any): any {
+  if (!p || typeof p !== "object") return null;
+  return {
+    platform: String(p.platform ?? ""),
+    hashtags: Array.isArray(p.hashtags) ? p.hashtags.map(String) : [],
+  };
+}
+
+function normaliseHashtagSet(h: any): any {
+  if (!h || typeof h !== "object") {
+    return { core: [], trending: [], niche: [], platformSpecific: [] };
+  }
+  const platformSpecific = Array.isArray(h.platformSpecific)
+    ? h.platformSpecific.map(normalisePlatformHashtag).filter(Boolean)
+    : [];
+  return {
+    core: Array.isArray(h.core) ? h.core.map(String) : [],
+    trending: Array.isArray(h.trending) ? h.trending.map(String) : [],
+    niche: Array.isArray(h.niche) ? h.niche.map(String) : [],
+    platformSpecific,
+  };
+}
+
 function normalisePremiumPack(raw: any): any {
   if (!raw || typeof raw !== "object") {
     return {
@@ -197,6 +232,10 @@ function normalisePremiumPack(raw: any): any {
   const whatsAppPromos = Array.isArray(raw.whatsAppPromos)
     ? raw.whatsAppPromos.map(normaliseWhatsApp).filter(Boolean)
     : [];
+  const platformAdaptations = Array.isArray(raw.platformAdaptations)
+    ? raw.platformAdaptations.map(normalisePlatformAdaptation).filter(Boolean)
+    : [];
+  const hashtagSet = normaliseHashtagSet(raw.hashtagSet);
 
   return {
     videoConcepts: videoConcepts.length > 0 ? videoConcepts : [normaliseVideoConcept(null)],
@@ -206,6 +245,8 @@ function normalisePremiumPack(raw: any): any {
     whatsAppPromos: whatsAppPromos.length > 0 ? whatsAppPromos : [normaliseWhatsApp(null)],
     emailCampaign: normaliseEmail(raw.emailCampaign),
     launchSequence: normaliseLaunchSequence(raw.launchSequence),
+    platformAdaptations: platformAdaptations.length > 0 ? platformAdaptations : [],
+    hashtagSet,
     packSummary: String(raw.packSummary ?? ""),
   };
 }
@@ -312,6 +353,27 @@ const LaunchSequenceSchema = z.object({
   })),
 });
 
+const PlatformAdaptationSchema = z.object({
+  platform: z.string(),
+  adaptedCaption: z.string(),
+  adaptedCta: z.string(),
+  adaptedHashtags: z.array(z.string()),
+  bestTimeToPost: z.string(),
+  formatNotes: z.string().nullable(),
+});
+
+const PlatformHashtagSchema = z.object({
+  platform: z.string(),
+  hashtags: z.array(z.string()),
+});
+
+const HashtagSetSchema = z.object({
+  core: z.array(z.string()),
+  trending: z.array(z.string()),
+  niche: z.array(z.string()),
+  platformSpecific: z.array(PlatformHashtagSchema),
+});
+
 const PremiumCampaignPackSchema = z.object({
   videoConcepts: z.array(VideoConceptSchema),
   carouselAds: z.array(CarouselAdSchema),
@@ -320,6 +382,8 @@ const PremiumCampaignPackSchema = z.object({
   whatsAppPromos: z.array(WhatsAppPromoSchema),
   emailCampaign: EmailCampaignSchema,
   launchSequence: LaunchSequenceSchema,
+  platformAdaptations: z.array(PlatformAdaptationSchema),
+  hashtagSet: HashtagSetSchema,
   packSummary: z.string(),
 });
 
@@ -387,12 +451,12 @@ ${funnelStages ? `- Funnel Stages: ${JSON.stringify(funnelStages.map((f: any) =>
 ${strategyContext?.campaignTheme ? `- Campaign Theme: ${strategyContext.campaignTheme}` : ""}
 ${strategyContext?.platformStrategy ? `- Platform Strategy: ${JSON.stringify(strategyContext.platformStrategy)}` : ""}
 
-GENERATE A PREMIUM CAMPAIGN PACK WITH THE FOLLOWING:
+GENERATE A MASTER CAMPAIGN PACK — think "Canva Premium Pack" or "Zuto Hub" quality: one hero asset per format, then platform adaptations. Do NOT generate many separate mediocre pieces. Generate ONE outstanding asset per category, then adapt it.
 
-A. 3 SHORT-FORM VIDEO/REEL CONCEPTS (Instagram Reels, TikTok, Facebook Reels, YouTube Shorts)
-For each video concept provide:
+A. 1 MASTER SHORT-FORM VIDEO CONCEPT (use for Instagram Reels, TikTok, Facebook Reels, YouTube Shorts)
+This is the single hero video blueprint for the entire campaign. Provide:
 - A scroll-stopping title
-- Platform recommendation
+- Platform recommendation (primary platform)
 - Duration (15s, 30s, or 45s)
 - Hook (the first line that stops the scroll)
 - Opening hook for the first 3 seconds (must be visceral, emotional, or provocative)
@@ -403,10 +467,10 @@ For each video concept provide:
 - Target persona
 - Funnel stage (awareness, consideration, conversion, retention)
 
-B. 3 CAROUSEL AD CONCEPTS
-For each carousel provide:
+B. 1 CAROUSEL AD CONCEPT
+One premium carousel that can be adapted across platforms. Provide:
 - Title
-- Platform
+- Platform (primary)
 - Hook
 - 4-6 slides with: headline, visual direction, body text, optional CTA (use null if no CTA on that slide)
 - Overall CTA
@@ -415,10 +479,10 @@ For each carousel provide:
 - Funnel stage
 - Benefit sequence explanation
 
-C. 5 HIGH-CONVERTING SOCIAL POSTS
-For each post provide:
-- Platform
-- Type (social_post)
+C. 1 MASTER SOCIAL POST (the hero visual post)
+One high-converting visual post that becomes the template. Provide:
+- Platform (primary)
+- Type: social_post
 - Title
 - Hook (bold, emotional, or controversial — max 12 words)
 - Caption (2-4 short paragraphs, line breaks, direct to reader, zero fluff)
@@ -433,19 +497,28 @@ For each post provide:
 - Transformation promised (use null if not applicable)
 - Urgency driver (use null if not applicable)
 
-D. 3 AD COPY VARIATIONS
+D. PLATFORM CAPTION ADAPTATIONS
+For EACH platform in the campaign (${campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn"}), provide a adapted version of the master post:
+- Platform name
+- Adapted caption (rewritten for that platform's tone and character limits)
+- Adapted CTA (platform-native call to action)
+- Adapted hashtags (platform-specific hashtag strategy)
+- Best time to post for that platform
+- Format notes (e.g. "TikTok: keep under 150 chars, use trending audio reference", "LinkedIn: professional tone, longer form accepted") — use null if not needed
+
+E. 3 AD COPY VARIATIONS
 - Awareness ad (problem agitation, curiosity)
 - Retargeting ad (social proof, objection handling)
 - Direct sales ad (offer, urgency, risk reversal)
 Each with: variant name, angle, headline, primary text, CTA, platform, funnel stage
 
-E. 2 WHATSAPP PROMO MESSAGES
+F. 1 WHATSAPP PROMO MESSAGE
 - Short, persuasive promo message
 - Follow-up message for non-responders (use null if not needed)
 - CTA
 - Casual but persuasive tone
 
-F. 1 EMAIL CAMPAIGN
+G. 1 EMAIL CAMPAIGN
 - Subject line (under 50 chars, curiosity-driven or benefit-led)
 - Preheader text
 - Body copy (under 200 words, single CTA focus)
@@ -453,10 +526,17 @@ F. 1 EMAIL CAMPAIGN
 - Tone
 - Target segment
 
-G. 1 LAUNCH/ OFFER SEQUENCE
+H. 1 LAUNCH / OFFER SEQUENCE
 - Multi-step launch sequence (3-5 steps)
 - Each step: channel, timing, message, CTA
 - Progresses from teaser → announcement → urgency → last chance
+
+I. HASHTAG SET
+Provide a structured hashtag strategy:
+- Core hashtags (5-10 evergreen, brand-relevant)
+- Trending hashtags (5-10 currently popular in this niche)
+- Niche hashtags (5-10 highly specific to the target audience)
+- Platform-specific hashtags (array of objects, each with "platform" name and "hashtags" array of 3-5 hashtags optimized for that platform)
 
 CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
 - Every object in the response MUST include EVERY key declared in its schema.
@@ -464,6 +544,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
 - Example: if a scene has no on-screen text, return "onScreenText": null.
 - Example: if a WhatsApp promo has no follow-up, return "followUp": null.
 - Example: if a social post has no pain point, return "painPoint": null.
+- Example: if platform adaptation has no format notes, return "formatNotes": null.
 - Never leave out any nested field. The schema is strict and every key is required.
 - Respond with valid structured data only.`;
 
@@ -478,7 +559,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       prompt: packPrompt,
       schema: PremiumCampaignPackSchema,
       system:
-        "You are an elite creative director and performance marketer. You create premium, sales-focused campaign assets that drive revenue. You specialise in Instagram Reels, TikTok, Facebook ads, carousel ads, direct-response copywriting, and launch sequences. Every asset must be emotionally engaging, visually specific, platform-native, and conversion-focused. CRITICAL: You must include EVERY key in every object. Use null for fields that do not apply. Never omit a key.",
+        "You are an elite creative director and performance marketer. You create premium, sales-focused campaign assets that drive revenue. You specialise in Instagram Reels, TikTok, Facebook ads, carousel ads, direct-response copywriting, and launch sequences. Every asset must be emotionally engaging, visually specific, platform-native, and conversion-focused. You generate ONE master asset per format, then provide platform adaptations — like a Canva Premium Pack or Zuto Hub. CRITICAL: You must include EVERY key in every object. Use null for fields that do not apply. Never omit a key.",
     });
   } catch (err: any) {
     packError = err.message || String(err);
@@ -529,6 +610,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
 
   let savedPosts = 0;
   let failedInserts = 0;
+  let savedAssets = 0;
 
   // Helper to insert content post with metadata
   async function insertPost(
@@ -711,6 +793,57 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     }
   );
 
+  // Save platform adaptations as campaign assets
+  if (pack.platformAdaptations && pack.platformAdaptations.length > 0) {
+    for (const adaptation of pack.platformAdaptations) {
+      try {
+        await db.insert(campaignAssets).values({
+          userId,
+          campaignId,
+          assetType: "caption_adaptation" as any,
+          title: `${adaptation.platform} Adaptation`,
+          status: "ready",
+          metadata: {
+            platform: adaptation.platform,
+            adaptedCaption: adaptation.adaptedCaption,
+            adaptedCta: adaptation.adaptedCta,
+            adaptedHashtags: adaptation.adaptedHashtags,
+            bestTimeToPost: adaptation.bestTimeToPost,
+            formatNotes: adaptation.formatNotes,
+          } as any,
+        });
+        savedAssets++;
+      } catch (err: any) {
+        console.error(`[CreativeAgent] Failed to save platform adaptation | campaignId=${campaignId} | platform=${adaptation.platform} | error="${err.message}"`);
+      }
+    }
+  }
+
+  // Save hashtag set as campaign asset
+  if (pack.hashtagSet) {
+    try {
+      await db.insert(campaignAssets).values({
+        userId,
+        campaignId,
+        assetType: "hashtag_set" as any,
+        title: "Master Hashtag Set",
+        status: "ready",
+        metadata: {
+          core: pack.hashtagSet.core,
+          trending: pack.hashtagSet.trending,
+          niche: pack.hashtagSet.niche,
+          platformSpecific: pack.hashtagSet.platformSpecific.map((p: any) => ({
+            platform: p.platform,
+            hashtags: p.hashtags,
+          })),
+        } as any,
+      });
+      savedAssets++;
+    } catch (err: any) {
+      console.error(`[CreativeAgent] Failed to save hashtag set | campaignId=${campaignId} | error="${err.message}"`);
+    }
+  }
+
   console.log(`[CreativeAgent] Premium pack saved: campaignId=${campaignId} savedPosts=${savedPosts} failedInserts=${failedInserts}`);
 
   if (savedPosts === 0) {
@@ -774,8 +907,7 @@ Respond with structured data.`;
     })
     .where(eq(campaigns.id, campaignId));
 
-  // Save campaign_assets records (best-effort)
-  let savedAssets = 0;
+  // Save campaign_assets records from Step 2 (best-effort)
   if (assetsResult) {
     for (const asset of assetsResult.output.assets) {
       try {

@@ -423,13 +423,19 @@ export default function Integrations() {
             </DialogTitle>
             <DialogDescription className="text-gray-400">
               {explainPlatform === "whatsapp"
-                ? "WhatsApp auto-publishing is not available yet."
+                ? "WhatsApp Business integration is not available yet. It requires Meta Business API setup which is not configured."
+                : explainPlatform === "email"
+                ? "Email provider integration is not available yet. SMTP-based sending will be enabled in a future update."
                 : "Automatic publishing is not available for this platform yet."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 text-sm text-gray-300">
             <p>
-              Platform setup is not enabled for this workspace yet. You can still generate content and publish manually.
+              {explainPlatform === "whatsapp"
+                ? "WhatsApp Business API requires a verified Meta Business account, phone number registration, and message template approval. This infrastructure is not yet configured for your workspace."
+                : explainPlatform === "email"
+                ? "Email sending requires SMTP provider configuration (SendGrid, Mailgun, AWS SES, etc.) and domain authentication. This will be available in a future update."
+                : "Platform setup is not enabled for this workspace yet. You can still generate content and publish manually."}
             </p>
             <p className="text-gray-500">
               Integrations are only required for automatic publishing and inbox management. Strategy and content generation work without any platform connected.

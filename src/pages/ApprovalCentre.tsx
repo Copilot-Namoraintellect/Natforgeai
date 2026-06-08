@@ -75,6 +75,17 @@ export default function ApprovalCentre() {
     onError: (err) => toast.error(err.message || "Failed to reject"),
   });
 
+  const editAndApproveMutation = trpc.approval.editAndApproveAction.useMutation({
+    onSuccess: () => {
+      toast.success("Saved & approved successfully");
+      utils.approval.listApprovals.invalidate();
+      setSelectedApproval(null);
+      setNotes("");
+      setActionType(null);
+    },
+    onError: (err) => toast.error(err.message || "Failed to save and approve"),
+  });
+
   const pendingApprovals = approvals?.filter((a) => a.status === "pending") || [];
   const resolvedApprovals = approvals?.filter((a) => a.status !== "pending") || [];
 
@@ -217,16 +228,22 @@ export default function ApprovalCentre() {
   }
 
   const handleAction = () => {
-    if (!selectedApproval || !actionType) return;
+    if (!selectedApproval || !actionType || isProcessing) return;
 
     if (actionType === "approve") {
       approveMutation.mutate({ approvalId: selectedApproval.id, notes: notes || undefined });
     } else if (actionType === "reject") {
       rejectMutation.mutate({ approvalId: selectedApproval.id, notes: notes || undefined });
+    } else if (actionType === "edit") {
+      editAndApproveMutation.mutate({
+        approvalId: selectedApproval.id,
+        editedPayload: {},
+        notes: notes || undefined,
+      });
     }
   };
 
-  const isProcessing = approveMutation.isPending || rejectMutation.isPending;
+  const isProcessing = approveMutation.isPending || rejectMutation.isPending || editAndApproveMutation.isPending;
 
   return (
     <div className="space-y-6">
@@ -462,14 +479,11 @@ export default function ApprovalCentre() {
               </Button>
               {actionType === "edit" ? (
                 <Button
-                  onClick={() => {
-                    // For now, edit & approve works same as approve
-                    handleAction();
-                  }}
+                  onClick={handleAction}
                   disabled={isProcessing}
                   className="bg-blue-500 hover:bg-blue-600"
                 >
-                  {isProcessing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {editAndApproveMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Save & Approve
                 </Button>
               ) : actionType === "approve" ? (

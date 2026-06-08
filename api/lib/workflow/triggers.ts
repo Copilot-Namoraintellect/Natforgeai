@@ -62,27 +62,61 @@ export async function onAgentRunComplete(runId: number) {
     }
     await transitionCampaignState(run.campaignId, run.userId, "creatives_complete");
 
-    // Auto-trigger audience agent after creatives are ready
+    // Auto-trigger audience agent after creatives are ready — with dedup guard
     try {
-      const audienceResult = await runAudienceAgent({
-        userId: run.userId,
-        campaignId: run.campaignId,
-      });
-      await onAgentRunComplete(audienceResult.runId);
+      const existingAudience = await db
+        .select()
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.campaignId, run.campaignId),
+            eq(agentRuns.agentType, "audience"),
+            eq(agentRuns.userId, run.userId)
+          )
+        )
+        .orderBy(agentRuns.createdAt)
+        .limit(1);
+
+      if (existingAudience.length > 0 && ["running", "completed"].includes(existingAudience[0].status)) {
+        console.log(`[Workflow] Skipping duplicate audience run for campaign ${run.campaignId}. Existing run ${existingAudience[0].id} is ${existingAudience[0].status}.`);
+      } else {
+        const audienceResult = await runAudienceAgent({
+          userId: run.userId,
+          campaignId: run.campaignId,
+        });
+        await onAgentRunComplete(audienceResult.runId);
+      }
     } catch (err: any) {
       console.error("[Workflow] Auto-audience failed:", err.message);
     }
   } else if (state === "audience_generating" && run.agentType === "audience") {
     await transitionCampaignState(run.campaignId, run.userId, "audience_complete");
 
-    // Auto-trigger distribution agent after audience is ready
+    // Auto-trigger distribution agent after audience is ready — with dedup guard
     try {
-      const distResult = await runDistributionAgent({
-        userId: run.userId,
-        campaignId: run.campaignId,
-        approvalMode: campaign.approvalMode as "assisted" | "autonomous",
-      });
-      await onAgentRunComplete(distResult.runId);
+      const existingDist = await db
+        .select()
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.campaignId, run.campaignId),
+            eq(agentRuns.agentType, "distribution"),
+            eq(agentRuns.userId, run.userId)
+          )
+        )
+        .orderBy(agentRuns.createdAt)
+        .limit(1);
+
+      if (existingDist.length > 0 && ["running", "completed"].includes(existingDist[0].status)) {
+        console.log(`[Workflow] Skipping duplicate distribution run for campaign ${run.campaignId}. Existing run ${existingDist[0].id} is ${existingDist[0].status}.`);
+      } else {
+        const distResult = await runDistributionAgent({
+          userId: run.userId,
+          campaignId: run.campaignId,
+          approvalMode: campaign.approvalMode as "assisted" | "autonomous",
+        });
+        await onAgentRunComplete(distResult.runId);
+      }
     } catch (err: any) {
       console.error("[Workflow] Auto-distribution failed:", err.message);
     }

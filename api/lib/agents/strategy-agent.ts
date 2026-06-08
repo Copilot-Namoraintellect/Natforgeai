@@ -5,6 +5,17 @@ import { getDb } from "../../queries/connection";
 import { campaigns } from "@db/schema";
 import { eq } from "drizzle-orm";
 
+function parseBudgetNumber(value: unknown): number {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    // Extract first numeric value from strings like "$50,000 in the first year"
+    const cleaned = value.replace(/[$,]/g, "").replace(/\s+/g, " ");
+    const match = cleaned.match(/(\d+(?:\.\d+)?)/);
+    if (match) return parseFloat(match[1]);
+  }
+  return 0;
+}
+
 const StrategyOutputSchema = z.object({
   personas: z.array(
     z.object({
@@ -51,12 +62,12 @@ const StrategyOutputSchema = z.object({
     })
   ),
   budgetRecommendation: z.object({
-    total: z.number(),
+    total: z.union([z.number(), z.string()]).transform(parseBudgetNumber),
     allocation: z.array(
       z.object({
         channel: z.string(),
-        amount: z.number(),
-        percentage: z.number(),
+        amount: z.union([z.number(), z.string()]).transform(parseBudgetNumber),
+        percentage: z.union([z.number(), z.string()]).transform(parseBudgetNumber),
       })
     ),
   }),

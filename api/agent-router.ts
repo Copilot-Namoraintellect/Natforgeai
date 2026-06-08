@@ -177,6 +177,34 @@ export const agentRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
 
+      // Deduplication guard — don't run if a creative agent is already running or completed
+      const existingCreative = await db
+        .select()
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.campaignId, input.campaignId),
+            eq(agentRuns.agentType, "creative"),
+            eq(agentRuns.userId, ctx.user.id)
+          )
+        )
+        .orderBy(agentRuns.createdAt)
+        .limit(1);
+
+      if (existingCreative.length > 0 && ["running", "completed"].includes(existingCreative[0].status)) {
+        return {
+          success: true,
+          skipped: true,
+          reason: `A creative agent run already exists with status "${existingCreative[0].status}".`,
+          packRunId: existingCreative[0].id,
+          assetsRunId: null,
+          pack: null,
+          assets: null,
+          savedPosts: 0,
+          savedAssets: 0,
+        };
+      }
+
       // Transition campaign to creatives_generating before starting
       try {
         await transitionCampaignState(input.campaignId, ctx.user.id, "generate_creatives");
@@ -189,11 +217,12 @@ export const agentRouter = createRouter({
         campaignId: input.campaignId,
       });
 
-      try {
-        await onAgentRunComplete(result.packRunId);
-      } catch (err: any) {
-        console.error("[AgentRouter] onAgentRunComplete failed:", err.message);
-      }
+      // Trigger workflow advancement asynchronously so the HTTP response is fast
+      Promise.resolve().then(() =>
+        onAgentRunComplete(result.packRunId).catch((err) => {
+          console.error("[AgentRouter] onAgentRunComplete failed:", err.message);
+        })
+      );
 
       return { success: true, ...result };
     }),
@@ -223,13 +252,42 @@ export const agentRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
 
+      // Deduplication guard
+      const existingAudience = await db
+        .select()
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.campaignId, input.campaignId),
+            eq(agentRuns.agentType, "audience"),
+            eq(agentRuns.userId, ctx.user.id)
+          )
+        )
+        .orderBy(agentRuns.createdAt)
+        .limit(1);
+
+      if (existingAudience.length > 0 && ["running", "completed"].includes(existingAudience[0].status)) {
+        return {
+          success: true,
+          skipped: true,
+          reason: `An audience agent run already exists with status "${existingAudience[0].status}".`,
+          runId: existingAudience[0].id,
+          output: existingAudience[0].output as any,
+        };
+      }
+
       const result = await runAudienceAgent({
         userId: ctx.user.id,
         campaignId: input.campaignId,
         isB2B: input.isB2B,
       });
 
-      await onAgentRunComplete(result.runId);
+      // Trigger workflow advancement asynchronously
+      Promise.resolve().then(() =>
+        onAgentRunComplete(result.runId).catch((err) => {
+          console.error("[AgentRouter] onAgentRunComplete failed:", err.message);
+        })
+      );
 
       return { success: true, ...result };
     }),
@@ -254,13 +312,42 @@ export const agentRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
 
+      // Deduplication guard
+      const existingDist = await db
+        .select()
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.campaignId, input.campaignId),
+            eq(agentRuns.agentType, "distribution"),
+            eq(agentRuns.userId, ctx.user.id)
+          )
+        )
+        .orderBy(agentRuns.createdAt)
+        .limit(1);
+
+      if (existingDist.length > 0 && ["running", "completed"].includes(existingDist[0].status)) {
+        return {
+          success: true,
+          skipped: true,
+          reason: `A distribution agent run already exists with status "${existingDist[0].status}".`,
+          runId: existingDist[0].id,
+          output: existingDist[0].output as any,
+        };
+      }
+
       const result = await runDistributionAgent({
         userId: ctx.user.id,
         campaignId: input.campaignId,
         approvalMode: campaign.approvalMode as "assisted" | "autonomous",
       });
 
-      await onAgentRunComplete(result.runId);
+      // Trigger workflow advancement asynchronously
+      Promise.resolve().then(() =>
+        onAgentRunComplete(result.runId).catch((err) => {
+          console.error("[AgentRouter] onAgentRunComplete failed:", err.message);
+        })
+      );
 
       return { success: true, ...result };
     }),

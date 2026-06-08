@@ -4,7 +4,7 @@ import { defaultModel } from "./openai";
 import { getDb } from "../../queries/connection";
 import { agentRuns } from "@db/schema";
 import { eq } from "drizzle-orm";
-import { deductCredits, recordAiUsage, checkCredits } from "../billing/credit-engine";
+import { deductCredits, recordAiUsage, checkCredits, adminAdjustCredits } from "../billing/credit-engine";
 import { getEstimatedAgentCost, calculateTokenCost } from "../billing/cost-tracker";
 import { enforceCostControl } from "../billing/cost-control";
 import { createAlert } from "../alerts";
@@ -149,13 +149,33 @@ export async function runAgent<TOutput>({
       })
       .where(eq(agentRuns.id, runId));
 
-    // Create alert for OpenAI/provider failures
+    // Determine if this is an internal/platform fault (refund) or user fault (no refund)
+    const isSchemaError =
+      error.message?.includes("schema") ||
+      error.message?.includes("response_format") ||
+      error.message?.includes("Missing required") ||
+      error.message?.includes("Invalid schema");
     const isProviderError =
       error.message?.includes("OpenAI") ||
       error.message?.includes("fetch") ||
       error.message?.includes("timeout") ||
       error.message?.includes("ECONNREFUSED") ||
       error.statusCode >= 500;
+
+    if ((isSchemaError || isProviderError) && creditsDeducted > 0 && !skipBilling) {
+      // Refund credits for internal failures
+      try {
+        await adminAdjustCredits({
+          userId,
+          amount: creditsDeducted,
+          description: `Refund for failed ${agentType} agent run (#${runId}) due to ${isSchemaError ? "schema error" : "provider error"}`,
+          adminUserId: 0, // system refund
+        });
+        console.log(`[AgentRunner] Refunded ${creditsDeducted} credits to user ${userId} for failed ${agentType} run ${runId}`);
+      } catch (refundErr: any) {
+        console.error(`[AgentRunner] Credit refund failed for user ${userId}:`, refundErr.message);
+      }
+    }
 
     if (isProviderError) {
       await createAlert({

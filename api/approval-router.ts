@@ -156,8 +156,13 @@ export const approvalRouter = createRouter({
         })
         .where(eq(approvalRequests.id, input.approvalId));
 
-      // Resume workflow through the trigger system
-      await onApprovalResolved(input.approvalId, "approved", ctx.user.id);
+      // Resume workflow through the trigger system — fire asynchronously so the HTTP
+      // response returns immediately and does not wait for long-running agent chains.
+      Promise.resolve().then(() =>
+        onApprovalResolved(input.approvalId, "approved", ctx.user.id).catch((err) => {
+          console.error(`[Approval] Async workflow trigger failed for approval ${input.approvalId}:`, err.message);
+        })
+      );
 
       return { success: true };
     }),
@@ -205,8 +210,13 @@ export const approvalRouter = createRouter({
         })
         .where(eq(approvalRequests.id, input.approvalId));
 
-      // Resume workflow through the trigger system
-      await onApprovalResolved(input.approvalId, "rejected", ctx.user.id);
+      // Resume workflow through the trigger system — fire asynchronously so the HTTP
+      // response returns immediately and does not wait for long-running agent chains.
+      Promise.resolve().then(() =>
+        onApprovalResolved(input.approvalId, "rejected", ctx.user.id).catch((err) => {
+          console.error(`[Approval] Async workflow trigger failed for approval ${input.approvalId}:`, err.message);
+        })
+      );
 
       return { success: true };
     }),
@@ -255,8 +265,13 @@ export const approvalRouter = createRouter({
         })
         .where(eq(approvalRequests.id, input.approvalId));
 
-      // Resume workflow through the trigger system
-      await onApprovalResolved(input.approvalId, "approved", ctx.user.id);
+      // Resume workflow through the trigger system — fire asynchronously so the HTTP
+      // response returns immediately and does not wait for long-running agent chains.
+      Promise.resolve().then(() =>
+        onApprovalResolved(input.approvalId, "approved", ctx.user.id).catch((err) => {
+          console.error(`[Approval] Async workflow trigger failed for approval ${input.approvalId}:`, err.message);
+        })
+      );
 
       return { success: true };
     }),

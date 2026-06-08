@@ -39,7 +39,10 @@ Generate a structured strategy with the following sections:
 7. Funnel Stages (awareness → consideration → conversion → retention)
 8. Offers (specific lead magnets, promotions, or incentives)
 9. CTAs (call-to-action strategy per funnel stage)
-10. Budget Recommendation (how to allocate budget across channels)`;
+10. Budget Recommendation (how to allocate budget across channels)
+
+CRITICAL: For budgetRecommendation.total and budgetRecommendation.allocation.amount, return ONLY plain numbers (e.g. 5000 or 15000). Do NOT include dollar signs, commas, words, or descriptions. The system parses these as numeric values.
+`;
 }
 
 export function creativeAgentPrompt(input: {
