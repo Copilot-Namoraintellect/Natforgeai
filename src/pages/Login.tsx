@@ -32,6 +32,9 @@ export default function Login() {
   const [runningDiagnostic, setRunningDiagnostic] = useState(false);
 
   // Login form state
+  // TODO: 2FA is scaffolded in the schema but not yet implemented.
+  // A full 2FA phase should add: TOTP secret generation, QR setup, encrypted storage,
+  // backup codes, login challenge screen, rate limiting, recovery flow, and settings UI.
   const [loginForm, setLoginForm] = useState({
     usernameOrEmail: "",
     password: "",
@@ -71,20 +74,14 @@ export default function Login() {
 
   const registerMutation = trpc.auth.register.useMutation({
     onSuccess: async (data) => {
-      localStorage.setItem("auth_token", data.token);
-      toast.success("Account created. Let's set up your first campaign.");
-      
-      try {
-        utils.auth.me.invalidate();
-        const user = await utils.auth.me.fetch(undefined);
-        if (user && !user.onboardingComplete) {
-          navigate("/onboarding");
-        } else {
-          navigate("/mission-control");
-        }
-      } catch {
-        navigate("/onboarding");
-      }
+      // Switch to login tab and prefill credentials so the user can sign in immediately
+      setTab("login");
+      setLoginForm({
+        usernameOrEmail: data.user?.username || registerForm.username,
+        password: registerForm.password,
+        rememberMe: false,
+      });
+      toast.success("Account created. Please sign in.");
     },
     onError: (err) => {
       const msg = err.message || "Registration failed";

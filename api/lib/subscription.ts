@@ -169,11 +169,15 @@ export async function checkLimit(
   type: "campaign" | "result"
 ): Promise<{ allowed: boolean; reason?: string; current: number; limit: number }> {
   const tier = await getUserTier(userId);
-  const usage = await getUserUsage(userId);
 
   if (type === "campaign") {
+    const db = getDb();
+    const [campaignCount] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(campaigns)
+      .where(eq(campaigns.userId, userId));
     const limit = tier?.maxCampaigns ?? 2;
-    const current = usage.campaignsCreated ?? 0;
+    const current = Number(campaignCount?.count ?? 0);
     if (current >= limit) {
       return {
         allowed: false,
@@ -186,6 +190,7 @@ export async function checkLimit(
   }
 
   if (type === "result") {
+    const usage = await getUserUsage(userId);
     const limit = tier?.maxResults ?? 5;
     const current = usage.successfulResults ?? 0;
     if (current >= limit) {

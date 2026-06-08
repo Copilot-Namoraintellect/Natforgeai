@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { generateObject } from "ai";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { campaigns } from "@db/schema";
+import { campaigns, businesses } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { checkLimit, incrementCampaignUsage, incrementResultUsage } from "./lib/subscription";
 import { TRPCError } from "@trpc/server";
+import { defaultModel } from "./lib/agents/openai";
 
 export const campaignRouter = createRouter({
   list: authedQuery.query(async ({ ctx }) => {
@@ -66,9 +68,35 @@ export const campaignRouter = createRouter({
         });
       }
 
+      // Determine onboarding status and auto-link business
+      let businessId = input.businessId;
+      let isOnboarded = ctx.user.onboardingComplete ?? false;
+
+      if (!businessId) {
+        const [biz] = await db
+          .select()
+          .from(businesses)
+          .where(eq(businesses.userId, ctx.user.id))
+          .orderBy(desc(businesses.createdAt))
+          .limit(1);
+        if (biz) {
+          businessId = biz.id;
+          if (biz.onboardingComplete) isOnboarded = true;
+        }
+      } else {
+        const [biz] = await db
+          .select()
+          .from(businesses)
+          .where(and(eq(businesses.id, businessId), eq(businesses.userId, ctx.user.id)))
+          .limit(1);
+        if (biz && biz.onboardingComplete) isOnboarded = true;
+      }
+
+      const workflowState = isOnboarded ? "strategy_pending" : "business_onboarding";
+
       const data: any = {
         userId: ctx.user.id,
-        businessId: input.businessId,
+        businessId: businessId ?? null,
         name: input.name,
         goal: input.goal,
         targetAudience: input.targetAudience,
@@ -82,7 +110,8 @@ export const campaignRouter = createRouter({
         funnelStages: input.funnelStages,
         offers: input.offers,
         ctaStrategy: input.ctaStrategy,
-        aiGenerated: input.aiGenerated ?? false,
+        aiGenerated: input.aiGenerated ?? isOnboarded,
+        workflowState,
       };
       if (input.startDate) data.startDate = new Date(input.startDate);
       if (input.endDate) data.endDate = new Date(input.endDate);
@@ -91,7 +120,63 @@ export const campaignRouter = createRouter({
       // Increment campaign usage
       await incrementCampaignUsage(ctx.user.id);
 
-      return { id: Number(camp.insertId), success: true };
+      return { id: Number(camp.insertId), success: true, workflowState };
+    }),
+
+  improveBrief: authedQuery
+    .input(
+      z.object({
+        name: z.string().optional(),
+        goal: z.string().optional(),
+        targetAudience: z.string().optional(),
+        platforms: z.string().optional(),
+        budget: z.number().optional(),
+        coreMessage: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      try {
+        const briefParts = [
+          input.name ? `Campaign Name: ${input.name}` : "",
+          input.goal ? `Objective: ${input.goal}` : "",
+          input.targetAudience ? `Target Audience: ${input.targetAudience}` : "",
+          input.platforms ? `Platforms: ${input.platforms}` : "",
+          input.budget ? `Budget: $${input.budget}` : "",
+          input.coreMessage ? `Core Message: ${input.coreMessage}` : "",
+        ].filter(Boolean);
+
+        if (briefParts.length === 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Please fill in at least one field before improving.",
+          });
+        }
+
+        const schema = z.object({
+          name: z.string().describe("Improved campaign name, punchy and clear"),
+          goal: z.string().describe("Refined campaign objective with metric if possible"),
+          targetAudience: z.string().describe("Sharper target audience description"),
+          platforms: z.string().describe("Recommended platforms as a comma-separated list"),
+          budget: z.number().describe("Suggested estimated marketing spend in USD"),
+          coreMessage: z.string().describe("Compelling core message or offer"),
+        });
+
+        const result = await generateObject({
+          model: defaultModel,
+          system:
+            "You are a senior marketing strategist. Improve the campaign brief below. Keep the same language and tone. Be concise and actionable.",
+          prompt: briefParts.join("\n"),
+          schema,
+        });
+
+        return { success: true, suggestions: result.object };
+      } catch (err: any) {
+        if (err instanceof TRPCError) throw err;
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: err.message || "Failed to improve brief. Please try again.",
+        });
+      }
     }),
 
   update: authedQuery

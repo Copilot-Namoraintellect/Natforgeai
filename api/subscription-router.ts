@@ -2,8 +2,8 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { subscriptions, subscriptionTiers, payments } from "@db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { subscriptions, subscriptionTiers, payments, campaigns } from "@db/schema";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { getUserTier, getUserUsage, ensureFreeSubscription } from "./lib/subscription";
 import { allocateMonthlyCredits } from "./lib/billing/credit-engine";
 import { env } from "./lib/env";
@@ -211,8 +211,15 @@ export const subscriptionRouter = createRouter({
   // Get user's current usage vs limits
   myUsage: authedQuery.query(async ({ ctx }) => {
     await ensureFreeSubscription(ctx.user.id);
+    const db = getDb();
     const tier = await getUserTier(ctx.user.id);
     const usage = await getUserUsage(ctx.user.id);
+
+    // Count actual campaigns from DB to avoid counter drift
+    const [campaignCount] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(campaigns)
+      .where(eq(campaigns.userId, ctx.user.id));
 
     return {
       tier: {
@@ -227,7 +234,7 @@ export const subscriptionRouter = createRouter({
         analytics: tier?.analytics ?? false,
       },
       usage: {
-        campaignsCreated: usage.campaignsCreated,
+        campaignsCreated: Number(campaignCount?.count ?? 0),
         successfulResults: usage.successfulResults,
       },
     };

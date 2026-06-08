@@ -2,7 +2,7 @@ import { z } from "zod";
 import { generateObject } from "ai";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { businesses } from "@db/schema";
+import { businesses, users } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { defaultModel } from "./lib/agents/openai";
 
@@ -77,6 +77,13 @@ export const businessRouter = createRouter({
         hasProductVideos: input.hasProductVideos,
         onboardingComplete: true,
       });
+
+      // Sync user onboarding flag so AppLayout and auth redirects stay consistent
+      await db
+        .update(users)
+        .set({ onboardingComplete: true })
+        .where(eq(users.id, ctx.user.id));
+
       return { id: Number(biz.insertId), success: true };
     }),
 
@@ -114,6 +121,15 @@ export const businessRouter = createRouter({
         .where(
           and(eq(businesses.id, id), eq(businesses.userId, ctx.user.id))
         );
+
+      // If business onboarding is being marked complete, also sync the user flag
+      if (data.onboardingComplete === true) {
+        await db
+          .update(users)
+          .set({ onboardingComplete: true })
+          .where(eq(users.id, ctx.user.id));
+      }
+
       return { success: true };
     }),
 

@@ -2,8 +2,8 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { createRouter, publicQuery, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { users } from "@db/schema";
-import { eq, or } from "drizzle-orm";
+import { users, businesses } from "@db/schema";
+import { eq, or, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { signLocalToken, verifyLocalToken } from "./lib/session";
 import { env } from "./lib/env";
@@ -84,6 +84,8 @@ export const localAuthRouter = createRouter({
     }),
 
   // Login with username/email + password
+  // TODO: 2FA login challenge is not yet implemented. When twoFactorEnabled is true,
+  // the login flow must verify a TOTP code before issuing a token.
   login: publicQuery
     .input(
       z.object({
@@ -364,6 +366,17 @@ export const localAuthRouter = createRouter({
 
     if (!user) return null;
 
+    // Treat user as onboarded if they have a completed business profile
+    let onboardingComplete = user.onboardingComplete;
+    if (!onboardingComplete) {
+      const [biz] = await db
+        .select()
+        .from(businesses)
+        .where(and(eq(businesses.userId, user.id), eq(businesses.onboardingComplete, true)))
+        .limit(1);
+      if (biz) onboardingComplete = true;
+    }
+
     return {
       id: user.id,
       username: user.username,
@@ -372,7 +385,7 @@ export const localAuthRouter = createRouter({
       avatar: user.avatar,
       role: user.role,
       authType: user.authType,
-      onboardingComplete: user.onboardingComplete,
+      onboardingComplete,
       twoFactorEnabled: user.twoFactorEnabled,
       createdAt: user.createdAt,
       lastSignInAt: user.lastSignInAt,

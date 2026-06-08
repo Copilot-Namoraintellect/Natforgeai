@@ -39,6 +39,16 @@ export const users = mysqlTable("users", {
     .$onUpdate(() => new Date()),
   lastSignInAt: timestamp("lastSignInAt").defaultNow().notNull(),
   onboardingComplete: boolean("onboardingComplete").default(false).notNull(),
+  // TODO: 2FA is scaffolded but not implemented.
+  // Required pieces for a dedicated 2FA phase:
+  // - TOTP secret generation
+  // - QR code setup
+  // - Encrypted secret storage
+  // - Backup codes
+  // - Login challenge screen
+  // - Rate limiting
+  // - Recovery flow
+  // - Settings UI to enable/disable 2FA
   twoFactorEnabled: boolean("twoFactorEnabled").default(false).notNull(),
   twoFactorMethod: varchar("twoFactorMethod", { length: 20 }),
   twoFactorVerifiedAt: timestamp("twoFactorVerifiedAt"),

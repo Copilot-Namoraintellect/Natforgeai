@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent } from "@/components/ui/card";
@@ -30,6 +30,7 @@ import {
   AlertCircle,
   Loader2,
   Rocket,
+  Wand2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -46,6 +47,40 @@ export default function Campaigns() {
   const { campaigns: campaignUsage, results: resultUsage, isLoading: usageLoading, tierName } = useUsage();
 
   const { data: campaigns, isLoading } = trpc.campaign.list.useQuery();
+  const { data: businessList } = trpc.business.list.useQuery();
+  const primaryBusiness = useMemo(() => businessList?.[0] ?? null, [businessList]);
+
+  // Form state for campaign creation (controlled so we can prefill and improve with AI)
+  const [formName, setFormName] = useState("");
+  const [formGoal, setFormGoal] = useState("");
+  const [formTargetAudience, setFormTargetAudience] = useState("");
+  const [formPlatforms, setFormPlatforms] = useState<string[]>([]);
+  const [formBudget, setFormBudget] = useState<string>("");
+  const [formCoreMessage, setFormCoreMessage] = useState("");
+
+  const PLATFORM_OPTIONS = [
+    { value: "Instagram", label: "Instagram" },
+    { value: "Facebook", label: "Facebook" },
+    { value: "TikTok", label: "TikTok" },
+    { value: "LinkedIn", label: "LinkedIn" },
+    { value: "X/Twitter", label: "X/Twitter" },
+    { value: "WhatsApp", label: "WhatsApp" },
+    { value: "Email", label: "Email" },
+    { value: "Google Ads", label: "Google Ads", comingSoon: true },
+  ];
+
+  // Prefill from business profile when modal opens
+  useEffect(() => {
+    if (createOpen && primaryBusiness) {
+      setFormTargetAudience(primaryBusiness.targetAudience || primaryBusiness.targetCustomer || "");
+      setFormBudget(primaryBusiness.monthlyBudget ? String(primaryBusiness.monthlyBudget) : "");
+      if (primaryBusiness.preferredPlatforms) {
+        const prefs = primaryBusiness.preferredPlatforms.split(",").map((p: string) => p.trim());
+        const matched = prefs.filter((p: string) => PLATFORM_OPTIONS.some((o) => o.value === p));
+        setFormPlatforms(matched);
+      }
+    }
+  }, [createOpen, primaryBusiness]);
 
   // Fetch pending approvals for the viewed campaign to wire strategy approval into workflow
   const { data: campaignPendingApprovals } = trpc.approval.listApprovals.useQuery(
@@ -92,26 +127,49 @@ export default function Campaigns() {
       utils.subscription.myUsage.invalidate();
       setCreateOpen(false);
       toast.success("Campaign created. NatForgeAI is preparing your strategy.");
+      // Reset form
+      setFormName("");
+      setFormGoal("");
+      setFormTargetAudience("");
+      setFormPlatforms([]);
+      setFormBudget("");
+      setFormCoreMessage("");
       if (data.id) {
         setHighlightedId(data.id);
         setTimeout(() => setHighlightedId(null), 4000);
-        const fresh = await utils.campaign.list.fetch(undefined);
-        const newCamp = fresh.find((c) => c.id === data.id);
-        if (newCamp) {
-          setViewCampaign(newCamp);
-          // Route to the correct next screen based on campaign state
-          if (newCamp.workflowState === "business_onboarding") {
-            navigate("/onboarding");
-          } else if (newCamp.workflowState === "strategy_pending") {
-            navigate("/agent-activity");
-          } else if (newCamp.workflowState === "strategy_generated") {
-            navigate("/approvals");
-          }
+        // Route immediately using the workflowState returned by the server
+        if (data.workflowState === "business_onboarding") {
+          navigate("/onboarding");
+        } else if (data.workflowState === "strategy_pending") {
+          navigate("/agent-activity");
+        } else if (data.workflowState === "strategy_generated") {
+          navigate("/approvals");
         }
       }
     },
     onError: (err) => {
       toast.error(err.message || "Failed to create campaign");
+    },
+  });
+
+  const improveBriefMutation = trpc.campaign.improveBrief.useMutation({
+    onSuccess: (data) => {
+      if (data.suggestions) {
+        setFormName((prev) => prev || data.suggestions.name || prev);
+        setFormGoal((prev) => prev || data.suggestions.goal || prev);
+        setFormTargetAudience((prev) => prev || data.suggestions.targetAudience || prev);
+        if (data.suggestions.platforms) {
+          const prefs = data.suggestions.platforms.split(",").map((p: string) => p.trim());
+          const matched = prefs.filter((p: string) => PLATFORM_OPTIONS.some((o) => o.value === p));
+          if (matched.length > 0) setFormPlatforms(matched);
+        }
+        setFormBudget((prev) => prev || String(data.suggestions.budget ?? prev));
+        setFormCoreMessage((prev) => prev || data.suggestions.coreMessage || prev);
+        toast.success("Brief improved with AI suggestions.");
+      }
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to improve brief");
     },
   });
   const deleteMutation = trpc.campaign.delete.useMutation({
@@ -239,14 +297,32 @@ export default function Campaigns() {
 
   function handleCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const form = new FormData(e.currentTarget);
+    if (createMutation.isPending) return;
     createMutation.mutate({
-      name: form.get("name") as string,
-      goal: form.get("goal") as string,
-      targetAudience: form.get("targetAudience") as string,
-      platforms: form.get("platforms") as string,
-      budget: Number(form.get("budget")) || undefined,
-      coreMessage: form.get("coreMessage") as string,
+      name: formName,
+      goal: formGoal,
+      targetAudience: formTargetAudience,
+      platforms: formPlatforms.join(", "),
+      budget: formBudget ? Number(formBudget) : undefined,
+      coreMessage: formCoreMessage,
+    });
+  }
+
+  function togglePlatform(value: string) {
+    setFormPlatforms((prev) =>
+      prev.includes(value) ? prev.filter((p) => p !== value) : [...prev, value]
+    );
+  }
+
+  function handleImproveBrief() {
+    if (improveBriefMutation.isPending) return;
+    improveBriefMutation.mutate({
+      name: formName,
+      goal: formGoal,
+      targetAudience: formTargetAudience,
+      platforms: formPlatforms.join(", "),
+      budget: formBudget ? Number(formBudget) : undefined,
+      coreMessage: formCoreMessage,
     });
   }
 
@@ -365,37 +441,122 @@ export default function Campaigns() {
                 </Button>
               </div>
             ) : (
-              <form onSubmit={handleCreate} className="space-y-4 mt-4">
-                <div>
-                  <Label>Campaign Name</Label>
-                  <Input name="name" placeholder="Summer Sale 2025" required />
+              <form onSubmit={handleCreate} className="space-y-5 mt-4">
+                {/* Section: Overview */}
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Overview</p>
+                  <div>
+                    <Label>Campaign Name</Label>
+                    <Input
+                      value={formName}
+                      onChange={(e) => setFormName(e.target.value)}
+                      placeholder="Summer Sale 2025"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <Label>Campaign Objective</Label>
+                    <Input
+                      value={formGoal}
+                      onChange={(e) => setFormGoal(e.target.value)}
+                      placeholder="Increase walk-ins by 30%"
+                      required
+                    />
+                  </div>
                 </div>
-                <div>
-                  <Label>Goal</Label>
-                  <Input name="goal" placeholder="Increase walk-ins by 30%" required />
+
+                {/* Section: Audience & Channels */}
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Audience & Channels</p>
+                  <div>
+                    <Label>Target Audience</Label>
+                    <Textarea
+                      value={formTargetAudience}
+                      onChange={(e) => setFormTargetAudience(e.target.value)}
+                      placeholder="Young professionals aged 25-40..."
+                    />
+                  </div>
+                  <div>
+                    <Label>Channels / Platforms</Label>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {PLATFORM_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          disabled={opt.comingSoon}
+                          onClick={() => !opt.comingSoon && togglePlatform(opt.value)}
+                          className={[
+                            "px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
+                            opt.comingSoon
+                              ? "border-dashed border-slate-300 text-slate-400 cursor-not-allowed"
+                              : formPlatforms.includes(opt.value)
+                              ? "bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white border-transparent"
+                              : "border-slate-300 text-slate-600 hover:border-[#00D4FF] hover:text-[#00D4FF]",
+                          ].join(" ")}
+                        >
+                          {opt.label}
+                          {opt.comingSoon && " (Soon)"}
+                        </button>
+                      ))}
+                    </div>
+                    {formPlatforms.length === 0 && (
+                      <p className="text-xs text-muted-foreground mt-1">Select at least one channel.</p>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <Label>Target Audience</Label>
-                  <Textarea name="targetAudience" placeholder="Young professionals aged 25-40..." />
+
+                {/* Section: Budget & Message */}
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Budget & Message</p>
+                  <div>
+                    <Label>Estimated Marketing Spend Guidance ($)</Label>
+                    <Input
+                      type="number"
+                      value={formBudget}
+                      onChange={(e) => setFormBudget(e.target.value)}
+                      placeholder="5000"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      This helps NatForgeAI calibrate recommendations. It is not a fee charged by NatForgeAI.
+                    </p>
+                  </div>
+                  <div>
+                    <Label>Core Message / Offer</Label>
+                    <Textarea
+                      value={formCoreMessage}
+                      onChange={(e) => setFormCoreMessage(e.target.value)}
+                      placeholder="Your main value proposition..."
+                    />
+                  </div>
                 </div>
-                <div>
-                  <Label>Platforms</Label>
-                  <Input name="platforms" placeholder="Instagram, TikTok, Facebook" />
-                </div>
-                <div>
-                  <Label>Budget ($)</Label>
-                  <Input name="budget" type="number" placeholder="5000" />
-                </div>
-                <div>
-                  <Label>Core Message</Label>
-                  <Textarea name="coreMessage" placeholder="Your main value proposition..." />
-                </div>
+
+                {/* Optional AI action */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full border-[#7C3AED]/30 text-[#7C3AED] hover:bg-[#7C3AED]/10"
+                  onClick={handleImproveBrief}
+                  disabled={improveBriefMutation.isPending}
+                >
+                  {improveBriefMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Wand2 className="w-4 h-4 mr-2" />
+                  )}
+                  Improve Brief with AI
+                </Button>
+
                 <Button
                   type="submit"
                   className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
                   disabled={createMutation.isPending}
                 >
-                  {createMutation.isPending ? "Creating..." : "Create Campaign"}
+                  {createMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Rocket className="w-4 h-4 mr-2" />
+                  )}
+                  Create Campaign
                 </Button>
               </form>
             )}
