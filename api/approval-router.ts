@@ -1,14 +1,92 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { approvalRequests, campaigns } from "@db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { approvalRequests, campaigns, contentPosts } from "@db/schema";
+import { eq, and, desc, count } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { onApprovalResolved } from "./lib/workflow/triggers";
 import { createApprovalRequest } from "./lib/workflow/engine";
 
+const beyondStrategyReviewStates = new Set([
+  "strategy_approved",
+  "creatives_generating",
+  "creatives_ready",
+  "audience_generating",
+  "audience_ready",
+  "schedule_generated",
+  "launch_approval_required",
+  "campaign_live",
+  "engagement_active",
+  "leads_converting",
+  "optimisation_active",
+  "completed",
+]);
+
+async function repairStaleApprovals(userId: number) {
+  const db = getDb();
+
+  // Find pending strategy approvals for campaigns that have already moved beyond strategy review
+  const stale = await db
+    .select({ id: approvalRequests.id, campaignId: approvalRequests.campaignId })
+    .from(approvalRequests)
+    .innerJoin(campaigns, eq(approvalRequests.campaignId, campaigns.id))
+    .where(
+      and(
+        eq(approvalRequests.userId, userId),
+        eq(approvalRequests.approvalType, "strategy_review"),
+        eq(approvalRequests.status, "pending"),
+        eq(campaigns.userId, userId)
+      )
+    );
+
+  for (const row of stale) {
+    const [campaign] = await db
+      .select()
+      .from(campaigns)
+      .where(and(eq(campaigns.id, row.campaignId!), eq(campaigns.userId, userId)))
+      .limit(1);
+
+    if (!campaign) continue;
+
+    // If campaign has moved beyond strategy review, auto-resolve the stale pending approval
+    if (beyondStrategyReviewStates.has(campaign.workflowState)) {
+      await db
+        .update(approvalRequests)
+        .set({
+          status: "approved",
+          approvedAt: new Date(),
+          description: `Auto-resolved: campaign workflow state is now ${campaign.workflowState}.`,
+        })
+        .where(eq(approvalRequests.id, row.id));
+      console.log(`[ApprovalRepair] Auto-resolved stale strategy approval ${row.id} for campaign ${row.campaignId} (state=${campaign.workflowState})`);
+      continue;
+    }
+
+    // If campaign already has content posts, auto-resolve stale strategy approval
+    const [contentCount] = await db
+      .select({ value: count() })
+      .from(contentPosts)
+      .where(and(eq(contentPosts.campaignId, row.campaignId!), eq(contentPosts.aiGenerated, true)));
+
+    if (contentCount && contentCount.value > 0) {
+      await db
+        .update(approvalRequests)
+        .set({
+          status: "approved",
+          approvedAt: new Date(),
+          description: `Auto-resolved: campaign already has ${contentCount.value} generated content posts.`,
+        })
+        .where(eq(approvalRequests.id, row.id));
+      console.log(`[ApprovalRepair] Auto-resolved stale strategy approval ${row.id} for campaign ${row.campaignId} (contentCount=${contentCount.value})`);
+    }
+  }
+}
+
 async function syncPendingApprovals(userId: number) {
   const db = getDb();
+
+  // First, auto-resolve any stale pending approvals
+  await repairStaleApprovals(userId);
 
   // Find campaigns that should have pending approvals but don't
   const stuckCampaigns = await db
@@ -26,10 +104,8 @@ async function syncPendingApprovals(userId: number) {
 
     // Repair missing strategy_review approvals (only if still at strategy_generated)
     if (state === "strategy_generated") {
-      // Check if there is already an approved or edited approval for this campaign.
-      // Do not recreate if the user has already approved — but DO recreate if it was
-      // rejected (state would be strategy_pending, but guard here just in case).
-      const alreadyApproved = await db
+      // Check if there is already an approved/edited approval for this campaign.
+      const alreadyResolved = await db
         .select()
         .from(approvalRequests)
         .where(
@@ -42,7 +118,24 @@ async function syncPendingApprovals(userId: number) {
         )
         .limit(1);
 
-      if (alreadyApproved.length > 0) {
+      if (alreadyResolved.length > 0) {
+        continue;
+      }
+
+      const alreadyEdited = await db
+        .select()
+        .from(approvalRequests)
+        .where(
+          and(
+            eq(approvalRequests.campaignId, campaign.id),
+            eq(approvalRequests.userId, userId),
+            eq(approvalRequests.approvalType, "strategy_review"),
+            eq(approvalRequests.status, "edited")
+          )
+        )
+        .limit(1);
+
+      if (alreadyEdited.length > 0) {
         continue;
       }
 

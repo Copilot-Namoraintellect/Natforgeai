@@ -1,13 +1,15 @@
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
 import { createRouter, publicQuery, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { users, businesses } from "@db/schema";
-import { eq, or, and } from "drizzle-orm";
+import { users, businesses, twoFactorChallenges } from "@db/schema";
+import { eq, or, and, gt } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { signLocalToken, verifyLocalToken } from "./lib/session";
 import { env } from "./lib/env";
 import { ensureFreeSubscription } from "./lib/subscription";
+import { sendTwoFactorCodeEmail } from "./lib/email";
 
 // ─── Local Auth Router ───
 export const localAuthRouter = createRouter({
@@ -84,8 +86,6 @@ export const localAuthRouter = createRouter({
     }),
 
   // Login with username/email + password
-  // TODO: 2FA login challenge is not yet implemented. When twoFactorEnabled is true,
-  // the login flow must verify a TOTP code before issuing a token.
   login: publicQuery
     .input(
       z.object({
@@ -93,7 +93,7 @@ export const localAuthRouter = createRouter({
         password: z.string().min(1),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
 
       // Find user by username or email
@@ -130,6 +130,47 @@ export const localAuthRouter = createRouter({
         .set({ lastSignInAt: new Date() })
         .where(eq(users.id, user.id));
 
+      // If 2FA is enabled, create a challenge and return it
+      if (user.twoFactorEnabled) {
+        const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+        const otpHash = await bcrypt.hash(otpCode, 10);
+        const challengeToken = randomBytes(32).toString("hex");
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+        await db.insert(twoFactorChallenges).values({
+          userId: user.id,
+          challengeToken,
+          otpHash,
+          expiresAt,
+          sentToEmail: user.email,
+          ipAddress: ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("host") || undefined,
+          userAgent: ctx.req.headers.get("user-agent") || undefined,
+        });
+
+        // Send OTP email
+        try {
+          await sendTwoFactorCodeEmail({ to: user.email, code: otpCode });
+        } catch (err: any) {
+          console.error("[2FA] Failed to send email:", err.message);
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Could not send verification code. Please try again.",
+          });
+        }
+
+        return {
+          requiresTwoFactor: true,
+          challengeToken,
+          user: {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+          },
+        };
+      }
+
       // Generate JWT
       const token = await signLocalToken({ userId: user.id, type: "local" });
 
@@ -143,6 +184,115 @@ export const localAuthRouter = createRouter({
           role: user.role,
         },
       };
+    }),
+
+  verifyTwoFactor: publicQuery
+    .input(
+      z.object({
+        challengeToken: z.string().min(1),
+        otpCode: z.string().length(6),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const db = getDb();
+
+      const [challenge] = await db
+        .select()
+        .from(twoFactorChallenges)
+        .where(
+          and(
+            eq(twoFactorChallenges.challengeToken, input.challengeToken),
+            gt(twoFactorChallenges.expiresAt, new Date()),
+            eq(twoFactorChallenges.consumedAt, null as any)
+          )
+        )
+        .limit(1);
+
+      if (!challenge) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Invalid or expired verification code",
+        });
+      }
+
+      if (challenge.attempts >= challenge.maxAttempts) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Too many attempts. Please request a new code.",
+        });
+      }
+
+      // Increment attempts
+      await db
+        .update(twoFactorChallenges)
+        .set({ attempts: challenge.attempts + 1 })
+        .where(eq(twoFactorChallenges.id, challenge.id));
+
+      const valid = await bcrypt.compare(input.otpCode, challenge.otpHash);
+      if (!valid) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Invalid verification code",
+        });
+      }
+
+      // Mark as consumed
+      await db
+        .update(twoFactorChallenges)
+        .set({ consumedAt: new Date() })
+        .where(eq(twoFactorChallenges.id, challenge.id));
+
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, challenge.userId))
+        .limit(1);
+
+      if (!user) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+      }
+
+      const token = await signLocalToken({ userId: user.id, type: "local" });
+
+      return {
+        token,
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+        },
+      };
+    }),
+
+  enableTwoFactor: authedQuery
+    .input(z.object({ method: z.enum(["email"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await db
+        .update(users)
+        .set({
+          twoFactorEnabled: true,
+          twoFactorMethod: input.method,
+          twoFactorVerifiedAt: new Date(),
+        })
+        .where(eq(users.id, ctx.user.id));
+      return { success: true };
+    }),
+
+  disableTwoFactor: authedQuery
+    .mutation(async ({ ctx }) => {
+      const db = getDb();
+      await db
+        .update(users)
+        .set({
+          twoFactorEnabled: false,
+          twoFactorMethod: null,
+          twoFactorVerifiedAt: null,
+        })
+        .where(eq(users.id, ctx.user.id));
+      return { success: true };
     }),
 
   // Google OAuth: find or create user

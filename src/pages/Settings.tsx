@@ -26,8 +26,132 @@ import {
   Bell,
   Globe,
   Shield,
+  CheckCircle2,
+  AlertTriangle,
+  Mail,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
+
+function SecuritySettings() {
+  const { user } = useAuth();
+  const utils = trpc.useUtils();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const enable2FA = trpc.auth.enableTwoFactor.useMutation({
+    onSuccess: () => {
+      utils.auth.me.invalidate();
+      toast.success("Two-factor authentication enabled");
+      setConfirmOpen(false);
+    },
+    onError: (err) => toast.error(err.message || "Failed to enable 2FA"),
+  });
+
+  const disable2FA = trpc.auth.disableTwoFactor.useMutation({
+    onSuccess: () => {
+      utils.auth.me.invalidate();
+      toast.success("Two-factor authentication disabled");
+    },
+    onError: (err) => toast.error(err.message || "Failed to disable 2FA"),
+  });
+
+  const isEnabled = user?.twoFactorEnabled;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Shield className="w-4 h-4 text-[#00D4FF]" />
+          Two-Factor Authentication
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between py-2">
+          <div>
+            <p className="text-sm font-medium">Status</p>
+            <p className="text-xs text-muted-foreground">
+              Add an extra layer of security to your account
+            </p>
+          </div>
+          {isEnabled ? (
+            <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-200">
+              <CheckCircle2 className="w-3 h-3 mr-1" />
+              Enabled
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-amber-600 border-amber-200 bg-amber-50">
+              <AlertTriangle className="w-3 h-3 mr-1" />
+              Disabled
+            </Badge>
+          )}
+        </div>
+
+        {isEnabled ? (
+          <div className="space-y-3">
+            <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">Two-factor authentication is active</p>
+                <p className="text-emerald-700/80 mt-0.5">
+                  You will receive a 6-digit verification code via email every time you sign in with your password.
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              className="border-red-200 text-red-600 hover:bg-red-50"
+              onClick={() => disable2FA.mutate()}
+              disabled={disable2FA.isPending}
+            >
+              {disable2FA.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Disable 2FA
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="p-3 rounded-lg bg-muted/50 border border-border text-xs text-muted-foreground">
+              <p className="font-medium text-foreground mb-1">How it works</p>
+              <ul className="space-y-1 list-disc list-inside">
+                <li>Every login attempt sends a one-time code to your email</li>
+                <li>Codes expire after 10 minutes</li>
+                <li>Only 5 attempts allowed per code</li>
+              </ul>
+            </div>
+            <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+              <DialogTrigger asChild>
+                <Button className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white">
+                  <Mail className="w-4 h-4 mr-2" />
+                  Enable Email 2FA
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Enable Two-Factor Authentication?</DialogTitle>
+                  <DialogDescription>
+                    Once enabled, you will need to enter a verification code sent to your email every time you log in.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="flex gap-2 pt-2">
+                  <Button variant="outline" className="flex-1" onClick={() => setConfirmOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                    onClick={() => enable2FA.mutate({ method: "email" })}
+                    disabled={enable2FA.isPending}
+                  >
+                    {enable2FA.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                    Confirm Enable
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function Settings() {
   const { user } = useAuth();
@@ -294,30 +418,7 @@ export default function Settings() {
 
         {/* Security Tab */}
         <TabsContent value="security" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Shield className="w-4 h-4 text-[#00D4FF]" />
-                Two-Factor Authentication
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between py-2">
-                <div>
-                  <p className="text-sm font-medium">Status</p>
-                  <p className="text-xs text-muted-foreground">
-                    Add an extra layer of security to your account
-                  </p>
-                </div>
-                <Badge variant="outline" className="text-amber-400 border-amber-400/30">
-                  Coming Soon
-                </Badge>
-              </div>
-              <div className="p-3 rounded-lg bg-muted/50 border border-border text-xs text-muted-foreground">
-                Two-factor authentication will be available in a future update. When enabled, you will be able to use email or authenticator app verification during login.
-              </div>
-            </CardContent>
-          </Card>
+          <SecuritySettings />
         </TabsContent>
 
         {/* Preferences Tab */}

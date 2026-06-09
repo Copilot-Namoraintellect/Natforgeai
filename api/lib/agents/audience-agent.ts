@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { runAgent } from "./runner";
 import { getDb } from "../../queries/connection";
-import { campaigns } from "@db/schema";
+import { campaigns, businesses } from "@db/schema";
 import { eq } from "drizzle-orm";
 
 // ─── Schema Normalisation Helpers ───
@@ -174,6 +174,17 @@ export async function runAudienceAgent({
   const strategyContext = campaign.workflowContext as any;
   const personas = campaign.personas as any[];
 
+  // Fallback: if workflowContext doesn't have location, try to get it from the campaign's business
+  let location = strategyContext?.location || null;
+  let industry = strategyContext?.industry || null;
+  if (!location && campaign.businessId) {
+    const [biz] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
+    if (biz) {
+      location = biz.location || null;
+      industry = industry || biz.industry || null;
+    }
+  }
+
   const prompt = `You are an audience research and targeting expert. Discover and define the optimal target audience for the following campaign.
 
 CAMPAIGN:
@@ -182,14 +193,21 @@ CAMPAIGN:
 - Target Audience: ${campaign.targetAudience || "Not specified"}
 - Core Message: ${campaign.coreMessage || "Not specified"}
 - Platforms: ${campaign.platforms || "Not specified"}
-- Industry: ${strategyContext?.industry || "Not specified"}
-- Location: ${strategyContext?.location || "Not specified"}
+- Industry: ${industry || "Not specified"}
+- Location: ${location || "Not specified"}
 - Business Type: ${isB2B ? "B2B" : "B2C"}
 
 PERSONAS:
 ${personas ? JSON.stringify(personas.map((p: any) => ({ name: p.name, demographics: p.demographics, painPoints: p.painPoints }))) : "General audience"}
 
 ${strategyContext?.platformStrategy ? `Platform Strategy: ${JSON.stringify(strategyContext.platformStrategy)}` : ""}
+
+LOCATION RULE — YOU MUST FOLLOW THIS EXACTLY:
+- The business location is: ${location || "Not specified"}.
+- If a location is specified above, you MUST use that location exactly. Do NOT invent a different city, province, state, or country.
+- If the location is Johannesburg, South Africa, your audience profiles and targeting must reflect Johannesburg, Gauteng, and South Africa.
+- Only use international locations if the user has explicitly selected international targeting.
+- If location is "Not specified", you may infer a reasonable location from the business context, but state it clearly.
 
 Your task:
 1. Define 3-4 detailed audience profiles with demographics, interests, and behaviours

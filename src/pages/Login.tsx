@@ -32,14 +32,16 @@ export default function Login() {
   const [runningDiagnostic, setRunningDiagnostic] = useState(false);
 
   // Login form state
-  // TODO: 2FA is scaffolded in the schema but not yet implemented.
-  // A full 2FA phase should add: TOTP secret generation, QR setup, encrypted storage,
-  // backup codes, login challenge screen, rate limiting, recovery flow, and settings UI.
   const [loginForm, setLoginForm] = useState({
     usernameOrEmail: "",
     password: "",
     rememberMe: false,
   });
+
+  // 2FA challenge state
+  const [challengeToken, setChallengeToken] = useState<string | null>(null);
+  const [otpCode, setOtpCode] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
 
   // Register form state
   const [registerForm, setRegisterForm] = useState({
@@ -52,9 +54,36 @@ export default function Login() {
 
   const loginMutation = trpc.auth.login.useMutation({
     onSuccess: async (data) => {
+      if ("requiresTwoFactor" in data && data.requiresTwoFactor) {
+        setChallengeToken(data.challengeToken);
+        toast.info("A verification code has been sent to your email.");
+        return;
+      }
+      if ("token" in data && data.token) {
+        localStorage.setItem("auth_token", data.token);
+        toast.success("Welcome back!");
+        try {
+          utils.auth.me.invalidate();
+          const user = await utils.auth.me.fetch(undefined);
+          if (user && !user.onboardingComplete) {
+            navigate("/onboarding");
+          } else {
+            navigate("/mission-control");
+          }
+        } catch {
+          navigate("/mission-control");
+        }
+      }
+    },
+    onError: (err) => {
+      toast.error(err.message || "Login failed");
+    },
+  });
+
+  const verifyTwoFactorMutation = trpc.auth.verifyTwoFactor.useMutation({
+    onSuccess: async (data) => {
       localStorage.setItem("auth_token", data.token);
       toast.success("Welcome back!");
-      
       try {
         utils.auth.me.invalidate();
         const user = await utils.auth.me.fetch(undefined);
@@ -68,7 +97,7 @@ export default function Login() {
       }
     },
     onError: (err) => {
-      toast.error(err.message || "Login failed");
+      toast.error(err.message || "Verification failed");
     },
   });
 
@@ -150,6 +179,38 @@ export default function Login() {
       usernameOrEmail: loginForm.usernameOrEmail,
       password: loginForm.password,
     });
+  }
+
+  function handleVerifyOtp(e: React.FormEvent) {
+    e.preventDefault();
+    if (!challengeToken || otpCode.length !== 6) {
+      toast.error("Please enter the 6-digit code");
+      return;
+    }
+    verifyTwoFactorMutation.mutate({ challengeToken, otpCode });
+  }
+
+  function handleResendCode() {
+    if (resendCooldown > 0) return;
+    loginMutation.mutate({
+      usernameOrEmail: loginForm.usernameOrEmail,
+      password: loginForm.password,
+    });
+    setResendCooldown(60);
+    const interval = setInterval(() => {
+      setResendCooldown((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
+
+  function handleBackToLogin() {
+    setChallengeToken(null);
+    setOtpCode("");
   }
 
   function handleRegister(e: React.FormEvent) {
@@ -262,106 +323,165 @@ export default function Login() {
 
               {/* ─── LOGIN TAB ─── */}
               <TabsContent value="login">
-                <form onSubmit={handleLogin} className="space-y-4">
-                  <div>
-                    <Label htmlFor="login-user" className="text-sm font-medium">
-                      Username or Email
-                    </Label>
-                    <div className="relative mt-1.5">
-                      <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                {challengeToken ? (
+                  <form onSubmit={handleVerifyOtp} className="space-y-4">
+                    <div className="text-center mb-4">
+                      <Lock className="w-8 h-8 text-[#00D4FF] mx-auto mb-2" />
+                      <h3 className="text-lg font-semibold">Two-Factor Authentication</h3>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Enter the 6-digit code sent to your email.
+                      </p>
+                    </div>
+                    <div>
+                      <Label htmlFor="otp-code" className="text-sm font-medium">
+                        Verification Code
+                      </Label>
                       <Input
-                        id="login-user"
-                        placeholder="Enter username or email"
-                        className="pl-9 rounded-xl"
-                        value={loginForm.usernameOrEmail}
-                        onChange={(e) =>
-                          setLoginForm({ ...loginForm, usernameOrEmail: e.target.value })
-                        }
+                        id="otp-code"
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        placeholder="000000"
+                        className="text-center text-lg tracking-[0.3em] rounded-xl mt-1.5"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                        autoFocus
                       />
                     </div>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="login-password" className="text-sm font-medium">
-                      Password
-                    </Label>
-                    <div className="relative mt-1.5">
-                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                      <Input
-                        id="login-password"
-                        type={showPassword ? "text" : "password"}
-                        placeholder="Enter password"
-                        className="pl-9 pr-10 rounded-xl"
-                        value={loginForm.password}
-                        onChange={(e) =>
-                          setLoginForm({ ...loginForm, password: e.target.value })
-                        }
-                      />
+                    <Button
+                      type="submit"
+                      className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white rounded-xl"
+                      disabled={verifyTwoFactorMutation.isPending || otpCode.length !== 6}
+                    >
+                      {verifyTwoFactorMutation.isPending ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <ArrowRight className="w-4 h-4 mr-2" />
+                      )}
+                      Verify
+                    </Button>
+                    <div className="flex items-center justify-between text-sm">
                       <button
                         type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        onClick={handleBackToLogin}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
                       >
-                        {showPassword ? (
-                          <EyeOff className="w-4 h-4" />
-                        ) : (
-                          <Eye className="w-4 h-4" />
-                        )}
+                        Back to login
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResendCode}
+                        disabled={resendCooldown > 0 || loginMutation.isPending}
+                        className="text-[#00D4FF] hover:underline disabled:opacity-50 disabled:hover:no-underline"
+                      >
+                        {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend code"}
                       </button>
                     </div>
-                  </div>
+                  </form>
+                ) : (
+                  <>
+                    <form onSubmit={handleLogin} className="space-y-4">
+                      <div>
+                        <Label htmlFor="login-user" className="text-sm font-medium">
+                          Username or Email
+                        </Label>
+                        <div className="relative mt-1.5">
+                          <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                          <Input
+                            id="login-user"
+                            placeholder="Enter username or email"
+                            className="pl-9 rounded-xl"
+                            value={loginForm.usernameOrEmail}
+                            onChange={(e) =>
+                              setLoginForm({ ...loginForm, usernameOrEmail: e.target.value })
+                            }
+                          />
+                        </div>
+                      </div>
 
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="remember"
-                        checked={loginForm.rememberMe}
-                        onCheckedChange={(checked) =>
-                          setLoginForm({ ...loginForm, rememberMe: checked as boolean })
-                        }
-                      />
-                      <Label htmlFor="remember" className="text-xs text-muted-foreground cursor-pointer">
-                        Remember me
-                      </Label>
+                      <div>
+                        <Label htmlFor="login-password" className="text-sm font-medium">
+                          Password
+                        </Label>
+                        <div className="relative mt-1.5">
+                          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                          <Input
+                            id="login-password"
+                            type={showPassword ? "text" : "password"}
+                            placeholder="Enter password"
+                            className="pl-9 pr-10 rounded-xl"
+                            value={loginForm.password}
+                            onChange={(e) =>
+                              setLoginForm({ ...loginForm, password: e.target.value })
+                            }
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            {showPassword ? (
+                              <EyeOff className="w-4 h-4" />
+                            ) : (
+                              <Eye className="w-4 h-4" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="remember"
+                            checked={loginForm.rememberMe}
+                            onCheckedChange={(checked) =>
+                              setLoginForm({ ...loginForm, rememberMe: checked as boolean })
+                            }
+                          />
+                          <Label htmlFor="remember" className="text-xs text-muted-foreground cursor-pointer">
+                            Remember me
+                          </Label>
+                        </div>
+                      </div>
+
+                      <Button
+                        type="submit"
+                        className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white rounded-xl"
+                        disabled={loginMutation.isPending}
+                      >
+                        {loginMutation.isPending ? (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        ) : (
+                          <ArrowRight className="w-4 h-4 mr-2" />
+                        )}
+                        Sign In
+                      </Button>
+                    </form>
+
+                    <div className="relative my-5">
+                      <div className="absolute inset-0 flex items-center">
+                        <div className="w-full border-t border-border" />
+                      </div>
+                      <div className="relative flex justify-center text-xs">
+                        <span className="bg-card px-3 text-muted-foreground">or continue with</span>
+                      </div>
                     </div>
-                  </div>
 
-                  <Button
-                    type="submit"
-                    className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90 text-white rounded-xl"
-                    disabled={loginMutation.isPending}
-                  >
-                    {loginMutation.isPending ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    ) : (
-                      <ArrowRight className="w-4 h-4 mr-2" />
-                    )}
-                    Sign In
-                  </Button>
-                </form>
-
-                <div className="relative my-5">
-                  <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-border" />
-                  </div>
-                  <div className="relative flex justify-center text-xs">
-                    <span className="bg-card px-3 text-muted-foreground">or continue with</span>
-                  </div>
-                </div>
-
-                <Button
-                  variant="outline"
-                  className="w-full rounded-xl"
-                  onClick={handleFirebaseGoogleAuth}
-                  disabled={firebaseAuthMutation.isPending}
-                >
-                  {firebaseAuthMutation.isPending ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  ) : (
-                    <Chrome className="w-4 h-4 mr-2 text-red-500" />
-                  )}
-                  Google Account
-                </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full rounded-xl"
+                      onClick={handleFirebaseGoogleAuth}
+                      disabled={firebaseAuthMutation.isPending}
+                    >
+                      {firebaseAuthMutation.isPending ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Chrome className="w-4 h-4 mr-2 text-red-500" />
+                      )}
+                      Google Account
+                    </Button>
+                  </>
+                )}
               </TabsContent>
 
               {/* ─── REGISTER TAB ─── */}

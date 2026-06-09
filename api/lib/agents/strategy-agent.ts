@@ -140,6 +140,8 @@ export async function runStrategyAgent({
         coreMessage: result.output.coreMessage,
         campaignTheme: result.output.campaignTheme,
         budgetRecommendation: result.output.budgetRecommendation,
+        location: business.location || null,
+        industry: business.industry || null,
       } as any,
     })
     .where(eq(campaigns.id, campaignId));

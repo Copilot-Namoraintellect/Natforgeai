@@ -51,7 +51,10 @@ import {
   Hash,
   MessageCircle,
   Image,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { toast } from "sonner";
 
 const platforms = [
@@ -96,6 +99,8 @@ export default function ContentStudio() {
   });
   const [scheduleDate, setScheduleDate] = useState("");
   const [pendingActions, setPendingActions] = useState<Set<PendingActionKey>>(new Set());
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["masterVisual", "masterVideo"]));
 
   const utils = trpc.useUtils();
   const listInput = (() => {
@@ -126,6 +131,11 @@ export default function ContentStudio() {
     { campaignId: Number(urlCampaignId) },
     { enabled: !!urlCampaignId }
   );
+  const { data: videoJobs } = trpc.video.listForCampaign.useQuery(
+    { campaignId: Number(urlCampaignId) },
+    { enabled: !!urlCampaignId }
+  );
+  const { data: videoConfig } = trpc.video.getConfigStatus.useQuery();
 
   // Fetch campaigns and approvals to show contextual empty-state guidance
   const { data: campaigns } = trpc.campaign.list.useQuery();
@@ -414,38 +424,70 @@ Include:
     toast.info("Auto-publishing is coming soon. Use 'Mark as posted' if you published manually.");
   }
 
+  const createRenderJobMutation = trpc.video.createRenderJob.useMutation({
+    onSuccess: () => {
+      toast.success("Video render job created!");
+      utils.video.listForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to create render job");
+    },
+  });
+
+  const refreshVideoStatusMutation = trpc.video.refreshStatus.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Video status: ${data.status}`);
+      utils.video.listForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to refresh status");
+    },
+  });
+
+  function getVideoJobForContent(contentId: number) {
+    return videoJobs?.find((j) => j.contentPostId === contentId);
+  }
+
   function renderVideoBlueprint(content: any) {
     const metadata = (content.metadata || {}) as any;
-    if (!metadata?.scenes?.length) return null;
+    const job = getVideoJobForContent(content.id);
+    const configured = videoConfig?.configured ?? false;
+
     return (
       <div className="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Video Blueprint</span>
-          <span className="text-[10px] text-slate-500">{metadata.duration || "30s"}</span>
-        </div>
-        <p className="text-xs text-slate-600 font-medium">{metadata.openingHook3Sec || content.hook}</p>
-        <div className="space-y-1.5">
-          {metadata.scenes.map((scene: any, i: number) => (
-            <div key={i} className="flex gap-2 text-xs">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-[#00D4FF]/10 text-[#00D4FF] flex items-center justify-center font-bold text-[10px]">
-                {scene.sceneNumber || i + 1}
-              </span>
-              <div className="flex-1 min-w-0">
-                <p className="text-slate-700 truncate">{scene.visualDescription}</p>
-                {scene.onScreenText && (
-                  <p className="text-slate-500 text-[10px]">Overlay: "{scene.onScreenText}"</p>
-                )}
-                {scene.voiceoverScript && (
-                  <p className="text-slate-500 text-[10px] italic truncate">VO: {scene.voiceoverScript}</p>
-                )}
-              </div>
+        {metadata?.scenes?.length > 0 && (
+          <>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Video Blueprint</span>
+              <span className="text-[10px] text-slate-500">{metadata.duration || "30s"}</span>
             </div>
-          ))}
-        </div>
-        {metadata.backgroundMusicMood && (
-          <p className="text-[10px] text-slate-500">Music: {metadata.backgroundMusicMood}</p>
+            <p className="text-xs text-slate-600 font-medium">{metadata.openingHook3Sec || content.hook}</p>
+            <div className="space-y-1.5">
+              {metadata.scenes.map((scene: any, i: number) => (
+                <div key={i} className="flex gap-2 text-xs">
+                  <span className="shrink-0 w-5 h-5 rounded-full bg-[#00D4FF]/10 text-[#00D4FF] flex items-center justify-center font-bold text-[10px]">
+                    {scene.sceneNumber || i + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-slate-700 truncate">{scene.visualDescription}</p>
+                    {scene.onScreenText && (
+                      <p className="text-slate-500 text-[10px]">Overlay: "{scene.onScreenText}"</p>
+                    )}
+                    {scene.voiceoverScript && (
+                      <p className="text-slate-500 text-[10px] italic truncate">VO: {scene.voiceoverScript}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {metadata.backgroundMusicMood && (
+              <p className="text-[10px] text-slate-500">Music: {metadata.backgroundMusicMood}</p>
+            )}
+          </>
         )}
-        <div className="flex gap-2 pt-1">
+
+        {/* Video Render Status / Actions */}
+        <div className="flex flex-wrap gap-2 pt-1">
           <Button
             size="sm"
             variant="outline"
@@ -455,7 +497,77 @@ Include:
             <Copy className="w-3 h-3 mr-1" />
             Export Brief
           </Button>
-          <span className="text-[10px] text-slate-400 self-center">Video rendering coming soon</span>
+
+          {!configured && (
+            <span className="text-[10px] text-slate-400 self-center">Video rendering not configured</span>
+          )}
+
+          {configured && !job && (
+            <Button
+              size="sm"
+              className="h-7 text-[11px] bg-rose-600 hover:bg-rose-700 text-white"
+              onClick={() =>
+                createRenderJobMutation.mutate({
+                  contentPostId: content.id,
+                  campaignId: Number(urlCampaignId),
+                })
+              }
+              disabled={createRenderJobMutation.isPending}
+            >
+              {createRenderJobMutation.isPending ? (
+                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+              ) : (
+                <Video className="w-3 h-3 mr-1" />
+              )}
+              Render Video
+            </Button>
+          )}
+
+          {job && (
+            <div className="flex items-center gap-2">
+              {job.renderStatus === "queued" && (
+                <Badge variant="outline" className="text-blue-600 border-blue-200 bg-blue-50 text-[10px] h-6">
+                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  Queued
+                </Badge>
+              )}
+              {job.renderStatus === "rendering" && (
+                <Badge variant="outline" className="text-purple-600 border-purple-200 bg-purple-50 text-[10px] h-6">
+                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  Rendering
+                </Badge>
+              )}
+              {job.renderStatus === "completed" && job.videoUrl && (
+                <a
+                  href={job.videoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center text-[11px] text-emerald-600 hover:text-emerald-700 font-medium"
+                >
+                  <CheckCircle2 className="w-3 h-3 mr-1" />
+                  View Video
+                </a>
+              )}
+              {job.renderStatus === "failed" && (
+                <Badge variant="outline" className="text-red-600 border-red-200 bg-red-50 text-[10px] h-6">
+                  <AlertCircle className="w-3 h-3 mr-1" />
+                  Failed
+                </Badge>
+              )}
+              {(job.renderStatus === "queued" || job.renderStatus === "rendering") && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-[11px]"
+                  onClick={() => refreshVideoStatusMutation.mutate({ jobId: job.id })}
+                  disabled={refreshVideoStatusMutation.isPending}
+                >
+                  <Loader2 className={`w-3 h-3 mr-1 ${refreshVideoStatusMutation.isPending ? "animate-spin" : ""}`} />
+                  Refresh
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -729,6 +841,85 @@ Include:
   }
 
   // Campaign Pack grouping
+  function toggleSection(key: string) {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function SectionHeader({ title, icon: Icon, color, sectionKey, count }: { title: string; icon: any; color: string; sectionKey: string; count?: number }) {
+    const isOpen = expandedSections.has(sectionKey);
+    return (
+      <CollapsibleTrigger asChild>
+        <button
+          onClick={() => toggleSection(sectionKey)}
+          className="flex items-center justify-between w-full text-left group"
+        >
+          <h3 className={`text-sm font-semibold flex items-center gap-2 ${color}`}>
+            <Icon className="w-4 h-4" />
+            {title}
+            {count !== undefined && count > 1 && (
+              <span className="text-xs font-normal text-muted-foreground">({count})</span>
+            )}
+          </h3>
+          {isOpen ? (
+            <ChevronUp className="w-4 h-4 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-muted-foreground" />
+          )}
+        </button>
+      </CollapsibleTrigger>
+    );
+  }
+
+  function getPlatformConnectionStatus() {
+    const platformsUsed = new Set<string>();
+    filtered?.forEach((c) => {
+      if (c.platform) platformsUsed.add(c.platform);
+    });
+    const result: { platform: string; connected: boolean; configurable: boolean }[] = [];
+    platformsUsed.forEach((p) => {
+      result.push({
+        platform: p,
+        connected: isPlatformConnected(p),
+        configurable: isPlatformConfigurable(p),
+      });
+    });
+    return result;
+  }
+
+  function handlePublishPack() {
+    const unapproved = filtered?.filter((c) => !getApprovalState(c) && c.status !== "published") || [];
+    if (unapproved.length === 0) {
+      toast.info("All items are already approved or published.");
+      return;
+    }
+    setPublishDialogOpen(true);
+  }
+
+  function executePublishPack() {
+    const unapproved = filtered?.filter((c) => !getApprovalState(c) && c.status !== "published") || [];
+    const platformStatus = getPlatformConnectionStatus();
+
+    unapproved.forEach((c) => {
+      handleApprove(c.id);
+      const platform = c.platform;
+      if (platform) {
+        const status = platformStatus.find((p) => p.platform === platform);
+        if (!status?.connected) {
+          // Mark as manually posted for disconnected platforms
+          setTimeout(() => handleMarkPosted(c.id), 500);
+        }
+      }
+    });
+
+    toast.success("Campaign pack approved. Disconnected platforms marked for manual posting.");
+    setPublishDialogOpen(false);
+  }
+
   function renderCampaignPack() {
     if (!urlCampaignId || !filtered) return null;
 
@@ -737,7 +928,7 @@ Include:
     const carousel = filtered.find((c) => c.type === "carousel_ad");
     const ads = filtered.filter((c) => c.type === "lead_gen_ad" || c.type === "ad_copy");
     const whatsapp = filtered.find((c) => c.type === "whatsapp_promo");
-    const email = filtered.find((c) => c.type === "email");
+    const emailItem = filtered.find((c) => c.type === "email");
     const launch = filtered.find((c) => c.type === "launch_pack");
     const others = filtered.filter((c) =>
       !["social_post", "video_concept", "reel_script", "carousel_ad", "lead_gen_ad", "ad_copy", "whatsapp_promo", "email", "launch_pack"].includes(c.type)
@@ -778,15 +969,7 @@ Include:
                   size="sm"
                   className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
                   disabled={!anyDraft}
-                  onClick={() => {
-                    const unapproved = filtered.filter((c) => !getApprovalState(c) && c.status !== "published");
-                    if (unapproved.length === 0) {
-                      toast.info("All items are already approved or published.");
-                      return;
-                    }
-                    unapproved.forEach((c) => handleApprove(c.id));
-                    toast.success("Publishing campaign pack...");
-                  }}
+                  onClick={handlePublishPack}
                 >
                   <Upload className="w-3.5 h-3.5 mr-1.5" />
                   Publish Campaign Pack
@@ -801,7 +984,7 @@ Include:
           </CardContent>
         </Card>
 
-        {/* Master Creative */}
+        {/* Master Creative — always expanded */}
         {masterVisual && (
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
@@ -812,7 +995,7 @@ Include:
           </div>
         )}
 
-        {/* Video */}
+        {/* Video — always expanded */}
         {video && (
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
@@ -823,161 +1006,233 @@ Include:
           </div>
         )}
 
-        {/* Carousel */}
-        {carousel && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-orange-500" />
-              Supporting: Carousel
-            </h3>
-            {renderContentCard(carousel)}
-          </div>
-        )}
+        {/* Supporting Assets — collapsed by default */}
+        <div className="space-y-4 pt-2 border-t border-slate-200">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Supporting Assets</p>
 
-        {/* Ads */}
-        {ads.length > 0 && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <Megaphone className="w-4 h-4 text-cyan-500" />
-              Ad Variations
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {ads.map((c) => renderContentCard(c))}
-            </div>
-          </div>
-        )}
+          {/* Carousel */}
+          {carousel && (
+            <Collapsible open={expandedSections.has("carousel")} onOpenChange={() => toggleSection("carousel")}>
+              <div className="space-y-2">
+                <SectionHeader title="Carousel" icon={FileText} color="text-orange-600" sectionKey="carousel" />
+                <CollapsibleContent>{renderContentCard(carousel)}</CollapsibleContent>
+              </div>
+            </Collapsible>
+          )}
 
-        {/* Platform Adaptations */}
-        {adaptations.length > 0 && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <MessageCircle className="w-4 h-4 text-purple-500" />
-              Platform Adaptation Pack
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {adaptations.map((adaptation) => {
-                const meta = (adaptation.metadata || {}) as any;
-                return (
-                  <Card key={adaptation.id} className="hover:shadow-md transition-all">
+          {/* Ads */}
+          {ads.length > 0 && (
+            <Collapsible open={expandedSections.has("ads")} onOpenChange={() => toggleSection("ads")}>
+              <div className="space-y-2">
+                <SectionHeader title="Ad Variations" icon={Megaphone} color="text-cyan-600" sectionKey="ads" count={ads.length} />
+                <CollapsibleContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {ads.map((c) => renderContentCard(c))}
+                  </div>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+          )}
+
+          {/* Platform Adaptations */}
+          {adaptations.length > 0 && (
+            <Collapsible open={expandedSections.has("adaptations")} onOpenChange={() => toggleSection("adaptations")}>
+              <div className="space-y-2">
+                <SectionHeader title="Platform Adaptation Pack" icon={MessageCircle} color="text-purple-600" sectionKey="adaptations" count={adaptations.length} />
+                <CollapsibleContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {adaptations.map((adaptation) => {
+                      const meta = (adaptation.metadata || {}) as any;
+                      return (
+                        <Card key={adaptation.id} className="hover:shadow-md transition-all">
+                          <CardContent className="p-4">
+                            <Badge variant="secondary" className="mb-2">
+                              {meta.platform || adaptation.assetType}
+                            </Badge>
+                            <p className="text-sm text-slate-900 font-medium">{adaptation.title}</p>
+                            {meta.adaptedCaption && (
+                              <p className="text-xs text-muted-foreground mt-1 line-clamp-3">{meta.adaptedCaption}</p>
+                            )}
+                            {meta.adaptedCta && (
+                              <p className="text-xs font-medium text-[#00D4FF] mt-1">CTA: {meta.adaptedCta}</p>
+                            )}
+                            {meta.adaptedHashtags && Array.isArray(meta.adaptedHashtags) && (
+                              <p className="text-[10px] text-muted-foreground mt-1">{meta.adaptedHashtags.join(" ")}</p>
+                            )}
+                            {meta.formatNotes && (
+                              <p className="text-[10px] text-slate-500 mt-1">{meta.formatNotes}</p>
+                            )}
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+          )}
+
+          {/* Hashtags */}
+          {hashtagSet && (
+            <Collapsible open={expandedSections.has("hashtags")} onOpenChange={() => toggleSection("hashtags")}>
+              <div className="space-y-2">
+                <SectionHeader title="Hashtag Pack" icon={Hash} color="text-pink-600" sectionKey="hashtags" />
+                <CollapsibleContent>
+                  <Card className="hover:shadow-md transition-all">
                     <CardContent className="p-4">
-                      <Badge variant="secondary" className="mb-2">
-                        {meta.platform || adaptation.assetType}
-                      </Badge>
-                      <p className="text-sm text-slate-900 font-medium">{adaptation.title}</p>
-                      {meta.adaptedCaption && (
-                        <p className="text-xs text-muted-foreground mt-1 line-clamp-3">{meta.adaptedCaption}</p>
-                      )}
-                      {meta.adaptedCta && (
-                        <p className="text-xs font-medium text-[#00D4FF] mt-1">CTA: {meta.adaptedCta}</p>
-                      )}
-                      {meta.adaptedHashtags && Array.isArray(meta.adaptedHashtags) && (
-                        <p className="text-[10px] text-muted-foreground mt-1">{meta.adaptedHashtags.join(" ")}</p>
-                      )}
-                      {meta.formatNotes && (
-                        <p className="text-[10px] text-slate-500 mt-1">{meta.formatNotes}</p>
-                      )}
+                      {(() => {
+                        const meta = (hashtagSet.metadata || {}) as any;
+                        return (
+                          <div className="space-y-2">
+                            {meta.core && Array.isArray(meta.core) && meta.core.length > 0 && (
+                              <div>
+                                <span className="text-[10px] font-medium text-slate-500 uppercase">Core</span>
+                                <p className="text-xs text-slate-700">{meta.core.join(" ")}</p>
+                              </div>
+                            )}
+                            {meta.trending && Array.isArray(meta.trending) && meta.trending.length > 0 && (
+                              <div>
+                                <span className="text-[10px] font-medium text-slate-500 uppercase">Trending</span>
+                                <p className="text-xs text-slate-700">{meta.trending.join(" ")}</p>
+                              </div>
+                            )}
+                            {meta.niche && Array.isArray(meta.niche) && meta.niche.length > 0 && (
+                              <div>
+                                <span className="text-[10px] font-medium text-slate-500 uppercase">Niche</span>
+                                <p className="text-xs text-slate-700">{meta.niche.join(" ")}</p>
+                              </div>
+                            )}
+                            {meta.platformSpecific && Array.isArray(meta.platformSpecific) && (
+                              <div className="space-y-1">
+                                {meta.platformSpecific.map((ps: any, i: number) => (
+                                  <div key={i}>
+                                    <span className="text-[10px] font-medium text-slate-500 uppercase">{ps.platform}</span>
+                                    <p className="text-xs text-slate-700">{ps.hashtags?.join(" ")}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </CardContent>
                   </Card>
-                );
-              })}
-            </div>
-          </div>
-        )}
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+          )}
 
-        {/* Hashtags */}
-        {hashtagSet && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <Hash className="w-4 h-4 text-pink-500" />
-              Hashtag Pack
-            </h3>
-            <Card className="hover:shadow-md transition-all">
-              <CardContent className="p-4">
-                {(() => {
-                  const meta = (hashtagSet.metadata || {}) as any;
-                  return (
-                    <div className="space-y-2">
-                      {meta.core && Array.isArray(meta.core) && meta.core.length > 0 && (
-                        <div>
-                          <span className="text-[10px] font-medium text-slate-500 uppercase">Core</span>
-                          <p className="text-xs text-slate-700">{meta.core.join(" ")}</p>
-                        </div>
-                      )}
-                      {meta.trending && Array.isArray(meta.trending) && meta.trending.length > 0 && (
-                        <div>
-                          <span className="text-[10px] font-medium text-slate-500 uppercase">Trending</span>
-                          <p className="text-xs text-slate-700">{meta.trending.join(" ")}</p>
-                        </div>
-                      )}
-                      {meta.niche && Array.isArray(meta.niche) && meta.niche.length > 0 && (
-                        <div>
-                          <span className="text-[10px] font-medium text-slate-500 uppercase">Niche</span>
-                          <p className="text-xs text-slate-700">{meta.niche.join(" ")}</p>
-                        </div>
-                      )}
-                      {meta.platformSpecific && Array.isArray(meta.platformSpecific) && (
-                        <div className="space-y-1">
-                          {meta.platformSpecific.map((ps: any, i: number) => (
-                            <div key={i}>
-                              <span className="text-[10px] font-medium text-slate-500 uppercase">{ps.platform}</span>
-                              <p className="text-xs text-slate-700">{ps.hashtags?.join(" ")}</p>
-                            </div>
+          {/* WhatsApp */}
+          {whatsapp && (
+            <Collapsible open={expandedSections.has("whatsapp")} onOpenChange={() => toggleSection("whatsapp")}>
+              <div className="space-y-2">
+                <SectionHeader title="WhatsApp Version" icon={MessageCircle} color="text-green-600" sectionKey="whatsapp" />
+                <CollapsibleContent>{renderContentCard(whatsapp)}</CollapsibleContent>
+              </div>
+            </Collapsible>
+          )}
+
+          {/* Email */}
+          {emailItem && (
+            <Collapsible open={expandedSections.has("email")} onOpenChange={() => toggleSection("email")}>
+              <div className="space-y-2">
+                <SectionHeader title="Email Version" icon={Mail} color="text-emerald-600" sectionKey="email" />
+                <CollapsibleContent>{renderContentCard(emailItem)}</CollapsibleContent>
+              </div>
+            </Collapsible>
+          )}
+
+          {/* Launch Sequence */}
+          {launch && (
+            <Collapsible open={expandedSections.has("launch")} onOpenChange={() => toggleSection("launch")}>
+              <div className="space-y-2">
+                <SectionHeader title="Launch Sequence" icon={Sparkles} color="text-violet-600" sectionKey="launch" />
+                <CollapsibleContent>{renderContentCard(launch)}</CollapsibleContent>
+              </div>
+            </Collapsible>
+          )}
+
+          {/* Other supporting assets */}
+          {others.length > 0 && (
+            <Collapsible open={expandedSections.has("others")} onOpenChange={() => toggleSection("others")}>
+              <div className="space-y-2">
+                <SectionHeader title="Other Assets" icon={FileText} color="text-slate-600" sectionKey="others" count={others.length} />
+                <CollapsibleContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {others.map((c) => renderContentCard(c))}
+                  </div>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+          )}
+        </div>
+
+        {/* Publish Dialog */}
+        <Dialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Publish Campaign Pack</DialogTitle>
+              <DialogDescription>
+                Review platform connections before publishing.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 mt-2">
+              {(() => {
+                const status = getPlatformConnectionStatus();
+                const connected = status.filter((s) => s.connected);
+                const disconnected = status.filter((s) => !s.connected);
+                return (
+                  <div className="space-y-3">
+                    {connected.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-emerald-700 uppercase tracking-wide mb-1">Connected Platforms</p>
+                        <div className="flex flex-wrap gap-2">
+                          {connected.map((s) => (
+                            <Badge key={s.platform} className="bg-emerald-50 text-emerald-700 border-emerald-200 capitalize">
+                              <CheckCircle2 className="w-3 h-3 mr-1" />
+                              {s.platform}
+                            </Badge>
                           ))}
                         </div>
-                      )}
-                    </div>
-                  );
-                })()}
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        {/* WhatsApp */}
-        {whatsapp && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <MessageCircle className="w-4 h-4 text-green-500" />
-              WhatsApp Version
-            </h3>
-            {renderContentCard(whatsapp)}
-          </div>
-        )}
-
-        {/* Email */}
-        {email && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <Mail className="w-4 h-4 text-emerald-500" />
-              Email Version
-            </h3>
-            {renderContentCard(email)}
-          </div>
-        )}
-
-        {/* Launch Sequence */}
-        {launch && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-violet-500" />
-              Launch Sequence
-            </h3>
-            {renderContentCard(launch)}
-          </div>
-        )}
-
-        {/* Other supporting assets */}
-        {others.length > 0 && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-slate-500" />
-              Supporting Assets
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {others.map((c) => renderContentCard(c))}
+                        <p className="text-xs text-muted-foreground mt-1">These will attempt automatic publishing.</p>
+                      </div>
+                    )}
+                    {disconnected.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-amber-700 uppercase tracking-wide mb-1">Manual Posting Required</p>
+                        <div className="flex flex-wrap gap-2">
+                          {disconnected.map((s) => (
+                            <Badge key={s.platform} variant="outline" className="text-amber-700 border-amber-200 bg-amber-50 capitalize">
+                              <AlertCircle className="w-3 h-3 mr-1" />
+                              {s.platform}
+                            </Badge>
+                          ))}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          These will be approved and marked as "manually posted". Copy the content and post on each platform.
+                        </p>
+                      </div>
+                    )}
+                    {status.length === 0 && (
+                      <div className="p-3 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                        <p className="font-medium">No platforms detected</p>
+                        <p className="text-amber-700/80 mt-0.5">All content will be approved and marked for manual posting.</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" className="flex-1" onClick={() => setPublishDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button className="flex-1 bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white" onClick={executePublishPack}>
+                  Approve All & Publish
+                </Button>
+              </div>
             </div>
-          </div>
-        )}
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }

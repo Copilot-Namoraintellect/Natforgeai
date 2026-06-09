@@ -773,6 +773,62 @@ export const creditTransactions = mysqlTable("credit_transactions", {
 
 export type CreditTransaction = typeof creditTransactions.$inferSelect;
 
+// ─── Video Render Jobs ───
+export const videoRenderJobs = mysqlTable("video_render_jobs", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
+  contentPostId: bigint("contentPostId", { mode: "number", unsigned: true }),
+  provider: varchar("provider", { length: 50 }).default("placeholder").notNull(),
+  renderJobId: varchar("renderJobId", { length: 255 }),
+  renderStatus: mysqlEnum("renderStatus", [
+    "queued",
+    "rendering",
+    "completed",
+    "failed",
+    "cancelled",
+  ])
+    .default("queued")
+    .notNull(),
+  videoUrl: text("videoUrl"),
+  thumbnailUrl: text("thumbnailUrl"),
+  errorMessage: text("errorMessage"),
+  creditCost: int("creditCost").default(0).notNull(),
+  requestedAt: timestamp("requestedAt").defaultNow().notNull(),
+  completedAt: timestamp("completedAt"),
+  createdBy: bigint("createdBy", { mode: "number", unsigned: true }).notNull(),
+  metadata: json("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+});
+
+export type VideoRenderJob = typeof videoRenderJobs.$inferSelect;
+
+// ─── Two-Factor Challenges ───
+export const twoFactorChallenges = mysqlTable("two_factor_challenges", {
+  id: serial("id").primaryKey(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  challengeToken: varchar("challengeToken", { length: 255 }).notNull().unique(),
+  otpHash: varchar("otpHash", { length: 255 }).notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  attempts: int("attempts").default(0).notNull(),
+  maxAttempts: int("maxAttempts").default(5).notNull(),
+  consumedAt: timestamp("consumedAt"),
+  sentToEmail: varchar("sentToEmail", { length: 320 }).notNull(),
+  ipAddress: varchar("ipAddress", { length: 45 }),
+  userAgent: text("userAgent"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+});
+
+export type TwoFactorChallenge = typeof twoFactorChallenges.$inferSelect;
+
 // ─── System Alerts ───
 export const systemAlerts = mysqlTable("system_alerts", {
   id: serial("id").primaryKey(),

@@ -435,6 +435,17 @@ export async function runCreativeAgent({
   const offers = campaign.offers as any[];
   const funnelStages = campaign.funnelStages as any[];
 
+  // Fallback: get location from workflowContext or business
+  let location = strategyContext?.location || null;
+  let industry = strategyContext?.industry || null;
+  if (!location && campaign.businessId) {
+    const [biz] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
+    if (biz) {
+      location = biz.location || null;
+      industry = industry || biz.industry || null;
+    }
+  }
+
   // Step 1: Generate Premium Campaign Pack
   const packPrompt = `You are an elite creative director and performance marketer who builds premium, sales-focused campaign assets for small businesses. You do not create generic filler content. Every asset must be designed to drive revenue, capture attention in 3 seconds, and convert viewers into buyers.
 
@@ -445,6 +456,8 @@ CAMPAIGN DETAILS:
 - CTA Strategy: ${ctaStrategy || "Not specified"}
 - Target Audience: ${campaign.targetAudience || "Not specified"}
 - Platforms: ${campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn"}
+- Location: ${location || "Not specified"}
+- Industry: ${industry || "Not specified"}
 - Personas: ${personas ? JSON.stringify(personas.map((p: any) => ({ name: p.name, painPoints: p.painPoints, goals: p.goals }))) : "General audience"}
 ${offers ? `- Offers: ${JSON.stringify(offers)}` : ""}
 ${funnelStages ? `- Funnel Stages: ${JSON.stringify(funnelStages.map((f: any) => f.stage))}` : ""}
@@ -537,6 +550,12 @@ Provide a structured hashtag strategy:
 - Trending hashtags (5-10 currently popular in this niche)
 - Niche hashtags (5-10 highly specific to the target audience)
 - Platform-specific hashtags (array of objects, each with "platform" name and "hashtags" array of 3-5 hashtags optimized for that platform)
+
+LOCATION RULE — YOU MUST FOLLOW THIS EXACTLY:
+- The business location is: ${location || "Not specified"}.
+- If a location is specified above, you MUST reflect that location in the content context, offers, and CTA where relevant. Do NOT invent a different city, province, state, or country.
+- If the location is Johannesburg, South Africa, the content should feel locally relevant to South Africa (currency, cultural references, local slang where appropriate).
+- Only use international references if the user has explicitly selected international targeting.
 
 CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
 - Every object in the response MUST include EVERY key declared in its schema.

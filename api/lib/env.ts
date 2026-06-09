@@ -24,8 +24,11 @@ export const env = {
   smtpPort: parseInt(process.env.SMTP_PORT || "587"),
   smtpUser: process.env.SMTP_USER ?? "",
   smtpPass: process.env.SMTP_PASS ?? "",
+  smtpFromEmail: process.env.SMTP_FROM_EMAIL ?? "",
+  smtpFromName: process.env.SMTP_FROM_NAME ?? "",
   sendgridApiKey: process.env.SENDGRID_API_KEY ?? "",
   redisUrl: process.env.REDIS_URL ?? "",
+  videoProvider: process.env.VIDEO_PROVIDER ?? "",
 };
 
 // Validate Redis in production
