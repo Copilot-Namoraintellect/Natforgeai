@@ -564,6 +564,7 @@ export const campaignAssets = mysqlTable("campaign_assets", {
     "carousel",
     "ad_copy",
     "caption",
+    "caption_adaptation",
     "hashtag_set",
     "cta_variant",
     "email_copy",

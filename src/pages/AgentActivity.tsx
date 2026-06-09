@@ -30,6 +30,8 @@ import {
   Hash,
   BarChart3,
   ArrowRight,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Link } from "react-router";
 
@@ -97,26 +99,7 @@ function FormattedAgentOutput({ agentType, output }: { agentType: string; output
   }
 
   if (agentType === "audience") {
-    return (
-      <div className="space-y-2">
-        {output.audienceProfiles && (
-          <div>
-            <p className="text-xs font-semibold text-pink-400 flex items-center gap-1"><Users className="w-3 h-3" /> Audience Profiles</p>
-            <div className="flex flex-wrap gap-1 mt-1">
-              {output.audienceProfiles.slice(0, 3).map((p: any, i: number) => (
-                <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-pink-500/10 text-pink-300 border border-pink-500/20">{p.name}</span>
-              ))}
-            </div>
-          </div>
-        )}
-        {output.hashtagStrategy && (
-          <div>
-            <p className="text-xs font-semibold text-pink-400 flex items-center gap-1"><Hash className="w-3 h-3" /> Hashtags</p>
-            <p className="text-xs text-gray-300">{output.hashtagStrategy.primary?.slice(0, 5).join(" ")}</p>
-          </div>
-        )}
-      </div>
-    );
+    return <AudienceAgentDetail output={output} />;
   }
 
   if (agentType === "distribution") {
@@ -173,6 +156,100 @@ function FormattedAgentOutput({ agentType, output }: { agentType: string; output
   );
 }
 
+function AudienceAgentDetail({ output }: { output: any }) {
+  const [showRaw, setShowRaw] = useState(false);
+  const profiles = output.audienceProfiles || [];
+  const hashtags = output.hashtagStrategy || {};
+  const targeting = output.targetingCriteria || {};
+  const outreach = output.outreachAngles || [];
+
+  return (
+    <div className="space-y-3">
+      {profiles.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-pink-400 flex items-center gap-1"><Users className="w-3 h-3" /> Audience Profiles</p>
+          {profiles.map((p: any, i: number) => (
+            <div key={i} className="p-2.5 rounded-lg bg-[#0F172A] border border-[#334155] space-y-1.5">
+              <p className="text-xs font-medium text-white">{p.name}</p>
+              {p.demographics && (
+                <div className="flex flex-wrap gap-1">
+                  {p.demographics.ageRange && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-pink-500/10 text-pink-300 border border-pink-500/20">{p.demographics.ageRange}</span>
+                  )}
+                  {p.demographics.gender && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-pink-500/10 text-pink-300 border border-pink-500/20">{p.demographics.gender}</span>
+                  )}
+                  {Array.isArray(p.demographics.locations) && p.demographics.locations.slice(0, 2).map((loc: string, idx: number) => (
+                    <span key={idx} className="text-[10px] px-1.5 py-0.5 rounded bg-pink-500/10 text-pink-300 border border-pink-500/20">{loc}</span>
+                  ))}
+                </div>
+              )}
+              {Array.isArray(p.goals) && p.goals.length > 0 && (
+                <div>
+                  <span className="text-[10px] font-medium text-emerald-400 uppercase tracking-wide">Goals</span>
+                  <p className="text-[11px] text-gray-300">{p.goals.join(", ")}</p>
+                </div>
+              )}
+              {Array.isArray(p.painPoints) && p.painPoints.length > 0 && (
+                <div>
+                  <span className="text-[10px] font-medium text-red-400 uppercase tracking-wide">Pain Points</span>
+                  <p className="text-[11px] text-gray-300">{p.painPoints.join(", ")}</p>
+                </div>
+              )}
+              {Array.isArray(p.platforms) && p.platforms.length > 0 && (
+                <div>
+                  <span className="text-[10px] font-medium text-blue-400 uppercase tracking-wide">Platforms</span>
+                  <p className="text-[11px] text-gray-300">{p.platforms.join(", ")}</p>
+                </div>
+              )}
+              {p.description && <p className="text-[11px] text-gray-400">{p.description}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {hashtags.primary && (
+        <div>
+          <p className="text-xs font-semibold text-pink-400 flex items-center gap-1"><Hash className="w-3 h-3" /> Hashtags</p>
+          <p className="text-[11px] text-gray-300 mt-1">{hashtags.primary.slice(0, 8).join(" ")}</p>
+        </div>
+      )}
+
+      {(targeting.interests?.length > 0 || targeting.behaviours?.length > 0) && (
+        <div>
+          <p className="text-xs font-semibold text-pink-400 flex items-center gap-1"><Target className="w-3 h-3" /> Targeting</p>
+          {targeting.interests?.length > 0 && <p className="text-[11px] text-gray-300"><span className="text-gray-500">Interests:</span> {targeting.interests.slice(0, 5).join(", ")}</p>}
+          {targeting.behaviours?.length > 0 && <p className="text-[11px] text-gray-300"><span className="text-gray-500">Behaviours:</span> {targeting.behaviours.slice(0, 5).join(", ")}</p>}
+        </div>
+      )}
+
+      {outreach.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-pink-400 flex items-center gap-1"><MessageSquare className="w-3 h-3" /> Messaging Angles</p>
+          <ul className="mt-1 space-y-0.5">
+            {outreach.slice(0, 4).map((angle: string, i: number) => (
+              <li key={i} className="text-[11px] text-gray-300">• {angle}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <button
+        onClick={() => setShowRaw((s) => !s)}
+        className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 mt-1"
+      >
+        {showRaw ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        {showRaw ? "Hide raw data" : "View raw data"}
+      </button>
+      {showRaw && (
+        <pre className="text-[10px] text-gray-500 bg-[#0F172A] p-2 rounded border border-[#334155] overflow-auto max-h-40">
+          {JSON.stringify(output, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export default function AgentActivity() {
   const [filterType, setFilterType] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
@@ -181,16 +258,24 @@ export default function AgentActivity() {
   const { data: agentRuns, isLoading } = trpc.agent.getAgentRuns.useQuery({
     agentType: filterType !== "all" ? (filterType as any) : undefined,
     status: filterStatus !== "all" ? (filterStatus as any) : undefined,
+  }, {
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const hasRunning = data?.some((r) => r.status === "running");
+      return hasRunning ? 5000 : 10000;
+    },
   });
 
   // Fetch campaigns to determine correct CTA state per run
-  const { data: allCampaigns } = trpc.campaign.list.useQuery();
+  const { data: allCampaigns } = trpc.campaign.list.useQuery(undefined, {
+    refetchInterval: 10000,
+  });
   const campaignMap = new Map(allCampaigns?.map((c) => [c.id, c]));
 
   // Fetch pending approvals to know if strategy_review is still open
   const { data: pendingApprovals } = trpc.approval.listApprovals.useQuery(
     { status: "pending" },
-    { enabled: !!agentRuns && agentRuns.length > 0 }
+    { enabled: !!agentRuns && agentRuns.length > 0, refetchInterval: 10000 }
   );
   const pendingStrategyApprovals = new Set(
     pendingApprovals
@@ -422,6 +507,14 @@ export default function AgentActivity() {
                             <Link to={`/content?campaignId=${run.campaignId}`}>
                               <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
                                 View Content
+                              </Button>
+                            </Link>
+                          )}
+                          {run.agentType === "audience" && run.campaignId && (
+                            <Link to={`/campaigns?campaignId=${run.campaignId}`}>
+                              <Button size="sm" variant="outline" className="border-[#334155] text-gray-300 hover:text-white h-7 text-xs">
+                                <Users className="w-3 h-3 mr-1" />
+                                View Audience
                               </Button>
                             </Link>
                           )}

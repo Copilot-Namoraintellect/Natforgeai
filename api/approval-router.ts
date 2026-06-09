@@ -24,9 +24,29 @@ async function syncPendingApprovals(userId: number) {
   for (const campaign of stuckCampaigns) {
     const state = campaign.workflowState;
 
-    // Repair missing strategy_review approvals
+    // Repair missing strategy_review approvals (only if still at strategy_generated)
     if (state === "strategy_generated") {
-      const existing = await db
+      // Check if there is already an approved or edited approval for this campaign.
+      // Do not recreate if the user has already approved — but DO recreate if it was
+      // rejected (state would be strategy_pending, but guard here just in case).
+      const alreadyApproved = await db
+        .select()
+        .from(approvalRequests)
+        .where(
+          and(
+            eq(approvalRequests.campaignId, campaign.id),
+            eq(approvalRequests.userId, userId),
+            eq(approvalRequests.approvalType, "strategy_review"),
+            eq(approvalRequests.status, "approved")
+          )
+        )
+        .limit(1);
+
+      if (alreadyApproved.length > 0) {
+        continue;
+      }
+
+      const existingPending = await db
         .select()
         .from(approvalRequests)
         .where(
@@ -39,7 +59,7 @@ async function syncPendingApprovals(userId: number) {
         )
         .limit(1);
 
-      if (existing.length === 0) {
+      if (existingPending.length === 0) {
         await createApprovalRequest({
           userId,
           campaignId: campaign.id,
@@ -54,7 +74,24 @@ async function syncPendingApprovals(userId: number) {
 
     // Repair missing campaign_launch approvals
     if (state === "launch_approval_required") {
-      const existing = await db
+      const alreadyApproved = await db
+        .select()
+        .from(approvalRequests)
+        .where(
+          and(
+            eq(approvalRequests.campaignId, campaign.id),
+            eq(approvalRequests.userId, userId),
+            eq(approvalRequests.approvalType, "campaign_launch"),
+            eq(approvalRequests.status, "approved")
+          )
+        )
+        .limit(1);
+
+      if (alreadyApproved.length > 0) {
+        continue;
+      }
+
+      const existingPending = await db
         .select()
         .from(approvalRequests)
         .where(
@@ -67,7 +104,7 @@ async function syncPendingApprovals(userId: number) {
         )
         .limit(1);
 
-      if (existing.length === 0) {
+      if (existingPending.length === 0) {
         await createApprovalRequest({
           userId,
           campaignId: campaign.id,
@@ -164,7 +201,7 @@ export const approvalRouter = createRouter({
         })
       );
 
-      return { success: true };
+      return { success: true, campaignId: request.campaignId, approvalType: request.approvalType };
     }),
 
   rejectAction: authedQuery
@@ -218,7 +255,7 @@ export const approvalRouter = createRouter({
         })
       );
 
-      return { success: true };
+      return { success: true, campaignId: request.campaignId, approvalType: request.approvalType };
     }),
 
   editAndApproveAction: authedQuery
@@ -273,6 +310,6 @@ export const approvalRouter = createRouter({
         })
       );
 
-      return { success: true };
+      return { success: true, campaignId: request.campaignId, approvalType: request.approvalType };
     }),
 });

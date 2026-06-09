@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { contentPosts, campaigns } from "@db/schema";
+import { contentPosts, campaigns, campaignAssets } from "@db/schema";
 import { eq, and, desc, count } from "drizzle-orm";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
@@ -65,6 +65,28 @@ export const contentRouter = createRouter({
         return result?.value ?? 0;
       } catch {
         return 0;
+      }
+    }),
+
+  campaignAssets: authedQuery
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      try {
+        const results = await db
+          .select()
+          .from(campaignAssets)
+          .where(
+            and(
+              eq(campaignAssets.userId, ctx.user.id),
+              eq(campaignAssets.campaignId, input.campaignId)
+            )
+          )
+          .orderBy(desc(campaignAssets.createdAt));
+        return results;
+      } catch (err: any) {
+        console.error("[content.campaignAssets] Query failed:", err.message);
+        return [];
       }
     }),
 

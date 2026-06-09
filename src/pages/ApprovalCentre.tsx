@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,19 +48,37 @@ const approvalTypeLabels: Record<string, string> = {
 
 export default function ApprovalCentre() {
   const utils = trpc.useUtils();
+  const navigate = useNavigate();
   const [selectedApproval, setSelectedApproval] = useState<any>(null);
   const [notes, setNotes] = useState("");
   const [actionType, setActionType] = useState<"approve" | "reject" | "edit" | null>(null);
 
-  const { data: approvals, isLoading } = trpc.approval.listApprovals.useQuery();
+  const { data: approvals, isLoading } = trpc.approval.listApprovals.useQuery(undefined, {
+    refetchInterval: 5000,
+  });
+
+  function invalidateAll() {
+    utils.approval.listApprovals.invalidate();
+    utils.approval.listApprovals.invalidate({ status: "pending" });
+    utils.campaign.list.invalidate();
+    utils.campaign.get.invalidate();
+    utils.agent.getAgentRuns.invalidate();
+    utils.content.list.invalidate();
+  }
 
   const approveMutation = trpc.approval.approveAction.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast.success("Approved successfully");
-      utils.approval.listApprovals.invalidate();
+      invalidateAll();
       setSelectedApproval(null);
       setNotes("");
       setActionType(null);
+      // Redirect to the next step
+      if (data.approvalType === "strategy_review") {
+        navigate("/agent-activity");
+      } else if (data.approvalType === "campaign_launch") {
+        navigate("/campaigns");
+      }
     },
     onError: (err) => toast.error(err.message || "Failed to approve"),
   });
@@ -67,7 +86,7 @@ export default function ApprovalCentre() {
   const rejectMutation = trpc.approval.rejectAction.useMutation({
     onSuccess: () => {
       toast.success("Rejected successfully");
-      utils.approval.listApprovals.invalidate();
+      invalidateAll();
       setSelectedApproval(null);
       setNotes("");
       setActionType(null);
@@ -76,12 +95,17 @@ export default function ApprovalCentre() {
   });
 
   const editAndApproveMutation = trpc.approval.editAndApproveAction.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast.success("Saved & approved successfully");
-      utils.approval.listApprovals.invalidate();
+      invalidateAll();
       setSelectedApproval(null);
       setNotes("");
       setActionType(null);
+      if (data.approvalType === "strategy_review") {
+        navigate("/agent-activity");
+      } else if (data.approvalType === "campaign_launch") {
+        navigate("/campaigns");
+      }
     },
     onError: (err) => toast.error(err.message || "Failed to save and approve"),
   });
@@ -114,7 +138,7 @@ export default function ApprovalCentre() {
               {personas.slice(0, 3).map((p: any, i: number) => (
                 <div key={i} className="text-xs text-gray-300">
                   <span className="font-medium text-white">{p.name}</span>
-                  {p.demographics && <span className="text-gray-500"> — {p.demographics}</span>}
+                  {p.demographics && <span className="text-gray-500"> — {typeof p.demographics === "string" ? p.demographics : [p.demographics.ageRange, p.demographics.gender, p.demographics.location].filter(Boolean).join(" · ")}</span>}
                 </div>
               ))}
             </div>
@@ -228,8 +252,7 @@ export default function ApprovalCentre() {
   }
 
   const handleAction = () => {
-    if (!selectedApproval || !actionType || isProcessing) return;
-
+    if (!selectedApproval || !actionType) return;
     if (actionType === "approve") {
       approveMutation.mutate({ approvalId: selectedApproval.id, notes: notes || undefined });
     } else if (actionType === "reject") {
@@ -242,8 +265,6 @@ export default function ApprovalCentre() {
       });
     }
   };
-
-  const isProcessing = approveMutation.isPending || rejectMutation.isPending || editAndApproveMutation.isPending;
 
   return (
     <div className="space-y-6">
@@ -480,7 +501,7 @@ export default function ApprovalCentre() {
               {actionType === "edit" ? (
                 <Button
                   onClick={handleAction}
-                  disabled={isProcessing}
+                  disabled={editAndApproveMutation.isPending}
                   className="bg-blue-500 hover:bg-blue-600"
                 >
                   {editAndApproveMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
@@ -489,19 +510,19 @@ export default function ApprovalCentre() {
               ) : actionType === "approve" ? (
                 <Button
                   onClick={handleAction}
-                  disabled={isProcessing}
+                  disabled={approveMutation.isPending}
                   className="bg-emerald-500 hover:bg-emerald-600"
                 >
-                  {isProcessing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {approveMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Confirm Approve
                 </Button>
               ) : (
                 <Button
                   onClick={handleAction}
-                  disabled={isProcessing}
+                  disabled={rejectMutation.isPending}
                   className="bg-red-500 hover:bg-red-600"
                 >
-                  {isProcessing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {rejectMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Confirm Reject
                 </Button>
               )}

@@ -800,7 +800,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         await db.insert(campaignAssets).values({
           userId,
           campaignId,
-          assetType: "caption_adaptation" as any,
+          assetType: "caption_adaptation",
           title: `${adaptation.platform} Adaptation`,
           status: "ready",
           metadata: {

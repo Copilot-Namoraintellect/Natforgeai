@@ -6,6 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
+  workflowStateLabels,
+  workflowGuidance,
+  journeyStage,
+  getContinueAction,
+} from "@/lib/workflow";
+import {
   Rocket,
   Megaphone,
   Users,
@@ -20,86 +26,36 @@ import {
   Target,
 } from "lucide-react";
 
-const workflowStateLabels: Record<string, { label: string; color: string; step: number }> = {
-  business_onboarding: { label: "Onboarding", color: "bg-amber-500/10 text-amber-600", step: 1 },
-  strategy_pending: { label: "Strategy Pending", color: "bg-blue-500/10 text-blue-600", step: 2 },
-  strategy_generated: { label: "Strategy Ready", color: "bg-purple-500/10 text-purple-600", step: 3 },
-  strategy_approved: { label: "Strategy Approved", color: "bg-emerald-500/10 text-emerald-600", step: 4 },
-  creatives_generating: { label: "Generating Creatives", color: "bg-blue-500/10 text-blue-600", step: 5 },
-  creatives_ready: { label: "Creatives Ready", color: "bg-purple-500/10 text-purple-600", step: 6 },
-  audience_generating: { label: "Finding Audience", color: "bg-blue-500/10 text-blue-600", step: 7 },
-  audience_ready: { label: "Audience Ready", color: "bg-purple-500/10 text-purple-600", step: 8 },
-  schedule_generated: { label: "Schedule Ready", color: "bg-cyan-500/10 text-cyan-600", step: 9 },
-  launch_approval_required: { label: "Awaiting Launch Approval", color: "bg-amber-500/10 text-amber-600", step: 10 },
-  campaign_live: { label: "Campaign Live", color: "bg-emerald-500/10 text-emerald-600", step: 11 },
-  engagement_active: { label: "Engagement Active", color: "bg-pink-500/10 text-pink-600", step: 12 },
-  leads_converting: { label: "Leads Converting", color: "bg-orange-500/10 text-orange-600", step: 13 },
-  optimisation_active: { label: "Optimising", color: "bg-indigo-500/10 text-indigo-600", step: 14 },
-  completed: { label: "Completed", color: "bg-gray-500/10 text-gray-600", step: 15 },
-};
-
-const workflowNextAction: Record<string, { text: string; actionLabel?: string; actionHref?: string }> = {
-  business_onboarding: { text: "Finish onboarding to begin." },
-  strategy_pending: { text: "NatForgeAI is preparing your strategy." },
-  strategy_generated: { text: "Review your strategy before continuing.", actionLabel: "Review Strategy", actionHref: "/approvals" },
-  strategy_approved: { text: "Creative assets are being generated." },
-  creatives_generating: { text: "NatForgeAI is generating creative content." },
-  creatives_ready: { text: "Creative content is ready for review.", actionLabel: "Review Content", actionHref: "/content" },
-  audience_generating: { text: "Audience segments are being identified." },
-  audience_ready: { text: "Audience profiles are ready." },
-  schedule_generated: { text: "Publishing schedule is ready for approval.", actionLabel: "Review Schedule", actionHref: "/approvals" },
-  launch_approval_required: { text: "Approve launch to go live.", actionLabel: "Approve Launch", actionHref: "/approvals" },
-  campaign_live: { text: "Campaign is live and running." },
-  engagement_active: { text: "Engaging with your audience." },
-  leads_converting: { text: "Nurturing leads through the funnel." },
-  optimisation_active: { text: "Optimising campaign performance." },
-  completed: { text: "Campaign cycle completed." },
-};
-
-const journeyStage: Record<string, string> = {
-  business_onboarding: "Draft",
-  strategy_pending: "Strategy Generating",
-  strategy_generated: "Strategy Ready",
-  strategy_approved: "Content Plan Ready",
-  creatives_generating: "Content Generating",
-  creatives_ready: "Content Ready for Review",
-  audience_generating: "Audience Research",
-  audience_ready: "Audience Ready",
-  schedule_generated: "Scheduled",
-  launch_approval_required: "Awaiting Launch Approval",
-  campaign_live: "Published",
-  engagement_active: "Leads Captured",
-  leads_converting: "Leads Captured",
-  optimisation_active: "Optimising",
-  completed: "Completed",
-};
-
 function itemText(count: number) {
   return count !== 1 ? "s" : "";
 }
 
-function getContinueAction(campaign: any) {
-  const state = campaign.workflowState;
-  if (state === "business_onboarding") return { label: "Complete Business Profile", href: "/onboarding" };
-  if (state === "strategy_pending") return { label: "View Progress", href: "/agent-activity" };
-  if (state === "strategy_generated") return { label: "Review Strategy", href: "/approvals" };
-  if (state === "strategy_approved" || state === "creatives_generating") return { label: "View Content Generation Progress", href: "/agent-activity" };
-  if (state === "creatives_ready") return { label: "View Generated Content", href: `/content?campaignId=${campaign.id}` };
-  if (state === "launch_approval_required") return { label: "Approve Launch", href: "/approvals" };
-  if (state === "audience_generating" || state === "audience_ready" || state === "schedule_generated") return { label: "View Progress", href: "/agent-activity" };
-  if (state === "campaign_live" || state === "engagement_active" || state === "leads_converting" || state === "optimisation_active") return { label: "View Analytics", href: "/analytics" };
-  return null;
-}
-
 export default function MissionControl() {
-  const { data: campaigns, isLoading: campaignsLoading } = trpc.campaign.list.useQuery();
-  const { data: agentRuns } = trpc.agent.getAgentRuns.useQuery({ status: "completed" });
-  const { data: runningAgents } = trpc.agent.getAgentRuns.useQuery({ status: "running" });
-  const { data: pendingApprovals } = trpc.approval.listApprovals.useQuery({ status: "pending" });
+  // Poll every 5 seconds when there are running agents or in-progress campaigns
+  const { data: campaigns, isLoading: campaignsLoading } = trpc.campaign.list.useQuery(undefined, {
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return false;
+      const hasRunning = data.some((c) =>
+        c.workflowState && ["strategy_pending", "creatives_generating", "audience_generating"].includes(c.workflowState)
+      );
+      return hasRunning ? 5000 : false;
+    },
+  });
+  const { data: agentRuns } = trpc.agent.getAgentRuns.useQuery(
+    { status: "completed" },
+    { refetchInterval: 10000 }
+  );
+  const { data: runningAgents } = trpc.agent.getAgentRuns.useQuery(
+    { status: "running" },
+    { refetchInterval: 5000 }
+  );
+  const { data: pendingApprovals } = trpc.approval.listApprovals.useQuery(
+    { status: "pending" },
+    { refetchInterval: 5000 }
+  );
   const { data: leads } = trpc.lead.list.useQuery();
   const { data: wallet } = trpc.billing.myWallet.useQuery();
-  // Content posts count reference for future use
-  // const { data: contentPostsCount } = trpc.content.list.useQuery(undefined, { enabled: false });
 
   const aiCampaigns = useMemo(
     () => campaigns?.filter((c) => c.aiGenerated) || [],
@@ -123,33 +79,27 @@ export default function MissionControl() {
     [aiCampaigns]
   );
 
-  // Pending reviews are sourced ONLY from approval_requests with status = pending
-  // Do not count campaigns by workflowState — that creates inconsistency
-  const pendingReviews = useMemo(() => {
-    return [];
-  }, []);
-
   const approvalCount = pendingApprovals?.length ?? 0;
   const completedAgentRuns = agentRuns?.length ?? 0;
 
   const dailySummary = useMemo(() => {
     const runningCount = runningAgents?.length ?? 0;
-    const pendingReviewCount = pendingReviews.length;
+    const pendingReviewCount = approvalCount;
     const hotLeads = leads?.filter((l) => l.score && l.score > 80).length ?? 0;
 
     let message = "NatForge is ready to launch your first campaign.";
     if (aiCampaigns.length > 0) {
       if (runningCount > 0) {
-        message = `NatForgeAI is working on ${runningCount} active task${runningCount !== 1 ? "s" : ""}.`;
+        message = `NatForgeAI is working on ${runningCount} active task${itemText(runningCount)}.`;
       } else if (pendingReviewCount > 0) {
-        message = `You have ${pendingReviewCount} campaign${pendingReviewCount !== 1 ? "s" : ""} waiting for your review.`;
+        message = `You have ${pendingReviewCount} campaign${itemText(pendingReviewCount)} waiting for your review.`;
       } else {
         message = "Your campaigns are running smoothly.";
       }
-      if (hotLeads > 0) message += ` ${hotLeads} hot lead${hotLeads !== 1 ? "s" : ""} captured.`;
+      if (hotLeads > 0) message += ` ${hotLeads} hot lead${itemText(hotLeads)} captured.`;
     }
     return message;
-  }, [aiCampaigns.length, runningAgents, pendingReviews.length, leads]);
+  }, [aiCampaigns.length, runningAgents, approvalCount, leads]);
 
   const stats = [
     {
@@ -202,7 +152,7 @@ export default function MissionControl() {
             <Link to="/approvals">
               <Button variant="outline" className="border-amber-500/30 text-amber-500 hover:bg-amber-500/10">
                 <AlertCircle className="w-4 h-4 mr-2" />
-                {approvalCount} Approval{approvalCount !== 1 ? "s" : ""} Needed
+                {approvalCount} Approval{itemText(approvalCount)} Needed
               </Button>
             </Link>
           )}
@@ -334,7 +284,7 @@ export default function MissionControl() {
                 step: 1,
               };
               const progressPercent = (stateInfo.step / 15) * 100;
-              const nextAction = workflowNextAction[campaign.workflowState];
+              const nextAction = workflowGuidance[campaign.workflowState];
               const continueAction = getContinueAction(campaign);
               const stage = journeyStage[campaign.workflowState] || "Draft";
 
@@ -362,7 +312,7 @@ export default function MissionControl() {
 
                     {nextAction && (
                       <p className="text-xs text-gray-400 mt-3">
-                        {nextAction.text}
+                        {nextAction.explanation}
                       </p>
                     )}
 
@@ -435,14 +385,14 @@ export default function MissionControl() {
                   </p>
                 </div>
               ) : null}
-              {pendingReviews.length + approvalCount > 0 && (
+              {approvalCount > 0 && (
                 <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
                   <div className="flex items-center gap-2 mb-1">
                     <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
                     <span className="text-xs font-medium text-amber-400">Action Needed</span>
                   </div>
                   <p className="text-xs text-gray-300">
-                    {pendingReviews.length + approvalCount} item{pendingReviews.length + approvalCount !== 1 ? "s" : ""} need your attention
+                    {approvalCount} item{itemText(approvalCount)} need your attention
                   </p>
                 </div>
               )}

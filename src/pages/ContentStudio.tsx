@@ -47,6 +47,10 @@ import {
   ExternalLink,
   AlertCircle,
   Loader2,
+  Megaphone,
+  Hash,
+  MessageCircle,
+  Image,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -60,6 +64,12 @@ const platforms = [
 ];
 
 const tones = ["friendly", "premium", "bold", "professional", "casual", "urgent"];
+
+type PendingActionKey = string;
+
+function actionKey(contentId: number, action: string): PendingActionKey {
+  return `${contentId}:${action}`;
+}
 
 export default function ContentStudio() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -85,6 +95,7 @@ export default function ContentStudio() {
     contentId: null,
   });
   const [scheduleDate, setScheduleDate] = useState("");
+  const [pendingActions, setPendingActions] = useState<Set<PendingActionKey>>(new Set());
 
   const utils = trpc.useUtils();
   const listInput = (() => {
@@ -96,6 +107,11 @@ export default function ContentStudio() {
   })();
   const { data: contents, isLoading } = trpc.content.list.useQuery(listInput, {
     retry: 1,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const hasDrafts = data?.some((c) => c.status === "draft");
+      return hasDrafts ? 8000 : false;
+    },
   });
 
   const { data: campaignForContext } = trpc.campaign.get.useQuery(
@@ -103,6 +119,10 @@ export default function ContentStudio() {
     { enabled: !!urlCampaignId }
   );
   const { data: postCountForCampaign } = trpc.content.countForCampaign.useQuery(
+    { campaignId: Number(urlCampaignId) },
+    { enabled: !!urlCampaignId }
+  );
+  const { data: campaignAssets } = trpc.content.campaignAssets.useQuery(
     { campaignId: Number(urlCampaignId) },
     { enabled: !!urlCampaignId }
   );
@@ -152,32 +172,62 @@ export default function ContentStudio() {
   });
 
   const approveMutation = trpc.content.approve.useMutation({
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       utils.content.list.invalidate();
       toast.success("Content approved and ready to publish!");
+      setPendingActions((prev) => {
+        const next = new Set(prev);
+        next.delete(actionKey(vars.id, "approve"));
+        return next;
+      });
     },
-    onError: (err) => {
+    onError: (err, vars) => {
       toast.error(err.message || "Failed to approve content");
+      setPendingActions((prev) => {
+        const next = new Set(prev);
+        next.delete(actionKey(vars.id, "approve"));
+        return next;
+      });
     },
   });
 
   const markManuallyPostedMutation = trpc.content.markAsManuallyPosted.useMutation({
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       utils.content.list.invalidate();
       toast.success("Marked as manually posted!");
+      setPendingActions((prev) => {
+        const next = new Set(prev);
+        next.delete(actionKey(vars.id, "markPosted"));
+        return next;
+      });
     },
-    onError: (err) => {
+    onError: (err, vars) => {
       toast.error(err.message || "Failed to update content");
+      setPendingActions((prev) => {
+        const next = new Set(prev);
+        next.delete(actionKey(vars.id, "markPosted"));
+        return next;
+      });
     },
   });
 
   const updateMutation = trpc.content.update.useMutation({
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       utils.content.list.invalidate();
       toast.success("Content updated!");
+      setPendingActions((prev) => {
+        const next = new Set(prev);
+        next.delete(actionKey(vars.id, "schedule"));
+        return next;
+      });
     },
-    onError: (err) => {
+    onError: (err, vars) => {
       toast.error(err.message || "Failed to update content");
+      setPendingActions((prev) => {
+        const next = new Set(prev);
+        next.delete(actionKey(vars.id, "schedule"));
+        return next;
+      });
     },
   });
 
@@ -209,9 +259,8 @@ export default function ContentStudio() {
 
   function isPlatformConnected(platform?: string | null) {
     if (!platform) return false;
-    // Social platforms that require connection
     const connectable = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
-    if (!connectable.includes(platform)) return true; // email/blog don't need OAuth
+    if (!connectable.includes(platform)) return true;
     return connectedIntegrations?.some(
       (i) => i.platform === platform && i.status === "connected"
     );
@@ -328,6 +377,7 @@ Include:
 
   function handleScheduleSave() {
     if (!scheduleOpen.contentId || !scheduleDate) return;
+    setPendingActions((prev) => new Set(prev).add(actionKey(scheduleOpen.contentId!, "schedule")));
     updateMutation.mutate({
       id: scheduleOpen.contentId,
       status: "scheduled",
@@ -339,6 +389,29 @@ Include:
   function getApprovalState(content: any) {
     const metadata = (content.metadata || {}) as any;
     return !!metadata.approved;
+  }
+
+  function isPending(contentId: number, action: string) {
+    return pendingActions.has(actionKey(contentId, action));
+  }
+
+  function handleApprove(contentId: number) {
+    setPendingActions((prev) => new Set(prev).add(actionKey(contentId, "approve")));
+    approveMutation.mutate({ id: contentId });
+  }
+
+  function handleMarkPosted(contentId: number) {
+    setPendingActions((prev) => new Set(prev).add(actionKey(contentId, "markPosted")));
+    markManuallyPostedMutation.mutate({ id: contentId });
+  }
+
+  function handlePublishNow(content: any) {
+    const connected = isPlatformConnected(content.platform);
+    if (!connected && content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform)) {
+      toast.error("Automatic publishing is not configured for this platform. You can copy or mark this content as manually posted.");
+      return;
+    }
+    toast.info("Auto-publishing is coming soon. Use 'Mark as posted' if you published manually.");
   }
 
   function renderVideoBlueprint(content: any) {
@@ -441,6 +514,469 @@ Include:
           <Badge variant="outline" className="text-[10px] h-5 border-rose-200 text-rose-600 bg-rose-50">
             Video Ready
           </Badge>
+        )}
+      </div>
+    );
+  }
+
+  function renderContentActions(content: any) {
+    const approved = getApprovalState(content);
+    const connected = isPlatformConnected(content.platform);
+    const captionText = getCaptionText(content);
+    const platformRequiresConnection = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform);
+    const showConnectGuard = platformRequiresConnection && !connected;
+
+    return (
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {!approved && content.status !== "published" && (
+          <Button
+            size="sm"
+            className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white"
+            onClick={() => handleApprove(content.id)}
+            disabled={isPending(content.id, "approve")}
+          >
+            {isPending(content.id, "approve") ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />}
+            Approve
+          </Button>
+        )}
+
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8"
+          onClick={() => copyToClipboard(captionText, content.id)}
+        >
+          {copiedId === content.id ? (
+            <Check className="w-3.5 h-3.5 mr-1.5" />
+          ) : (
+            <Copy className="w-3.5 h-3.5 mr-1.5" />
+          )}
+          Copy caption
+        </Button>
+
+        {content.status !== "published" && content.status !== "archived" && (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8"
+              onClick={() => openSchedule(content.id, content.scheduledFor)}
+              disabled={isPending(content.id, "schedule")}
+            >
+              <CalendarClock className="w-3.5 h-3.5 mr-1.5" />
+              {content.status === "scheduled" ? "Reschedule" : "Schedule"}
+            </Button>
+
+            {showConnectGuard ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8"
+                onClick={() => handleMarkPosted(content.id)}
+                disabled={isPending(content.id, "markPosted")}
+              >
+                {isPending(content.id, "markPosted") ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1.5" />}
+                Mark as posted
+              </Button>
+            ) : connected ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8"
+                onClick={() => handlePublishNow(content)}
+              >
+                <Upload className="w-3.5 h-3.5 mr-1.5" />
+                Publish now
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8"
+                onClick={() => handleMarkPosted(content.id)}
+                disabled={isPending(content.id, "markPosted")}
+              >
+                {isPending(content.id, "markPosted") ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1.5" />}
+                Mark as posted
+              </Button>
+            )}
+          </>
+        )}
+
+        {content.platform && (
+          <span className="ml-auto text-xs text-muted-foreground capitalize">
+            {content.platform}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  function renderContentCard(content: any) {
+    const approved = getApprovalState(content);
+    const showConnectGuard = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform) && !isPlatformConnected(content.platform);
+
+    return (
+      <Card key={content.id} className="group hover:shadow-md transition-all">
+        <CardContent className="p-5">
+          <div className="flex items-start justify-between mb-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge
+                variant="secondary"
+                className={typeColors[content.type] || "bg-muted"}
+              >
+                {content.type.replace("_", " ")}
+              </Badge>
+              {content.aiGenerated && (
+                <Badge variant="outline" className="flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" />
+                  AI
+                </Badge>
+              )}
+              <Badge
+                variant="outline"
+                className={statusColors[content.status] || statusColors.draft}
+              >
+                {content.status}
+              </Badge>
+              {approved && (
+                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Approved
+                </Badge>
+              )}
+            </div>
+            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() =>
+                  copyToClipboard(getCaptionText(content), content.id)
+                }
+                title="Copy caption"
+              >
+                {copiedId === content.id ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-red-500 hover:text-red-600"
+                onClick={() => deleteMutation.mutate({ id: content.id })}
+                title="Delete"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          </div>
+
+          <h3 className="font-semibold text-sm mb-2 text-slate-900">{content.title}</h3>
+          {content.hook && (
+            <p className="text-sm text-muted-foreground line-clamp-1 mb-1">
+              <span className="font-medium text-foreground">Hook:</span>{" "}
+              {content.hook}
+            </p>
+          )}
+          {content.caption && (
+            <p className="text-sm text-muted-foreground line-clamp-2 mb-1">
+              {content.caption}
+            </p>
+          )}
+          {content.cta && (
+            <p className="text-xs font-medium text-[#00D4FF] mt-1">
+              CTA: {content.cta}
+            </p>
+          )}
+
+          {renderPremiumBadges(content)}
+
+          {content.type === "video_concept" && renderVideoBlueprint(content)}
+          {content.type === "reel_script" && renderVideoBlueprint(content)}
+          {content.type === "carousel_ad" && renderCarouselBlueprint(content)}
+
+          {showConnectGuard && (
+            <div className="mt-3 p-2.5 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-medium">Publishing setup required</p>
+                <p className="text-amber-700/80">
+                  Connect {content.platform} in Integrations to publish automatically, or mark as manually posted.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  {isPlatformConfigurable(content.platform) ? (
+                    <Link to="/integrations">
+                      <Button size="sm" variant="outline" className="h-7 text-xs">
+                        <ExternalLink className="w-3 h-3 mr-1" />
+                        Connect {content.platform}
+                      </Button>
+                    </Link>
+                  ) : (
+                    <span className="text-[11px] text-amber-700/70">Admin needs to configure this platform before it can be connected.</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {renderContentActions(content)}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Campaign Pack grouping
+  function renderCampaignPack() {
+    if (!urlCampaignId || !filtered) return null;
+
+    const masterVisual = filtered.find((c) => c.type === "social_post");
+    const video = filtered.find((c) => c.type === "video_concept" || c.type === "reel_script");
+    const carousel = filtered.find((c) => c.type === "carousel_ad");
+    const ads = filtered.filter((c) => c.type === "lead_gen_ad" || c.type === "ad_copy");
+    const whatsapp = filtered.find((c) => c.type === "whatsapp_promo");
+    const email = filtered.find((c) => c.type === "email");
+    const launch = filtered.find((c) => c.type === "launch_pack");
+    const others = filtered.filter((c) =>
+      !["social_post", "video_concept", "reel_script", "carousel_ad", "lead_gen_ad", "ad_copy", "whatsapp_promo", "email", "launch_pack"].includes(c.type)
+    );
+
+    const adaptations = campaignAssets?.filter((a) => a.assetType === "caption_adaptation") || [];
+    const hashtagSet = campaignAssets?.find((a) => a.assetType === "hashtag_set");
+    const allApproved = filtered.every((c) => getApprovalState(c));
+    const anyDraft = filtered.some((c) => c.status === "draft");
+
+    return (
+      <div className="space-y-6">
+        {/* Campaign Pack Header */}
+        <Card className="border-[#00D4FF]/20 bg-gradient-to-r from-[#00D4FF]/5 to-[#7C3AED]/5">
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                  <Megaphone className="w-5 h-5 text-[#00D4FF]" />
+                  Campaign Pack
+                </h2>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  {campaignForContext?.name} — {filtered.length} assets generated
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {allApproved ? (
+                  <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                    <CheckCircle2 className="w-3 h-3 mr-1" />
+                    Pack Approved
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-amber-600 border-amber-200 bg-amber-50">
+                    {filtered.filter((c) => !getApprovalState(c)).length} pending approval
+                  </Badge>
+                )}
+                <Button
+                  size="sm"
+                  className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
+                  disabled={!anyDraft}
+                  onClick={() => {
+                    const unapproved = filtered.filter((c) => !getApprovalState(c) && c.status !== "published");
+                    if (unapproved.length === 0) {
+                      toast.info("All items are already approved or published.");
+                      return;
+                    }
+                    unapproved.forEach((c) => handleApprove(c.id));
+                    toast.success("Publishing campaign pack...");
+                  }}
+                >
+                  <Upload className="w-3.5 h-3.5 mr-1.5" />
+                  Publish Campaign Pack
+                </Button>
+              </div>
+            </div>
+            {campaignForContext?.workflowState && (
+              <p className="text-xs text-muted-foreground mt-2">
+                Campaign status: <span className="font-medium">{campaignForContext.workflowState.replace(/_/g, " ")}</span>
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Master Creative */}
+        {masterVisual && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+              <Image className="w-4 h-4 text-[#00D4FF]" />
+              Master Visual Post
+            </h3>
+            {renderContentCard(masterVisual)}
+          </div>
+        )}
+
+        {/* Video */}
+        {video && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+              <Video className="w-4 h-4 text-rose-500" />
+              Master Video Concept
+            </h3>
+            {renderContentCard(video)}
+          </div>
+        )}
+
+        {/* Carousel */}
+        {carousel && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+              <FileText className="w-4 h-4 text-orange-500" />
+              Supporting: Carousel
+            </h3>
+            {renderContentCard(carousel)}
+          </div>
+        )}
+
+        {/* Ads */}
+        {ads.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+              <Megaphone className="w-4 h-4 text-cyan-500" />
+              Ad Variations
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {ads.map((c) => renderContentCard(c))}
+            </div>
+          </div>
+        )}
+
+        {/* Platform Adaptations */}
+        {adaptations.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+              <MessageCircle className="w-4 h-4 text-purple-500" />
+              Platform Adaptation Pack
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {adaptations.map((adaptation) => {
+                const meta = (adaptation.metadata || {}) as any;
+                return (
+                  <Card key={adaptation.id} className="hover:shadow-md transition-all">
+                    <CardContent className="p-4">
+                      <Badge variant="secondary" className="mb-2">
+                        {meta.platform || adaptation.assetType}
+                      </Badge>
+                      <p className="text-sm text-slate-900 font-medium">{adaptation.title}</p>
+                      {meta.adaptedCaption && (
+                        <p className="text-xs text-muted-foreground mt-1 line-clamp-3">{meta.adaptedCaption}</p>
+                      )}
+                      {meta.adaptedCta && (
+                        <p className="text-xs font-medium text-[#00D4FF] mt-1">CTA: {meta.adaptedCta}</p>
+                      )}
+                      {meta.adaptedHashtags && Array.isArray(meta.adaptedHashtags) && (
+                        <p className="text-[10px] text-muted-foreground mt-1">{meta.adaptedHashtags.join(" ")}</p>
+                      )}
+                      {meta.formatNotes && (
+                        <p className="text-[10px] text-slate-500 mt-1">{meta.formatNotes}</p>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Hashtags */}
+        {hashtagSet && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+              <Hash className="w-4 h-4 text-pink-500" />
+              Hashtag Pack
+            </h3>
+            <Card className="hover:shadow-md transition-all">
+              <CardContent className="p-4">
+                {(() => {
+                  const meta = (hashtagSet.metadata || {}) as any;
+                  return (
+                    <div className="space-y-2">
+                      {meta.core && Array.isArray(meta.core) && meta.core.length > 0 && (
+                        <div>
+                          <span className="text-[10px] font-medium text-slate-500 uppercase">Core</span>
+                          <p className="text-xs text-slate-700">{meta.core.join(" ")}</p>
+                        </div>
+                      )}
+                      {meta.trending && Array.isArray(meta.trending) && meta.trending.length > 0 && (
+                        <div>
+                          <span className="text-[10px] font-medium text-slate-500 uppercase">Trending</span>
+                          <p className="text-xs text-slate-700">{meta.trending.join(" ")}</p>
+                        </div>
+                      )}
+                      {meta.niche && Array.isArray(meta.niche) && meta.niche.length > 0 && (
+                        <div>
+                          <span className="text-[10px] font-medium text-slate-500 uppercase">Niche</span>
+                          <p className="text-xs text-slate-700">{meta.niche.join(" ")}</p>
+                        </div>
+                      )}
+                      {meta.platformSpecific && Array.isArray(meta.platformSpecific) && (
+                        <div className="space-y-1">
+                          {meta.platformSpecific.map((ps: any, i: number) => (
+                            <div key={i}>
+                              <span className="text-[10px] font-medium text-slate-500 uppercase">{ps.platform}</span>
+                              <p className="text-xs text-slate-700">{ps.hashtags?.join(" ")}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* WhatsApp */}
+        {whatsapp && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+              <MessageCircle className="w-4 h-4 text-green-500" />
+              WhatsApp Version
+            </h3>
+            {renderContentCard(whatsapp)}
+          </div>
+        )}
+
+        {/* Email */}
+        {email && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+              <Mail className="w-4 h-4 text-emerald-500" />
+              Email Version
+            </h3>
+            {renderContentCard(email)}
+          </div>
+        )}
+
+        {/* Launch Sequence */}
+        {launch && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-violet-500" />
+              Launch Sequence
+            </h3>
+            {renderContentCard(launch)}
+          </div>
+        )}
+
+        {/* Other supporting assets */}
+        {others.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+              <FileText className="w-4 h-4 text-slate-500" />
+              Supporting Assets
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {others.map((c) => renderContentCard(c))}
+            </div>
+          </div>
         )}
       </div>
     );
@@ -762,34 +1298,36 @@ Include:
       </div>
 
       {/* Tabs & Search */}
-      <div className="flex flex-col sm:flex-row gap-4">
-        <Tabs
-          value={activeTab}
-          onValueChange={setActiveTab}
-          className="flex-1"
-        >
-          <TabsList className="flex-wrap h-auto">
-            <TabsTrigger value="all">All</TabsTrigger>
-            <TabsTrigger value="ai_generated" className="text-purple-400">AI Generated</TabsTrigger>
-            <TabsTrigger value="social_post">Social</TabsTrigger>
-            <TabsTrigger value="ad_copy">Ads</TabsTrigger>
-            <TabsTrigger value="email">Email</TabsTrigger>
-            <TabsTrigger value="video_concept">Video</TabsTrigger>
-            <TabsTrigger value="carousel_ad">Carousel</TabsTrigger>
-            <TabsTrigger value="script">Script</TabsTrigger>
-            <TabsTrigger value="blog">Blog</TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <div className="relative w-full sm:w-64">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="Search content..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+      {!urlCampaignId && (
+        <div className="flex flex-col sm:flex-row gap-4">
+          <Tabs
+            value={activeTab}
+            onValueChange={setActiveTab}
+            className="flex-1"
+          >
+            <TabsList className="flex-wrap h-auto">
+              <TabsTrigger value="all">All</TabsTrigger>
+              <TabsTrigger value="ai_generated" className="text-purple-400">AI Generated</TabsTrigger>
+              <TabsTrigger value="social_post">Social</TabsTrigger>
+              <TabsTrigger value="ad_copy">Ads</TabsTrigger>
+              <TabsTrigger value="email">Email</TabsTrigger>
+              <TabsTrigger value="video_concept">Video</TabsTrigger>
+              <TabsTrigger value="carousel_ad">Carousel</TabsTrigger>
+              <TabsTrigger value="script">Script</TabsTrigger>
+              <TabsTrigger value="blog">Blog</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              placeholder="Search content..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Schedule Dialog */}
       <Dialog open={scheduleOpen.open} onOpenChange={(open) => !open && setScheduleOpen({ open: false, contentId: null })}>
@@ -808,15 +1346,15 @@ Include:
               <Button variant="outline" className="flex-1" onClick={() => setScheduleOpen({ open: false, contentId: null })}>
                 Cancel
               </Button>
-              <Button className="flex-1" onClick={handleScheduleSave} disabled={!scheduleDate || updateMutation.isPending}>
-                {updateMutation.isPending ? "Saving..." : "Schedule"}
+              <Button className="flex-1" onClick={handleScheduleSave} disabled={!scheduleDate || isPending(scheduleOpen.contentId ?? 0, "schedule")}>
+                {isPending(scheduleOpen.contentId ?? 0, "schedule") ? "Saving..." : "Schedule"}
               </Button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Content Grid */}
+      {/* Content Grid or Campaign Pack */}
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {[1, 2].map((i) => (
@@ -942,208 +1480,11 @@ Include:
             )}
           </CardContent>
         </Card>
+      ) : urlCampaignId ? (
+        renderCampaignPack()
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {(filtered ?? []).map((content) => {
-            const approved = getApprovalState(content);
-            const connected = isPlatformConnected(content.platform);
-            const configurable = isPlatformConfigurable(content.platform);
-            const showConnectGuard = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform) && !connected;
-            const captionText = getCaptionText(content);
-
-            return (
-              <Card key={content.id} className="group hover:shadow-md transition-all">
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant="secondary"
-                        className={typeColors[content.type] || "bg-muted"}
-                      >
-                        {content.type.replace("_", " ")}
-                      </Badge>
-                      {content.aiGenerated && (
-                        <Badge variant="outline" className="flex items-center gap-1">
-                          <Sparkles className="w-3 h-3" />
-                          AI
-                        </Badge>
-                      )}
-                      <Badge
-                        variant="outline"
-                        className={statusColors[content.status] || statusColors.draft}
-                      >
-                        {content.status}
-                      </Badge>
-                      {approved && (
-                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" />
-                          Approved
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() =>
-                          copyToClipboard(captionText, content.id)
-                        }
-                        title="Copy caption"
-                      >
-                        {copiedId === content.id ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-500" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-red-500 hover:text-red-600"
-                        onClick={() => deleteMutation.mutate({ id: content.id })}
-                        title="Delete"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  <h3 className="font-semibold text-sm mb-2 text-slate-900">{content.title}</h3>
-                  {content.hook && (
-                    <p className="text-sm text-muted-foreground line-clamp-1 mb-1">
-                      <span className="font-medium text-foreground">Hook:</span>{" "}
-                      {content.hook}
-                    </p>
-                  )}
-                  {content.caption && (
-                    <p className="text-sm text-muted-foreground line-clamp-2 mb-1">
-                      {content.caption}
-                    </p>
-                  )}
-                  {content.cta && (
-                    <p className="text-xs font-medium text-[#00D4FF] mt-1">
-                      CTA: {content.cta}
-                    </p>
-                  )}
-
-                  {renderPremiumBadges(content)}
-
-                  {content.type === "video_concept" && renderVideoBlueprint(content)}
-                  {content.type === "reel_script" && renderVideoBlueprint(content)}
-                  {content.type === "carousel_ad" && renderCarouselBlueprint(content)}
-
-                  {showConnectGuard && (
-                    <div className="mt-3 p-2.5 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2">
-                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                      <div className="flex-1">
-                        <p className="font-medium">Publishing setup required</p>
-                        <p className="text-amber-700/80">
-                          Connect {content.platform} in Integrations to publish automatically, or mark as manually posted.
-                        </p>
-                        <div className="mt-2 flex gap-2">
-                          {configurable ? (
-                            <Link to="/integrations">
-                              <Button size="sm" variant="outline" className="h-7 text-xs">
-                                <ExternalLink className="w-3 h-3 mr-1" />
-                                Connect {content.platform}
-                              </Button>
-                            </Link>
-                          ) : (
-                            <span className="text-[11px] text-amber-700/70">Admin needs to configure this platform before it can be connected.</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="mt-4 flex flex-wrap items-center gap-2">
-                    {!approved && content.status !== "published" && (
-                      <Button
-                        size="sm"
-                        className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white"
-                        onClick={() => approveMutation.mutate({ id: content.id })}
-                        disabled={approveMutation.isPending}
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
-                        Approve
-                      </Button>
-                    )}
-
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-8"
-                      onClick={() => copyToClipboard(captionText, content.id)}
-                    >
-                      {copiedId === content.id ? (
-                        <Check className="w-3.5 h-3.5 mr-1.5" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5 mr-1.5" />
-                      )}
-                      Copy caption
-                    </Button>
-
-                    {content.status !== "published" && content.status !== "archived" && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8"
-                          onClick={() => openSchedule(content.id, content.scheduledFor)}
-                        >
-                          <CalendarClock className="w-3.5 h-3.5 mr-1.5" />
-                          {content.status === "scheduled" ? "Reschedule" : "Schedule"}
-                        </Button>
-
-                        {showConnectGuard ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8"
-                            onClick={() => markManuallyPostedMutation.mutate({ id: content.id })}
-                            disabled={markManuallyPostedMutation.isPending}
-                          >
-                            <Upload className="w-3.5 h-3.5 mr-1.5" />
-                            Mark as posted
-                          </Button>
-                        ) : connected ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8"
-                            onClick={() => {
-                              toast.info("Auto-publishing is coming soon. Use 'Mark as posted' if you published manually.");
-                            }}
-                          >
-                            <Upload className="w-3.5 h-3.5 mr-1.5" />
-                            Publish now
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8"
-                            onClick={() => markManuallyPostedMutation.mutate({ id: content.id })}
-                            disabled={markManuallyPostedMutation.isPending}
-                          >
-                            <Upload className="w-3.5 h-3.5 mr-1.5" />
-                            Mark as posted
-                          </Button>
-                        )}
-                      </>
-                    )}
-
-                    {content.platform && (
-                      <span className="ml-auto text-xs text-muted-foreground capitalize">
-                        {content.platform}
-                      </span>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+          {(filtered ?? []).map((content) => renderContentCard(content))}
         </div>
       )}
     </div>
