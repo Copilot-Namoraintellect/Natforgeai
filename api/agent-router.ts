@@ -98,6 +98,10 @@ export const agentRouter = createRouter({
         .limit(1);
 
       if (existingRun.length > 0 && ["running", "completed"].includes(existingRun[0].status)) {
+        // If completed but workflow wasn't advanced (e.g. onAgentRunComplete missed), trigger it now
+        if (existingRun[0].status === "completed") {
+          await onAgentRunComplete(existingRun[0].id);
+        }
         return {
           success: true,
           skipped: true,

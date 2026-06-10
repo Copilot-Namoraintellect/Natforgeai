@@ -2,11 +2,13 @@ import { z } from "zod";
 import { generateObject } from "ai";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { campaigns, businesses } from "@db/schema";
+import { campaigns, businesses, agentRuns } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { checkLimit, incrementCampaignUsage, incrementResultUsage } from "./lib/subscription";
 import { TRPCError } from "@trpc/server";
 import { defaultModel } from "./lib/agents/openai";
+import { runStrategyAgent } from "./lib/agents/strategy-agent";
+import { onAgentRunComplete } from "./lib/workflow/triggers";
 
 export const campaignRouter = createRouter({
   list: authedQuery.query(async ({ ctx }) => {
@@ -116,11 +118,69 @@ export const campaignRouter = createRouter({
       if (input.startDate) data.startDate = new Date(input.startDate);
       if (input.endDate) data.endDate = new Date(input.endDate);
       const [camp] = await db.insert(campaigns).values(data);
+      const campaignId = Number(camp.insertId);
 
       // Increment campaign usage
       await incrementCampaignUsage(ctx.user.id);
 
-      return { id: Number(camp.insertId), success: true, workflowState };
+      // Auto-start Strategy Agent for onboarded businesses
+      if (workflowState === "strategy_pending" && businessId) {
+        Promise.resolve().then(async () => {
+          try {
+            const [business] = await db
+              .select()
+              .from(businesses)
+              .where(eq(businesses.id, businessId))
+              .limit(1);
+
+            if (!business) return;
+
+            // Deduplication guard
+            const existing = await db
+              .select()
+              .from(agentRuns)
+              .where(
+                and(
+                  eq(agentRuns.campaignId, campaignId),
+                  eq(agentRuns.agentType, "strategy")
+                )
+              )
+              .orderBy(agentRuns.createdAt)
+              .limit(1);
+
+            if (existing.length > 0 && ["running", "completed"].includes(existing[0].status)) {
+              console.log(`[CampaignCreate] Strategy agent already ${existing[0].status} for campaign ${campaignId}`);
+              if (existing[0].status === "completed") {
+                await onAgentRunComplete(existing[0].id);
+              }
+              return;
+            }
+
+            const result = await runStrategyAgent({
+              userId: ctx.user.id,
+              campaignId,
+              business: {
+                name: business.name,
+                industry: business.industry,
+                location: business.location,
+                productOrService: business.productOrService,
+                targetCustomer: business.targetCustomer,
+                brandTone: business.brandTone,
+                mainGoal: business.mainGoal,
+                monthlyBudget: business.monthlyBudget,
+                preferredPlatforms: business.preferredPlatforms,
+                website: business.website,
+              },
+            });
+
+            await onAgentRunComplete(result.runId);
+          } catch (err: any) {
+            console.error(`[CampaignCreate] Strategy agent failed for campaign ${campaignId}:`, err.message);
+          }
+        });
+      }
+
+      return { id: campaignId, success: true, workflowState };
     }),
 
   improveBrief: authedQuery

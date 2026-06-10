@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -254,8 +255,11 @@ export default function AgentActivity() {
   const [filterType, setFilterType] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const utils = trpc.useUtils();
+  const [searchParams] = useSearchParams();
+  const urlCampaignId = searchParams.get("campaignId");
 
   const { data: agentRuns, isLoading } = trpc.agent.getAgentRuns.useQuery({
+    campaignId: urlCampaignId ? Number(urlCampaignId) : undefined,
     agentType: filterType !== "all" ? (filterType as any) : undefined,
     status: filterStatus !== "all" ? (filterStatus as any) : undefined,
   }, {

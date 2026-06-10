@@ -131,7 +131,6 @@ export async function runStrategyAgent({
       funnelStages: result.output.funnelStages as any,
       offers: result.output.offers as any,
       ctaStrategy: result.output.ctas.map((c) => `${c.stage}: ${c.cta}`).join("\n"),
-      workflowState: "strategy_generated",
       workflowContext: {
         strategyGeneratedAt: new Date().toISOString(),
         strategyRunId: result.runId,

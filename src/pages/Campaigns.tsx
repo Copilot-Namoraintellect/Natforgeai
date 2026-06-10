@@ -157,7 +157,11 @@ export default function Campaigns() {
         if (data.workflowState === "business_onboarding") {
           navigate("/onboarding");
         } else if (data.workflowState === "strategy_pending") {
-          navigate("/agent-activity");
+          navigate(`/agent-activity?campaignId=${data.id}`);
+          // Fallback frontend trigger in case backend async start missed
+          setTimeout(() => {
+            runStrategyAgentMutation.mutate({ campaignId: data.id, generate: true });
+          }, 1500);
         } else if (data.workflowState === "strategy_generated") {
           navigate("/approvals");
         }
@@ -212,6 +216,20 @@ export default function Campaigns() {
     },
     onError: (err) => {
       toast.error(err.message || "Failed to generate creative content. The campaign is blocked. Please retry from Mission Control.");
+    },
+  });
+  const runStrategyAgentMutation = trpc.agent.runStrategyAgent.useMutation({
+    onSuccess: (data) => {
+      if (data.skipped) {
+        toast.info(data.reason || "Strategy generation is already in progress.");
+      } else {
+        toast.success("Strategy generation started.");
+      }
+      utils.campaign.list.invalidate();
+      utils.agent.getAgentRuns.invalidate();
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to start strategy generation");
     },
   });
 
@@ -646,9 +664,19 @@ export default function Campaigns() {
                       </Link>
                     )}
                     {camp.workflowState === "strategy_pending" && (
-                      <Button size="sm" variant="outline" disabled className="h-7 text-xs">
-                        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                        Preparing Strategy
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs"
+                        onClick={() => runStrategyAgentMutation.mutate({ campaignId: camp.id, generate: true })}
+                        disabled={runStrategyAgentMutation.isPending && runStrategyAgentMutation.variables?.campaignId === camp.id}
+                      >
+                        {runStrategyAgentMutation.isPending && runStrategyAgentMutation.variables?.campaignId === camp.id ? (
+                          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                        ) : (
+                          <Rocket className="w-3 h-3 mr-1" />
+                        )}
+                        {runStrategyAgentMutation.isPending && runStrategyAgentMutation.variables?.campaignId === camp.id ? "Starting..." : "Start Strategy"}
                       </Button>
                     )}
                     <Button
@@ -920,9 +948,21 @@ export default function Campaigns() {
                   </Button>
                 )}
                 {viewCampaign.workflowState === "strategy_pending" && (
-                  <Button size="sm" variant="outline" disabled>
-                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                    Preparing Strategy
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      runStrategyAgentMutation.mutate({ campaignId: viewCampaign.id, generate: true });
+                      setViewCampaign(null);
+                    }}
+                    disabled={runStrategyAgentMutation.isPending && runStrategyAgentMutation.variables?.campaignId === viewCampaign.id}
+                  >
+                    {runStrategyAgentMutation.isPending && runStrategyAgentMutation.variables?.campaignId === viewCampaign.id ? (
+                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                    ) : (
+                      <Rocket className="w-3 h-3 mr-1" />
+                    )}
+                    {runStrategyAgentMutation.isPending && runStrategyAgentMutation.variables?.campaignId === viewCampaign.id ? "Starting..." : "Start Strategy"}
                   </Button>
                 )}
               </div>
