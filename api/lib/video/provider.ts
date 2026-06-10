@@ -1,4 +1,5 @@
 import { env } from "../env";
+import { renderLocalMp4 } from "./renderer";
 
 export interface VideoRenderRequest {
   contentPostId: number;
@@ -13,6 +14,12 @@ export interface VideoRenderRequest {
   }>;
   duration?: string;
   style?: string;
+  title?: string;
+  businessName?: string;
+  productName?: string;
+  offer?: string;
+  cta?: string;
+  uploadedImagePath?: string | null;
 }
 
 export interface VideoRenderResult {
@@ -21,6 +28,8 @@ export interface VideoRenderResult {
   videoUrl?: string;
   thumbnailUrl?: string;
   errorMessage?: string;
+  durationSeconds?: number;
+  aspectRatio?: string;
 }
 
 export interface VideoProvider {
@@ -30,10 +39,61 @@ export interface VideoProvider {
   getStatus(jobId: string): Promise<VideoRenderResult>;
 }
 
+// ─── Local FFmpeg Renderer ───
+class LocalVideoProvider implements VideoProvider {
+  name = "local";
+  configured = true;
+
+  async generateVideo(req: VideoRenderRequest): Promise<VideoRenderResult> {
+    try {
+      const result = await renderLocalMp4({
+        contentPostId: req.contentPostId,
+        campaignId: req.campaignId,
+        userId: req.userId,
+        title: req.title || "Video",
+        businessName: req.businessName,
+        productName: req.productName,
+        offer: req.offer,
+        cta: req.cta,
+        scenes: req.scenes.map((s) => ({
+          sceneNumber: s.sceneNumber,
+          durationSeconds: 5,
+          visualDescription: s.visualDescription,
+          onScreenText: s.onScreenText,
+          voiceoverScript: s.voiceoverScript,
+        })),
+        duration: req.duration,
+        style: req.style,
+        uploadedImagePath: req.uploadedImagePath,
+      });
+
+      return {
+        jobId: `local-${req.contentPostId}-${Date.now()}`,
+        status: "completed",
+        videoUrl: result.videoUrl,
+        thumbnailUrl: result.thumbnailUrl,
+        durationSeconds: result.durationSeconds,
+        aspectRatio: result.aspectRatio,
+      };
+    } catch (err: any) {
+      return {
+        jobId: `local-fail-${Date.now()}`,
+        status: "failed",
+        errorMessage: err.message || "Local render failed",
+      };
+    }
+  }
+
+  async getStatus(jobId: string): Promise<VideoRenderResult> {
+    // Local renders are synchronous; status is final immediately
+    if (jobId.startsWith("local-fail")) {
+      return { jobId, status: "failed", errorMessage: "Previous render failed" };
+    }
+    return { jobId, status: "completed" };
+  }
+}
+
 // ─── Placeholder Provider ───
-// Returns configured: false when no real provider credentials are available.
-// This ensures the UI shows an honest "not configured" message instead of
-// faking success or silently failing.
 class PlaceholderVideoProvider implements VideoProvider {
   name = "placeholder";
   configured = false;
@@ -52,6 +112,7 @@ class PlaceholderVideoProvider implements VideoProvider {
 // ─── Provider Registry ───
 const providers = new Map<string, VideoProvider>();
 providers.set("placeholder", new PlaceholderVideoProvider());
+providers.set("local", new LocalVideoProvider());
 
 // Future: register real providers here (e.g., Runway, HeyGen, Synthesia)
 // if (env.videoProvider === "runway" && env.runwayApiKey) {
@@ -59,7 +120,7 @@ providers.set("placeholder", new PlaceholderVideoProvider());
 // }
 
 export function getVideoProvider(): VideoProvider {
-  const providerName = env.videoProvider || "placeholder";
+  const providerName = env.videoProvider || "local";
   const provider = providers.get(providerName);
   if (provider) return provider;
   return providers.get("placeholder")!;

@@ -203,6 +203,16 @@ function normaliseHashtagSet(h: any): any {
   };
 }
 
+function normaliseHook(h: any): any {
+  if (!h || typeof h !== "object") return { text: "", angle: "" };
+  return { text: String(h.text ?? ""), angle: String(h.angle ?? "") };
+}
+
+function normaliseCtaVariation(c: any): any {
+  if (!c || typeof c !== "object") return { text: "", angle: "" };
+  return { text: String(c.text ?? ""), angle: String(c.angle ?? "") };
+}
+
 function normalisePremiumPack(raw: any): any {
   if (!raw || typeof raw !== "object") {
     return {
@@ -213,6 +223,8 @@ function normalisePremiumPack(raw: any): any {
       whatsAppPromos: [normaliseWhatsApp(null)],
       emailCampaign: normaliseEmail(null),
       launchSequence: normaliseLaunchSequence(null),
+      hooks: [normaliseHook(null)],
+      ctaVariations: [normaliseCtaVariation(null)],
       packSummary: "",
     };
   }
@@ -236,6 +248,12 @@ function normalisePremiumPack(raw: any): any {
     ? raw.platformAdaptations.map(normalisePlatformAdaptation).filter(Boolean)
     : [];
   const hashtagSet = normaliseHashtagSet(raw.hashtagSet);
+  const hooks = Array.isArray(raw.hooks)
+    ? raw.hooks.map(normaliseHook).filter((h: any) => h.text)
+    : [];
+  const ctaVariations = Array.isArray(raw.ctaVariations)
+    ? raw.ctaVariations.map(normaliseCtaVariation).filter((c: any) => c.text)
+    : [];
 
   return {
     videoConcepts: videoConcepts.length > 0 ? videoConcepts : [normaliseVideoConcept(null)],
@@ -247,6 +265,8 @@ function normalisePremiumPack(raw: any): any {
     launchSequence: normaliseLaunchSequence(raw.launchSequence),
     platformAdaptations: platformAdaptations.length > 0 ? platformAdaptations : [],
     hashtagSet,
+    hooks: hooks.length > 0 ? hooks : [normaliseHook(null)],
+    ctaVariations: ctaVariations.length > 0 ? ctaVariations : [normaliseCtaVariation(null)],
     packSummary: String(raw.packSummary ?? ""),
   };
 }
@@ -275,6 +295,8 @@ const VideoConceptSchema = z.object({
   visualStyle: z.string(),
   targetPersona: z.string(),
   funnelStage: z.enum(["awareness", "consideration", "conversion", "retention"]),
+  voiceoverScript: z.string().nullable(),
+  thumbnailPrompt: z.string().nullable(),
 });
 
 const CarouselSlideSchema = z.object({
@@ -374,6 +396,16 @@ const HashtagSetSchema = z.object({
   platformSpecific: z.array(PlatformHashtagSchema),
 });
 
+const HookSchema = z.object({
+  text: z.string(),
+  angle: z.string().nullable(),
+});
+
+const CtaVariationSchema = z.object({
+  text: z.string(),
+  angle: z.string().nullable(),
+});
+
 const PremiumCampaignPackSchema = z.object({
   videoConcepts: z.array(VideoConceptSchema),
   carouselAds: z.array(CarouselAdSchema),
@@ -384,6 +416,8 @@ const PremiumCampaignPackSchema = z.object({
   launchSequence: LaunchSequenceSchema,
   platformAdaptations: z.array(PlatformAdaptationSchema),
   hashtagSet: HashtagSetSchema,
+  hooks: z.array(HookSchema).nullable(),
+  ctaVariations: z.array(CtaVariationSchema).nullable(),
   packSummary: z.string(),
 });
 
@@ -466,6 +500,18 @@ ${strategyContext?.platformStrategy ? `- Platform Strategy: ${JSON.stringify(str
 
 GENERATE A MASTER CAMPAIGN PACK — think "Canva Premium Pack" or "Zuto Hub" quality: one hero asset per format, then platform adaptations. Do NOT generate many separate mediocre pieces. Generate ONE outstanding asset per category, then adapt it.
 
+COPY QUALITY RULES — YOU MUST FOLLOW THESE EXACTLY:
+- NEVER use generic filler like "Discover the best" or "Unlock your potential".
+- NEVER use placeholders like [Your Business], YourBrandName, [Company], or [Product].
+- NEVER use USD, "$100", or dollar amounts unless the campaign explicitly targets the US.
+- If the location is in South Africa, use South African Rand (R) or generic terms like "from only R299" only if an offer exists. Do not invent prices.
+- Use strong hooks, clear offers, and direct CTAs. Every word must earn its place.
+- WhatsApp copy must be short and action-focused (under 160 chars if possible).
+- LinkedIn copy must be business/professional with clear value proposition.
+- TikTok/Reels copy must be punchy, visual, and trend-aware.
+- Instagram copy can be slightly longer but must front-load the hook.
+- Facebook copy should be conversational and community-oriented.
+
 A. 1 MASTER SHORT-FORM VIDEO CONCEPT (use for Instagram Reels, TikTok, Facebook Reels, YouTube Shorts)
 This is the single hero video blueprint for the entire campaign. Provide:
 - A scroll-stopping title
@@ -479,13 +525,15 @@ This is the single hero video blueprint for the entire campaign. Provide:
 - Visual style description
 - Target persona
 - Funnel stage (awareness, consideration, conversion, retention)
+- Voiceover script (full script read aloud, not just scene notes)
+- Thumbnail generation prompt (detailed visual description for a static thumbnail)
 
 B. 1 CAROUSEL AD CONCEPT
 One premium carousel that can be adapted across platforms. Provide:
 - Title
 - Platform (primary)
 - Hook
-- 4-6 slides with: headline, visual direction, body text, optional CTA (use null if no CTA on that slide)
+- 5-7 slides with: headline, visual direction, body text, optional CTA (use null if no CTA on that slide)
 - Overall CTA
 - Visual style
 - Target persona
@@ -519,14 +567,18 @@ For EACH platform in the campaign (${campaign.platforms || "Instagram, Facebook,
 - Best time to post for that platform
 - Format notes (e.g. "TikTok: keep under 150 chars, use trending audio reference", "LinkedIn: professional tone, longer form accepted") — use null if not needed
 
-E. 3 AD COPY VARIATIONS
-- Awareness ad (problem agitation, curiosity)
-- Retargeting ad (social proof, objection handling)
-- Direct sales ad (offer, urgency, risk reversal)
+E. 6 AD COPY VARIATIONS
+Generate 6 distinct static ad variations covering these angles:
+1. Awareness ad (problem agitation, curiosity)
+2. Retargeting ad (social proof, objection handling)
+3. Direct sales ad (offer, urgency, risk reversal)
+4. Local relevance ad (ties to location if applicable)
+5. Transformation ad (before/after, dream outcome)
+6. Scarcity ad (limited time, limited spots, exclusive)
 Each with: variant name, angle, headline, primary text, CTA, platform, funnel stage
 
 F. 1 WHATSAPP PROMO MESSAGE
-- Short, persuasive promo message
+- Short, persuasive promo message (under 160 characters, action-focused)
 - Follow-up message for non-responders (use null if not needed)
 - CTA
 - Casual but persuasive tone
@@ -544,7 +596,16 @@ H. 1 LAUNCH / OFFER SEQUENCE
 - Each step: channel, timing, message, CTA
 - Progresses from teaser → announcement → urgency → last chance
 
-I. HASHTAG SET
+I. HOOK BANK
+Provide at least 3 strong hook variations for this campaign:
+- Each hook should be under 12 words
+- Different angles: curiosity, pain point, bold claim, story opener
+
+J. CTA VARIATION BANK
+Provide at least 3 distinct CTA variations:
+- Different angles: urgency, low friction, social proof, direct command
+
+K. HASHTAG SET
 Provide a structured hashtag strategy:
 - Core hashtags (5-10 evergreen, brand-relevant)
 - Trending hashtags (5-10 currently popular in this niche)
@@ -686,8 +747,10 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         targetPersona: video.targetPersona,
         funnelStage: video.funnelStage,
         assetKind: "video_blueprint",
-        videoStatus: "draft_brief",
-        message: "NatForgeAI has prepared a video-ready script and creative direction. Full video rendering will be available once video generation is enabled.",
+        videoStatus: "concept",
+        voiceoverScript: video.voiceoverScript,
+        thumbnailPrompt: video.thumbnailPrompt,
+        message: "Video Concept Only — Render the video to generate a playable MP4.",
       }
     );
   }
@@ -811,6 +874,44 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       assetKind: "launch_sequence",
     }
   );
+
+  // Save hooks bank as campaign asset
+  if (pack.hooks && pack.hooks.length > 0) {
+    try {
+      await db.insert(campaignAssets).values({
+        userId,
+        campaignId,
+        assetType: "cta_variant" as any,
+        title: "Hook Bank",
+        status: "ready",
+        metadata: {
+          hooks: pack.hooks.map((h: any) => ({ text: h.text, angle: h.angle })),
+        } as any,
+      });
+      savedAssets++;
+    } catch (err: any) {
+      console.error(`[CreativeAgent] Failed to save hook bank | campaignId=${campaignId} | error="${err.message}"`);
+    }
+  }
+
+  // Save CTA variations as campaign asset
+  if (pack.ctaVariations && pack.ctaVariations.length > 0) {
+    try {
+      await db.insert(campaignAssets).values({
+        userId,
+        campaignId,
+        assetType: "cta_variant" as any,
+        title: "CTA Variation Bank",
+        status: "ready",
+        metadata: {
+          ctaVariations: pack.ctaVariations.map((c: any) => ({ text: c.text, angle: c.angle })),
+        } as any,
+      });
+      savedAssets++;
+    } catch (err: any) {
+      console.error(`[CreativeAgent] Failed to save CTA variation bank | campaignId=${campaignId} | error="${err.message}"`);
+    }
+  }
 
   // Save platform adaptations as campaign assets
   if (pack.platformAdaptations && pack.platformAdaptations.length > 0) {

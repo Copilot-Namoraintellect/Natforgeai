@@ -300,4 +300,79 @@ export const contentRouter = createRouter({
         );
       return { success: true };
     }),
+
+  publishCampaignPack: authedQuery
+    .input(z.object({ campaignId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+
+      const posts = await db
+        .select()
+        .from(contentPosts)
+        .where(
+          and(
+            eq(contentPosts.userId, ctx.user.id),
+            eq(contentPosts.campaignId, input.campaignId)
+          )
+        );
+
+      // Guard: at least one approved social post must exist
+      const socialPosts = posts.filter((p) => p.type === "social_post");
+      const approvedSocial = socialPosts.filter((p) => {
+        const meta = (p.metadata || {}) as any;
+        return meta.approved === true || p.status === "published";
+      });
+      if (approvedSocial.length === 0 && socialPosts.length > 0) {
+        throw new Error("At least one social post must be approved before publishing the campaign pack.");
+      }
+
+      // Guard: platform-specific captions must exist
+      const adaptations = await db
+        .select()
+        .from(campaignAssets)
+        .where(
+          and(
+            eq(campaignAssets.userId, ctx.user.id),
+            eq(campaignAssets.campaignId, input.campaignId),
+            eq(campaignAssets.assetType, "caption_adaptation")
+          )
+        );
+      if (adaptations.length === 0) {
+        throw new Error("Platform-specific captions are missing. Generate content first.");
+      }
+
+      // Guard: if video exists, it must be ready with a videoUrl
+      const videos = posts.filter((p) => p.type === "video_concept" || p.type === "reel_script");
+      for (const video of videos) {
+        const meta = (video.metadata || {}) as any;
+        if (meta.videoStatus === "concept" || meta.videoStatus === "rendering") {
+          throw new Error("This campaign contains a video concept only. Render the video before publishing.");
+        }
+        if (meta.videoStatus === "ready" && !meta.videoUrl) {
+          throw new Error("This campaign contains a video concept only. Render the video before publishing.");
+        }
+        if (meta.videoStatus === "failed") {
+          throw new Error("Video rendering failed. Retry rendering or remove the video before publishing.");
+        }
+      }
+
+      // Approve all unapproved, non-published posts
+      for (const post of posts) {
+        const meta = (post.metadata || {}) as any;
+        if (!meta.approved && post.status !== "published" && post.status !== "archived") {
+          await db
+            .update(contentPosts)
+            .set({
+              metadata: {
+                ...meta,
+                approved: true,
+                approvedAt: new Date().toISOString(),
+              },
+            })
+            .where(and(eq(contentPosts.id, post.id), eq(contentPosts.userId, ctx.user.id)));
+        }
+      }
+
+      return { success: true, approvedCount: posts.filter((p) => p.status !== "published" && p.status !== "archived").length };
+    }),
 });

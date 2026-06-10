@@ -424,13 +424,28 @@ Include:
     toast.info("Auto-publishing is coming soon. Use 'Mark as posted' if you published manually.");
   }
 
-  const createRenderJobMutation = trpc.video.createRenderJob.useMutation({
-    onSuccess: () => {
-      toast.success("Video render job created!");
+  const renderVideoMutation = trpc.video.renderVideo.useMutation({
+    onSuccess: (data) => {
+      toast.success("Video rendered successfully!");
+      utils.content.list.invalidate();
       utils.video.listForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
+      if (data.videoUrl) {
+        window.open(data.videoUrl, "_blank");
+      }
     },
     onError: (err) => {
-      toast.error(err.message || "Failed to create render job");
+      toast.error(err.message || "Failed to render video");
+    },
+  });
+
+  const publishCampaignPackMutation = trpc.content.publishCampaignPack.useMutation({
+    onSuccess: (data) => {
+      utils.content.list.invalidate();
+      toast.success(`Campaign pack published. ${data.approvedCount} items approved.`);
+      setPublishDialogOpen(false);
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to publish campaign pack");
     },
   });
 
@@ -451,7 +466,10 @@ Include:
   function renderVideoBlueprint(content: any) {
     const metadata = (content.metadata || {}) as any;
     const job = getVideoJobForContent(content.id);
-    const configured = videoConfig?.configured ?? false;
+    const configured = videoConfig?.configured ?? true; // local renderer is always configured
+    const videoStatus = metadata?.videoStatus || "concept";
+    const videoUrl = metadata?.videoUrl || job?.videoUrl || null;
+    const approved = getApprovalState(content);
 
     return (
       <div className="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
@@ -486,6 +504,40 @@ Include:
           </>
         )}
 
+        {/* Video Status Badges */}
+        <div className="flex flex-wrap gap-2 pt-1">
+          {!videoUrl && videoStatus === "concept" && (
+            <Badge variant="outline" className="text-amber-600 border-amber-200 bg-amber-50 text-[10px] h-6">
+              <AlertCircle className="w-3 h-3 mr-1" />
+              Storyboard
+            </Badge>
+          )}
+          {videoStatus === "rendering" && (
+            <Badge variant="outline" className="text-purple-600 border-purple-200 bg-purple-50 text-[10px] h-6">
+              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+              Rendering
+            </Badge>
+          )}
+          {videoStatus === "ready" && videoUrl && (
+            <Badge variant="outline" className="text-emerald-600 border-emerald-200 bg-emerald-50 text-[10px] h-6">
+              <CheckCircle2 className="w-3 h-3 mr-1" />
+              Ready to Preview
+            </Badge>
+          )}
+          {videoStatus === "failed" && (
+            <Badge variant="outline" className="text-red-600 border-red-200 bg-red-50 text-[10px] h-6">
+              <AlertCircle className="w-3 h-3 mr-1" />
+              Render Failed
+            </Badge>
+          )}
+          {approved && (
+            <Badge variant="outline" className="text-blue-600 border-blue-200 bg-blue-50 text-[10px] h-6">
+              <CheckCircle2 className="w-3 h-3 mr-1" />
+              Approved
+            </Badge>
+          )}
+        </div>
+
         {/* Video Render Status / Actions */}
         <div className="flex flex-wrap gap-2 pt-1">
           <Button
@@ -498,23 +550,14 @@ Include:
             Export Brief
           </Button>
 
-          {!configured && (
-            <span className="text-[10px] text-slate-400 self-center">Video rendering not configured</span>
-          )}
-
-          {configured && !job && (
+          {!videoUrl && videoStatus === "concept" && (
             <Button
               size="sm"
               className="h-7 text-[11px] bg-rose-600 hover:bg-rose-700 text-white"
-              onClick={() =>
-                createRenderJobMutation.mutate({
-                  contentPostId: content.id,
-                  campaignId: Number(urlCampaignId),
-                })
-              }
-              disabled={createRenderJobMutation.isPending}
+              onClick={() => renderVideoMutation.mutate({ contentPostId: content.id })}
+              disabled={renderVideoMutation.isPending}
             >
-              {createRenderJobMutation.isPending ? (
+              {renderVideoMutation.isPending ? (
                 <Loader2 className="w-3 h-3 mr-1 animate-spin" />
               ) : (
                 <Video className="w-3 h-3 mr-1" />
@@ -523,7 +566,35 @@ Include:
             </Button>
           )}
 
-          {job && (
+          {videoUrl && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-[11px]"
+                onClick={() => window.open(videoUrl, "_blank")}
+              >
+                <Video className="w-3 h-3 mr-1" />
+                Preview Video
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-[11px]"
+                onClick={() => {
+                  const a = document.createElement("a");
+                  a.href = videoUrl;
+                  a.download = `${content.title}.mp4`;
+                  a.click();
+                }}
+              >
+                <ExternalLink className="w-3 h-3 mr-1" />
+                Download MP4
+              </Button>
+            </>
+          )}
+
+          {job && !videoUrl && (
             <div className="flex items-center gap-2">
               {job.renderStatus === "queued" && (
                 <Badge variant="outline" className="text-blue-600 border-blue-200 bg-blue-50 text-[10px] h-6">
@@ -536,17 +607,6 @@ Include:
                   <Loader2 className="w-3 h-3 mr-1 animate-spin" />
                   Rendering
                 </Badge>
-              )}
-              {job.renderStatus === "completed" && job.videoUrl && (
-                <a
-                  href={job.videoUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center text-[11px] text-emerald-600 hover:text-emerald-700 font-medium"
-                >
-                  <CheckCircle2 className="w-3 h-3 mr-1" />
-                  View Video
-                </a>
               )}
               {job.renderStatus === "failed" && (
                 <Badge variant="outline" className="text-red-600 border-red-200 bg-red-50 text-[10px] h-6">
@@ -569,6 +629,12 @@ Include:
             </div>
           )}
         </div>
+
+        {!configured && !videoUrl && (
+          <p className="text-[10px] text-slate-400">
+            Video rendering is not configured. This is a storyboard only.
+          </p>
+        )}
       </div>
     );
   }
@@ -622,9 +688,19 @@ Include:
             {metadata.salesAngle}
           </Badge>
         )}
-        {metadata.assetKind === "video_blueprint" && (
-          <Badge variant="outline" className="text-[10px] h-5 border-rose-200 text-rose-600 bg-rose-50">
-            Video Ready
+        {metadata.assetKind === "video_blueprint" && metadata.videoStatus === "concept" && (
+          <Badge variant="outline" className="text-[10px] h-5 border-amber-200 text-amber-600 bg-amber-50">
+            Storyboard
+          </Badge>
+        )}
+        {metadata.assetKind === "video_blueprint" && metadata.videoStatus === "rendering" && (
+          <Badge variant="outline" className="text-[10px] h-5 border-purple-200 text-purple-600 bg-purple-50">
+            Rendering
+          </Badge>
+        )}
+        {metadata.assetKind === "video_blueprint" && metadata.videoStatus === "ready" && metadata.videoUrl && (
+          <Badge variant="outline" className="text-[10px] h-5 border-emerald-200 text-emerald-600 bg-emerald-50">
+            Ready to Preview
           </Badge>
         )}
       </div>
@@ -637,10 +713,14 @@ Include:
     const captionText = getCaptionText(content);
     const platformRequiresConnection = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform);
     const showConnectGuard = platformRequiresConnection && !connected;
+    const meta = (content.metadata || {}) as any;
+    const isVideo = content.type === "video_concept" || content.type === "reel_script";
+    const videoReady = isVideo && meta.videoStatus === "ready" && meta.videoUrl;
+    const videoBlocked = isVideo && !videoReady;
 
     return (
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        {!approved && content.status !== "published" && (
+        {!approved && content.status !== "published" && !videoBlocked && (
           <Button
             size="sm"
             className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white"
@@ -650,6 +730,9 @@ Include:
             {isPending(content.id, "approve") ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />}
             Approve
           </Button>
+        )}
+        {videoBlocked && (
+          <span className="text-[11px] text-slate-400">Approve disabled until video is rendered</span>
         )}
 
         <Button
@@ -897,27 +980,31 @@ Include:
       toast.info("All items are already approved or published.");
       return;
     }
+
+    // Frontend guard: check video readiness
+    const videos = filtered?.filter((c) => c.type === "video_concept" || c.type === "reel_script") || [];
+    for (const v of videos) {
+      const meta = (v.metadata || {}) as any;
+      if (meta.videoStatus === "concept" || meta.videoStatus === "rendering") {
+        toast.error("This campaign contains a video concept only. Render the video before publishing.");
+        return;
+      }
+      if (meta.videoStatus === "ready" && !meta.videoUrl) {
+        toast.error("This campaign contains a video concept only. Render the video before publishing.");
+        return;
+      }
+      if (meta.videoStatus === "failed") {
+        toast.error("Video rendering failed. Retry rendering or remove the video before publishing.");
+        return;
+      }
+    }
+
     setPublishDialogOpen(true);
   }
 
   function executePublishPack() {
-    const unapproved = filtered?.filter((c) => !getApprovalState(c) && c.status !== "published") || [];
-    const platformStatus = getPlatformConnectionStatus();
-
-    unapproved.forEach((c) => {
-      handleApprove(c.id);
-      const platform = c.platform;
-      if (platform) {
-        const status = platformStatus.find((p) => p.platform === platform);
-        if (!status?.connected) {
-          // Mark as manually posted for disconnected platforms
-          setTimeout(() => handleMarkPosted(c.id), 500);
-        }
-      }
-    });
-
-    toast.success("Campaign pack approved. Disconnected platforms marked for manual posting.");
-    setPublishDialogOpen(false);
+    if (!urlCampaignId) return;
+    publishCampaignPackMutation.mutate({ campaignId: Number(urlCampaignId) });
   }
 
   function renderCampaignPack() {
@@ -989,7 +1076,7 @@ Include:
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
               <Image className="w-4 h-4 text-[#00D4FF]" />
-              Master Visual Post
+              Master Campaign Post
             </h3>
             {renderContentCard(masterVisual)}
           </div>
@@ -1000,7 +1087,7 @@ Include:
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
               <Video className="w-4 h-4 text-rose-500" />
-              Master Video Concept
+              Video Ad
             </h3>
             {renderContentCard(video)}
           </div>
