@@ -4,7 +4,7 @@ import { randomBytes } from "crypto";
 import { createRouter, publicQuery, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { users, businesses, twoFactorChallenges } from "@db/schema";
-import { eq, or, and, gt } from "drizzle-orm";
+import { eq, or, and, gt, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { signLocalToken, verifyLocalToken } from "./lib/session";
 import { env } from "./lib/env";
@@ -211,7 +211,7 @@ export const localAuthRouter = createRouter({
           and(
             eq(twoFactorChallenges.challengeToken, input.challengeToken),
             gt(twoFactorChallenges.expiresAt, new Date()),
-            eq(twoFactorChallenges.consumedAt, null as any)
+            isNull(twoFactorChallenges.consumedAt)
           )
         )
         .limit(1);
@@ -257,7 +257,10 @@ export const localAuthRouter = createRouter({
         .limit(1);
 
       if (!user) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Verification failed. Please try again.",
+        });
       }
 
       const token = await signLocalToken({ userId: user.id, type: "local" });
