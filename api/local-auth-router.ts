@@ -132,6 +132,14 @@ export const localAuthRouter = createRouter({
 
       // If 2FA is enabled, create a challenge and return it
       if (user.twoFactorEnabled) {
+        const email = user.email;
+        if (!email) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "An email address is required to use two-factor authentication.",
+          });
+        }
+
         const otpCode = String(Math.floor(100000 + Math.random() * 900000));
         const otpHash = await bcrypt.hash(otpCode, 10);
         const challengeToken = randomBytes(32).toString("hex");
@@ -142,14 +150,14 @@ export const localAuthRouter = createRouter({
           challengeToken,
           otpHash,
           expiresAt,
-          sentToEmail: user.email,
+          sentToEmail: email,
           ipAddress: ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("host") || undefined,
           userAgent: ctx.req.headers.get("user-agent") || undefined,
         });
 
         // Send OTP email
         try {
-          await sendTwoFactorCodeEmail({ to: user.email, code: otpCode });
+          await sendTwoFactorCodeEmail({ to: email, code: otpCode });
         } catch (err: any) {
           console.error("[2FA] Failed to send email:", err.message);
           throw new TRPCError({

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { runAgent } from "./runner";
 import { getDb } from "../../queries/connection";
-import { campaigns, contentPosts, campaignAssets } from "@db/schema";
+import { campaigns, contentPosts, campaignAssets, businesses } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 
 // ─── Schema Normalisation Helpers ───

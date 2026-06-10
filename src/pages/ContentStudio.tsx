@@ -884,7 +884,7 @@ Include:
     platformsUsed.forEach((p) => {
       result.push({
         platform: p,
-        connected: isPlatformConnected(p),
+        connected: !!isPlatformConnected(p),
         configurable: isPlatformConfigurable(p),
       });
     });
