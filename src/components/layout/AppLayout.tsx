@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 export function AppLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const { isAuthenticated, isLoading, user } = useAuth();
+  const { isAuthenticated, isLoading, user, requiresVerification } = useAuth();
   const location = useLocation();
 
   // Show loading while checking auth
@@ -25,6 +25,11 @@ export function AppLayout() {
   // Redirect to login if not authenticated
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
+  }
+
+  // Block unverified users from all protected pages, including onboarding
+  if (requiresVerification && location.pathname !== "/login") {
+    return <Navigate to="/login?verify=required" replace />;
   }
 
   // Redirect to onboarding if not completed

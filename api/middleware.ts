@@ -21,6 +21,13 @@ const requireAuth = t.middleware(async (opts) => {
     });
   }
 
+  if (!ctx.session?.verified) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Verification required. Please complete OTP/2FA verification to access this resource.",
+    });
+  }
+
   return next({ ctx: { ...ctx, user: ctx.user } });
 });
 

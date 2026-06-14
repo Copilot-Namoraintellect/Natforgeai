@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router";
+import { useNavigate, Link, useSearchParams } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,11 +25,20 @@ import {
 
 export default function Login() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState<"login" | "register">("login");
   const [showPassword, setShowPassword] = useState(false);
   const [firebaseError, setFirebaseError] = useState<string | null>(null);
   const [diagnosticResult, setDiagnosticResult] = useState<any>(null);
   const [runningDiagnostic, setRunningDiagnostic] = useState(false);
+
+  const verificationRequired = searchParams.get("verify") === "required";
+
+  // 2FA challenge state
+  const [challengeToken, setChallengeToken] = useState<string | null>(null);
+  const [challengeSource, setChallengeSource] = useState<"login" | "firebase" | "register" | null>(null);
+  const [otpCode, setOtpCode] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
 
   // Login form state
   const [loginForm, setLoginForm] = useState({
@@ -37,11 +46,6 @@ export default function Login() {
     password: "",
     rememberMe: false,
   });
-
-  // 2FA challenge state
-  const [challengeToken, setChallengeToken] = useState<string | null>(null);
-  const [otpCode, setOtpCode] = useState("");
-  const [resendCooldown, setResendCooldown] = useState(0);
 
   // Register form state
   const [registerForm, setRegisterForm] = useState({
@@ -56,6 +60,7 @@ export default function Login() {
     onSuccess: async (data) => {
       if ("requiresTwoFactor" in data && data.requiresTwoFactor) {
         setChallengeToken(data.challengeToken);
+        setChallengeSource("login");
         toast.info("A verification code has been sent to your email.");
         return;
       }
@@ -84,6 +89,11 @@ export default function Login() {
     onSuccess: async (data) => {
       localStorage.setItem("auth_token", data.token);
       toast.success("Welcome back!");
+      if (verificationRequired) {
+        const next = new URLSearchParams(searchParams);
+        next.delete("verify");
+        setSearchParams(next, { replace: true });
+      }
       try {
         utils.auth.me.invalidate();
         const user = await utils.auth.me.fetch(undefined);
@@ -103,7 +113,14 @@ export default function Login() {
 
   const registerMutation = trpc.auth.register.useMutation({
     onSuccess: async (data) => {
-      // Switch to login tab and prefill credentials so the user can sign in immediately
+      if ("requiresTwoFactor" in data && data.requiresTwoFactor) {
+        setChallengeToken(data.challengeToken);
+        setChallengeSource("register");
+        toast.info("Account created. A verification code has been sent to your email.");
+        return;
+      }
+
+      // Fallback: switch to login tab and prefill credentials
       setTab("login");
       setLoginForm({
         usernameOrEmail: data.user?.username || registerForm.username,
@@ -128,6 +145,13 @@ export default function Login() {
 
   const firebaseAuthMutation = trpc.auth.firebaseAuth.useMutation({
     onSuccess: async (data) => {
+      if ("requiresTwoFactor" in data && data.requiresTwoFactor) {
+        setChallengeToken(data.challengeToken);
+        setChallengeSource("firebase");
+        toast.info("Please verify your Google login to continue. A code has been sent to your email.");
+        return;
+      }
+
       if (!data?.token) {
         toast.error("Google sign-in succeeded, but no session token was returned. Please try again.");
         return;
@@ -192,10 +216,17 @@ export default function Login() {
 
   function handleResendCode() {
     if (resendCooldown > 0) return;
-    loginMutation.mutate({
-      usernameOrEmail: loginForm.usernameOrEmail,
-      password: loginForm.password,
-    });
+    if (challengeSource === "login") {
+      loginMutation.mutate({
+        usernameOrEmail: loginForm.usernameOrEmail,
+        password: loginForm.password,
+      });
+    } else if (challengeSource === "firebase") {
+      handleFirebaseGoogleAuth();
+    } else {
+      toast.info("Please sign in again to receive a new verification code.");
+      return;
+    }
     setResendCooldown(60);
     const interval = setInterval(() => {
       setResendCooldown((prev) => {
@@ -210,7 +241,13 @@ export default function Login() {
 
   function handleBackToLogin() {
     setChallengeToken(null);
+    setChallengeSource(null);
     setOtpCode("");
+    if (verificationRequired) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("verify");
+      setSearchParams(next, { replace: true });
+    }
   }
 
   function handleRegister(e: React.FormEvent) {
@@ -280,6 +317,14 @@ export default function Login() {
           </p>
         </div>
 
+        {/* Verification Required Banner */}
+        {verificationRequired && !challengeToken && (
+          <div className="mb-4 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+            <p className="font-semibold mb-1">Verification Required</p>
+            <p>Please sign in again to verify your identity and continue.</p>
+          </div>
+        )}
+
         {/* Firebase Error Banner */}
         {firebaseError && (
           <div className="mb-4 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
@@ -327,7 +372,12 @@ export default function Login() {
                   <form onSubmit={handleVerifyOtp} className="space-y-4">
                     <div className="text-center mb-4">
                       <Lock className="w-8 h-8 text-[#00D4FF] mx-auto mb-2" />
-                      <h3 className="text-lg font-semibold">Two-Factor Authentication</h3>
+                      <h3 className="text-lg font-semibold">
+                        {challengeSource === "register" ? "Verify Your Account" : "Verify Your Login"}
+                      </h3>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Please verify your login to continue.
+                      </p>
                       <p className="text-sm text-muted-foreground mt-1">
                         Enter the 6-digit code sent to your email.
                       </p>

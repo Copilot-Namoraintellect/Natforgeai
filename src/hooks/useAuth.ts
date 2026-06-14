@@ -20,15 +20,20 @@ export function useAuth() {
     window.location.href = "/login";
   }, [utils]);
 
+  const requiresVerification = !!user?.requiresVerification;
+  const isFullyVerified = user?.isFullyVerified ?? false;
+
   return useMemo(
     () => ({
       user: user ?? null,
       isAuthenticated: !!user,
+      isFullyVerified,
+      requiresVerification,
       isLoading,
       error,
       logout,
       refresh: refetch,
     }),
-    [user, isLoading, error, logout, refetch],
+    [user, isFullyVerified, requiresVerification, isLoading, error, logout, refetch],
   );
 }

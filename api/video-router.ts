@@ -198,6 +198,7 @@ export const videoRouter = createRouter({
 
       try {
         const provider = getVideoProvider();
+        console.log(`[VideoRouter] Render start | contentPostId=${post.id} | campaignId=${post.campaignId} | provider=${provider.name} | userId=${ctx.user.id}`);
 
         // Fetch campaign and business for context
         let businessName = "";
@@ -233,13 +234,16 @@ export const videoRouter = createRouter({
         });
 
         if (result.status === "failed" || !result.videoUrl) {
+          const friendlyError = result.errorMessage || "Video rendering failed";
+          console.error(`[VideoRouter] Render failed | contentPostId=${post.id} | campaignId=${post.campaignId} | provider=${provider.name} | error="${friendlyError}"`);
+
           await db
             .update(contentPosts)
             .set({
               metadata: {
                 ...metadata,
                 videoStatus: "failed",
-                renderError: result.errorMessage || "Video rendering failed",
+                renderError: friendlyError,
                 renderProvider: provider.name,
               },
             })
@@ -247,7 +251,7 @@ export const videoRouter = createRouter({
 
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
-            message: result.errorMessage || "Video rendering failed",
+            message: friendlyError,
           });
         }
 
@@ -293,6 +297,7 @@ export const videoRouter = createRouter({
           aspectRatio: result.aspectRatio,
         };
       } catch (err: any) {
+        console.error(`[VideoRouter] Render exception | contentPostId=${post.id} | campaignId=${post.campaignId} | error="${err.message || String(err)}"`);
         // Ensure failed status is set on unexpected errors
         const currentMeta = (post.metadata || {}) as any;
         await db

@@ -480,8 +480,8 @@ export async function runCreativeAgent({
     }
   }
 
-  // Step 1: Generate Premium Campaign Pack
-  const packPrompt = `You are an elite creative director and performance marketer who builds premium, sales-focused campaign assets for small businesses. You do not create generic filler content. Every asset must be designed to drive revenue, capture attention in 3 seconds, and convert viewers into buyers.
+  // Step 1: Generate Hero Campaign Pack
+  const packPrompt = `You are an elite creative director for a premium marketing agency. You build tight, high-performing Hero Campaign Packs — not content factories. Approved strategy becomes one strong campaign idea, then platform adaptations and supporting assets.
 
 CAMPAIGN DETAILS:
 - Name: ${campaign.name}
@@ -498,123 +498,104 @@ ${funnelStages ? `- Funnel Stages: ${JSON.stringify(funnelStages.map((f: any) =>
 ${strategyContext?.campaignTheme ? `- Campaign Theme: ${strategyContext.campaignTheme}` : ""}
 ${strategyContext?.platformStrategy ? `- Platform Strategy: ${JSON.stringify(strategyContext.platformStrategy)}` : ""}
 
-GENERATE A MASTER CAMPAIGN PACK — think "Canva Premium Pack" or "Zuto Hub" quality: one hero asset per format, then platform adaptations. Do NOT generate many separate mediocre pieces. Generate ONE outstanding asset per category, then adapt it.
+PRODUCT EXPERIENCE RULES — YOU MUST FOLLOW THESE EXACTLY:
+- Output exactly ONE Master Campaign Post and ONE Master Video Ad as the primary assets.
+- Personas guide the message, tone and angle. DO NOT create a separate post for each persona by default.
+- DO NOT invent offers, discounts, free trials, limited spots, loyalty programmes, free e-books or lead magnets unless they are explicitly listed in the approved strategy above.
+- If the user did not provide an offer, use neutral CTAs only: "Book a demo", "Speak to us", "See how it works", "Request a payout workflow assessment", or "Let us show you the payout flow".
+- Ground every claim in the approved strategy. Do not invent statistics, testimonials, prices or locations.
 
 COPY QUALITY RULES — YOU MUST FOLLOW THESE EXACTLY:
-- NEVER use generic filler like "Discover the best" or "Unlock your potential".
+- NEVER use weak, generic lines like "Limited Spots for Financial Wellness!", "First Month FREE! Make the Switch Now!", "Watch Your Team Flourish Here!", "Hundreds of Businesses Trust Our Solutions!", "Transform your employees' financial futures today!", "Financial health means employee happiness!", "Discover the best", "Unlock your potential" or "Join thousands of satisfied customers".
+- Write like a premium agency: specific, grounded, human, confident. Every word must earn its place.
+- Front-load the benefit. One clear idea per asset.
 - NEVER use placeholders like [Your Business], YourBrandName, [Company], or [Product].
 - NEVER use USD, "$100", or dollar amounts unless the campaign explicitly targets the US.
-- If the location is in South Africa, use South African Rand (R) or generic terms like "from only R299" only if an offer exists. Do not invent prices.
-- Use strong hooks, clear offers, and direct CTAs. Every word must earn its place.
+- If the location is in South Africa, use South African Rand (R) only if an offer price exists. Do not invent prices.
 - WhatsApp copy must be short and action-focused (under 160 chars if possible).
 - LinkedIn copy must be business/professional with clear value proposition.
 - TikTok/Reels copy must be punchy, visual, and trend-aware.
 - Instagram copy can be slightly longer but must front-load the hook.
 - Facebook copy should be conversational and community-oriented.
 
-A. 1 MASTER SHORT-FORM VIDEO CONCEPT (use for Instagram Reels, TikTok, Facebook Reels, YouTube Shorts)
-This is the single hero video blueprint for the entire campaign. Provide:
-- A scroll-stopping title
-- Platform recommendation (primary platform)
-- Duration (15s, 30s, or 45s)
-- Hook (the first line that stops the scroll)
-- Opening hook for the first 3 seconds (must be visceral, emotional, or provocative)
-- Scene-by-scene breakdown (3-6 scenes) with: visual description, on-screen text, voiceover script, audio direction, product shot instruction
-- Background music/mood suggestion
-- Strong CTA with urgency
-- Visual style description
-- Target persona
-- Funnel stage (awareness, consideration, conversion, retention)
-- Voiceover script (full script read aloud, not just scene notes)
-- Thumbnail generation prompt (detailed visual description for a static thumbnail)
+ZUTOHUB / STAFF PAYOUT FOCUS (apply when the campaign is about staff earnings, tips, commissions or payouts):
+- Focus on: tips payouts, commission payouts, staff earnings payouts, faster access to earned money, reducing manual payout admin, improving staff retention, helping merchants support staff without increasing salaries, helping restaurants, salons, barbershops, delivery operators and commission-based businesses manage payouts.
+- Core idea: "What if you could improve staff retention without increasing salaries?"
+- Example tone: "Your team works hard for every tip, commission and earned payout. ZutoHub helps businesses move those earnings faster, cleaner and with less admin, so staff feel supported and owners stay in control."
+- Avoid discount language. Avoid "free". Lead with operational relief and staff retention.
 
-B. 1 CAROUSEL AD CONCEPT
-One premium carousel that can be adapted across platforms. Provide:
-- Title
-- Platform (primary)
-- Hook
-- 5-7 slides with: headline, visual direction, body text, optional CTA (use null if no CTA on that slide)
-- Overall CTA
-- Visual style
-- Target persona
-- Funnel stage
-- Benefit sequence explanation
+GENERATE THE FOLLOWING STRUCTURE:
 
-C. 1 MASTER SOCIAL POST (the hero visual post)
-One high-converting visual post that becomes the template. Provide:
+A. 1 MASTER CAMPAIGN POST (social_post) — the hero visual post
+This is the single primary social asset for the entire campaign. Provide:
 - Platform (primary)
 - Type: social_post
 - Title
-- Hook (bold, emotional, or controversial — max 12 words)
+- Hook (bold, emotional, or provocative — max 12 words)
 - Caption (2-4 short paragraphs, line breaks, direct to reader, zero fluff)
-- CTA (exact action + urgency: "Link in bio — only 20 spots", "DM 'YES' now")
+- CTA (neutral if no offer is provided; otherwise grounded in the approved offer)
 - Hashtags (5-10 targeted, niche + trending mix)
 - Visual generation prompt (detailed scene for AI image tools)
 - Best time to post
-- Sales angle (fear of missing out, social proof, direct benefit, transformation)
-- Target persona
+- Sales angle
+- Target persona (this persona guides tone; it does NOT create a separate card)
 - Funnel stage
 - Pain point addressed (use null if not applicable)
 - Transformation promised (use null if not applicable)
 - Urgency driver (use null if not applicable)
 
-D. PLATFORM CAPTION ADAPTATIONS
+B. 1 MASTER SHORT-FORM VIDEO AD (video_concept)
+This is the single hero video blueprint. Provide:
+- A scroll-stopping title
+- Platform recommendation (primary platform)
+- Duration (15s, 30s, or 45s)
+- Hook (the first line that stops the scroll)
+- Opening hook for the first 3 seconds (visceral, emotional, or provocative)
+- Scene-by-scene breakdown (3-6 scenes) with: visual description, on-screen text, voiceover script, audio direction, product shot instruction
+- Background music/mood suggestion
+- CTA (neutral if no offer; otherwise grounded in approved offer)
+- Visual style description
+- Target persona
+- Funnel stage
+- Voiceover script (full script read aloud)
+- Thumbnail generation prompt
+
+C. PLATFORM CAPTION ADAPTATIONS
 For EACH platform in the campaign (${campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn"}), provide a adapted version of the master post:
 - Platform name
 - Adapted caption (rewritten for that platform's tone and character limits)
-- Adapted CTA (platform-native call to action)
+- Adapted CTA (platform-native, neutral if no offer)
 - Adapted hashtags (platform-specific hashtag strategy)
 - Best time to post for that platform
 - Format notes (e.g. "TikTok: keep under 150 chars, use trending audio reference", "LinkedIn: professional tone, longer form accepted") — use null if not needed
 
-E. 6 AD COPY VARIATIONS
-Generate 6 distinct static ad variations covering these angles:
-1. Awareness ad (problem agitation, curiosity)
-2. Retargeting ad (social proof, objection handling)
-3. Direct sales ad (offer, urgency, risk reversal)
-4. Local relevance ad (ties to location if applicable)
-5. Transformation ad (before/after, dream outcome)
-6. Scarcity ad (limited time, limited spots, exclusive)
-Each with: variant name, angle, headline, primary text, CTA, platform, funnel stage
+D. 1 CAROUSEL AD CONCEPT (supporting asset)
+One premium carousel. Provide title, primary platform, hook, 5-7 slides, overall CTA, visual style, target persona, funnel stage, benefit sequence.
 
-F. 1 WHATSAPP PROMO MESSAGE
-- Short, persuasive promo message (under 160 characters, action-focused)
-- Follow-up message for non-responders (use null if not needed)
-- CTA
-- Casual but persuasive tone
+E. AD COPY VARIATIONS (supporting assets)
+Generate 3-5 distinct static ad variations. Each with: variant name, angle, headline, primary text, CTA, platform, funnel stage. Do not default to scarcity/limited spots unless the approved strategy includes them.
 
-G. 1 EMAIL CAMPAIGN
-- Subject line (under 50 chars, curiosity-driven or benefit-led)
-- Preheader text
-- Body copy (under 200 words, single CTA focus)
-- CTA
-- Tone
-- Target segment
+F. 1 WHATSAPP PROMO MESSAGE (supporting asset)
+Short, persuasive promo message (under 160 characters), optional follow-up, CTA, tone.
 
-H. 1 LAUNCH / OFFER SEQUENCE
-- Multi-step launch sequence (3-5 steps)
-- Each step: channel, timing, message, CTA
-- Progresses from teaser → announcement → urgency → last chance
+G. 1 EMAIL CAMPAIGN (supporting asset)
+Subject line (under 50 chars), preheader, body copy (under 200 words), CTA, tone, target segment.
+
+H. 1 LAUNCH / OFFER SEQUENCE (supporting asset)
+Multi-step launch sequence (3-5 steps). Each step: channel, timing, message, CTA. Progress from teaser → announcement → urgency → last chance. Do not invent offers.
 
 I. HOOK BANK
-Provide at least 3 strong hook variations for this campaign:
-- Each hook should be under 12 words
-- Different angles: curiosity, pain point, bold claim, story opener
+At least 3 strong hook variations under 12 words. Different angles.
 
 J. CTA VARIATION BANK
-Provide at least 3 distinct CTA variations:
-- Different angles: urgency, low friction, social proof, direct command
+At least 3 distinct CTA variations. Neutral CTAs only if no approved offer.
 
 K. HASHTAG SET
-Provide a structured hashtag strategy:
-- Core hashtags (5-10 evergreen, brand-relevant)
-- Trending hashtags (5-10 currently popular in this niche)
-- Niche hashtags (5-10 highly specific to the target audience)
-- Platform-specific hashtags (array of objects, each with "platform" name and "hashtags" array of 3-5 hashtags optimized for that platform)
+Core, trending, niche and platform-specific hashtags.
 
 LOCATION RULE — YOU MUST FOLLOW THIS EXACTLY:
 - The business location is: ${location || "Not specified"}.
-- If a location is specified above, you MUST reflect that location in the content context, offers, and CTA where relevant. Do NOT invent a different city, province, state, or country.
+- If a location is specified above, you MUST reflect that location in the content context where relevant. Do NOT invent a different city, province, state, or country.
 - If the location is Johannesburg, South Africa, the content should feel locally relevant to South Africa (currency, cultural references, local slang where appropriate).
 - Only use international references if the user has explicitly selected international targeting.
 
@@ -639,7 +620,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       prompt: packPrompt,
       schema: PremiumCampaignPackSchema,
       system:
-        "You are an elite creative director and performance marketer. You create premium, sales-focused campaign assets that drive revenue. You specialise in Instagram Reels, TikTok, Facebook ads, carousel ads, direct-response copywriting, and launch sequences. Every asset must be emotionally engaging, visually specific, platform-native, and conversion-focused. You generate ONE master asset per format, then provide platform adaptations — like a Canva Premium Pack or Zuto Hub. CRITICAL: You must include EVERY key in every object. Use null for fields that do not apply. Never omit a key.",
+        "You are an elite creative director for a premium marketing agency. You create Hero Campaign Packs: one strong campaign idea expressed as one Master Campaign Post and one Master Video Ad, plus platform adaptations and collapsed supporting assets. You specialise in Instagram Reels, TikTok, Facebook ads, carousel ads, direct-response copywriting, and launch sequences. Every asset must be emotionally engaging, visually specific, platform-native, and conversion-focused. You do not create separate cards for each persona; personas guide tone only. You do not invent offers, discounts, free trials, limited spots or free e-books. If no offer is provided, use neutral CTAs like 'Book a demo' or 'See how it works'. CRITICAL: You must include EVERY key in every object. Use null for fields that do not apply. Never omit a key.",
     });
   } catch (err: any) {
     packError = err.message || String(err);
@@ -727,8 +708,9 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     }
   }
 
-  // Save video concepts as content posts with rich metadata
-  for (const video of pack.videoConcepts) {
+  // Save ONLY the master video ad as a content post
+  if (pack.videoConcepts.length > 0) {
+    const video = pack.videoConcepts[0];
     const caption = `${video.hook}\n\n${video.openingHook3Sec}\n\n${video.scenes.map((s: any, i: number) => `Scene ${i + 1}: ${s.visualDescription}`).join("\n")}\n\n${video.cta}`;
     await insertPost(
       video.title,
@@ -746,39 +728,18 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         backgroundMusicMood: video.backgroundMusicMood,
         targetPersona: video.targetPersona,
         funnelStage: video.funnelStage,
-        assetKind: "video_blueprint",
+        assetKind: "master_video_ad",
         videoStatus: "concept",
         voiceoverScript: video.voiceoverScript,
         thumbnailPrompt: video.thumbnailPrompt,
-        message: "Video Concept Only — Render the video to generate a playable MP4.",
+        message: "Master Video Ad — Render to generate a playable MP4.",
       }
     );
   }
 
-  // Save carousel ads
-  for (const carousel of pack.carouselAds) {
-    const caption = `${carousel.hook}\n\n${carousel.slides.map((s: any, i: number) => `Slide ${i + 1}: ${s.headline} — ${s.bodyText}`).join("\n")}\n\n${carousel.overallCta}`;
-    await insertPost(
-      carousel.title,
-      "carousel_ad",
-      carousel.platform,
-      carousel.hook,
-      caption,
-      carousel.overallCta,
-      [],
-      carousel.visualStyle,
-      {
-        slides: carousel.slides,
-        benefitSequence: carousel.benefitSequence,
-        targetPersona: carousel.targetPersona,
-        funnelStage: carousel.funnelStage,
-        assetKind: "carousel_blueprint",
-      }
-    );
-  }
-
-  // Save social posts
-  for (const post of pack.socialPosts) {
+  // Save ONLY the master campaign post as a content post
+  if (pack.socialPosts.length > 0) {
+    const post = pack.socialPosts[0];
     await insertPost(
       post.title,
       post.type,
@@ -796,84 +757,107 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         transformation: post.transformation,
         urgency: post.urgency,
         bestTimeToPost: post.bestTimeToPost,
-        assetKind: "social_post_premium",
+        assetKind: "master_campaign_post",
       }
     );
   }
 
-  // Save ad copy variations
-  for (const ad of pack.adCopyVariations) {
-    const caption = `${ad.headline}\n\n${ad.primaryText}\n\n${ad.cta}`;
-    await insertPost(
-      ad.variantName,
-      "lead_gen_ad",
-      ad.platform,
-      ad.headline,
-      caption,
-      ad.cta,
-      [],
-      "",
+  // Save supporting assets as campaign assets (collapsed in the UI), not as primary content posts
+  async function insertAsset(title: string, assetType: string, metadata: any) {
+    try {
+      await db.insert(campaignAssets).values({
+        userId,
+        campaignId,
+        assetType: assetType as any,
+        title,
+        status: "ready",
+        metadata: metadata as any,
+      });
+      savedAssets++;
+    } catch (err: any) {
+      console.error(`[CreativeAgent] Failed to save supporting asset | campaignId=${campaignId} | type=${assetType} | error="${err.message}"`);
+    }
+  }
+
+  // Carousel ad
+  if (pack.carouselAds.length > 0) {
+    const carousel = pack.carouselAds[0];
+    await insertAsset(
+      carousel.title,
+      "carousel_ad",
       {
-        angle: ad.angle,
-        funnelStage: ad.funnelStage,
-        assetKind: "ad_copy_variation",
-        variantType: ad.variantName,
+        hook: carousel.hook,
+        platform: carousel.platform,
+        slides: carousel.slides,
+        overallCta: carousel.overallCta,
+        visualStyle: carousel.visualStyle,
+        targetPersona: carousel.targetPersona,
+        funnelStage: carousel.funnelStage,
+        benefitSequence: carousel.benefitSequence,
       }
     );
   }
 
-  // Save WhatsApp promos
-  for (const wa of pack.whatsAppPromos) {
-    await insertPost(
+  // Ad copy variations (grouped into one supporting asset)
+  if (pack.adCopyVariations.length > 0) {
+    await insertAsset(
+      "Ad Variations",
+      "ad_copy",
+      {
+        variations: pack.adCopyVariations.map((ad: any) => ({
+          variantName: ad.variantName,
+          angle: ad.angle,
+          headline: ad.headline,
+          primaryText: ad.primaryText,
+          cta: ad.cta,
+          platform: ad.platform,
+          funnelStage: ad.funnelStage,
+        })),
+      }
+    );
+  }
+
+  // WhatsApp promo
+  if (pack.whatsAppPromos.length > 0) {
+    const wa = pack.whatsAppPromos[0];
+    await insertAsset(
       wa.title,
       "whatsapp_promo",
-      "whatsapp",
-      wa.message.slice(0, 60),
-      wa.message,
-      wa.cta,
-      [],
-      "",
       {
+        message: wa.message,
         followUp: wa.followUp,
+        cta: wa.cta,
         tone: wa.tone,
-        assetKind: "whatsapp_promo",
       }
     );
   }
 
-  // Save email campaign
-  await insertPost(
-    pack.emailCampaign.subjectLine,
-    "email",
-    "email",
-    pack.emailCampaign.subjectLine,
-    `${pack.emailCampaign.preheader}\n\n${pack.emailCampaign.body}`,
-    pack.emailCampaign.cta,
-    [],
-    "",
-    {
-      preheader: pack.emailCampaign.preheader,
-      tone: pack.emailCampaign.tone,
-      segment: pack.emailCampaign.segment,
-      assetKind: "email_campaign",
-    }
-  );
+  // Email campaign
+  if (pack.emailCampaign) {
+    await insertAsset(
+      pack.emailCampaign.subjectLine,
+      "email_copy",
+      {
+        subjectLine: pack.emailCampaign.subjectLine,
+        preheader: pack.emailCampaign.preheader,
+        body: pack.emailCampaign.body,
+        cta: pack.emailCampaign.cta,
+        tone: pack.emailCampaign.tone,
+        segment: pack.emailCampaign.segment,
+      }
+    );
+  }
 
-  // Save launch sequence
-  await insertPost(
-    pack.launchSequence.title,
-    "launch_pack",
-    "multi",
-    pack.launchSequence.sequenceSteps[0]?.message?.slice(0, 80) || pack.launchSequence.title,
-    pack.launchSequence.sequenceSteps.map((s: any) => `Step ${s.stepNumber} (${s.channel}, ${s.timing}): ${s.message}`).join("\n\n"),
-    pack.launchSequence.sequenceSteps[pack.launchSequence.sequenceSteps.length - 1]?.cta || "",
-    [],
-    "",
-    {
-      sequenceSteps: pack.launchSequence.sequenceSteps,
-      assetKind: "launch_sequence",
-    }
-  );
+  // Launch sequence
+  if (pack.launchSequence) {
+    await insertAsset(
+      pack.launchSequence.title,
+      "launch_pack",
+      {
+        sequenceSteps: pack.launchSequence.sequenceSteps,
+      }
+    );
+  }
 
   // Save hooks bank as campaign asset
   if (pack.hooks && pack.hooks.length > 0) {

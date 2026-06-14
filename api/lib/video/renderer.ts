@@ -11,8 +11,31 @@ const PUBLIC_VIDEOS_DIR = env.isProduction
 
 function ensureDir(dir: string) {
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      console.log(`[VideoRenderer] Created output directory: ${dir}`);
+    } catch (err: any) {
+      console.error(`[VideoRenderer] Failed to create output directory: ${dir} | error="${err.message}"`);
+      throw new Error(`Render failed: output folder missing — ${err.message}`);
+    }
   }
+}
+
+function classifyRenderError(err: any, context: { ffmpegExitCode?: number | null; stderr?: string }): string {
+  const message = err?.message || String(err);
+  if (message.includes("ENOENT") && message.toLowerCase().includes("ffmpeg")) {
+    return "Render failed: ffmpeg not found";
+  }
+  if (message.includes("output folder missing")) {
+    return message;
+  }
+  if (context.ffmpegExitCode != null) {
+    return `Render failed: ffmpeg exited with code ${context.ffmpegExitCode}`;
+  }
+  if (message.includes("spawn")) {
+    return "Render failed: could not start ffmpeg";
+  }
+  return `Render failed: ${message}`;
 }
 
 function sanitizeFilename(name: string): string {
@@ -50,6 +73,9 @@ interface RenderVideoOutput {
 }
 
 export async function renderLocalMp4(input: RenderVideoInput): Promise<RenderVideoOutput> {
+  const ffmpegPath = ffmpegStatic || "ffmpeg";
+  console.log(`[VideoRenderer] Starting local render | contentPostId=${input.contentPostId} | campaignId=${input.campaignId} | userId=${input.userId} | outputDir=${PUBLIC_VIDEOS_DIR} | ffmpegPath=${ffmpegPath}`);
+
   ensureDir(PUBLIC_VIDEOS_DIR);
 
   const baseName = sanitizeFilename(`${input.businessName || "video"}_${input.contentPostId}_${Date.now()}`);
@@ -192,9 +218,9 @@ export async function renderLocalMp4(input: RenderVideoInput): Promise<RenderVid
   concatLines.push(`file '${lastSafePath}'`);
   fs.writeFileSync(concatFile, concatLines.join("\n"), "utf-8");
 
-  const ffmpegPath = ffmpegStatic || "ffmpeg";
-
   // Run ffmpeg
+  let ffmpegExitCode: number | null = null;
+  let ffmpegStderr = "";
   await new Promise<void>((resolve, reject) => {
     const args = [
       "-y",
@@ -210,16 +236,24 @@ export async function renderLocalMp4(input: RenderVideoInput): Promise<RenderVid
       outPath,
     ];
     const proc = spawn(ffmpegPath, args, { stdio: "pipe" });
-    let stderr = "";
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.stderr.on("data", (d) => { ffmpegStderr += d.toString(); });
     proc.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-500)}`));
+      ffmpegExitCode = code ?? null;
+      if (code === 0) {
+        resolve();
+      } else {
+        console.error(`[VideoRenderer] ffmpeg exited with code ${code} | contentPostId=${input.contentPostId} | stderr="${ffmpegStderr.slice(-500)}"`);
+        reject(new Error(classifyRenderError(new Error(`ffmpeg exited ${code}: ${ffmpegStderr.slice(-500)}`), { ffmpegExitCode: code, stderr: ffmpegStderr })));
+      }
     });
-    proc.on("error", (err) => reject(err));
+    proc.on("error", (err) => {
+      console.error(`[VideoRenderer] ffmpeg spawn error | contentPostId=${input.contentPostId} | error="${err.message}"`);
+      reject(new Error(classifyRenderError(err, { ffmpegExitCode, stderr: ffmpegStderr })));
+    });
   });
 
   // Generate thumbnail from first frame
+  let thumbStderr = "";
   await new Promise<void>((resolve, reject) => {
     const args = [
       "-y",
@@ -230,13 +264,19 @@ export async function renderLocalMp4(input: RenderVideoInput): Promise<RenderVid
       thumbPath,
     ];
     const proc = spawn(ffmpegPath, args, { stdio: "pipe" });
-    let stderr = "";
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.stderr.on("data", (d) => { thumbStderr += d.toString(); });
     proc.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`ffmpeg thumbnail exited ${code}: ${stderr.slice(-500)}`));
+      if (code === 0) {
+        resolve();
+      } else {
+        console.error(`[VideoRenderer] ffmpeg thumbnail exited with code ${code} | contentPostId=${input.contentPostId} | stderr="${thumbStderr.slice(-500)}"`);
+        reject(new Error(`Render failed: thumbnail generation failed (ffmpeg exited ${code})`));
+      }
     });
-    proc.on("error", (err) => reject(err));
+    proc.on("error", (err) => {
+      console.error(`[VideoRenderer] ffmpeg thumbnail spawn error | contentPostId=${input.contentPostId} | error="${err.message}"`);
+      reject(new Error(`Render failed: thumbnail generation failed — ${err.message}`));
+    });
   });
 
   // Cleanup temp files
@@ -250,6 +290,8 @@ export async function renderLocalMp4(input: RenderVideoInput): Promise<RenderVid
   const baseUrl = env.isProduction ? "" : `http://localhost:3000`;
   const videoUrl = `${baseUrl}/videos/${path.basename(outPath)}`;
   const thumbnailUrl = `${baseUrl}/videos/${path.basename(thumbPath)}`;
+
+  console.log(`[VideoRenderer] Render completed successfully | contentPostId=${input.contentPostId} | campaignId=${input.campaignId} | videoUrl=${videoUrl} | thumbnailUrl=${thumbnailUrl} | duration=${totalDuration}s`);
 
   return {
     videoUrl,

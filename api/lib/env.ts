@@ -29,6 +29,7 @@ export const env = {
   sendgridApiKey: process.env.SENDGRID_API_KEY ?? "",
   redisUrl: process.env.REDIS_URL ?? "",
   videoProvider: process.env.VIDEO_PROVIDER ?? "",
+  requireTwoFactor: process.env.REQUIRE_TWO_FACTOR !== "false",
 };
 
 // Validate Redis in production

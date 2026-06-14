@@ -9,6 +9,7 @@ export type TrpcContext = {
   req: Request;
   resHeaders: Headers;
   user?: User;
+  session?: import("./lib/session").LocalSessionPayload;
 };
 
 export async function createContext(
@@ -23,6 +24,7 @@ export async function createContext(
       const token = authHeader.slice(7);
       const payload = await verifyLocalToken(token);
       if (payload) {
+        ctx.session = payload;
         const db = getDb();
         const [user] = await db
           .select()

@@ -6,9 +6,49 @@ import { getDb } from "./queries/connection";
 import { users, businesses, twoFactorChallenges } from "@db/schema";
 import { eq, or, and, gt, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { signLocalToken, verifyLocalToken } from "./lib/session";
+import { signLocalToken, verifyLocalToken, type LocalSessionPayload } from "./lib/session";
 import { env } from "./lib/env";
 import { ensureFreeSubscription } from "./lib/subscription";
+
+function requiresTwoFactorPolicy(user: { twoFactorEnabled: boolean }): boolean {
+  // Product-level mandatory verification can be disabled with REQUIRE_TWO_FACTOR=false.
+  // Per-user two-factor settings also trigger a challenge.
+  return env.requireTwoFactor || user.twoFactorEnabled;
+}
+
+async function createTwoFactorChallenge(
+  userId: number,
+  email: string,
+  ctx: { req: Request }
+): Promise<string> {
+  const db = getDb();
+  const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+  const otpHash = await bcrypt.hash(otpCode, 10);
+  const challengeToken = randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+  await db.insert(twoFactorChallenges).values({
+    userId,
+    challengeToken,
+    otpHash,
+    expiresAt,
+    sentToEmail: email,
+    ipAddress: ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("host") || undefined,
+    userAgent: ctx.req.headers.get("user-agent") || undefined,
+  });
+
+  try {
+    await sendTwoFactorCodeEmail({ to: email, code: otpCode });
+  } catch (err: any) {
+    console.error("[2FA] Failed to send email:", err.message);
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Could not send verification code. Please try again.",
+    });
+  }
+
+  return challengeToken;
+}
 import { sendTwoFactorCodeEmail } from "./lib/email";
 
 // ─── Local Auth Router ───
@@ -23,7 +63,7 @@ export const localAuthRouter = createRouter({
         name: z.string().min(1),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
 
       // Check if username or email already exists
@@ -70,11 +110,12 @@ export const localAuthRouter = createRouter({
       // Auto-assign free tier and usage tracking
       await ensureFreeSubscription(userId);
 
-      // Generate JWT
-      const token = await signLocalToken({ userId, type: "local" });
+      // Verification is required for new registrations under the current policy
+      const challengeToken = await createTwoFactorChallenge(userId, input.email, ctx);
 
       return {
-        token,
+        requiresTwoFactor: true,
+        challengeToken,
         user: {
           id: userId,
           username: input.username,
@@ -130,41 +171,17 @@ export const localAuthRouter = createRouter({
         .set({ lastSignInAt: new Date() })
         .where(eq(users.id, user.id));
 
-      // If 2FA is enabled, create a challenge and return it
-      if (user.twoFactorEnabled) {
+      // If verification is required by product policy or user preference, create a challenge
+      if (requiresTwoFactorPolicy(user)) {
         const email = user.email;
         if (!email) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: "An email address is required to use two-factor authentication.",
+            message: "An email address is required to verify your login.",
           });
         }
 
-        const otpCode = String(Math.floor(100000 + Math.random() * 900000));
-        const otpHash = await bcrypt.hash(otpCode, 10);
-        const challengeToken = randomBytes(32).toString("hex");
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-        await db.insert(twoFactorChallenges).values({
-          userId: user.id,
-          challengeToken,
-          otpHash,
-          expiresAt,
-          sentToEmail: email,
-          ipAddress: ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("host") || undefined,
-          userAgent: ctx.req.headers.get("user-agent") || undefined,
-        });
-
-        // Send OTP email
-        try {
-          await sendTwoFactorCodeEmail({ to: email, code: otpCode });
-        } catch (err: any) {
-          console.error("[2FA] Failed to send email:", err.message);
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Could not send verification code. Please try again.",
-          });
-        }
+        const challengeToken = await createTwoFactorChallenge(user.id, email, ctx);
 
         return {
           requiresTwoFactor: true,
@@ -179,8 +196,8 @@ export const localAuthRouter = createRouter({
         };
       }
 
-      // Generate JWT
-      const token = await signLocalToken({ userId: user.id, type: "local" });
+      // Generate fully-verified JWT
+      const token = await signLocalToken({ userId: user.id, type: "local", verified: true });
 
       return {
         token,
@@ -263,7 +280,11 @@ export const localAuthRouter = createRouter({
         });
       }
 
-      const token = await signLocalToken({ userId: user.id, type: "local" });
+      const token = await signLocalToken({
+        userId: user.id,
+        type: user.authType === "google" || user.authType === "firebase" ? user.authType : "local",
+        verified: true,
+      });
 
       return {
         token,
@@ -316,7 +337,7 @@ export const localAuthRouter = createRouter({
         avatar: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
 
       // Check if user exists
@@ -386,8 +407,31 @@ export const localAuthRouter = createRouter({
         .set({ lastSignInAt: new Date() })
         .where(eq(users.id, user.id));
 
-      // Generate JWT
-      const token = await signLocalToken({ userId: user.id, type: "google" });
+      // Verification is required for Google users under the current policy
+      if (requiresTwoFactorPolicy(user)) {
+        const email = user.email;
+        if (!email) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "An email address is required to verify your Google login.",
+          });
+        }
+        const challengeToken = await createTwoFactorChallenge(user.id, email, { req: ctx.req });
+        return {
+          requiresTwoFactor: true,
+          challengeToken,
+          user: {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+          },
+        };
+      }
+
+      // Generate fully-verified JWT
+      const token = await signLocalToken({ userId: user.id, type: "google", verified: true });
 
       return {
         token,
@@ -408,7 +452,7 @@ export const localAuthRouter = createRouter({
         idToken: z.string().min(1),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { firebaseAuth } = await import("./lib/firebase-admin");
       const decoded = await firebaseAuth.verifyIdToken(input.idToken);
       const firebaseUid = decoded.uid;
@@ -493,7 +537,30 @@ export const localAuthRouter = createRouter({
         user.role = "admin";
       }
 
-      const token = await signLocalToken({ userId: user.id, type: "firebase" });
+      // Verification is required for Firebase/Google users under the current policy
+      if (requiresTwoFactorPolicy(user)) {
+        const email = user.email;
+        if (!email) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "An email address is required to verify your Google login.",
+          });
+        }
+        const challengeToken = await createTwoFactorChallenge(user.id, email, { req: ctx.req });
+        return {
+          requiresTwoFactor: true,
+          challengeToken,
+          user: {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+          },
+        };
+      }
+
+      const token = await signLocalToken({ userId: user.id, type: "firebase", verified: true });
 
       return {
         token,
@@ -509,20 +576,26 @@ export const localAuthRouter = createRouter({
 
   // Get current user from token
   me: publicQuery.query(async ({ ctx }) => {
-    const authHeader = ctx.req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return null;
+    let payload: LocalSessionPayload | null = ctx.session ?? null;
+    if (!payload) {
+      // Fallback to header for non-context callers (keeps backward compatibility)
+      const authHeader = ctx.req.headers.get("authorization");
+      if (!authHeader?.startsWith("Bearer ")) {
+        return null;
+      }
+      const token = authHeader.slice(7);
+      payload = await verifyLocalToken(token);
+      if (!payload) return null;
     }
 
-    const token = authHeader.slice(7);
-    const payload = await verifyLocalToken(token);
-    if (!payload) return null;
+    const userId = payload.userId;
+    if (!userId) return null;
 
     const db = getDb();
     const [user] = await db
       .select()
       .from(users)
-      .where(eq(users.id, payload.userId))
+      .where(eq(users.id, userId))
       .limit(1);
 
     if (!user) return null;
@@ -538,6 +611,8 @@ export const localAuthRouter = createRouter({
       if (biz) onboardingComplete = true;
     }
 
+    const requiresVerification = !payload?.verified;
+
     return {
       id: user.id,
       username: user.username,
@@ -548,6 +623,8 @@ export const localAuthRouter = createRouter({
       authType: user.authType,
       onboardingComplete,
       twoFactorEnabled: user.twoFactorEnabled,
+      requiresVerification,
+      isFullyVerified: !requiresVerification,
       createdAt: user.createdAt,
       lastSignInAt: user.lastSignInAt,
     };

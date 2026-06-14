@@ -530,6 +530,11 @@ Include:
               Render Failed
             </Badge>
           )}
+          {videoStatus === "failed" && metadata?.renderError && (
+            <p className="text-[11px] text-red-600 mt-1">
+              {metadata.renderError}
+            </p>
+          )}
           {approved && (
             <Badge variant="outline" className="text-blue-600 border-blue-200 bg-blue-50 text-[10px] h-6">
               <CheckCircle2 className="w-3 h-3 mr-1" />
@@ -923,6 +928,106 @@ Include:
     );
   }
 
+  function renderCampaignAssetCard(asset: any) {
+    const meta = (asset.metadata || {}) as any;
+    return (
+      <Card key={asset.id} className="hover:shadow-md transition-all">
+        <CardContent className="p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Badge variant="secondary" className="capitalize">
+              {asset.assetType.replace(/_/g, " ")}
+            </Badge>
+            {asset.status && (
+              <Badge variant="outline" className="text-[10px] h-5">
+                {asset.status}
+              </Badge>
+            )}
+          </div>
+          <h4 className="text-sm font-semibold text-slate-900 mb-1">{asset.title}</h4>
+
+          {meta.adaptedCaption && (
+            <p className="text-xs text-muted-foreground line-clamp-3">{meta.adaptedCaption}</p>
+          )}
+          {meta.message && <p className="text-xs text-muted-foreground line-clamp-3">{meta.message}</p>}
+          {meta.body && <p className="text-xs text-muted-foreground line-clamp-3">{meta.body}</p>}
+          {meta.content && <p className="text-xs text-muted-foreground line-clamp-3">{meta.content}</p>}
+
+          {meta.adaptedCta && <p className="text-xs font-medium text-[#00D4FF] mt-1">CTA: {meta.adaptedCta}</p>}
+          {meta.cta && <p className="text-xs font-medium text-[#00D4FF] mt-1">CTA: {meta.cta}</p>}
+
+          {meta.adaptedHashtags && Array.isArray(meta.adaptedHashtags) && (
+            <p className="text-[10px] text-muted-foreground mt-1">{meta.adaptedHashtags.join(" ")}</p>
+          )}
+
+          {meta.variations && Array.isArray(meta.variations) && (
+            <div className="mt-2 space-y-1.5">
+              {meta.variations.slice(0, 4).map((v: any, i: number) => (
+                <div key={i} className="text-xs text-slate-700 bg-slate-50 rounded p-2">
+                  {typeof v === "string" ? v : v.headline ? `${v.headline}: ${v.primaryText || v.text || ""}` : JSON.stringify(v)}
+                </div>
+              ))}
+              {meta.variations.length > 4 && (
+                <p className="text-[10px] text-muted-foreground">+{meta.variations.length - 4} more</p>
+              )}
+            </div>
+          )}
+
+          {meta.slides && Array.isArray(meta.slides) && (
+            <div className="mt-2 space-y-1">
+              {meta.slides.map((slide: any, i: number) => (
+                <div key={i} className="flex gap-2 text-xs">
+                  <span className="shrink-0 w-5 h-5 rounded bg-orange-500/10 text-orange-600 flex items-center justify-center font-bold text-[10px]">
+                    {slide.slideNumber || i + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-slate-700 font-medium truncate">{slide.headline}</p>
+                    <p className="text-slate-500 truncate">{slide.visualDirection}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {meta.sequenceSteps && Array.isArray(meta.sequenceSteps) && (
+            <div className="mt-2 space-y-1">
+              {meta.sequenceSteps.map((step: any, i: number) => (
+                <div key={i} className="text-xs text-slate-700 bg-slate-50 rounded p-2">
+                  <span className="font-medium">Step {step.stepNumber}</span> ({step.channel}, {step.timing}): {step.message}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {meta.hooks && Array.isArray(meta.hooks) && (
+            <div className="mt-2 space-y-1">
+              {meta.hooks.slice(0, 5).map((hook: any, i: number) => (
+                <div key={i} className="text-xs text-slate-700 bg-slate-50 rounded p-2">
+                  {hook.text || hook}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {meta.ctaVariations && Array.isArray(meta.ctaVariations) && (
+            <div className="mt-2 space-y-1">
+              {meta.ctaVariations.slice(0, 5).map((cta: any, i: number) => (
+                <div key={i} className="text-xs text-slate-700 bg-slate-50 rounded p-2">
+                  {cta.text || cta}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {meta.formatNotes && <p className="text-[10px] text-slate-500 mt-1">{meta.formatNotes}</p>}
+
+          {asset.prompt && (
+            <p className="text-[10px] text-slate-500 mt-1 line-clamp-2">Prompt: {asset.prompt}</p>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
   // Campaign Pack grouping
   function toggleSection(key: string) {
     setExpandedSections((prev) => {
@@ -1010,19 +1115,41 @@ Include:
   function renderCampaignPack() {
     if (!urlCampaignId || !filtered) return null;
 
-    const masterVisual = filtered.find((c) => c.type === "social_post");
-    const video = filtered.find((c) => c.type === "video_concept" || c.type === "reel_script");
-    const carousel = filtered.find((c) => c.type === "carousel_ad");
-    const ads = filtered.filter((c) => c.type === "lead_gen_ad" || c.type === "ad_copy");
-    const whatsapp = filtered.find((c) => c.type === "whatsapp_promo");
-    const emailItem = filtered.find((c) => c.type === "email");
-    const launch = filtered.find((c) => c.type === "launch_pack");
-    const others = filtered.filter((c) =>
-      !["social_post", "video_concept", "reel_script", "carousel_ad", "lead_gen_ad", "ad_copy", "whatsapp_promo", "email", "launch_pack"].includes(c.type)
-    );
+    // Primary assets: exactly one master campaign post and one master video ad
+    const masterVisual =
+      filtered.find((c) => ((c.metadata as any)?.assetKind === "master_campaign_post")) ||
+      filtered.find((c) => c.type === "social_post");
+    const video =
+      filtered.find((c) => ((c.metadata as any)?.assetKind === "master_video_ad")) ||
+      filtered.find((c) => c.type === "video_concept" || c.type === "reel_script");
 
+    // Supporting assets live in campaignAssets, not as primary content cards
     const adaptations = campaignAssets?.filter((a) => a.assetType === "caption_adaptation") || [];
     const hashtagSet = campaignAssets?.find((a) => a.assetType === "hashtag_set");
+    const carousel = campaignAssets?.find((a) => a.assetType === "carousel_ad" || a.assetType === "carousel");
+    const ads = campaignAssets?.filter((a) => a.assetType === "ad_copy" || a.assetType === "lead_gen_ad") || [];
+    const whatsapp = campaignAssets?.find((a) => a.assetType === "whatsapp_promo" || a.assetType === "whatsapp_copy");
+    const emailItem = campaignAssets?.find((a) => a.assetType === "email_copy");
+    const launch = campaignAssets?.find((a) => a.assetType === "launch_pack");
+    const hookBank = campaignAssets?.find((a) => a.assetType === "cta_variant" && a.title === "Hook Bank");
+    const ctaBank = campaignAssets?.find((a) => a.assetType === "cta_variant" && a.title === "CTA Variation Bank");
+    const otherAssets =
+      campaignAssets?.filter(
+        (a) =>
+          ![
+            "caption_adaptation",
+            "hashtag_set",
+            "carousel_ad",
+            "carousel",
+            "ad_copy",
+            "lead_gen_ad",
+            "whatsapp_promo",
+            "whatsapp_copy",
+            "email_copy",
+            "launch_pack",
+            "cta_variant",
+          ].includes(a.assetType)
+      ) || [];
     const allApproved = filtered.every((c) => getApprovalState(c));
     const anyDraft = filtered.some((c) => c.status === "draft");
 
@@ -1038,7 +1165,10 @@ Include:
                   Campaign Pack
                 </h2>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  {campaignForContext?.name} — {filtered.length} assets generated
+                  {campaignForContext?.name} — 2 primary assets
+                  {campaignAssets && campaignAssets.length > 0 && (
+                    <span> · {campaignAssets.length} supporting asset{campaignAssets.length === 1 ? "" : "s"}</span>
+                  )}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -1071,7 +1201,7 @@ Include:
           </CardContent>
         </Card>
 
-        {/* Master Creative — always expanded */}
+        {/* Master Campaign Post — always expanded, adaptations nested inside */}
         {masterVisual && (
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
@@ -1079,180 +1209,223 @@ Include:
               Master Campaign Post
             </h3>
             {renderContentCard(masterVisual)}
+
+            {adaptations.length > 0 && (
+              <Collapsible
+                open={expandedSections.has("adaptations")}
+                onOpenChange={() => toggleSection("adaptations")}
+              >
+                <div className="mt-2 space-y-2">
+                  <SectionHeader
+                    title="Platform Adaptations"
+                    icon={MessageCircle}
+                    color="text-purple-600"
+                    sectionKey="adaptations"
+                    count={adaptations.length}
+                  />
+                  <CollapsibleContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {adaptations.map((adaptation) => {
+                        const meta = (adaptation.metadata || {}) as any;
+                        return (
+                          <Card key={adaptation.id} className="hover:shadow-md transition-all">
+                            <CardContent className="p-4">
+                              <Badge variant="secondary" className="mb-2 capitalize">
+                                {meta.platform || adaptation.assetType}
+                              </Badge>
+                              <p className="text-sm text-slate-900 font-medium">{adaptation.title}</p>
+                              {meta.adaptedCaption && (
+                                <p className="text-xs text-muted-foreground mt-1 line-clamp-3">{meta.adaptedCaption}</p>
+                              )}
+                              {meta.adaptedCta && (
+                                <p className="text-xs font-medium text-[#00D4FF] mt-1">CTA: {meta.adaptedCta}</p>
+                              )}
+                              {meta.adaptedHashtags && Array.isArray(meta.adaptedHashtags) && (
+                                <p className="text-[10px] text-muted-foreground mt-1">{meta.adaptedHashtags.join(" ")}</p>
+                              )}
+                              {meta.formatNotes && (
+                                <p className="text-[10px] text-slate-500 mt-1">{meta.formatNotes}</p>
+                              )}
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  </CollapsibleContent>
+                </div>
+              </Collapsible>
+            )}
           </div>
         )}
 
-        {/* Video — always expanded */}
+        {/* Master Video Ad — always expanded */}
         {video && (
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
               <Video className="w-4 h-4 text-rose-500" />
-              Video Ad
+              Master Video Ad
             </h3>
             {renderContentCard(video)}
           </div>
         )}
 
         {/* Supporting Assets — collapsed by default */}
-        <div className="space-y-4 pt-2 border-t border-slate-200">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Supporting Assets</p>
+        <Collapsible
+          open={expandedSections.has("supporting")}
+          onOpenChange={() => toggleSection("supporting")}
+        >
+          <div className="space-y-4 pt-2 border-t border-slate-200">
+            <SectionHeader
+              title="Supporting Assets"
+              icon={FileText}
+              color="text-slate-700"
+              sectionKey="supporting"
+              count={campaignAssets?.length || 0}
+            />
 
-          {/* Carousel */}
-          {carousel && (
-            <Collapsible open={expandedSections.has("carousel")} onOpenChange={() => toggleSection("carousel")}>
-              <div className="space-y-2">
-                <SectionHeader title="Carousel" icon={FileText} color="text-orange-600" sectionKey="carousel" />
-                <CollapsibleContent>{renderContentCard(carousel)}</CollapsibleContent>
-              </div>
-            </Collapsible>
-          )}
+            <CollapsibleContent>
+              <div className="space-y-4">
+                {/* Carousel */}
+                {carousel && (
+                  <Collapsible open={expandedSections.has("carousel")} onOpenChange={() => toggleSection("carousel")}>
+                    <div className="space-y-2">
+                      <SectionHeader title="Carousel" icon={FileText} color="text-orange-600" sectionKey="carousel" />
+                      <CollapsibleContent>{renderCampaignAssetCard(carousel)}</CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                )}
 
-          {/* Ads */}
-          {ads.length > 0 && (
-            <Collapsible open={expandedSections.has("ads")} onOpenChange={() => toggleSection("ads")}>
-              <div className="space-y-2">
-                <SectionHeader title="Ad Variations" icon={Megaphone} color="text-cyan-600" sectionKey="ads" count={ads.length} />
-                <CollapsibleContent>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {ads.map((c) => renderContentCard(c))}
-                  </div>
-                </CollapsibleContent>
-              </div>
-            </Collapsible>
-          )}
+                {/* Ad Variations */}
+                {ads.length > 0 && (
+                  <Collapsible open={expandedSections.has("ads")} onOpenChange={() => toggleSection("ads")}>
+                    <div className="space-y-2">
+                      <SectionHeader title="Ad Variations" icon={Megaphone} color="text-cyan-600" sectionKey="ads" count={ads.length} />
+                      <CollapsibleContent>
+                        <div className="grid grid-cols-1 gap-4">
+                          {ads.map((asset) => renderCampaignAssetCard(asset))}
+                        </div>
+                      </CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                )}
 
-          {/* Platform Adaptations */}
-          {adaptations.length > 0 && (
-            <Collapsible open={expandedSections.has("adaptations")} onOpenChange={() => toggleSection("adaptations")}>
-              <div className="space-y-2">
-                <SectionHeader title="Platform Adaptation Pack" icon={MessageCircle} color="text-purple-600" sectionKey="adaptations" count={adaptations.length} />
-                <CollapsibleContent>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {adaptations.map((adaptation) => {
-                      const meta = (adaptation.metadata || {}) as any;
-                      return (
-                        <Card key={adaptation.id} className="hover:shadow-md transition-all">
+                {/* Hashtag Pack */}
+                {hashtagSet && (
+                  <Collapsible open={expandedSections.has("hashtags")} onOpenChange={() => toggleSection("hashtags")}>
+                    <div className="space-y-2">
+                      <SectionHeader title="Hashtag Pack" icon={Hash} color="text-pink-600" sectionKey="hashtags" />
+                      <CollapsibleContent>
+                        <Card className="hover:shadow-md transition-all">
                           <CardContent className="p-4">
-                            <Badge variant="secondary" className="mb-2">
-                              {meta.platform || adaptation.assetType}
-                            </Badge>
-                            <p className="text-sm text-slate-900 font-medium">{adaptation.title}</p>
-                            {meta.adaptedCaption && (
-                              <p className="text-xs text-muted-foreground mt-1 line-clamp-3">{meta.adaptedCaption}</p>
-                            )}
-                            {meta.adaptedCta && (
-                              <p className="text-xs font-medium text-[#00D4FF] mt-1">CTA: {meta.adaptedCta}</p>
-                            )}
-                            {meta.adaptedHashtags && Array.isArray(meta.adaptedHashtags) && (
-                              <p className="text-[10px] text-muted-foreground mt-1">{meta.adaptedHashtags.join(" ")}</p>
-                            )}
-                            {meta.formatNotes && (
-                              <p className="text-[10px] text-slate-500 mt-1">{meta.formatNotes}</p>
-                            )}
+                            {(() => {
+                              const meta = (hashtagSet.metadata || {}) as any;
+                              return (
+                                <div className="space-y-2">
+                                  {meta.core && Array.isArray(meta.core) && meta.core.length > 0 && (
+                                    <div>
+                                      <span className="text-[10px] font-medium text-slate-500 uppercase">Core</span>
+                                      <p className="text-xs text-slate-700">{meta.core.join(" ")}</p>
+                                    </div>
+                                  )}
+                                  {meta.trending && Array.isArray(meta.trending) && meta.trending.length > 0 && (
+                                    <div>
+                                      <span className="text-[10px] font-medium text-slate-500 uppercase">Trending</span>
+                                      <p className="text-xs text-slate-700">{meta.trending.join(" ")}</p>
+                                    </div>
+                                  )}
+                                  {meta.niche && Array.isArray(meta.niche) && meta.niche.length > 0 && (
+                                    <div>
+                                      <span className="text-[10px] font-medium text-slate-500 uppercase">Niche</span>
+                                      <p className="text-xs text-slate-700">{meta.niche.join(" ")}</p>
+                                    </div>
+                                  )}
+                                  {meta.platformSpecific && Array.isArray(meta.platformSpecific) && (
+                                    <div className="space-y-1">
+                                      {meta.platformSpecific.map((ps: any, i: number) => (
+                                        <div key={i}>
+                                          <span className="text-[10px] font-medium text-slate-500 uppercase">{ps.platform}</span>
+                                          <p className="text-xs text-slate-700">{ps.hashtags?.join(" ")}</p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </CardContent>
                         </Card>
-                      );
-                    })}
-                  </div>
-                </CollapsibleContent>
-              </div>
-            </Collapsible>
-          )}
+                      </CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                )}
 
-          {/* Hashtags */}
-          {hashtagSet && (
-            <Collapsible open={expandedSections.has("hashtags")} onOpenChange={() => toggleSection("hashtags")}>
-              <div className="space-y-2">
-                <SectionHeader title="Hashtag Pack" icon={Hash} color="text-pink-600" sectionKey="hashtags" />
-                <CollapsibleContent>
-                  <Card className="hover:shadow-md transition-all">
-                    <CardContent className="p-4">
-                      {(() => {
-                        const meta = (hashtagSet.metadata || {}) as any;
-                        return (
-                          <div className="space-y-2">
-                            {meta.core && Array.isArray(meta.core) && meta.core.length > 0 && (
-                              <div>
-                                <span className="text-[10px] font-medium text-slate-500 uppercase">Core</span>
-                                <p className="text-xs text-slate-700">{meta.core.join(" ")}</p>
-                              </div>
-                            )}
-                            {meta.trending && Array.isArray(meta.trending) && meta.trending.length > 0 && (
-                              <div>
-                                <span className="text-[10px] font-medium text-slate-500 uppercase">Trending</span>
-                                <p className="text-xs text-slate-700">{meta.trending.join(" ")}</p>
-                              </div>
-                            )}
-                            {meta.niche && Array.isArray(meta.niche) && meta.niche.length > 0 && (
-                              <div>
-                                <span className="text-[10px] font-medium text-slate-500 uppercase">Niche</span>
-                                <p className="text-xs text-slate-700">{meta.niche.join(" ")}</p>
-                              </div>
-                            )}
-                            {meta.platformSpecific && Array.isArray(meta.platformSpecific) && (
-                              <div className="space-y-1">
-                                {meta.platformSpecific.map((ps: any, i: number) => (
-                                  <div key={i}>
-                                    <span className="text-[10px] font-medium text-slate-500 uppercase">{ps.platform}</span>
-                                    <p className="text-xs text-slate-700">{ps.hashtags?.join(" ")}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </CardContent>
-                  </Card>
-                </CollapsibleContent>
-              </div>
-            </Collapsible>
-          )}
+                {/* WhatsApp */}
+                {whatsapp && (
+                  <Collapsible open={expandedSections.has("whatsapp")} onOpenChange={() => toggleSection("whatsapp")}>
+                    <div className="space-y-2">
+                      <SectionHeader title="WhatsApp Version" icon={MessageCircle} color="text-green-600" sectionKey="whatsapp" />
+                      <CollapsibleContent>{renderCampaignAssetCard(whatsapp)}</CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                )}
 
-          {/* WhatsApp */}
-          {whatsapp && (
-            <Collapsible open={expandedSections.has("whatsapp")} onOpenChange={() => toggleSection("whatsapp")}>
-              <div className="space-y-2">
-                <SectionHeader title="WhatsApp Version" icon={MessageCircle} color="text-green-600" sectionKey="whatsapp" />
-                <CollapsibleContent>{renderContentCard(whatsapp)}</CollapsibleContent>
-              </div>
-            </Collapsible>
-          )}
+                {/* Email */}
+                {emailItem && (
+                  <Collapsible open={expandedSections.has("email")} onOpenChange={() => toggleSection("email")}>
+                    <div className="space-y-2">
+                      <SectionHeader title="Email Version" icon={Mail} color="text-emerald-600" sectionKey="email" />
+                      <CollapsibleContent>{renderCampaignAssetCard(emailItem)}</CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                )}
 
-          {/* Email */}
-          {emailItem && (
-            <Collapsible open={expandedSections.has("email")} onOpenChange={() => toggleSection("email")}>
-              <div className="space-y-2">
-                <SectionHeader title="Email Version" icon={Mail} color="text-emerald-600" sectionKey="email" />
-                <CollapsibleContent>{renderContentCard(emailItem)}</CollapsibleContent>
-              </div>
-            </Collapsible>
-          )}
+                {/* Launch Sequence */}
+                {launch && (
+                  <Collapsible open={expandedSections.has("launch")} onOpenChange={() => toggleSection("launch")}>
+                    <div className="space-y-2">
+                      <SectionHeader title="Launch Sequence" icon={Sparkles} color="text-violet-600" sectionKey="launch" />
+                      <CollapsibleContent>{renderCampaignAssetCard(launch)}</CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                )}
 
-          {/* Launch Sequence */}
-          {launch && (
-            <Collapsible open={expandedSections.has("launch")} onOpenChange={() => toggleSection("launch")}>
-              <div className="space-y-2">
-                <SectionHeader title="Launch Sequence" icon={Sparkles} color="text-violet-600" sectionKey="launch" />
-                <CollapsibleContent>{renderContentCard(launch)}</CollapsibleContent>
-              </div>
-            </Collapsible>
-          )}
+                {/* Hook Bank */}
+                {hookBank && (
+                  <Collapsible open={expandedSections.has("hooks")} onOpenChange={() => toggleSection("hooks")}>
+                    <div className="space-y-2">
+                      <SectionHeader title="Hook Bank" icon={Hash} color="text-amber-600" sectionKey="hooks" />
+                      <CollapsibleContent>{renderCampaignAssetCard(hookBank)}</CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                )}
 
-          {/* Other supporting assets */}
-          {others.length > 0 && (
-            <Collapsible open={expandedSections.has("others")} onOpenChange={() => toggleSection("others")}>
-              <div className="space-y-2">
-                <SectionHeader title="Other Assets" icon={FileText} color="text-slate-600" sectionKey="others" count={others.length} />
-                <CollapsibleContent>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {others.map((c) => renderContentCard(c))}
-                  </div>
-                </CollapsibleContent>
+                {/* CTA Variation Bank */}
+                {ctaBank && (
+                  <Collapsible open={expandedSections.has("ctas")} onOpenChange={() => toggleSection("ctas")}>
+                    <div className="space-y-2">
+                      <SectionHeader title="CTA Variation Bank" icon={Megaphone} color="text-blue-600" sectionKey="ctas" />
+                      <CollapsibleContent>{renderCampaignAssetCard(ctaBank)}</CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                )}
+
+                {/* Other supporting assets */}
+                {otherAssets.length > 0 && (
+                  <Collapsible open={expandedSections.has("others")} onOpenChange={() => toggleSection("others")}>
+                    <div className="space-y-2">
+                      <SectionHeader title="Other Assets" icon={FileText} color="text-slate-600" sectionKey="others" count={otherAssets.length} />
+                      <CollapsibleContent>
+                        <div className="grid grid-cols-1 gap-4">
+                          {otherAssets.map((asset) => renderCampaignAssetCard(asset))}
+                        </div>
+                      </CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                )}
               </div>
-            </Collapsible>
-          )}
-        </div>
+            </CollapsibleContent>
+          </div>
+        </Collapsible>
 
         {/* Publish Dialog */}
         <Dialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>

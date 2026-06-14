@@ -7,6 +7,7 @@ const JWT_SECRET = () => new TextEncoder().encode(env.appSecret + "_local");
 export interface LocalSessionPayload {
   userId: number;
   type: "local" | "google" | "firebase";
+  verified: boolean;
 }
 
 export async function signLocalToken(payload: LocalSessionPayload): Promise<string> {
@@ -27,7 +28,13 @@ export async function verifyLocalToken(
       clockTolerance: 60,
     });
     if (!payload.userId || !payload.type) return null;
-    return { userId: payload.userId as number, type: payload.type as "local" | "google" | "firebase" };
+    // Tokens without an explicit verified flag are treated as unverified to enforce the current policy
+    const verified = payload.verified === true;
+    return {
+      userId: payload.userId as number,
+      type: payload.type as "local" | "google" | "firebase",
+      verified,
+    };
   } catch {
     return null;
   }
