@@ -42,6 +42,14 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-z0-9_-]/gi, "_").toLowerCase();
 }
 
+function escapeSvg(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 interface SceneInput {
   sceneNumber: number;
   durationSeconds: number;
@@ -72,6 +80,118 @@ interface RenderVideoOutput {
   aspectRatio: string;
 }
 
+const WIDTH = 1080;
+const HEIGHT = 1920;
+const FPS = 30;
+
+const BRAND_ACCENT = "#00D4FF";
+const BRAND_SECONDARY = "#7C3AED";
+
+const GRADIENTS = [
+  { from: "#0f172a", to: "#1e1b4b" },
+  { from: "#1e1b4b", to: "#312e81" },
+  { from: "#0c4a6e", to: "#1e3a8a" },
+  { from: "#312e81", to: "#4c1d95" },
+  { from: "#111827", to: "#312e81" },
+  { from: "#0f172a", to: "#0c4a6e" },
+];
+
+function wrapText(text: string, maxChars: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  let line = "";
+  for (const w of words) {
+    if ((line + " " + w).trim().length > maxChars && line.length > 0) {
+      out.push(line.trim());
+      line = w;
+    } else {
+      line = line ? `${line} ${w}` : w;
+    }
+  }
+  if (line.trim()) out.push(line.trim());
+  return out.length ? out : [text];
+}
+
+function buildFrameSvg(
+  scene: SceneInput,
+  index: number,
+  total: number,
+  input: RenderVideoInput
+): string {
+  const isFirst = index === 0;
+  const isLast = index === total - 1;
+  const gradient = GRADIENTS[index % GRADIENTS.length];
+  const caption = scene.onScreenText || scene.visualDescription || input.title || "";
+  const wrapped = wrapText(caption, 32);
+  const lineHeight = 68;
+  const chipText = isFirst ? "The problem" : isLast ? "Next step" : "The solution";
+  const chipColor = isFirst ? "#f87171" : isLast ? BRAND_ACCENT : "#34d399";
+
+  const captionBoxPadding = 48;
+  const captionBoxHeight = Math.max(180, wrapped.length * lineHeight + captionBoxPadding * 2);
+  const captionBoxY = HEIGHT - captionBoxHeight - 260;
+
+  let linesSvg = "";
+  const startY = captionBoxY + captionBoxPadding + lineHeight * 0.75;
+  wrapped.forEach((wl, idx) => {
+    linesSvg += `<text x="${WIDTH / 2}" y="${startY + idx * lineHeight}" font-family="Arial, sans-serif" font-size="56" font-weight="700" fill="#ffffff" text-anchor="middle">${escapeSvg(wl)}</text>`;
+  });
+
+  const ctaButtonSvg =
+    isLast && input.cta
+      ? `
+    <g filter="url(#shadow)">
+      <rect x="${WIDTH / 2 - 320}" y="${HEIGHT - 210}" width="640" height="100" rx="24" fill="${BRAND_ACCENT}" />
+      <text x="${WIDTH / 2}" y="${HEIGHT - 150}" font-family="Arial, sans-serif" font-size="42" font-weight="bold" fill="#0f172a" text-anchor="middle">${escapeSvg(input.cta)}</text>
+    </g>
+  `
+      : "";
+
+  const businessName = input.businessName || input.productName || "";
+
+  return `
+    <svg width="${WIDTH}" height="${HEIGHT}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="bgGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="${gradient.from}" />
+          <stop offset="100%" stop-color="${gradient.to}" />
+        </linearGradient>
+        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000000" flood-opacity="0.4" />
+        </filter>
+        <linearGradient id="barGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="${BRAND_ACCENT}" />
+          <stop offset="100%" stop-color="${BRAND_SECONDARY}" />
+        </linearGradient>
+      </defs>
+
+      <!-- Background -->
+      <rect width="100%" height="100%" fill="url(#bgGradient)" />
+
+      <!-- Top brand bar -->
+      <rect x="0" y="0" width="100%" height="130" fill="rgba(0,0,0,0.28)" />
+      <rect x="0" y="0" width="12" height="130" fill="url(#barGradient)" />
+      <text x="54" y="82" font-family="Arial, sans-serif" font-size="44" font-weight="800" fill="#ffffff">${escapeSvg(businessName)}</text>
+      <text x="${WIDTH - 54}" y="82" font-family="Arial, sans-serif" font-size="26" fill="#94a3b8" text-anchor="end">Draft motion video</text>
+
+      <!-- Arc chip -->
+      <g filter="url(#shadow)">
+        <rect x="54" y="170" width="260" height="58" rx="29" fill="${chipColor}" opacity="0.95" />
+        <text x="184" y="210" font-family="Arial, sans-serif" font-size="26" font-weight="bold" fill="#0f172a" text-anchor="middle">${chipText}</text>
+      </g>
+
+      <!-- Caption card -->
+      <g filter="url(#shadow)">
+        <rect x="54" y="${captionBoxY}" width="${WIDTH - 108}" height="${captionBoxHeight}" rx="28" fill="rgba(15,23,42,0.72)" />
+        ${linesSvg}
+      </g>
+
+      <!-- CTA button (last scene) -->
+      ${ctaButtonSvg}
+    </svg>
+  `;
+}
+
 export async function renderLocalMp4(input: RenderVideoInput): Promise<RenderVideoOutput> {
   const ffmpegPath = ffmpegStatic || "ffmpeg";
   console.log(`[VideoRenderer] Starting local render | contentPostId=${input.contentPostId} | campaignId=${input.campaignId} | userId=${input.userId} | outputDir=${PUBLIC_VIDEOS_DIR} | ffmpegPath=${ffmpegPath}`);
@@ -82,9 +202,9 @@ export async function renderLocalMp4(input: RenderVideoInput): Promise<RenderVid
   const outPath = path.join(PUBLIC_VIDEOS_DIR, `${baseName}.mp4`);
   const thumbPath = path.join(PUBLIC_VIDEOS_DIR, `${baseName}.jpg`);
 
-  // Build scene durations (default 5s each, cap total at 30s)
-  const sceneList = (input.scenes || []).slice(0, 6);
-  const scenes = sceneList.map((s) => ({
+  // Build scene list with sane durations
+  const rawScenes = (input.scenes || []).slice(0, 6);
+  const scenes: SceneInput[] = rawScenes.map((s) => ({
     ...s,
     durationSeconds: Math.min(Math.max(s.durationSeconds || 5, 3), 8),
   }));
@@ -99,121 +219,56 @@ export async function renderLocalMp4(input: RenderVideoInput): Promise<RenderVid
     });
   }
 
-  // Ensure total duration 20-30s
-  const totalDuration = Math.min(Math.max(scenes.reduce((sum, s) => sum + s.durationSeconds, 0), 20), 30);
-  const scaleFactor = totalDuration / scenes.reduce((sum, s) => sum + s.durationSeconds, 0);
+  // Keep total runtime between 20-30 seconds
+  const rawTotal = scenes.reduce((sum, s) => sum + s.durationSeconds, 0);
+  const totalDuration = Math.min(Math.max(rawTotal, 20), 30);
+  const scaleFactor = totalDuration / rawTotal;
   scenes.forEach((s) => {
     s.durationSeconds = Math.max(3, Math.round(s.durationSeconds * scaleFactor));
   });
 
-  const width = 1080;
-  const height = 1920;
-  const fps = 30;
-
-  // Generate frame images for each scene using sharp
   const tempDir = path.join(PUBLIC_VIDEOS_DIR, `.tmp_${baseName}`);
   ensureDir(tempDir);
 
-  const bgColors = ["#0f172a", "#1e1b4b", "#312e81", "#1e293b", "#0c4a6e", "#312e81"];
-  const textColors = ["#ffffff", "#fbbf24", "#a5b4fc", "#bae6fd", "#fde68a", "#c4b5fd"];
-
   const framePaths: string[] = [];
+  const frameDurations: number[] = [];
 
   for (let i = 0; i < scenes.length; i++) {
     const scene = scenes[i];
-    const bg = bgColors[i % bgColors.length];
-    const tc = textColors[i % textColors.length];
     const frameFile = path.join(tempDir, `frame_${String(i).padStart(3, "0")}.png`);
-
-    const lines: string[] = [];
-    if (scene.onScreenText) lines.push(scene.onScreenText);
-    else lines.push(scene.visualDescription);
-
-    // Build SVG overlay
-    const svgWidth = width;
-    const svgHeight = height;
-
-    // Wrap text roughly
-    function wrapText(text: string, maxChars: number): string[] {
-      const words = text.split(/\s+/);
-      const out: string[] = [];
-      let line = "";
-      for (const w of words) {
-        if ((line + w).length > maxChars && line.length > 0) {
-          out.push(line.trim());
-          line = w + " ";
-        } else {
-          line += w + " ";
-        }
-      }
-      if (line.trim()) out.push(line.trim());
-      return out.length ? out : [text];
-    }
-
-    const wrappedLines = lines.flatMap((l) => wrapText(l, 28));
-    const lineHeight = 72;
-    const startY = svgHeight / 2 - (wrappedLines.length * lineHeight) / 2;
-
-    let textSvg = "";
-    wrappedLines.forEach((wl, idx) => {
-      textSvg += `<text x="${svgWidth / 2}" y="${startY + idx * lineHeight}" font-family="Arial, sans-serif" font-size="64" font-weight="bold" fill="${tc}" text-anchor="middle">${wl.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</text>`;
-    });
-
-    // Add scene counter at top
-    textSvg += `<text x="${svgWidth / 2}" y="120" font-family="Arial, sans-serif" font-size="36" fill="#94a3b8" text-anchor="middle">Scene ${i + 1} / ${scenes.length}</text>`;
-
-    // Add business name at bottom if available
-    if (input.businessName) {
-      textSvg += `<text x="${svgWidth / 2}" y="${svgHeight - 120}" font-family="Arial, sans-serif" font-size="40" fill="#cbd5e1" text-anchor="middle">${input.businessName.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</text>`;
-    }
-
-    // Add CTA on last scene
-    if (i === scenes.length - 1 && input.cta) {
-      textSvg += `<rect x="${svgWidth / 2 - 300}" y="${svgHeight - 280}" width="600" height="90" rx="16" fill="#00D4FF" opacity="0.9" />`;
-      textSvg += `<text x="${svgWidth / 2}" y="${svgHeight - 225}" font-family="Arial, sans-serif" font-size="40" font-weight="bold" fill="#0f172a" text-anchor="middle">${input.cta.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</text>`;
-    }
-
-    const svg = `
-      <svg width="${svgWidth}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">
-        <rect width="100%" height="100%" fill="${bg}" />
-        ${textSvg}
-      </svg>
-    `;
+    const svg = buildFrameSvg(scene, i, scenes.length, input);
 
     await sharp(Buffer.from(svg))
-      .resize(width, height)
+      .resize(WIDTH, HEIGHT)
       .png()
       .toFile(frameFile);
 
     framePaths.push(frameFile);
+    frameDurations.push(scene.durationSeconds);
   }
 
-  // If uploaded image exists, add it as an extra scene before CTA
+  // If an uploaded image exists, insert it as a product/service shot before the final CTA scene
   if (input.uploadedImagePath && fs.existsSync(input.uploadedImagePath)) {
     const imgFrame = path.join(tempDir, `frame_img.png`);
     await sharp(input.uploadedImagePath)
-      .resize(width, height, { fit: "cover" })
+      .resize(WIDTH, HEIGHT, { fit: "cover" })
       .png()
       .toFile(imgFrame);
-    // Insert before last frame if last is CTA, else append
-    if (framePaths.length > 1) {
-      framePaths.splice(framePaths.length - 1, 0, imgFrame);
-    } else {
-      framePaths.push(imgFrame);
-    }
+
+    const insertIndex = framePaths.length > 1 ? framePaths.length - 1 : framePaths.length;
+    framePaths.splice(insertIndex, 0, imgFrame);
+    frameDurations.splice(insertIndex, 0, 4);
   }
 
-  // Build ffmpeg concat demuxer input
+  // Build ffmpeg concat demuxer input with per-frame durations
   const concatFile = path.join(tempDir, "concat.txt");
   const concatLines: string[] = [];
-  for (const fp of framePaths) {
-    const duration = scenes.length > 0 ? Math.max(3, Math.round(totalDuration / framePaths.length)) : 5;
-    // Use forward slashes for ffmpeg cross-platform compatibility
-    const safePath = fp.replace(/\\/g, "/").replace(/'/g, "'\\''");
+  for (let i = 0; i < framePaths.length; i++) {
+    const safePath = framePaths[i].replace(/\\/g, "/").replace(/'/g, "'\\''");
     concatLines.push(`file '${safePath}'`);
-    concatLines.push(`duration ${duration}`);
+    concatLines.push(`duration ${frameDurations[i]}`);
   }
-  // ffmpeg concat demuxer requires last frame repeated without duration
+  // ffmpeg concat demuxer requires the last frame repeated without duration
   const lastSafePath = framePaths[framePaths.length - 1].replace(/\\/g, "/").replace(/'/g, "'\\''");
   concatLines.push(`file '${lastSafePath}'`);
   fs.writeFileSync(concatFile, concatLines.join("\n"), "utf-8");
@@ -227,7 +282,7 @@ export async function renderLocalMp4(input: RenderVideoInput): Promise<RenderVid
       "-f", "concat",
       "-safe", "0",
       "-i", concatFile,
-      "-vf", `fps=${fps},format=yuv420p,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`,
+      "-vf", `fps=${FPS},format=yuv420p,scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2:black`,
       "-c:v", "libx264",
       "-preset", "fast",
       "-crf", "28",
@@ -291,12 +346,13 @@ export async function renderLocalMp4(input: RenderVideoInput): Promise<RenderVid
   const videoUrl = `${baseUrl}/videos/${path.basename(outPath)}`;
   const thumbnailUrl = `${baseUrl}/videos/${path.basename(thumbPath)}`;
 
-  console.log(`[VideoRenderer] Render completed successfully | contentPostId=${input.contentPostId} | campaignId=${input.campaignId} | videoUrl=${videoUrl} | thumbnailUrl=${thumbnailUrl} | duration=${totalDuration}s`);
+  const actualDuration = frameDurations.reduce((sum, d) => sum + d, 0);
+  console.log(`[VideoRenderer] Render completed successfully | contentPostId=${input.contentPostId} | campaignId=${input.campaignId} | videoUrl=${videoUrl} | thumbnailUrl=${thumbnailUrl} | duration=${actualDuration}s`);
 
   return {
     videoUrl,
     thumbnailUrl,
-    durationSeconds: totalDuration,
+    durationSeconds: actualDuration,
     aspectRatio: "9:16",
   };
 }

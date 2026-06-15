@@ -10,8 +10,45 @@ export function strategyAgentPrompt(input: {
   preferredPlatforms?: string;
   strategyText?: string;
   website?: string;
+  campaignBrief?: {
+    name?: string;
+    goal?: string;
+    targetAudience?: string;
+    coreMessage?: string;
+    platforms?: string;
+    budget?: number;
+    primaryOutcome?: string;
+    targetBuyer?: string;
+    mainPainPoint?: string;
+    productOrService?: string;
+    offerDetails?: string;
+    preferredCta?: string;
+    excludedOffers?: string;
+    referenceStyle?: string;
+    contentStyle?: string;
+  };
 }): string {
   const hasStrategy = input.strategyText && input.strategyText.trim().length > 0;
+  const cb = input.campaignBrief;
+
+  const briefSection = cb
+    ? `
+CAMPAIGN BRIEF — USE THESE DETAILS EXACTLY. DO NOT IGNORE THEM:
+- Campaign Name: ${cb.name || "Not specified"}
+- Campaign Goal: ${cb.goal || "Not specified"}
+- Primary Outcome: ${cb.primaryOutcome || "Not specified"}
+- Target Buyer: ${cb.targetBuyer || cb.targetAudience || "Not specified"}
+- Main Pain Point: ${cb.mainPainPoint || "Not specified"}
+- Product/Service Being Promoted: ${cb.productOrService || cb.coreMessage || "Not specified"}
+- Offer (only if provided): ${cb.offerDetails || "None — do not invent offers, discounts or free trials"}
+- Preferred CTA: ${cb.preferredCta || "Not specified"}
+- What NOT to say / excluded offers: ${cb.excludedOffers || "None specified"}
+- Reference Style / Example: ${cb.referenceStyle || "Not specified"}
+- Preferred Content Style: ${cb.contentStyle || "Not specified"}
+- Channels: ${cb.platforms || "Not specified"}
+- Budget Guidance: ${cb.budget ? "$" + cb.budget : "Not specified"}
+`
+    : "";
 
   return `You are a senior marketing strategist. ${hasStrategy ? "Review and enhance the provided marketing strategy" : "Create a comprehensive marketing strategy"} for the following business.
 
@@ -26,6 +63,7 @@ BUSINESS PROFILE:
 - Monthly Budget: ${input.monthlyBudget ? "$" + input.monthlyBudget : "Not specified"}
 - Preferred Platforms: ${input.preferredPlatforms || "Not specified"}
 - Website: ${input.website || "Not specified"}
+${briefSection}
 
 ${hasStrategy ? `EXISTING STRATEGY:\n${input.strategyText}\n\nEnhance this strategy with additional insights.` : "Create a complete marketing strategy from scratch."}
 
@@ -33,15 +71,18 @@ Generate a structured strategy with the following sections:
 1. Target Personas (2-3 detailed buyer personas with demographics, pain points, goals)
 2. Positioning (how the brand stands out from competitors)
 3. Value Proposition (clear statement of unique value)
-4. Core Message (primary messaging theme)
+4. Core Message (primary messaging theme — must be grounded in the campaign brief and product/service)
 5. Campaign Theme (overarching creative direction)
 6. Platform Strategy (which platforms to use and why)
 7. Funnel Stages (awareness → consideration → conversion → retention)
-8. Offers (specific lead magnets, promotions, or incentives)
-9. CTAs (call-to-action strategy per funnel stage)
+8. Offers (specific lead magnets, promotions, or incentives — ONLY if explicitly provided in the brief; otherwise return empty array [])
+9. CTAs (call-to-action strategy per funnel stage — use the preferred CTA if provided)
 10. Budget Recommendation (how to allocate budget across channels)
 
-CRITICAL: For budgetRecommendation.total and budgetRecommendation.allocation.amount, return ONLY plain numbers (e.g. 5000 or 15000). Do NOT include dollar signs, commas, words, or descriptions. The system parses these as numeric values.
+CRITICAL RULES:
+- For budgetRecommendation.total and budgetRecommendation.allocation.amount, return ONLY plain numbers (e.g. 5000 or 15000). Do NOT include dollar signs, commas, words, or descriptions. The system parses these as numeric values.
+- If no offer is provided in the campaign brief, the offers array MUST be empty. Do not invent discounts, free trials, free e-books, loyalty programmes, limited spots or percentages.
+- The core message must be specific to the business and product/service, not generic motivational filler.
 `;
 }
 

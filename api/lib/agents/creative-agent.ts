@@ -442,6 +442,129 @@ const CreativeAssetsSchema = z.object({
 export type PremiumCampaignPackOutput = z.infer<typeof PremiumCampaignPackSchema>;
 export type CreativeAssetsOutput = z.infer<typeof CreativeAssetsSchema>;
 
+// ─── Quality Gate ───
+const GENERIC_PHRASES = [
+  "join the trading revolution",
+  "explore unique experiences",
+  "join our community",
+  "trade smarter",
+  "live greener",
+  "unlock new possibilities",
+  "transform your future",
+  "discover treasures",
+  "get 20% off",
+  "get 50% off",
+  "first month free",
+  "limited spots",
+  "limited time",
+  "hurry",
+  "act now",
+  "don't miss out",
+  "unlock your potential",
+  "discover the best",
+  "join thousands",
+  "revolution",
+];
+
+const OFFER_PATTERNS = [
+  /\b\d{1,2}%\s*off\b/i,
+  /first\s+month\s+free/i,
+  /free\s+trial/i,
+  /limited\s+spots/i,
+  /limited\s+time/i,
+  /\bfree\b.*\bebook/i,
+  /loyalty\s+program/i,
+];
+
+function assessPackQuality(
+  pack: any,
+  hasExplicitOffer: boolean,
+  brief: {
+    preferredCta?: string | null;
+    excludedOffers?: string | null;
+    productOrService?: string | null;
+    mainPainPoint?: string | null;
+  }
+): { passed: boolean; issues: string[] } {
+  const issues: string[] = [];
+  const masterPost = pack.socialPosts?.[0];
+  const video = pack.videoConcepts?.[0];
+
+  const textToCheck = [
+    masterPost?.hook || "",
+    masterPost?.caption || "",
+    masterPost?.cta || "",
+    video?.hook || "",
+    video?.openingHook3Sec || "",
+    video?.cta || "",
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  // Generic phrase check
+  for (const phrase of GENERIC_PHRASES) {
+    if (textToCheck.includes(phrase.toLowerCase())) {
+      issues.push(`Generic phrase detected: "${phrase}"`);
+    }
+  }
+
+  // Invented offer check
+  if (!hasExplicitOffer) {
+    for (const pattern of OFFER_PATTERNS) {
+      if (pattern.test(textToCheck)) {
+        issues.push(`Invented offer detected (no offer was provided): "${textToCheck.match(pattern)?.[0]}"`);
+      }
+    }
+    if (/\bfree\b/i.test(textToCheck)) {
+      issues.push("Invented 'free' offer detected (no offer was provided)");
+    }
+  }
+
+  // Excluded offers check
+  if (brief.excludedOffers) {
+    const excluded = brief.excludedOffers.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    for (const ex of excluded) {
+      if (textToCheck.includes(ex)) {
+        issues.push(`Excluded phrase used: "${ex}"`);
+      }
+    }
+  }
+
+  // Preferred CTA check (if provided and not an offer-based CTA)
+  if (brief.preferredCta && !hasExplicitOffer) {
+    const preferred = brief.preferredCta.toLowerCase();
+    if (!textToCheck.includes(preferred)) {
+      issues.push(`Preferred CTA "${brief.preferredCta}" was not used`);
+    }
+  }
+
+  // Business grounding checks
+  if (!brief.productOrService && !brief.mainPainPoint) {
+    // If no brief provided, we can't enforce grounding strictly
+  } else {
+    const productTerms = (brief.productOrService || "").toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    const painTerms = (brief.mainPainPoint || "").toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    const hasProductTerm = productTerms.some((t) => textToCheck.includes(t));
+    const hasPainTerm = painTerms.some((t) => textToCheck.includes(t));
+    if (!hasProductTerm && productTerms.length > 0) {
+      issues.push("Master copy is not grounded in the product/service being promoted");
+    }
+    if (!hasPainTerm && painTerms.length > 0) {
+      issues.push("Master copy does not address the main pain point");
+    }
+  }
+
+  // Empty / weak checks
+  if (!masterPost?.caption || masterPost.caption.trim().length < 40) {
+    issues.push("Master Campaign Post caption is too short or empty");
+  }
+  if (!masterPost?.hook || masterPost.hook.trim().length < 5) {
+    issues.push("Master Campaign Post hook is missing or too short");
+  }
+
+  return { passed: issues.length === 0, issues };
+}
+
 export async function runCreativeAgent({
   userId,
   campaignId,
@@ -469,6 +592,20 @@ export async function runCreativeAgent({
   const offers = campaign.offers as any[];
   const funnelStages = campaign.funnelStages as any[];
 
+  // Campaign brief precision fields
+  const brief = {
+    primaryOutcome: campaign.primaryOutcome,
+    targetBuyer: campaign.targetBuyer,
+    mainPainPoint: campaign.mainPainPoint,
+    productOrService: campaign.productOrService,
+    offerDetails: campaign.offerDetails,
+    preferredCta: campaign.preferredCta,
+    excludedOffers: campaign.excludedOffers,
+    referenceStyle: campaign.referenceStyle,
+    contentStyle: campaign.contentStyle,
+  };
+  const hasExplicitOffer = !!(brief.offerDetails && brief.offerDetails.trim().length > 0) || (offers && offers.length > 0);
+
   // Fallback: get location from workflowContext or business
   let location = strategyContext?.location || null;
   let industry = strategyContext?.industry || null;
@@ -486,6 +623,15 @@ export async function runCreativeAgent({
 CAMPAIGN DETAILS:
 - Name: ${campaign.name}
 - Goal: ${campaign.goal}
+- Primary Outcome: ${brief.primaryOutcome || "Not specified"}
+- Target Buyer: ${brief.targetBuyer || campaign.targetAudience || "Not specified"}
+- Main Pain Point: ${brief.mainPainPoint || "Not specified"}
+- Product/Service Being Promoted: ${brief.productOrService || strategyContext?.valueProposition || coreMessage || "Not specified"}
+- Explicit Offer (only use this): ${brief.offerDetails || (offers && offers.length > 0 ? JSON.stringify(offers) : "None — do not invent offers")}
+- Preferred CTA: ${brief.preferredCta || ctaStrategy || "Not specified"}
+- What NOT to say / excluded offers: ${brief.excludedOffers || "None specified"}
+- Reference Style / Example: ${brief.referenceStyle || strategyContext?.campaignTheme || "Not specified"}
+- Preferred Content Style: ${brief.contentStyle || "Not specified"}
 - Core Message: ${coreMessage || "Not specified"}
 - CTA Strategy: ${ctaStrategy || "Not specified"}
 - Target Audience: ${campaign.targetAudience || "Not specified"}
@@ -493,7 +639,6 @@ CAMPAIGN DETAILS:
 - Location: ${location || "Not specified"}
 - Industry: ${industry || "Not specified"}
 - Personas: ${personas ? JSON.stringify(personas.map((p: any) => ({ name: p.name, painPoints: p.painPoints, goals: p.goals }))) : "General audience"}
-${offers ? `- Offers: ${JSON.stringify(offers)}` : ""}
 ${funnelStages ? `- Funnel Stages: ${JSON.stringify(funnelStages.map((f: any) => f.stage))}` : ""}
 ${strategyContext?.campaignTheme ? `- Campaign Theme: ${strategyContext.campaignTheme}` : ""}
 ${strategyContext?.platformStrategy ? `- Platform Strategy: ${JSON.stringify(strategyContext.platformStrategy)}` : ""}
@@ -502,13 +647,14 @@ PRODUCT EXPERIENCE RULES — YOU MUST FOLLOW THESE EXACTLY:
 - Output exactly ONE Master Campaign Post and ONE Master Video Ad as the primary assets.
 - Personas guide the message, tone and angle. DO NOT create a separate post for each persona by default.
 - DO NOT invent offers, discounts, free trials, limited spots, loyalty programmes, free e-books or lead magnets unless they are explicitly listed in the approved strategy above.
-- If the user did not provide an offer, use neutral CTAs only: "Book a demo", "Speak to us", "See how it works", "Request a payout workflow assessment", or "Let us show you the payout flow".
+- If the user did not provide an offer, use neutral CTAs only: "Book a demo", "Speak to us", "See how it works", "Request a payout workflow assessment", "Request a walkthrough", "Start your listing", "Join the platform" or "Let us show you the payout flow".
 - Ground every claim in the approved strategy. Do not invent statistics, testimonials, prices or locations.
 
 COPY QUALITY RULES — YOU MUST FOLLOW THESE EXACTLY:
-- NEVER use weak, generic lines like "Limited Spots for Financial Wellness!", "First Month FREE! Make the Switch Now!", "Watch Your Team Flourish Here!", "Hundreds of Businesses Trust Our Solutions!", "Transform your employees' financial futures today!", "Financial health means employee happiness!", "Discover the best", "Unlock your potential" or "Join thousands of satisfied customers".
+- NEVER use weak, generic lines like "Join the Trading Revolution", "Explore Unique Experiences", "Join Our Community", "Trade smarter, live greener", "Unlock new possibilities", "Transform your future", "Discover treasures", "Get 20% off", "Limited Spots for Financial Wellness!", "First Month FREE! Make the Switch Now!", "Watch Your Team Flourish Here!", "Hundreds of Businesses Trust Our Solutions!", "Transform your employees' financial futures today!", "Financial health means employee happiness!", "Discover the best", "Unlock your potential" or "Join thousands of satisfied customers".
 - Write like a premium agency: specific, grounded, human, confident. Every word must earn its place.
-- Front-load the benefit. One clear idea per asset.
+- The Master Campaign Post must lead with ONE clear business-specific idea: the target buyer, their pain point, the product/service solution, and the transformation.
+- Front-load the benefit. One clear idea per asset. No vague motivational filler.
 - NEVER use placeholders like [Your Business], YourBrandName, [Company], or [Product].
 - NEVER use USD, "$100", or dollar amounts unless the campaign explicitly targets the US.
 - If the location is in South Africa, use South African Rand (R) only if an offer price exists. Do not invent prices.
@@ -517,6 +663,15 @@ COPY QUALITY RULES — YOU MUST FOLLOW THESE EXACTLY:
 - TikTok/Reels copy must be punchy, visual, and trend-aware.
 - Instagram copy can be slightly longer but must front-load the hook.
 - Facebook copy should be conversational and community-oriented.
+
+QUALITY GATE — IF THE OUTPUT CONTAINS ANY OF THE FOLLOWING, IT FAILS:
+- Invented discounts or percentages (e.g. "20% off", "50% off", "first month free").
+- Generic motivational phrases without business-specific meaning.
+- A CTA that does not match the preferred CTA or neutral options above.
+- No clear customer pain point addressed.
+- No clear transformation promised.
+- No connection to the product/service being promoted.
+- If the output fails, regenerate until it meets the premium standard.
 
 ZUTOHUB / STAFF PAYOUT FOCUS (apply when the campaign is about staff earnings, tips, commissions or payouts):
 - Focus on: tips payouts, commission payouts, staff earnings payouts, faster access to earned money, reducing manual payout admin, improving staff retention, helping merchants support staff without increasing salaries, helping restaurants, salons, barbershops, delivery operators and commission-based businesses manage payouts.
@@ -633,7 +788,36 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
   }
 
   // Normalise the AI output so missing/undefined fields become safe defaults
-  const pack = normalisePremiumPack(packResult.output);
+  let pack = normalisePremiumPack(packResult.output);
+
+  // Quality gate: check for invented offers and generic copy
+  const quality = assessPackQuality(pack, hasExplicitOffer, brief);
+  if (!quality.passed) {
+    console.warn(`[CreativeAgent] Quality gate failed | campaignId=${campaignId} | issues=${JSON.stringify(quality.issues)}`);
+    // One regeneration attempt with stricter instructions
+    try {
+      const retryPrompt = `${packPrompt}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${quality.issues.map((i) => `- ${i}`).join("\n")}\n\nDo not invent offers. Do not use generic motivational language. Ground every line in the campaign brief above.`;
+      const retryResult = await runAgent({
+        userId,
+        campaignId,
+        agentType: "creative",
+        prompt: retryPrompt,
+        schema: PremiumCampaignPackSchema,
+        system:
+          "You are an elite creative director. Your previous output was rejected for being generic or inventing offers. Regenerate a tight, premium Hero Campaign Pack that is specific to the business and campaign brief. Do not invent discounts or offers. Use neutral CTAs if no offer exists. Every word must earn its place.",
+      });
+      pack = normalisePremiumPack(retryResult.output);
+      const retryQuality = assessPackQuality(pack, hasExplicitOffer, brief);
+      if (!retryQuality.passed) {
+        console.error(`[CreativeAgent] Quality gate failed after retry | campaignId=${campaignId} | issues=${JSON.stringify(retryQuality.issues)}`);
+        throw new Error(`Generated content did not meet quality standards: ${retryQuality.issues.join("; ")}`);
+      }
+    } catch (err: any) {
+      if (err.message?.includes("Generated content did not meet quality standards")) throw err;
+      console.error(`[CreativeAgent] Retry generation failed | campaignId=${campaignId} | error="${err.message}"`);
+      throw new Error("Content generation needs to be retried. The first draft did not meet quality standards.");
+    }
+  }
 
   // Save pack summary to campaign
   await db

@@ -1043,7 +1043,6 @@ Include:
     return (
       <CollapsibleTrigger asChild>
         <button
-          onClick={() => toggleSection(sectionKey)}
           className="flex items-center justify-between w-full text-left group"
         >
           <h3 className={`text-sm font-semibold flex items-center gap-2 ${color}`}>

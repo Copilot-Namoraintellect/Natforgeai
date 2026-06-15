@@ -56,6 +56,16 @@ export const campaignRouter = createRouter({
         offers: z.any().optional(),
         ctaStrategy: z.string().optional(),
         aiGenerated: z.boolean().optional(),
+        // Campaign brief precision
+        primaryOutcome: z.string().optional(),
+        targetBuyer: z.string().optional(),
+        mainPainPoint: z.string().optional(),
+        productOrService: z.string().optional(),
+        offerDetails: z.string().optional(),
+        preferredCta: z.string().optional(),
+        excludedOffers: z.string().optional(),
+        referenceStyle: z.string().optional(),
+        contentStyle: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -114,6 +124,15 @@ export const campaignRouter = createRouter({
         ctaStrategy: input.ctaStrategy,
         aiGenerated: input.aiGenerated ?? isOnboarded,
         workflowState,
+        primaryOutcome: input.primaryOutcome,
+        targetBuyer: input.targetBuyer,
+        mainPainPoint: input.mainPainPoint,
+        productOrService: input.productOrService,
+        offerDetails: input.offerDetails,
+        preferredCta: input.preferredCta,
+        excludedOffers: input.excludedOffers,
+        referenceStyle: input.referenceStyle,
+        contentStyle: input.contentStyle,
       };
       if (input.startDate) data.startDate = new Date(input.startDate);
       if (input.endDate) data.endDate = new Date(input.endDate);
@@ -171,6 +190,23 @@ export const campaignRouter = createRouter({
                 preferredPlatforms: business.preferredPlatforms,
                 website: business.website,
               },
+              campaignBrief: {
+                name: input.name,
+                goal: input.goal,
+                targetAudience: input.targetAudience,
+                coreMessage: input.coreMessage,
+                platforms: input.platforms,
+                budget: input.budget,
+                primaryOutcome: input.primaryOutcome,
+                targetBuyer: input.targetBuyer,
+                mainPainPoint: input.mainPainPoint,
+                productOrService: input.productOrService,
+                offerDetails: input.offerDetails,
+                preferredCta: input.preferredCta,
+                excludedOffers: input.excludedOffers,
+                referenceStyle: input.referenceStyle,
+                contentStyle: input.contentStyle,
+              },
             });
 
             await onAgentRunComplete(result.runId);
@@ -192,6 +228,15 @@ export const campaignRouter = createRouter({
         platforms: z.string().optional(),
         budget: z.number().optional(),
         coreMessage: z.string().optional(),
+        primaryOutcome: z.string().optional(),
+        targetBuyer: z.string().optional(),
+        mainPainPoint: z.string().optional(),
+        productOrService: z.string().optional(),
+        offerDetails: z.string().optional(),
+        preferredCta: z.string().optional(),
+        excludedOffers: z.string().optional(),
+        referenceStyle: z.string().optional(),
+        contentStyle: z.string().optional(),
       })
     )
     .mutation(async ({ input }) => {
@@ -199,10 +244,18 @@ export const campaignRouter = createRouter({
         const briefParts = [
           input.name ? `Campaign Name: ${input.name}` : "",
           input.goal ? `Objective: ${input.goal}` : "",
-          input.targetAudience ? `Target Audience: ${input.targetAudience}` : "",
+          input.primaryOutcome ? `Primary Outcome: ${input.primaryOutcome}` : "",
+          input.targetBuyer ? `Target Buyer: ${input.targetBuyer}` : (input.targetAudience ? `Target Audience: ${input.targetAudience}` : ""),
+          input.mainPainPoint ? `Main Pain Point: ${input.mainPainPoint}` : "",
+          input.productOrService ? `Product/Service: ${input.productOrService}` : "",
           input.platforms ? `Platforms: ${input.platforms}` : "",
           input.budget ? `Budget: $${input.budget}` : "",
           input.coreMessage ? `Core Message: ${input.coreMessage}` : "",
+          input.offerDetails ? `Offer: ${input.offerDetails}` : "",
+          input.preferredCta ? `Preferred CTA: ${input.preferredCta}` : "",
+          input.excludedOffers ? `Do NOT say: ${input.excludedOffers}` : "",
+          input.referenceStyle ? `Reference Style: ${input.referenceStyle}` : "",
+          input.contentStyle ? `Preferred Content Style: ${input.contentStyle}` : "",
         ].filter(Boolean);
 
         if (briefParts.length === 0) {
@@ -219,12 +272,21 @@ export const campaignRouter = createRouter({
           platforms: z.string().describe("Recommended platforms as a comma-separated list"),
           budget: z.number().describe("Suggested estimated marketing spend in USD"),
           coreMessage: z.string().describe("Compelling core message or offer"),
+          primaryOutcome: z.string().optional().describe("Single primary outcome"),
+          targetBuyer: z.string().optional().describe("Sharper target buyer description"),
+          mainPainPoint: z.string().optional().describe("Specific main pain point"),
+          productOrService: z.string().optional().describe("Product/service being promoted"),
+          offerDetails: z.string().optional().describe("Offer if any; empty if none"),
+          preferredCta: z.string().optional().describe("Recommended CTA"),
+          excludedOffers: z.string().optional().describe("Phrases or offers to avoid"),
+          referenceStyle: z.string().optional().describe("Reference style or example"),
+          contentStyle: z.string().optional().describe("Preferred content style"),
         });
 
         const result = await generateObject({
           model: defaultModel,
           system:
-            "You are a senior marketing strategist. Improve the campaign brief below. Keep the same language and tone. Be concise and actionable.",
+            "You are a senior marketing strategist. Improve the campaign brief below. Keep the same language and tone. Be concise and actionable. If no offer is provided, do not invent discounts, free trials or limited-time offers. Use neutral CTAs.",
           prompt: briefParts.join("\n"),
           schema,
         });
@@ -259,6 +321,15 @@ export const campaignRouter = createRouter({
         funnelStages: z.any().optional(),
         offers: z.any().optional(),
         ctaStrategy: z.string().optional(),
+        primaryOutcome: z.string().optional(),
+        targetBuyer: z.string().optional(),
+        mainPainPoint: z.string().optional(),
+        productOrService: z.string().optional(),
+        offerDetails: z.string().optional(),
+        preferredCta: z.string().optional(),
+        excludedOffers: z.string().optional(),
+        referenceStyle: z.string().optional(),
+        contentStyle: z.string().optional(),
         workflowState: z.enum([
           "business_onboarding",
           "strategy_pending",

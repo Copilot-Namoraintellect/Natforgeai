@@ -80,6 +80,7 @@ export async function runStrategyAgent({
   campaignId,
   business,
   strategyText,
+  campaignBrief,
 }: {
   userId: number;
   campaignId: number;
@@ -96,6 +97,23 @@ export async function runStrategyAgent({
     website?: string | null;
   };
   strategyText?: string;
+  campaignBrief?: {
+    name?: string;
+    goal?: string;
+    targetAudience?: string;
+    coreMessage?: string;
+    platforms?: string;
+    budget?: number;
+    primaryOutcome?: string;
+    targetBuyer?: string;
+    mainPainPoint?: string;
+    productOrService?: string;
+    offerDetails?: string;
+    preferredCta?: string;
+    excludedOffers?: string;
+    referenceStyle?: string;
+    contentStyle?: string;
+  };
 }) {
   const prompt = strategyAgentPrompt({
     businessName: business.name,
@@ -109,6 +127,7 @@ export async function runStrategyAgent({
     preferredPlatforms: business.preferredPlatforms ?? undefined,
     website: business.website ?? undefined,
     strategyText,
+    campaignBrief,
   });
 
   const result = await runAgent({

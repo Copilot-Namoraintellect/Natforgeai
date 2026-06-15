@@ -72,6 +72,16 @@ export default function Campaigns() {
   const [formPlatforms, setFormPlatforms] = useState<string[]>([]);
   const [formBudget, setFormBudget] = useState<string>("");
   const [formCoreMessage, setFormCoreMessage] = useState("");
+  // Campaign brief precision fields
+  const [formPrimaryOutcome, setFormPrimaryOutcome] = useState("");
+  const [formTargetBuyer, setFormTargetBuyer] = useState("");
+  const [formMainPainPoint, setFormMainPainPoint] = useState("");
+  const [formProductOrService, setFormProductOrService] = useState("");
+  const [formOfferDetails, setFormOfferDetails] = useState("");
+  const [formPreferredCta, setFormPreferredCta] = useState("");
+  const [formExcludedOffers, setFormExcludedOffers] = useState("");
+  const [formReferenceStyle, setFormReferenceStyle] = useState("");
+  const [formContentStyle, setFormContentStyle] = useState("");
 
   const PLATFORM_OPTIONS = [
     { value: "Instagram", label: "Instagram" },
@@ -82,6 +92,16 @@ export default function Campaigns() {
     { value: "WhatsApp", label: "WhatsApp" },
     { value: "Email", label: "Email" },
     { value: "Google Ads", label: "Google Ads", comingSoon: true },
+  ];
+
+  const CONTENT_STYLE_OPTIONS = [
+    { value: "", label: "Select style" },
+    { value: "premium_brand_ad", label: "Premium brand ad" },
+    { value: "ugc_style_ad", label: "UGC-style ad" },
+    { value: "founder_explainer", label: "Founder/presenter explainer" },
+    { value: "product_demo", label: "Product demo" },
+    { value: "testimonial_style", label: "Testimonial-style" },
+    { value: "carousel_led", label: "Carousel-led campaign" },
   ];
 
   // Prefill from business profile when modal opens
@@ -150,6 +170,15 @@ export default function Campaigns() {
       setFormPlatforms([]);
       setFormBudget("");
       setFormCoreMessage("");
+      setFormPrimaryOutcome("");
+      setFormTargetBuyer("");
+      setFormMainPainPoint("");
+      setFormProductOrService("");
+      setFormOfferDetails("");
+      setFormPreferredCta("");
+      setFormExcludedOffers("");
+      setFormReferenceStyle("");
+      setFormContentStyle("");
       if (data.id) {
         setHighlightedId(data.id);
         setTimeout(() => setHighlightedId(null), 4000);
@@ -185,6 +214,15 @@ export default function Campaigns() {
         }
         setFormBudget((prev) => prev || String(data.suggestions.budget ?? prev));
         setFormCoreMessage((prev) => prev || data.suggestions.coreMessage || prev);
+        setFormPrimaryOutcome((prev) => prev || data.suggestions.primaryOutcome || prev);
+        setFormTargetBuyer((prev) => prev || data.suggestions.targetBuyer || prev);
+        setFormMainPainPoint((prev) => prev || data.suggestions.mainPainPoint || prev);
+        setFormProductOrService((prev) => prev || data.suggestions.productOrService || prev);
+        setFormOfferDetails((prev) => prev || data.suggestions.offerDetails || prev);
+        setFormPreferredCta((prev) => prev || data.suggestions.preferredCta || prev);
+        setFormExcludedOffers((prev) => prev || data.suggestions.excludedOffers || prev);
+        setFormReferenceStyle((prev) => prev || data.suggestions.referenceStyle || prev);
+        setFormContentStyle((prev) => prev || data.suggestions.contentStyle || prev);
         toast.success("Brief improved with AI suggestions.");
       }
     },
@@ -271,6 +309,15 @@ export default function Campaigns() {
       platforms: formPlatforms.join(", "),
       budget: formBudget ? Number(formBudget) : undefined,
       coreMessage: formCoreMessage,
+      primaryOutcome: formPrimaryOutcome,
+      targetBuyer: formTargetBuyer,
+      mainPainPoint: formMainPainPoint,
+      productOrService: formProductOrService,
+      offerDetails: formOfferDetails,
+      preferredCta: formPreferredCta,
+      excludedOffers: formExcludedOffers,
+      referenceStyle: formReferenceStyle,
+      contentStyle: formContentStyle,
     });
   }
 
@@ -289,6 +336,15 @@ export default function Campaigns() {
       platforms: formPlatforms.join(", "),
       budget: formBudget ? Number(formBudget) : undefined,
       coreMessage: formCoreMessage,
+      primaryOutcome: formPrimaryOutcome,
+      targetBuyer: formTargetBuyer,
+      mainPainPoint: formMainPainPoint,
+      productOrService: formProductOrService,
+      offerDetails: formOfferDetails,
+      preferredCta: formPreferredCta,
+      excludedOffers: formExcludedOffers,
+      referenceStyle: formReferenceStyle,
+      contentStyle: formContentStyle,
     });
   }
 
@@ -468,6 +524,90 @@ export default function Campaigns() {
                     {formPlatforms.length === 0 && (
                       <p className="text-xs text-muted-foreground mt-1">Select at least one channel.</p>
                     )}
+                  </div>
+                </div>
+
+                {/* Section: Campaign Brief Precision */}
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Campaign Brief Precision</p>
+                  <div>
+                    <Label>Primary Outcome</Label>
+                    <Input
+                      value={formPrimaryOutcome}
+                      onChange={(e) => setFormPrimaryOutcome(e.target.value)}
+                      placeholder="e.g. 50 new seller listings in 30 days"
+                    />
+                  </div>
+                  <div>
+                    <Label>Target Buyer</Label>
+                    <Input
+                      value={formTargetBuyer}
+                      onChange={(e) => setFormTargetBuyer(e.target.value)}
+                      placeholder="e.g. Small restaurant owners in Johannesburg"
+                    />
+                  </div>
+                  <div>
+                    <Label>Main Pain Point</Label>
+                    <Textarea
+                      value={formMainPainPoint}
+                      onChange={(e) => setFormMainPainPoint(e.target.value)}
+                      placeholder="What problem does your buyer face that this campaign solves?"
+                    />
+                  </div>
+                  <div>
+                    <Label>Product/Service Being Promoted</Label>
+                    <Textarea
+                      value={formProductOrService}
+                      onChange={(e) => setFormProductOrService(e.target.value)}
+                      placeholder="Describe the specific product, service or platform feature..."
+                    />
+                  </div>
+                  <div>
+                    <Label>Offer, if any</Label>
+                    <Input
+                      value={formOfferDetails}
+                      onChange={(e) => setFormOfferDetails(e.target.value)}
+                      placeholder="Leave blank if there is no offer"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Leave blank and NatForgeAI will not invent discounts or offers.</p>
+                  </div>
+                  <div>
+                    <Label>Preferred CTA</Label>
+                    <Input
+                      value={formPreferredCta}
+                      onChange={(e) => setFormPreferredCta(e.target.value)}
+                      placeholder="e.g. Book a demo"
+                    />
+                  </div>
+                  <div>
+                    <Label>What NOT to say / excluded offers</Label>
+                    <Input
+                      value={formExcludedOffers}
+                      onChange={(e) => setFormExcludedOffers(e.target.value)}
+                      placeholder="e.g. 20% off, free trial, trading revolution"
+                    />
+                  </div>
+                  <div>
+                    <Label>Reference Style or Example</Label>
+                    <Input
+                      value={formReferenceStyle}
+                      onChange={(e) => setFormReferenceStyle(e.target.value)}
+                      placeholder="e.g. ZutoHub payout explainer, Founder's UGC-style ad"
+                    />
+                  </div>
+                  <div>
+                    <Label>Preferred Content Style</Label>
+                    <select
+                      value={formContentStyle}
+                      onChange={(e) => setFormContentStyle(e.target.value)}
+                      className="w-full h-10 px-3 rounded-md border border-input bg-background text-sm"
+                    >
+                      {CONTENT_STYLE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 
