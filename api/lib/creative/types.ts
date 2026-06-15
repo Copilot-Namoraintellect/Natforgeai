@@ -12,9 +12,11 @@ export interface ImageResult {
   jobId: string;
   status: ProviderStatus;
   imageUrl?: string;
+  imageBase64?: string;
   errorMessage?: string;
   provider?: string;
   providerJobId?: string;
+  rawResponse?: any;
 }
 
 export interface VideoResult {

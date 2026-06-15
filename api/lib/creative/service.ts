@@ -1,11 +1,12 @@
 import { TRPCError } from "@trpc/server";
 import { eq, and } from "drizzle-orm";
+import { env } from "../env";
 import { getDb } from "../../queries/connection";
 import { contentPosts, campaigns, businesses, generatedImages, videoRenderJobs, campaignAssets } from "@db/schema";
 import { checkCredits, deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
 import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider } from "./registry";
-import { downloadAndStoreImage, downloadAndStoreVideo } from "./storage";
+import { downloadAndStoreImage, storeBase64Image, downloadAndStoreVideo } from "./storage";
 import {
   getPremiumImageCredits,
   getPremiumVideoCredits,
@@ -261,9 +262,10 @@ export async function generateMasterImage({
     negativePrompt: campaign.excludedOffers || undefined,
   });
 
-  if (result.status === "failed" || !result.imageUrl) {
+  if (result.status === "failed" || (!result.imageUrl && !result.imageBase64)) {
     const errorMessage = result.errorMessage || "Image generation failed";
     console.error(`[CreativeService] Image generation failed | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`);
+
     await db
       .update(contentPosts)
       .set({
@@ -274,18 +276,51 @@ export async function generateMasterImage({
         },
       })
       .where(eq(contentPosts.id, post.id));
+
+    // Log failed provider call for debugging; no credits deducted
+    try {
+      await recordAiUsage({
+        userId,
+        campaignId: post.campaignId ?? undefined,
+        agentType: "image_generation",
+        model: env.openaiImageModel || "gpt-image-1",
+        promptTokens: 500,
+        completionTokens: 0,
+        actualCostUsdMicro: 0,
+        estimatedCostUsdMicro: 0,
+        creditsDeducted: 0,
+        metadata: {
+          provider: provider.name,
+          providerJobId: result.providerJobId,
+          contentPostId: post.id,
+          aspectRatio,
+          error: errorMessage,
+          rawResponse: result.rawResponse,
+        },
+      });
+    } catch (logErr: any) {
+      console.error(`[CreativeService] Failed to log image error usage | error="${logErr.message}"`);
+    }
+
     return { ...result, errorMessage };
   }
 
-  // currentMeta already declared above
-
-  // Download and store locally
+  // Store locally from base64 or URL
   let stored;
   try {
-    stored = await downloadAndStoreImage(result.imageUrl, {
-      campaignId: post.campaignId ?? undefined,
-      prefix: "master-post",
-    });
+    if (result.imageBase64) {
+      stored = await storeBase64Image(result.imageBase64, {
+        campaignId: post.campaignId ?? undefined,
+        prefix: "master-post",
+      });
+    } else if (result.imageUrl) {
+      stored = await downloadAndStoreImage(result.imageUrl, {
+        campaignId: post.campaignId ?? undefined,
+        prefix: "master-post",
+      });
+    } else {
+      throw new Error("No image URL or base64 data received");
+    }
   } catch (storageErr: any) {
     console.error(`[CreativeService] Failed to store image | userId=${userId} | error="${storageErr.message}"`);
     return { ...result, status: "failed", errorMessage: `Generated image could not be stored: ${storageErr.message}` };
@@ -313,7 +348,7 @@ export async function generateMasterImage({
     userId,
     campaignId: post.campaignId ?? undefined,
     agentType: "image_generation",
-    model: "dall-e-3",
+    model: env.openaiImageModel || "gpt-image-1",
     promptTokens: 500,
     completionTokens: 100,
     actualCostUsdMicro: usdToMicroCents(actualCostUsd),

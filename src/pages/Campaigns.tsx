@@ -256,6 +256,20 @@ export default function Campaigns() {
     },
   });
 
+  async function handleParseIntent() {
+    if (parseIntentMutation.isPending || !intentText.trim()) return;
+    await toast.promise(parseIntentMutation.mutateAsync({
+      intent: intentText,
+      targetAudience: intentTargetAudience,
+      offer: intentOffer,
+      platforms: intentPlatforms.join(", "),
+    }), {
+      loading: "Building your campaign brief with AI...",
+      success: "Campaign brief built with AI. Review and edit before creating.",
+      error: (err: any) => err.message || "Failed to build campaign brief",
+    });
+  }
+
   const improveBriefMutation = trpc.campaign.improveBrief.useMutation({
     onSuccess: (data) => {
       if (data.suggestions) {
@@ -364,9 +378,9 @@ export default function Campaigns() {
     );
   }
 
-  function handleImproveBrief() {
+  async function handleImproveBrief() {
     if (improveBriefMutation.isPending) return;
-    improveBriefMutation.mutate({
+    await toast.promise(improveBriefMutation.mutateAsync({
       name: formName,
       goal: formGoal,
       targetAudience: formTargetAudience,
@@ -382,6 +396,10 @@ export default function Campaigns() {
       excludedOffers: formExcludedOffers,
       referenceStyle: formReferenceStyle,
       contentStyle: formContentStyle,
+    }), {
+      loading: "Improving your campaign brief...",
+      success: "Brief improved with AI suggestions.",
+      error: (err: any) => err.message || "Failed to improve brief",
     });
   }
 
@@ -546,14 +564,7 @@ export default function Campaigns() {
               </div>
               <Button
                 className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
-                onClick={() =>
-                  parseIntentMutation.mutate({
-                    intent: intentText,
-                    targetAudience: intentTargetAudience,
-                    offer: intentOffer,
-                    platforms: intentPlatforms.join(", "),
-                  })
-                }
+                onClick={handleParseIntent}
                 disabled={parseIntentMutation.isPending || !intentText.trim()}
               >
                 {parseIntentMutation.isPending ? (

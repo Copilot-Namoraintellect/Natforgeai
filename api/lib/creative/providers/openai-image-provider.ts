@@ -17,6 +17,22 @@ function mapAspectRatio(ratio?: string): "1024x1024" | "1792x1024" | "1024x1792"
   }
 }
 
+function mapAspectRatioForGptImage(ratio?: string): "1024x1024" | "1024x1536" | "1536x1024" {
+  switch (ratio) {
+    case "16:9":
+    case "3:2":
+    case "4:3":
+      return "1536x1024";
+    case "9:16":
+    case "2:3":
+    case "4:5":
+      return "1024x1536";
+    case "1:1":
+    default:
+      return "1024x1024";
+  }
+}
+
 export class OpenAIImageProvider implements ImageProvider {
   name = "openai";
 
@@ -29,50 +45,69 @@ export class OpenAIImageProvider implements ImageProvider {
       return {
         jobId: "",
         status: "failed",
-        errorMessage: "OpenAI API key is not configured",
+        errorMessage: "Premium image generation is not configured. Please contact admin.",
       };
     }
 
-    const size = mapAspectRatio(req.aspectRatio);
+    const model = env.openaiImageModel || "gpt-image-1";
+    const isDallE = model.includes("dall-e");
+    const size = isDallE ? mapAspectRatio(req.aspectRatio) : mapAspectRatioForGptImage(req.aspectRatio);
+
+    const jobId = `openai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     try {
+      const body: Record<string, any> = {
+        model,
+        prompt: req.prompt,
+        n: 1,
+        size,
+        quality: "standard",
+      };
+
+      if (isDallE) {
+        // DALL-E 3 uses response_format to request base64
+        body.response_format = "b64_json";
+      } else {
+        // gpt-image-1 uses output_format
+        body.output_format = env.openaiImageOutputFormat || "b64_json";
+      }
+
       const response = await fetch("https://api.openai.com/v1/images/generations", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${env.openaiApiKey}`,
         },
-        body: JSON.stringify({
-          model: "dall-e-3",
-          prompt: req.prompt,
-          n: 1,
-          size,
-          quality: "standard",
-          response_format: "url",
-        }),
+        body: JSON.stringify(body),
       });
 
+      const rawResponse = (await response.json().catch(async () => ({}))) as any;
+
       if (!response.ok) {
-        const errorBody = await response.text();
+        const errorDetail = rawResponse?.error?.message || JSON.stringify(rawResponse);
         return {
-          jobId: "",
+          jobId,
           status: "failed",
-          errorMessage: `OpenAI image generation failed (${response.status}): ${errorBody}`,
+          errorMessage: `OpenAI image generation failed (${response.status}): ${errorDetail}`,
+          provider: this.name,
+          providerJobId: jobId,
+          rawResponse,
         };
       }
 
-      const data = (await response.json()) as any;
-      const imageUrl = data?.data?.[0]?.url;
+      const b64 = rawResponse?.data?.[0]?.b64_json as string | undefined;
+      const imageUrl = rawResponse?.data?.[0]?.url as string | undefined;
 
-      if (!imageUrl) {
+      if (!b64 && !imageUrl) {
         return {
-          jobId: "",
+          jobId,
           status: "failed",
-          errorMessage: "OpenAI returned no image URL",
+          errorMessage: "OpenAI returned no image data",
+          provider: this.name,
+          providerJobId: jobId,
+          rawResponse,
         };
       }
-
-      const jobId = `openai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       return {
         jobId,
@@ -80,12 +115,16 @@ export class OpenAIImageProvider implements ImageProvider {
         provider: this.name,
         status: "completed",
         imageUrl,
+        imageBase64: b64,
+        rawResponse,
       };
     } catch (err: any) {
       return {
-        jobId: "",
+        jobId,
         status: "failed",
         errorMessage: err.message || "OpenAI image generation request failed",
+        provider: this.name,
+        providerJobId: jobId,
       };
     }
   }

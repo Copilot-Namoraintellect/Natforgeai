@@ -58,6 +58,37 @@ export async function downloadAndStoreImage(
   return { publicUrl, localPath };
 }
 
+export async function storeBase64Image(
+  base64: string,
+  options: {
+    campaignId?: number;
+    prefix?: string;
+    extension?: string;
+  } = {}
+): Promise<StoredMedia> {
+  if (!base64) throw new Error("No base64 image provided");
+
+  const ext = options.extension || "png";
+  const dir = path.join(
+    PUBLIC_GENERATED_DIR,
+    "images",
+    options.campaignId ? String(options.campaignId) : "general"
+  );
+  ensureDir(dir);
+
+  const fileName = `${options.prefix || "img"}_${randomUUID()}.${ext}`;
+  const localPath = path.join(dir, fileName);
+
+  const buffer = Buffer.from(base64, "base64");
+  fs.writeFileSync(localPath, buffer);
+
+  const publicUrl = `${publicBaseUrl()}/generated/images/${
+    options.campaignId ? String(options.campaignId) : "general"
+  }/${fileName}`;
+
+  return { publicUrl, localPath };
+}
+
 export async function downloadAndStoreVideo(
   url: string,
   options: {

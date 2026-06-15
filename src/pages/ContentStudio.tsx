@@ -444,19 +444,28 @@ Include:
 
   const generateImageMutation = trpc.image.generateForPost.useMutation({
     onSuccess: (data) => {
-      toast.success(`Premium image generated (${data.creditsCharged} credits).`);
+      toast.success(`Premium image generated (${data.creditsCharged} credits). Review the image and caption pack, then approve or regenerate.`);
       utils.content.list.invalidate();
       utils.image.list.invalidate({ campaignId: Number(urlCampaignId) });
       utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
     },
     onError: (err) => {
-      toast.error(err.message || "Failed to generate image");
+      const message = err.message || "";
+      if (message.includes("not configured")) {
+        toast.error("Premium image generation is not configured. Please contact admin.");
+      } else if (message.includes("System AI generation limit")) {
+        toast.error("System AI generation limit reached. Please contact admin or try again later.");
+      } else if (message.includes("400")) {
+        toast.error("We could not generate the premium image. No credits were deducted. Please try again or contact support if the issue continues.");
+      } else {
+        toast.error(err.message || "We could not generate the premium image. No credits were deducted. Please try again.");
+      }
     },
   });
 
   const generateCaptionPackMutation = trpc.image.generateCaptionPack.useMutation({
     onSuccess: () => {
-      toast.success("Caption pack generated.");
+      toast.success("Caption pack generated. You can now copy platform-ready captions.");
       utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
     },
     onError: (err) => {
@@ -817,24 +826,47 @@ Include:
     }
 
     return (
-      <div className="mt-4 p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50/50 text-center space-y-3">
-        <p className="text-sm text-slate-600">No premium image generated yet.</p>
-        <Button
-          size="sm"
-          className="h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white"
-          onClick={() => generateImageMutation.mutate({ contentPostId: content.id })}
-          disabled={isGenerating}
-        >
-          {isGenerating ? (
-            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-          ) : (
-            <Image className="w-3 h-3 mr-1" />
-          )}
-          Generate Premium Image
-        </Button>
-        <p className="text-[10px] text-slate-500">10 credits · Includes caption pack</p>
+      <div className="mt-4 rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+        {isGenerating ? (
+          <div className="text-center space-y-3 py-4">
+            <Loader2 className="w-8 h-8 mx-auto text-[#00D4FF] animate-spin" />
+            <p className="text-sm font-medium text-slate-800">Generating your premium marketing image</p>
+            <p className="text-xs text-slate-500">This may take up to a minute. No credits are deducted until the image is ready.</p>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center shrink-0">
+                <Image className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Premium image not created yet</p>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Click Generate Premium Image to create a ready-to-post marketing poster using your approved campaign strategy, brand style and caption pack.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                size="sm"
+                className="h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white"
+                onClick={() => generateImageMutation.mutate({ contentPostId: content.id })}
+              >
+                <Image className="w-3 h-3 mr-1" />
+                Generate Premium Image — 10 credits
+              </Button>
+              <span className="text-[10px] text-slate-500">Includes caption pack</span>
+            </div>
+          </>
+        )}
         {imageStatus === "failed" && metadata?.imageError && (
-          <p className="text-[11px] text-red-600 w-full">{metadata.imageError}</p>
+          <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-left">
+            <p className="text-xs font-semibold text-red-700">We could not generate the premium image</p>
+            <p className="text-[11px] text-red-600 mt-0.5">No credits were deducted. Please try again or contact support if the issue continues.</p>
+            {typeof metadata.imageError === "string" && metadata.imageError.includes("400") && (
+              <p className="text-[10px] text-red-500 mt-1 font-mono">{metadata.imageError}</p>
+            )}
+          </div>
         )}
       </div>
     );
@@ -1399,6 +1431,131 @@ Include:
     publishCampaignPackMutation.mutate({ campaignId: Number(urlCampaignId) });
   }
 
+  function renderWorkflowGuidance() {
+    if (!campaignForContext) return null;
+
+    const state = campaignForContext.workflowState || "strategy_pending";
+    const hasCaptionPack = campaignAssets?.some((a) => a.assetType === "caption_pack");
+    const masterVisual =
+      filtered?.find((c) => ((c.metadata as any)?.assetKind === "master_campaign_post")) ||
+      filtered?.find((c) => c.type === "social_post");
+    const hasImage = !!((masterVisual?.metadata as any)?.imageUrl);
+    const isImageGenerating = ((masterVisual?.metadata as any)?.imageStatus) === "generating" || generateImageMutation.isPending;
+    const isImageFailed = ((masterVisual?.metadata as any)?.imageStatus) === "failed";
+    const approvalsPending = approvals?.filter((a) => a.status === "pending").length || 0;
+    const allApproved = filtered?.every((c) => getApprovalState(c));
+
+    const stateGuide: Record<string, { title: string; description: string; tone: "info" | "success" | "warning" }> = {
+      strategy_pending: {
+        title: "Strategy Agent is preparing your campaign direction.",
+        description: "This usually takes a minute. You'll be notified when the strategy is ready for review.",
+        tone: "info",
+      },
+      strategy_generated: {
+        title: "Strategy generated.",
+        description: "Review and approve the strategy so NatForgeAI can create your campaign content.",
+        tone: "warning",
+      },
+      strategy_approved: {
+        title: "Strategy approved. NatForgeAI will now prepare your campaign content.",
+        description: "The Creative Agent is building your master caption and platform adaptations.",
+        tone: "success",
+      },
+      creatives_generating: {
+        title: "Creative Agent is creating your master caption and platform adaptations.",
+        description: "This usually takes a minute. Refresh if it seems stuck.",
+        tone: "info",
+      },
+      creatives_ready: {
+        title: "Campaign content is ready. Review the caption, then generate your premium image.",
+        description: "Your campaign pack is ready. Next step: generate your premium marketing image.",
+        tone: "warning",
+      },
+      audience_generating: {
+        title: "Audience Agent is refining your target buyer and channels.",
+        description: "This usually takes a minute.",
+        tone: "info",
+      },
+      audience_ready: {
+        title: "Audience refinements ready.",
+        description: "Review the audience recommendations, then generate your premium image.",
+        tone: "success",
+      },
+      schedule_generated: {
+        title: "Your campaign pack is ready. Next step: generate your premium image.",
+        description: "Click Generate Premium Image below to create a ready-to-post marketing poster.",
+        tone: "warning",
+      },
+      launch_approval_required: {
+        title: "Approval required before launch.",
+        description: "An admin needs to approve this campaign before it can go live.",
+        tone: "warning",
+      },
+      campaign_live: {
+        title: "Campaign is live.",
+        description: "Your campaign is running. Monitor performance in Analytics.",
+        tone: "success",
+      },
+      completed: {
+        title: "Campaign completed.",
+        description: "This campaign has finished.",
+        tone: "success",
+      },
+    };
+
+    const guide = stateGuide[state] || {
+      title: "Continue building your campaign.",
+      description: "Review the assets below and follow the next step.",
+      tone: "info",
+    };
+
+    const toneClasses = {
+      info: "border-blue-200 bg-blue-50 text-blue-800",
+      success: "border-emerald-200 bg-emerald-50 text-emerald-800",
+      warning: "border-amber-200 bg-amber-50 text-amber-800",
+    };
+
+    const items = [
+      { label: "Campaign strategy approved", done: !["business_onboarding", "strategy_pending", "strategy_generated"].includes(state) },
+      { label: "Caption pack created", done: hasCaptionPack },
+      { label: "Premium image ready", done: hasImage, loading: isImageGenerating, failed: isImageFailed },
+      { label: "Approval pending", done: approvalsPending === 0 && allApproved, attention: approvalsPending > 0 },
+      { label: "Publishing pending", done: campaignForContext.status === "active" || campaignForContext.status === "completed", attention: !allApproved },
+    ];
+
+    return (
+      <Card className={`border ${toneClasses[guide.tone]}`}>
+        <CardContent className="p-4 space-y-3">
+          <div className="flex items-start gap-3">
+            {guide.tone === "info" ? <Loader2 className="w-5 h-5 mt-0.5 animate-spin" /> : <AlertCircle className="w-5 h-5 mt-0.5" />}
+            <div>
+              <p className="font-semibold text-sm">{guide.title}</p>
+              <p className="text-xs opacity-90 mt-0.5">{guide.description}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-current/10">
+            {items.map((item) => (
+              <div key={item.label} className="flex items-center gap-1.5 text-xs">
+                {item.done ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                ) : item.loading ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                ) : item.failed ? (
+                  <AlertCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                ) : item.attention ? (
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                ) : (
+                  <span className="w-3.5 h-3.5 rounded-full border border-current/30 shrink-0" />
+                )}
+                <span className={item.done ? "opacity-80" : ""}>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   function renderCampaignPack() {
     if (!urlCampaignId || !filtered) return null;
 
@@ -1487,6 +1644,8 @@ Include:
             )}
           </CardContent>
         </Card>
+
+        {renderWorkflowGuidance()}
 
         {/* Master Campaign Post — always expanded, adaptations nested inside */}
         {masterVisual && (
