@@ -5,7 +5,7 @@ import { generatedImages } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { checkCredits, deductCredits, recordAiUsage } from "./lib/billing/credit-engine";
 import { calculateFixedCost } from "./lib/billing/cost-tracker";
-import { generateMasterImage } from "./lib/creative/service";
+import { generateMasterImage, generateCaptionPack } from "./lib/creative/service";
 import { TRPCError } from "@trpc/server";
 
 export const imageRouter = createRouter({
@@ -148,5 +148,23 @@ export const imageRouter = createRouter({
         jobId: result.jobId,
         creditsCharged: result.creditsCharged,
       };
+    }),
+
+  generateCaptionPack: aiActionQuery
+    .input(z.object({ contentPostId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const pack = await generateCaptionPack({
+        userId: ctx.user.id,
+        contentPostId: input.contentPostId,
+      });
+
+      if (!pack) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Caption pack generation failed. Please try again.",
+        });
+      }
+
+      return { success: true, pack };
     }),
 });

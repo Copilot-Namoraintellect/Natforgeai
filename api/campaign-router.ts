@@ -10,6 +10,26 @@ import { defaultModel } from "./lib/agents/openai";
 import { runStrategyAgent } from "./lib/agents/strategy-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
 
+function campaignSuggestionSchema() {
+  return z.object({
+    name: z.string().nullable().describe("Improved campaign name, punchy and clear"),
+    goal: z.string().nullable().describe("Refined campaign objective with metric if possible"),
+    targetAudience: z.string().nullable().describe("Sharper target audience description"),
+    platforms: z.string().nullable().describe("Recommended platforms as a comma-separated list"),
+    budget: z.number().nullable().describe("Suggested estimated marketing spend in USD"),
+    coreMessage: z.string().nullable().describe("Compelling core message or offer"),
+    primaryOutcome: z.string().nullable().describe("Single primary outcome"),
+    targetBuyer: z.string().nullable().describe("Sharper target buyer description"),
+    mainPainPoint: z.string().nullable().describe("Specific main pain point"),
+    productOrService: z.string().nullable().describe("Product/service being promoted"),
+    offerDetails: z.string().nullable().describe("Offer if any; null if none"),
+    preferredCta: z.string().nullable().describe("Recommended CTA"),
+    excludedOffers: z.string().nullable().describe("Phrases or offers to avoid"),
+    referenceStyle: z.string().nullable().describe("Reference style or example"),
+    contentStyle: z.string().nullable().describe("Preferred content style"),
+  });
+}
+
 export const campaignRouter = createRouter({
   list: authedQuery.query(async ({ ctx }) => {
     const db = getDb();
@@ -219,6 +239,55 @@ export const campaignRouter = createRouter({
       return { id: campaignId, success: true, workflowState };
     }),
 
+  parseIntent: authedQuery
+    .input(
+      z.object({
+        intent: z.string().min(1, "Describe what you want to promote or achieve."),
+        targetAudience: z.string().optional(),
+        offer: z.string().optional(),
+        platforms: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const db = getDb();
+        const [business] = await db
+          .select()
+          .from(businesses)
+          .where(eq(businesses.userId, ctx.user.id))
+          .orderBy(desc(businesses.createdAt))
+          .limit(1);
+
+        const promptParts = [
+          `Campaign intent: ${input.intent}`,
+          input.targetAudience ? `Target audience hint: ${input.targetAudience}` : "",
+          input.offer ? `Offer hint: ${input.offer}` : "",
+          input.platforms ? `Preferred platforms hint: ${input.platforms}` : "",
+          business
+            ? `Business context:\n- Name: ${business.name}\n- Industry: ${business.industry || "N/A"}\n- Location: ${business.location || "N/A"}\n- Product/Service: ${business.productOrService || "N/A"}\n- Target customer: ${business.targetCustomer || "N/A"}\n- Brand tone: ${business.brandTone || "N/A"}\n- Monthly budget: ${business.monthlyBudget || "N/A"}`
+            : "",
+        ].filter(Boolean);
+
+        const schema = campaignSuggestionSchema();
+
+        const result = await generateObject({
+          model: defaultModel,
+          system:
+            "You are a senior marketing strategist. Turn the user's free-form campaign intent into a complete, concise campaign brief. Keep the same language and tone as the user. If no offer is provided, do not invent discounts, free trials or limited-time offers. Use neutral CTAs. Return null for any field you cannot infer confidently.",
+          prompt: promptParts.join("\n"),
+          schema,
+        });
+
+        return { success: true, suggestions: result.object };
+      } catch (err: any) {
+        if (err instanceof TRPCError) throw err;
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: err.message || "Failed to build campaign brief. Please try again.",
+        });
+      }
+    }),
+
   improveBrief: authedQuery
     .input(
       z.object({
@@ -265,33 +334,29 @@ export const campaignRouter = createRouter({
           });
         }
 
-        const schema = z.object({
-          name: z.string().describe("Improved campaign name, punchy and clear"),
-          goal: z.string().describe("Refined campaign objective with metric if possible"),
-          targetAudience: z.string().describe("Sharper target audience description"),
-          platforms: z.string().describe("Recommended platforms as a comma-separated list"),
-          budget: z.number().describe("Suggested estimated marketing spend in USD"),
-          coreMessage: z.string().describe("Compelling core message or offer"),
-          primaryOutcome: z.string().optional().describe("Single primary outcome"),
-          targetBuyer: z.string().optional().describe("Sharper target buyer description"),
-          mainPainPoint: z.string().optional().describe("Specific main pain point"),
-          productOrService: z.string().optional().describe("Product/service being promoted"),
-          offerDetails: z.string().optional().describe("Offer if any; empty if none"),
-          preferredCta: z.string().optional().describe("Recommended CTA"),
-          excludedOffers: z.string().optional().describe("Phrases or offers to avoid"),
-          referenceStyle: z.string().optional().describe("Reference style or example"),
-          contentStyle: z.string().optional().describe("Preferred content style"),
-        });
+        const schema = campaignSuggestionSchema();
 
         const result = await generateObject({
           model: defaultModel,
           system:
-            "You are a senior marketing strategist. Improve the campaign brief below. Keep the same language and tone. Be concise and actionable. If no offer is provided, do not invent discounts, free trials or limited-time offers. Use neutral CTAs.",
+            "You are a senior marketing strategist. Improve the campaign brief below. Keep the same language and tone. Be concise and actionable. If no offer is provided, do not invent discounts, free trials or limited-time offers. Use neutral CTAs. Return null for any field you cannot improve confidently.",
           prompt: briefParts.join("\n"),
           schema,
         });
 
-        return { success: true, suggestions: result.object };
+        // Fallback: preserve existing user-entered values when AI returns null or missing fields
+        const suggestions: Record<string, any> = {};
+        const raw = result.object as Record<string, any>;
+        for (const [key, value] of Object.entries(input)) {
+          const aiValue = raw[key];
+          if (aiValue === null || aiValue === undefined || aiValue === "") {
+            suggestions[key] = value ?? null;
+          } else {
+            suggestions[key] = aiValue;
+          }
+        }
+
+        return { success: true, suggestions };
       } catch (err: any) {
         if (err instanceof TRPCError) throw err;
         throw new TRPCError({

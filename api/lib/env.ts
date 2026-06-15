@@ -46,6 +46,10 @@ export const env = {
 
   // Provider cost tracking (USD per Creatify credit; 0 = raw credits only)
   creatifyCreditUsd: parseFloat(process.env.CREATIFY_CREDIT_USD || "0"),
+
+  // System AI usage limits (admin/system-level guardrails)
+  dailyAiCreditLimit: parseInt(process.env.DAILY_AI_CREDIT_LIMIT || "500", 10),
+  monthlyAiCreditLimit: parseInt(process.env.MONTHLY_AI_CREDIT_LIMIT || "5000", 10),
 };
 
 // Validate Redis in production

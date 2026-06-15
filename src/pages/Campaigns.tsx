@@ -21,7 +21,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Megaphone,
@@ -45,9 +44,21 @@ export default function Campaigns() {
   const urlCampaignId = searchParams.get("campaignId");
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [intentOpen, setIntentOpen] = useState(false);
+  const [skipBusinessPrefill, setSkipBusinessPrefill] = useState(false);
   const [viewCampaign, setViewCampaign] = useState<any>(null);
   const [highlightedId, setHighlightedId] = useState<number | null>(null);
   const [filter, setFilter] = useState<string>("all");
+
+  // Campaign intent quick-start state
+  const [intentText, setIntentText] = useState("");
+  const [intentTargetAudience, setIntentTargetAudience] = useState("");
+  const [intentOffer, setIntentOffer] = useState("");
+  const [intentPlatforms, setIntentPlatforms] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!createOpen) setSkipBusinessPrefill(false);
+  }, [createOpen]);
   const utils = trpc.useUtils();
   const navigate = useNavigate();
   const { campaigns: campaignUsage, results: resultUsage, isLoading: usageLoading, tierName } = useUsage();
@@ -104,18 +115,22 @@ export default function Campaigns() {
     { value: "carousel_led", label: "Carousel-led campaign" },
   ];
 
-  // Prefill from business profile when modal opens
+  // Prefill from business profile when modal opens (unless AI intent already prefilled)
   useEffect(() => {
-    if (createOpen && primaryBusiness) {
-      setFormTargetAudience(primaryBusiness.targetAudience || primaryBusiness.targetCustomer || "");
-      setFormBudget(primaryBusiness.monthlyBudget ? String(primaryBusiness.monthlyBudget) : "");
-      if (primaryBusiness.preferredPlatforms) {
+    if (createOpen && primaryBusiness && !skipBusinessPrefill) {
+      if (!formTargetAudience) {
+        setFormTargetAudience(primaryBusiness.targetAudience || primaryBusiness.targetCustomer || "");
+      }
+      if (!formBudget) {
+        setFormBudget(primaryBusiness.monthlyBudget ? String(primaryBusiness.monthlyBudget) : "");
+      }
+      if (formPlatforms.length === 0 && primaryBusiness.preferredPlatforms) {
         const prefs = primaryBusiness.preferredPlatforms.split(",").map((p: string) => p.trim());
         const matched = prefs.filter((p: string) => PLATFORM_OPTIONS.some((o) => o.value === p));
-        setFormPlatforms(matched);
+        if (matched.length > 0) setFormPlatforms(matched);
       }
     }
-  }, [createOpen, primaryBusiness]);
+  }, [createOpen, primaryBusiness, skipBusinessPrefill]);
 
   // Fetch pending approvals for the viewed campaign to wire strategy approval into workflow
   const { data: campaignPendingApprovals } = trpc.approval.listApprovals.useQuery(
@@ -179,6 +194,7 @@ export default function Campaigns() {
       setFormExcludedOffers("");
       setFormReferenceStyle("");
       setFormContentStyle("");
+      setSkipBusinessPrefill(false);
       if (data.id) {
         setHighlightedId(data.id);
         setTimeout(() => setHighlightedId(null), 4000);
@@ -201,28 +217,49 @@ export default function Campaigns() {
     },
   });
 
+  function applySuggestions(suggestions: any) {
+    if (!suggestions) return;
+    setFormName((prev) => suggestions.name ?? prev);
+    setFormGoal((prev) => suggestions.goal ?? prev);
+    setFormTargetAudience((prev) => suggestions.targetAudience ?? prev);
+    if (suggestions.platforms) {
+      const prefs = String(suggestions.platforms)
+        .split(",")
+        .map((p: string) => p.trim())
+        .filter(Boolean);
+      const matched = prefs.filter((p: string) => PLATFORM_OPTIONS.some((o) => o.value === p));
+      if (matched.length > 0) setFormPlatforms(matched);
+    }
+    setFormBudget((prev) => (suggestions.budget != null ? String(suggestions.budget) : prev));
+    setFormCoreMessage((prev) => suggestions.coreMessage ?? prev);
+    setFormPrimaryOutcome((prev) => suggestions.primaryOutcome ?? prev);
+    setFormTargetBuyer((prev) => suggestions.targetBuyer ?? prev);
+    setFormMainPainPoint((prev) => suggestions.mainPainPoint ?? prev);
+    setFormProductOrService((prev) => suggestions.productOrService ?? prev);
+    setFormOfferDetails((prev) => suggestions.offerDetails ?? prev);
+    setFormPreferredCta((prev) => suggestions.preferredCta ?? prev);
+    setFormExcludedOffers((prev) => suggestions.excludedOffers ?? prev);
+    setFormReferenceStyle((prev) => suggestions.referenceStyle ?? prev);
+    setFormContentStyle((prev) => suggestions.contentStyle ?? prev);
+  }
+
+  const parseIntentMutation = trpc.campaign.parseIntent.useMutation({
+    onSuccess: (data) => {
+      applySuggestions(data.suggestions);
+      setSkipBusinessPrefill(true);
+      setIntentOpen(false);
+      setCreateOpen(true);
+      toast.success("Campaign brief built with AI. Review and edit before creating.");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to build campaign brief");
+    },
+  });
+
   const improveBriefMutation = trpc.campaign.improveBrief.useMutation({
     onSuccess: (data) => {
       if (data.suggestions) {
-        setFormName((prev) => prev || data.suggestions.name || prev);
-        setFormGoal((prev) => prev || data.suggestions.goal || prev);
-        setFormTargetAudience((prev) => prev || data.suggestions.targetAudience || prev);
-        if (data.suggestions.platforms) {
-          const prefs = data.suggestions.platforms.split(",").map((p: string) => p.trim());
-          const matched = prefs.filter((p: string) => PLATFORM_OPTIONS.some((o) => o.value === p));
-          if (matched.length > 0) setFormPlatforms(matched);
-        }
-        setFormBudget((prev) => prev || String(data.suggestions.budget ?? prev));
-        setFormCoreMessage((prev) => prev || data.suggestions.coreMessage || prev);
-        setFormPrimaryOutcome((prev) => prev || data.suggestions.primaryOutcome || prev);
-        setFormTargetBuyer((prev) => prev || data.suggestions.targetBuyer || prev);
-        setFormMainPainPoint((prev) => prev || data.suggestions.mainPainPoint || prev);
-        setFormProductOrService((prev) => prev || data.suggestions.productOrService || prev);
-        setFormOfferDetails((prev) => prev || data.suggestions.offerDetails || prev);
-        setFormPreferredCta((prev) => prev || data.suggestions.preferredCta || prev);
-        setFormExcludedOffers((prev) => prev || data.suggestions.excludedOffers || prev);
-        setFormReferenceStyle((prev) => prev || data.suggestions.referenceStyle || prev);
-        setFormContentStyle((prev) => prev || data.suggestions.contentStyle || prev);
+        applySuggestions(data.suggestions);
         toast.success("Brief improved with AI suggestions.");
       }
     },
@@ -430,16 +467,118 @@ export default function Campaigns() {
             Plan, launch, and track your marketing campaigns.
           </p>
         </div>
+        <Button
+          className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90"
+          disabled={isCampaignLimitReached}
+          onClick={() => {
+            setIntentText("");
+            setIntentTargetAudience("");
+            setIntentOffer("");
+            setIntentPlatforms([]);
+            setIntentOpen(true);
+          }}
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          New Campaign
+        </Button>
+
+        {/* Campaign Intent quick-start modal */}
+        <Dialog open={intentOpen} onOpenChange={setIntentOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>New Campaign</DialogTitle>
+              <DialogDescription>
+                Tell NatForgeAI what you want to promote. We'll build a detailed brief you can edit.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 mt-2">
+              <div>
+                <Label htmlFor="intent-text">What do you want to promote or achieve? *</Label>
+                <Textarea
+                  id="intent-text"
+                  value={intentText}
+                  onChange={(e) => setIntentText(e.target.value)}
+                  placeholder="e.g. Promote our winter printing specials to local businesses and push online orders"
+                  rows={3}
+                />
+              </div>
+              <div>
+                <Label htmlFor="intent-target">Target audience (optional)</Label>
+                <Input
+                  id="intent-target"
+                  value={intentTargetAudience}
+                  onChange={(e) => setIntentTargetAudience(e.target.value)}
+                  placeholder="e.g. Small business owners in Alberton"
+                />
+              </div>
+              <div>
+                <Label htmlFor="intent-offer">Offer, if any (optional)</Label>
+                <Input
+                  id="intent-offer"
+                  value={intentOffer}
+                  onChange={(e) => setIntentOffer(e.target.value)}
+                  placeholder="e.g. 10% off orders above R1000"
+                />
+              </div>
+              <div>
+                <Label>Preferred platforms (optional)</Label>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {PLATFORM_OPTIONS.filter((o) => !o.comingSoon).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() =>
+                        setIntentPlatforms((prev) =>
+                          prev.includes(opt.value) ? prev.filter((p) => p !== opt.value) : [...prev, opt.value]
+                        )
+                      }
+                      className={[
+                        "px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
+                        intentPlatforms.includes(opt.value)
+                          ? "bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white border-transparent"
+                          : "border-slate-300 text-slate-600 hover:border-[#00D4FF] hover:text-[#00D4FF]",
+                      ].join(" ")}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <Button
+                className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
+                onClick={() =>
+                  parseIntentMutation.mutate({
+                    intent: intentText,
+                    targetAudience: intentTargetAudience,
+                    offer: intentOffer,
+                    platforms: intentPlatforms.join(", "),
+                  })
+                }
+                disabled={parseIntentMutation.isPending || !intentText.trim()}
+              >
+                {parseIntentMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Sparkles className="w-4 h-4 mr-2" />
+                )}
+                Build campaign brief with AI
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full text-slate-500"
+                onClick={() => {
+                  setSkipBusinessPrefill(false);
+                  setIntentOpen(false);
+                  setCreateOpen(true);
+                }}
+              >
+                Skip and fill manually
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-          <DialogTrigger asChild>
-            <Button
-              className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90"
-              disabled={isCampaignLimitReached}
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              New Campaign
-            </Button>
-          </DialogTrigger>
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Create Campaign</DialogTitle>

@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { eq, and } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
-import { contentPosts, campaigns, businesses, generatedImages, videoRenderJobs } from "@db/schema";
+import { contentPosts, campaigns, businesses, generatedImages, videoRenderJobs, campaignAssets } from "@db/schema";
 import { checkCredits, deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
 import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider } from "./registry";
@@ -12,6 +12,8 @@ import {
   creatifyCreditsToUsd,
   usdToMicroCents,
 } from "./costs";
+import { generateText } from "ai";
+import { openai } from "@ai-sdk/openai";
 import type {
   ImageResult,
   VideoResult,
@@ -365,6 +367,11 @@ export async function generateMasterImage({
     })
     .where(eq(contentPosts.id, post.id));
 
+  // Generate included Caption Pack (non-blocking; failure is logged but image still returned)
+  generateCaptionPack({ userId, contentPostId: post.id }).catch((err) => {
+    console.error(`[CreativeService] Caption pack async error | userId=${userId} | contentPostId=${post.id} | error="${err.message}"`);
+  });
+
   console.log(`[CreativeService] Premium image ready | userId=${userId} | contentPostId=${contentPostId} | url=${stored.publicUrl} | credits=${cost}`);
 
   return {
@@ -373,6 +380,164 @@ export async function generateMasterImage({
     creditsCharged: cost,
     status: "completed",
   };
+}
+
+export interface CaptionPack {
+  linkedinCaption: string;
+  facebookCaption: string;
+  instagramCaption: string;
+  whatsappCaption: string;
+  emailSubject: string;
+  emailPreheader: string;
+  emailBody: string;
+  hashtags: string[];
+  ctaVariations: string[];
+  outreachDm: string;
+}
+
+// ─── Caption Pack generation (included with premium image) ───
+export async function generateCaptionPack({
+  userId,
+  contentPostId,
+}: {
+  userId: number;
+  contentPostId: number;
+}): Promise<CaptionPack | null> {
+  const db = getDb();
+
+  const [post] = await db
+    .select()
+    .from(contentPosts)
+    .where(and(eq(contentPosts.id, contentPostId), eq(contentPosts.userId, userId)))
+    .limit(1);
+
+  if (!post) return null;
+
+  let campaign: any = null;
+  let business: any = null;
+
+  if (post.campaignId) {
+    [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, post.campaignId)).limit(1);
+    if (campaign?.businessId) {
+      [business] = await db
+        .select()
+        .from(businesses)
+        .where(eq(businesses.id, campaign.businessId))
+        .limit(1);
+    }
+  }
+
+  if (!business) business = {};
+  if (!campaign) campaign = {};
+
+  const brandColors = (business.brandColors as string[] | undefined) || [];
+  const prompt = `You are a senior conversion copywriter for a local marketing agency. Write a commercially specific, ready-to-post "Caption Pack" for the campaign below. The copy must sound like it was written for THIS exact business, not a generic template.
+
+BUSINESS:
+- Name: ${business.name || "N/A"}
+- Industry: ${business.industry || "N/A"}
+- Location: ${business.location || "N/A"}
+- Website: ${business.website || "N/A"}
+- Brand tone: ${business.brandTone || business.tone || "professional"}
+- Brand colours: ${brandColors.join(", ") || "not specified"}
+- Visual style: ${business.visualStyle || "not specified"}
+- Brand voice notes: ${business.brandVoiceNotes || "not specified"}
+- Words to avoid: ${business.avoidWords || "None specified"}
+
+CAMPAIGN BRIEF:
+- Primary outcome: ${campaign.primaryOutcome || "N/A"}
+- Target buyer: ${campaign.targetBuyer || campaign.targetAudience || "N/A"}
+- Main pain point: ${campaign.mainPainPoint || "N/A"}
+- Product/service: ${campaign.productOrService || business.productOrService || "N/A"}
+- Offer: ${campaign.offerDetails || "None — do not invent offers or discounts"}
+- Preferred CTA: ${campaign.preferredCta || post.cta || "N/A"}
+- Exclusions (NEVER use): ${campaign.excludedOffers || business.avoidWords || "None specified"}
+- Reference style: ${campaign.referenceStyle || "N/A"}
+- Content style: ${campaign.contentStyle || "N/A"}
+
+MASTER POST:
+- Title: ${post.title || "N/A"}
+- Hook: ${post.hook || "N/A"}
+- Caption: ${post.caption || "N/A"}
+- CTA: ${post.cta || "N/A"}
+
+COPY RULES:
+1. NEVER use generic motivational phrases like "Unleash creativity this winter", "Winter vibes are here", "Join the revolution", "Unlock your potential", "Discover the best" or "Transform your future".
+2. Lead with a concrete business outcome: what the buyer gets, how they save time, what they avoid, or what the offer gives them.
+3. Mention specific products/services from the brief (e.g. printing, branding, craft supplies, courier support) where relevant.
+4. If an offer is provided, state it exactly as given (e.g. "10% off orders above R1000"). If no offer is provided, do NOT invent discounts, free trials, limited spots, free e-books, loyalty programmes or fake promotions.
+5. CTA must be clear and action-based: "Order on WhatsApp", "Request a quote", "Shop online", "Book a demo", "Speak to us" or similar. Match it to the preferred CTA if one is supplied.
+6. Highlight practical benefits like ordering without visiting the store, saving time, delivery/courier support, or local availability where they apply.
+7. Each caption must match the platform's tone and format and be usable straight away.
+8. Hashtags should be a focused mix of core, local and niche tags (8–12 total). Include location-based tags if a location is provided.
+9. CTA variations must be distinct and platform-appropriate.
+10. Outreach DM should be short, warm and direct — one sentence of context plus a clear ask.
+
+OUTPUT FORMAT — return ONLY a single JSON object with these exact keys:
+{
+  "linkedinCaption": "string",
+  "facebookCaption": "string",
+  "instagramCaption": "string",
+  "whatsappCaption": "string",
+  "emailSubject": "string",
+  "emailPreheader": "string",
+  "emailBody": "string",
+  "hashtags": ["string"],
+  "ctaVariations": ["string"],
+  "outreachDm": "string"
+}`;
+
+  try {
+    console.log(`[CreativeService] Generating caption pack | userId=${userId} | contentPostId=${contentPostId}`);
+    const { text } = await generateText({
+      model: openai("gpt-4o-mini"),
+      prompt,
+      temperature: 0.7,
+      maxOutputTokens: 2500,
+    });
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const pack: CaptionPack = jsonMatch
+      ? JSON.parse(jsonMatch[0])
+      : JSON.parse(text);
+
+    // Validate shape with safe defaults
+    const safePack: CaptionPack = {
+      linkedinCaption: pack.linkedinCaption || post.caption || "",
+      facebookCaption: pack.facebookCaption || post.caption || "",
+      instagramCaption: pack.instagramCaption || post.caption || "",
+      whatsappCaption: pack.whatsappCaption || post.cta || "",
+      emailSubject: pack.emailSubject || post.title || "",
+      emailPreheader: pack.emailPreheader || post.hook || "",
+      emailBody: pack.emailBody || post.caption || "",
+      hashtags: Array.isArray(pack.hashtags) ? pack.hashtags : [],
+      ctaVariations: Array.isArray(pack.ctaVariations) ? pack.ctaVariations : [],
+      outreachDm: pack.outreachDm || "",
+    };
+
+    if (!post.campaignId) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Caption pack requires content post to belong to a campaign" });
+    }
+
+    await db.insert(campaignAssets).values({
+      userId,
+      campaignId: post.campaignId,
+      assetType: "caption_pack",
+      title: "Caption Pack",
+      status: "ready",
+      metadata: {
+        ...safePack,
+        contentPostId: post.id,
+        generatedAt: new Date().toISOString(),
+      },
+    });
+
+    console.log(`[CreativeService] Caption pack stored | userId=${userId} | contentPostId=${contentPostId}`);
+    return safePack;
+  } catch (err: any) {
+    console.error(`[CreativeService] Caption pack failed | userId=${userId} | contentPostId=${contentPostId} | error="${err.message}"`);
+    return null;
+  }
 }
 
 // ─── Premium video generation (async) ───

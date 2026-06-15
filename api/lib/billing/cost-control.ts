@@ -2,6 +2,8 @@ import { getDb } from "../../queries/connection";
 import { aiUsage, creditWallets, campaigns, approvalRequests } from "@db/schema";
 import { eq, and, gte, sql } from "drizzle-orm";
 import { checkCredits } from "./credit-engine";
+import { env } from "../env";
+import { getSystemSetting } from "../system-settings";
 
 interface CostControlResult {
   allowed: boolean;
@@ -9,6 +11,21 @@ interface CostControlResult {
   daily: number;
   monthly: number;
   balance: number;
+}
+
+async function getSystemAiLimits(): Promise<{ daily: number; monthly: number }> {
+  const [dailyRaw, monthlyRaw] = await Promise.all([
+    getSystemSetting("daily_ai_credit_limit"),
+    getSystemSetting("monthly_ai_credit_limit"),
+  ]);
+
+  const daily = dailyRaw ? parseInt(dailyRaw, 10) : env.dailyAiCreditLimit;
+  const monthly = monthlyRaw ? parseInt(monthlyRaw, 10) : env.monthlyAiCreditLimit;
+
+  return {
+    daily: Number.isFinite(daily) && daily > 0 ? daily : env.dailyAiCreditLimit,
+    monthly: Number.isFinite(monthly) && monthly > 0 ? monthly : env.monthlyAiCreditLimit,
+  };
 }
 
 /**
@@ -41,15 +58,15 @@ export async function getCreditSpend(userId: number): Promise<{
     .limit(1);
 
   return {
-    daily: dailyResult?.total ?? 0,
-    monthly: monthlyResult?.total ?? 0,
-    balance: wallet?.balance ?? 0,
+    daily: Number(dailyResult?.total ?? 0),
+    monthly: Number(monthlyResult?.total ?? 0),
+    balance: Number(wallet?.balance ?? 0),
   };
 }
 
 /**
  * Enforce cost controls before an AI action.
- * Checks: balance, daily limit, monthly limit.
+ * Checks: balance, daily system limit, monthly system limit.
  */
 export async function enforceCostControl(
   userId: number,
@@ -60,8 +77,9 @@ export async function enforceCostControl(
   }
 ): Promise<CostControlResult> {
   const spend = await getCreditSpend(userId);
+  const systemLimits = await getSystemAiLimits();
 
-  // Check balance
+  // Check balance first (user credits)
   const balanceCheck = await checkCredits(userId, estimatedCost);
   if (!balanceCheck.hasCredits) {
     return {
@@ -71,22 +89,22 @@ export async function enforceCostControl(
     };
   }
 
-  // Check daily limit (default: 500 for safety)
-  const dailyLimit = options?.dailyLimit ?? 500;
+  // Check daily system limit
+  const dailyLimit = options?.dailyLimit ?? systemLimits.daily;
   if (spend.daily + estimatedCost > dailyLimit) {
     return {
       allowed: false,
-      reason: `Daily AI credit limit reached. Limit: ${dailyLimit}. Spent today: ${spend.daily}.`,
+      reason: `System AI generation limit reached. Daily limit: ${dailyLimit}. Spent today: ${spend.daily}. Please contact admin or increase the daily AI limit.`,
       ...spend,
     };
   }
 
-  // Check monthly limit (default: 5000 for safety)
-  const monthlyLimit = options?.monthlyLimit ?? 5000;
+  // Check monthly system limit
+  const monthlyLimit = options?.monthlyLimit ?? systemLimits.monthly;
   if (spend.monthly + estimatedCost > monthlyLimit) {
     return {
       allowed: false,
-      reason: `Monthly AI credit limit reached. Limit: ${monthlyLimit}. Spent this month: ${spend.monthly}.`,
+      reason: `System AI generation limit reached. Monthly limit: ${monthlyLimit}. Spent this month: ${spend.monthly}. Please contact admin or increase the monthly AI limit.`,
       ...spend,
     };
   }

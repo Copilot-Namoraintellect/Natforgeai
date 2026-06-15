@@ -716,13 +716,23 @@ This is the single hero video blueprint. Provide:
 - Thumbnail generation prompt
 
 C. PLATFORM CAPTION ADAPTATIONS
-For EACH platform in the campaign (${campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn"}), provide a adapted version of the master post:
+For EACH platform in the campaign (${campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn"}), provide a complete, ready-to-post adaptation. Do not write one-liners. Each adaptation must be a full caption/ message the user can copy and publish.
+
+For every platform include:
 - Platform name
-- Adapted caption (rewritten for that platform's tone and character limits)
-- Adapted CTA (platform-native, neutral if no offer)
-- Adapted hashtags (platform-specific hashtag strategy)
+- Adapted caption (full rewrite for that platform's tone and format)
+- Adapted CTA (platform-native, action-driven)
+- Adapted hashtags (platform-specific strategy)
 - Best time to post for that platform
-- Format notes (e.g. "TikTok: keep under 150 chars, use trending audio reference", "LinkedIn: professional tone, longer form accepted") — use null if not needed
+- Format notes (e.g. character limit, formatting, native features) — use null if not needed
+
+Platform-specific requirements:
+- LinkedIn: professional, business-focused. Lead with the buyer's problem or opportunity, include a clear value proposition, keep tone credible. 2-4 short paragraphs.
+- Facebook: community and offer-driven. Conversational, warm, easy to read. Lead with the benefit or offer, invite engagement.
+- Instagram: visual, short and engaging. Front-load the hook, use line breaks, keep it scannable. Include relevant hashtags.
+- WhatsApp: direct and action-focused. Short message (under 160 characters if possible), clear CTA, easy to forward.
+- Email: write a real subject line (under 50 chars) plus a short email body (under 120 words) with a clear CTA. Include preheader if useful.
+- TikTok: short hook (first line stops the scroll) + caption + CTA. Trend-aware, casual, punchy. Keep caption under 100 characters where possible.
 
 D. 1 CAROUSEL AD CONCEPT (supporting asset)
 One premium carousel. Provide title, primary platform, hook, 5-7 slides, overall CTA, visual style, target persona, funnel stage, benefit sequence.

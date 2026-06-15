@@ -585,6 +585,7 @@ export const campaignAssets = mysqlTable("campaign_assets", {
     "ad_copy",
     "caption",
     "caption_adaptation",
+    "caption_pack",
     "hashtag_set",
     "cta_variant",
     "email_copy",
@@ -873,3 +874,16 @@ export const systemAlerts = mysqlTable("system_alerts", {
 });
 
 export type SystemAlert = typeof systemAlerts.$inferSelect;
+
+// ─── System Settings ───
+export const systemSettings = mysqlTable("system_settings", {
+  settingKey: varchar("settingKey", { length: 128 }).primaryKey(),
+  settingValue: text("settingValue").notNull(),
+  description: text("description"),
+  updatedAt: timestamp("updatedAt")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+});
+
+export type SystemSetting = typeof systemSettings.$inferSelect;

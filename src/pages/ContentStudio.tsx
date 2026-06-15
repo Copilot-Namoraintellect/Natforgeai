@@ -447,9 +447,20 @@ Include:
       toast.success(`Premium image generated (${data.creditsCharged} credits).`);
       utils.content.list.invalidate();
       utils.image.list.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
     },
     onError: (err) => {
       toast.error(err.message || "Failed to generate image");
+    },
+  });
+
+  const generateCaptionPackMutation = trpc.image.generateCaptionPack.useMutation({
+    onSuccess: () => {
+      toast.success("Caption pack generated.");
+      utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to generate caption pack");
     },
   });
 
@@ -574,31 +585,44 @@ Include:
 
           {!videoUrl && videoStatus === "concept" && (
             <>
-              <Button
-                size="sm"
-                className="h-7 text-[11px] bg-purple-600 hover:bg-purple-700 text-white"
-                onClick={() => renderVideoMutation.mutate({ contentPostId: content.id, mode: "premium" })}
-                disabled={renderVideoMutation.isPending || !premiumConfigured}
-                title={premiumConfigured ? "Generate premium AI video (100 credits)" : "Premium video provider not configured"}
-              >
-                {renderVideoMutation.isPending ? (
-                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                ) : (
+              {premiumConfigured ? (
+                <Button
+                  size="sm"
+                  className="h-7 text-[11px] bg-purple-600 hover:bg-purple-700 text-white"
+                  onClick={() => renderVideoMutation.mutate({ contentPostId: content.id, mode: "premium" })}
+                  disabled={renderVideoMutation.isPending}
+                  title="Generate premium AI video (100 credits)"
+                >
+                  {renderVideoMutation.isPending ? (
+                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  ) : (
+                    <Video className="w-3 h-3 mr-1" />
+                  )}
+                  Generate Premium Video
+                </Button>
+              ) : (
+                <Badge variant="outline" className="text-[10px] h-7 px-2 border-slate-200 text-slate-500 bg-slate-50">
                   <Video className="w-3 h-3 mr-1" />
-                )}
-                Generate Premium Video
-              </Button>
+                  Premium Video · Coming soon
+                </Badge>
+              )}
 
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50"
-                onClick={() => renderVideoMutation.mutate({ contentPostId: content.id, mode: "basic" })}
-                disabled={renderVideoMutation.isPending || !basicConfigured}
-              >
-                <Video className="w-3 h-3 mr-1" />
-                Basic Draft Video
-              </Button>
+              {basicConfigured && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50"
+                  onClick={() => renderVideoMutation.mutate({ contentPostId: content.id, mode: "basic" })}
+                  disabled={renderVideoMutation.isPending}
+                >
+                  <Video className="w-3 h-3 mr-1" />
+                  Generate Basic Draft Video
+                </Button>
+              )}
+
+              {!premiumConfigured && (
+                <span className="text-[10px] text-slate-400">Premium video requires provider configuration.</span>
+              )}
             </>
           )}
 
@@ -718,16 +742,38 @@ Include:
     const imageUrl = metadata?.imageUrl;
     const imageStatus = metadata?.imageStatus;
     const isGenerating = imageStatus === "generating" || generateImageMutation.isPending;
+    const captionPack = campaignAssets?.find(
+      (a) => a.assetType === "caption_pack" && (a.metadata as any)?.contentPostId === content.id
+    );
 
     if (imageUrl) {
       return (
-        <div className="mt-3 space-y-2">
-          <img
-            src={imageUrl}
-            alt="Master campaign visual"
-            className="w-full rounded-lg border border-slate-200 object-cover max-h-[360px]"
-          />
-          <div className="flex flex-wrap gap-2">
+        <div className="mt-4 space-y-3">
+          <div className="relative group overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+            <img
+              src={imageUrl}
+              alt="Master campaign visual"
+              className="w-full object-contain max-h-[420px]"
+            />
+            <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                className="h-7 text-[11px]"
+                onClick={() => {
+                  const a = document.createElement("a");
+                  a.href = imageUrl;
+                  a.download = `${content.title || "campaign"}-image.png`;
+                  a.click();
+                }}
+              >
+                <ExternalLink className="w-3 h-3 mr-1" />
+                Download Image
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="text-[10px] h-6 border-emerald-200 text-emerald-700 bg-emerald-50">
               <Sparkles className="w-3 h-3 mr-1" />
               Premium Image
@@ -745,18 +791,37 @@ Include:
               disabled={isGenerating}
             >
               <Image className="w-3 h-3 mr-1" />
-              Regenerate
+              Regenerate Image
             </Button>
+            {!captionPack && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-[11px]"
+                onClick={() => generateCaptionPackMutation.mutate({ contentPostId: content.id })}
+                disabled={generateCaptionPackMutation.isPending}
+              >
+                {generateCaptionPackMutation.isPending ? (
+                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                ) : (
+                  <MessageCircle className="w-3 h-3 mr-1" />
+                )}
+                Generate Caption Pack
+              </Button>
+            )}
           </div>
+
+          {captionPack && renderCaptionPack(captionPack, content.id)}
         </div>
       );
     }
 
     return (
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="mt-4 p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50/50 text-center space-y-3">
+        <p className="text-sm text-slate-600">No premium image generated yet.</p>
         <Button
           size="sm"
-          className="h-7 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
+          className="h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white"
           onClick={() => generateImageMutation.mutate({ contentPostId: content.id })}
           disabled={isGenerating}
         >
@@ -767,10 +832,87 @@ Include:
           )}
           Generate Premium Image
         </Button>
-        <span className="text-[10px] text-slate-500">10 credits</span>
+        <p className="text-[10px] text-slate-500">10 credits · Includes caption pack</p>
         {imageStatus === "failed" && metadata?.imageError && (
           <p className="text-[11px] text-red-600 w-full">{metadata.imageError}</p>
         )}
+      </div>
+    );
+  }
+
+  function renderCaptionPack(asset: any, contentPostId: number) {
+    const md = (asset.metadata || {}) as any;
+    const pack = md.captionPack || md;
+    const sections = [
+      { key: "masterCaption", label: "Master Caption", text: pack?.masterCaption },
+      { key: "linkedIn", label: "LinkedIn", text: pack?.linkedIn },
+      { key: "facebook", label: "Facebook", text: pack?.facebook },
+      { key: "instagram", label: "Instagram", text: pack?.instagram },
+      { key: "whatsApp", label: "WhatsApp", text: pack?.whatsApp },
+      { key: "email", label: "Email", text: pack?.email },
+      { key: "hashtags", label: "Hashtags", text: pack?.hashtags },
+      { key: "ctaVariants", label: "CTA Variants", text: pack?.ctaVariants },
+      { key: "outreachDm", label: "Outreach DM", text: pack?.outreachDm },
+    ].filter((s) => typeof s.text === "string" && s.text.trim().length > 0);
+
+    if (!sections.length) return null;
+
+    const copyText = sections.map((s) => `**${s.label}**\n${s.text}`).join("\n\n");
+
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+            <MessageCircle className="w-4 h-4 text-emerald-600" />
+            Caption Pack
+          </h4>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px]"
+              onClick={() => {
+                navigator.clipboard.writeText(copyText);
+                toast.success("Caption pack copied.");
+              }}
+            >
+              <Copy className="w-3 h-3 mr-1" />
+              Copy All
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px]"
+              onClick={() => generateCaptionPackMutation.mutate({ contentPostId })}
+              disabled={generateCaptionPackMutation.isPending}
+            >
+              <Sparkles className="w-3 h-3 mr-1" />
+              Regenerate
+            </Button>
+          </div>
+        </div>
+        <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+          {sections.map((s) => (
+            <div key={s.key} className="rounded-lg border border-slate-100 bg-slate-50 p-2.5">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] font-semibold text-slate-600 uppercase tracking-wide">{s.label}</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-[10px] px-1.5 text-slate-500 hover:text-slate-800"
+                  onClick={() => {
+                    navigator.clipboard.writeText(s.text);
+                    toast.success(`${s.label} copied.`);
+                  }}
+                >
+                  <Copy className="w-3 h-3 mr-1" />
+                  Copy
+                </Button>
+              </div>
+              <p className="text-xs text-slate-700 whitespace-pre-wrap">{s.text}</p>
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -956,10 +1098,13 @@ Include:
   function renderContentCard(content: any) {
     const approved = getApprovalState(content);
     const showConnectGuard = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform) && !isPlatformConnected(content.platform);
+    const isMasterCampaignPost = (content.metadata as any)?.assetKind === "master_campaign_post";
 
     return (
       <Card key={content.id} className="group hover:shadow-md transition-all">
         <CardContent className="p-5">
+          {isMasterCampaignPost && renderMasterImageSection(content)}
+
           <div className="flex items-start justify-between mb-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge
@@ -1035,7 +1180,7 @@ Include:
 
           {renderPremiumBadges(content)}
 
-          {content.type === "social_post" && renderMasterImageSection(content)}
+          {content.type === "social_post" && !isMasterCampaignPost && renderMasterImageSection(content)}
 
           {content.type === "video_concept" && renderVideoBlueprint(content)}
           {content.type === "reel_script" && renderVideoBlueprint(content)}

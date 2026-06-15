@@ -43,6 +43,13 @@
       "when": 1781542151944,
       "tag": "0005_dear_guardsmen",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1781548376131,
+      "tag": "0006_bizarre_gamma_corps",
+      "breakpoints": true
     }
   ]
 }
