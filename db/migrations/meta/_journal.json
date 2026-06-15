@@ -29,6 +29,13 @@
       "when": 1780831759898,
       "tag": "0003_safe_hydra",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1781510827473,
+      "tag": "0004_left_squadron_supreme",
+      "breakpoints": true
     }
   ]
 }
