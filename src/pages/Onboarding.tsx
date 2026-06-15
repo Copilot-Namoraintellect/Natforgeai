@@ -681,6 +681,12 @@ export default function Onboarding() {
         targetCustomer: businessForm.targetCustomer || undefined,
         monthlyBudget: businessForm.monthlyBudget ? Number(businessForm.monthlyBudget) : undefined,
         brandTone: brandForm.brandTone || businessForm.brandTone || undefined,
+        brandColors: brandForm.colorPalette
+          ? brandForm.colorPalette.split(",").map((c) => c.trim()).filter(Boolean)
+          : undefined,
+        visualStyle: brandForm.visualStyle || undefined,
+        brandVoiceNotes: brandForm.brandVoiceNotes || undefined,
+        avoidWords: brandForm.avoidWords || undefined,
         mainGoal: goalForm.primaryGoal || businessForm.mainGoal || undefined,
         whatsappNumber: businessForm.whatsappNumber || undefined,
         preferredPlatforms: businessForm.preferredPlatforms.join(","),

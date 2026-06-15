@@ -13,8 +13,10 @@ import { startPublishingWorker } from "./lib/queue/publishing-worker";
 import { platformConfigs, getFacebookPages, getInstagramAccounts, getLinkedInProfile, getTwitterProfile } from "./lib/integrations/platforms";
 import { exchangeCodeForToken } from "./lib/integrations/oauth";
 import { getDb } from "./queries/connection";
-import { socialIntegrations } from "@db/schema";
+import { socialIntegrations, videoRenderJobs } from "@db/schema";
 import { eq, and } from "drizzle-orm";
+import { completePremiumVideo } from "./lib/creative/service";
+import { CreatifyVideoProvider } from "./lib/creative/providers/creatify-video-provider";
 import { encryptToken, validateEncryption } from "./lib/crypto";
 
 // Validate encryption at startup
@@ -160,6 +162,36 @@ app.post("/api/webhooks/:platform", async (c) => {
     signaturePresent: !!signature,
     payloadKeys: payload ? Object.keys(payload) : null,
   });
+
+  // Creatify video generation webhook
+  if (platform === "creatify") {
+    const providerJobId = payload?.id;
+    if (!providerJobId) {
+      return c.json({ received: false, error: "Missing Creatify job id" }, 400);
+    }
+
+    try {
+      const db = getDb();
+      const [job] = await db
+        .select()
+        .from(videoRenderJobs)
+        .where(eq(videoRenderJobs.renderJobId, String(providerJobId)))
+        .limit(1);
+
+      if (!job) {
+        console.warn(`[Webhook creatify] Job not found | providerJobId=${providerJobId}`);
+        return c.json({ received: false, error: "Job not found" }, 404);
+      }
+
+      const provider = new CreatifyVideoProvider();
+      const result = provider.parseVideoResponse(payload);
+      await completePremiumVideo({ userId: job.userId, providerJobId: String(providerJobId), resultOverride: result });
+      return c.json({ received: true, providerJobId });
+    } catch (err: any) {
+      console.error(`[Webhook creatify] Error processing webhook | providerJobId=${providerJobId} | error="${err.message}"`);
+      return c.json({ received: false, error: err.message }, 500);
+    }
+  }
 
   // Meta (Facebook/Instagram/WhatsApp) signature verification placeholder
   if (platform === "facebook" || platform === "instagram" || platform === "whatsapp") {

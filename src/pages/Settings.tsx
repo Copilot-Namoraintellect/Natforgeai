@@ -187,6 +187,7 @@ export default function Settings() {
   function handleCreateBiz(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
+    const colorInput = (form.get("brandColors") as string) || "";
     createBiz.mutate({
       name: form.get("name") as string,
       description: (form.get("description") as string) || undefined,
@@ -195,6 +196,10 @@ export default function Settings() {
       targetAudience: (form.get("targetAudience") as string) || undefined,
       tone: (form.get("tone") as string) || undefined,
       website: (form.get("website") as string) || undefined,
+      brandColors: colorInput ? colorInput.split(",").map((c) => c.trim()).filter(Boolean) : undefined,
+      visualStyle: (form.get("visualStyle") as string) || undefined,
+      brandVoiceNotes: (form.get("brandVoiceNotes") as string) || undefined,
+      avoidWords: (form.get("avoidWords") as string) || undefined,
     });
   }
 
@@ -202,6 +207,7 @@ export default function Settings() {
     e.preventDefault();
     if (!editBiz) return;
     const form = new FormData(e.currentTarget);
+    const colorInput = (form.get("brandColors") as string) || "";
     updateBiz.mutate({
       id: editBiz.id,
       name: (form.get("name") as string) || undefined,
@@ -211,6 +217,10 @@ export default function Settings() {
       targetAudience: (form.get("targetAudience") as string) || undefined,
       tone: (form.get("tone") as string) || undefined,
       website: (form.get("website") as string) || undefined,
+      brandColors: colorInput ? colorInput.split(",").map((c) => c.trim()).filter(Boolean) : undefined,
+      visualStyle: (form.get("visualStyle") as string) || undefined,
+      brandVoiceNotes: (form.get("brandVoiceNotes") as string) || undefined,
+      avoidWords: (form.get("avoidWords") as string) || undefined,
     });
   }
 
@@ -328,6 +338,22 @@ export default function Settings() {
                   <div>
                     <Label>Website</Label>
                     <Input name="website" placeholder="https://example.com" />
+                  </div>
+                  <div>
+                    <Label>Brand Colours (comma separated)</Label>
+                    <Input name="brandColors" placeholder="#0F172A, #00D4FF, #FFFFFF" />
+                  </div>
+                  <div>
+                    <Label>Visual Style</Label>
+                    <Input name="visualStyle" placeholder="modern, minimal, bold" />
+                  </div>
+                  <div>
+                    <Label>Brand Voice Notes</Label>
+                    <Input name="brandVoiceNotes" placeholder="Short sentences, no slang" />
+                  </div>
+                  <div>
+                    <Label>Words to Avoid</Label>
+                    <Input name="avoidWords" placeholder="cheap, discount, guaranteed" />
                   </div>
                   <Button
                     type="submit"
@@ -550,6 +576,25 @@ export default function Settings() {
               <div>
                 <Label>Website</Label>
                 <Input name="website" defaultValue={editBiz.website || ""} />
+              </div>
+              <div>
+                <Label>Brand Colours (comma separated)</Label>
+                <Input
+                  name="brandColors"
+                  defaultValue={Array.isArray(editBiz.brandColors) ? editBiz.brandColors.join(", ") : ""}
+                />
+              </div>
+              <div>
+                <Label>Visual Style</Label>
+                <Input name="visualStyle" defaultValue={editBiz.visualStyle || ""} />
+              </div>
+              <div>
+                <Label>Brand Voice Notes</Label>
+                <Input name="brandVoiceNotes" defaultValue={editBiz.brandVoiceNotes || ""} />
+              </div>
+              <div>
+                <Label>Words to Avoid</Label>
+                <Input name="avoidWords" defaultValue={editBiz.avoidWords || ""} />
               </div>
               <Button
                 type="submit"

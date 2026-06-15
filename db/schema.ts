@@ -172,6 +172,10 @@ export const businesses = mysqlTable("businesses", {
   targetCustomer: text("targetCustomer"),
   monthlyBudget: int("monthlyBudget"),
   brandTone: varchar("brandTone", { length: 50 }),
+  brandColors: json("brandColors"),
+  visualStyle: varchar("visualStyle", { length: 50 }),
+  brandVoiceNotes: text("brandVoiceNotes"),
+  avoidWords: text("avoidWords"),
   mainGoal: text("mainGoal"),
   socialLinks: json("socialLinks"),
   whatsappNumber: varchar("whatsappNumber", { length: 50 }),
@@ -480,6 +484,9 @@ export const generatedImages = mysqlTable("generated_images", {
   userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
   campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
   businessId: bigint("businessId", { mode: "number", unsigned: true }),
+  contentPostId: bigint("contentPostId", { mode: "number", unsigned: true }),
+  provider: varchar("provider", { length: 50 }).default("openai"),
+  providerJobId: varchar("providerJobId", { length: 255 }),
   prompt: text("prompt").notNull(),
   url: text("url").notNull(),
   aspectRatio: varchar("aspectRatio", { length: 10 }).default("1:1"),
@@ -487,6 +494,9 @@ export const generatedImages = mysqlTable("generated_images", {
   status: mysqlEnum("status", ["pending", "completed", "failed"])
     .default("pending")
     .notNull(),
+  creditsCharged: int("creditsCharged").default(0),
+  providerCostUsd: int("providerCostUsd").default(0),
+  metadata: json("metadata"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -791,6 +801,9 @@ export const videoRenderJobs = mysqlTable("video_render_jobs", {
   contentPostId: bigint("contentPostId", { mode: "number", unsigned: true }),
   provider: varchar("provider", { length: 50 }).default("placeholder").notNull(),
   renderJobId: varchar("renderJobId", { length: 255 }),
+  providerLinkId: varchar("providerLinkId", { length: 255 }),
+  creditsCharged: int("creditsCharged").default(0),
+  providerCostUsd: int("providerCostUsd").default(0),
   renderStatus: mysqlEnum("renderStatus", [
     "queued",
     "rendering",

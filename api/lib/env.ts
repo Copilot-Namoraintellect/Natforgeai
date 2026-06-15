@@ -30,6 +30,22 @@ export const env = {
   redisUrl: process.env.REDIS_URL ?? "",
   videoProvider: process.env.VIDEO_PROVIDER ?? "",
   requireTwoFactor: process.env.REQUIRE_TWO_FACTOR !== "false",
+
+  // Creative generation providers
+  creatifyApiBaseUrl: process.env.CREATIFY_API_BASE_URL ?? "https://api.creatify.ai",
+  creatifyApiId: process.env.CREATIFY_API_ID ?? "",
+  creatifyApiKey: process.env.CREATIFY_API_KEY ?? "",
+  creatifyWebhookUrl: process.env.CREATIFY_WEBHOOK_URL ?? "",
+  heygenApiKey: process.env.HEYGEN_API_KEY ?? "",
+  runwayApiKey: process.env.RUNWAY_API_KEY ?? "",
+
+  // Creative generation credit pricing (NatForgeAI internal credits)
+  premiumImageCredits: parseInt(process.env.PREMIUM_IMAGE_CREDITS || "10", 10),
+  premiumVideoCredits: parseInt(process.env.PREMIUM_VIDEO_CREDITS || "100", 10),
+  premiumHeroPackCredits: parseInt(process.env.PREMIUM_HERO_PACK_CREDITS || "120", 10),
+
+  // Provider cost tracking (USD per Creatify credit; 0 = raw credits only)
+  creatifyCreditUsd: parseFloat(process.env.CREATIFY_CREDIT_USD || "0"),
 };
 
 // Validate Redis in production

@@ -5,6 +5,7 @@ import { generatedImages } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { checkCredits, deductCredits, recordAiUsage } from "./lib/billing/credit-engine";
 import { calculateFixedCost } from "./lib/billing/cost-tracker";
+import { generateMasterImage } from "./lib/creative/service";
 import { TRPCError } from "@trpc/server";
 
 export const imageRouter = createRouter({
@@ -119,18 +120,33 @@ export const imageRouter = createRouter({
       return { success: true };
     }),
 
-  delete: authedQuery
-    .input(z.object({ id: z.number() }))
+  generateForPost: aiActionQuery
+    .input(
+      z.object({
+        contentPostId: z.number(),
+        brandColors: z.array(z.string()).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-      await db
-        .delete(generatedImages)
-        .where(
-          and(
-            eq(generatedImages.id, input.id),
-            eq(generatedImages.userId, ctx.user.id)
-          )
-        );
-      return { success: true };
+      const result = await generateMasterImage({
+        userId: ctx.user.id,
+        contentPostId: input.contentPostId,
+        brandColors: input.brandColors,
+      });
+
+      if (result.status === "failed") {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: result.errorMessage || "Premium image generation failed",
+        });
+      }
+
+      return {
+        success: true,
+        imageUrl: result.imageUrl,
+        provider: result.provider,
+        jobId: result.jobId,
+        creditsCharged: result.creditsCharged,
+      };
     }),
 });

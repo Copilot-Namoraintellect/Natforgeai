@@ -426,7 +426,11 @@ Include:
 
   const renderVideoMutation = trpc.video.renderVideo.useMutation({
     onSuccess: (data) => {
-      toast.success("Video rendered successfully!");
+      if (data.mode === "premium") {
+        toast.success(data.status === "queued" ? "Premium video queued with Creatify." : "Premium video ready!");
+      } else {
+        toast.success("Basic draft video rendered.");
+      }
       utils.content.list.invalidate();
       utils.video.listForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
       if (data.videoUrl) {
@@ -435,6 +439,17 @@ Include:
     },
     onError: (err) => {
       toast.error(err.message || "Failed to render video");
+    },
+  });
+
+  const generateImageMutation = trpc.image.generateForPost.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Premium image generated (${data.creditsCharged} credits).`);
+      utils.content.list.invalidate();
+      utils.image.list.invalidate({ campaignId: Number(urlCampaignId) });
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to generate image");
     },
   });
 
@@ -466,7 +481,9 @@ Include:
   function renderVideoBlueprint(content: any) {
     const metadata = (content.metadata || {}) as any;
     const job = getVideoJobForContent(content.id);
-    const configured = videoConfig?.configured ?? true; // local renderer is always configured
+    const basicConfigured = videoConfig?.basicConfigured ?? true;
+    const premiumConfigured = videoConfig?.premiumConfigured ?? false;
+    const isPremiumVideo = metadata?.isPremiumVideo === true;
     const videoStatus = metadata?.videoStatus || "concept";
     const videoUrl = metadata?.videoUrl || job?.videoUrl || null;
     const approved = getApprovalState(content);
@@ -519,9 +536,9 @@ Include:
             </Badge>
           )}
           {videoStatus === "ready" && videoUrl && (
-            <Badge variant="outline" className="text-emerald-600 border-emerald-200 bg-emerald-50 text-[10px] h-6">
+            <Badge variant="outline" className={`text-[10px] h-6 ${isPremiumVideo ? "text-purple-600 border-purple-200 bg-purple-50" : "text-amber-600 border-amber-200 bg-amber-50"}`}>
               <CheckCircle2 className="w-3 h-3 mr-1" />
-              Ready to Preview
+              {isPremiumVideo ? "Premium Video" : "Basic Draft Video"}
             </Badge>
           )}
           {videoStatus === "failed" && (
@@ -556,46 +573,78 @@ Include:
           </Button>
 
           {!videoUrl && videoStatus === "concept" && (
-            <Button
-              size="sm"
-              className="h-7 text-[11px] bg-rose-600 hover:bg-rose-700 text-white"
-              onClick={() => renderVideoMutation.mutate({ contentPostId: content.id })}
-              disabled={renderVideoMutation.isPending}
-            >
-              {renderVideoMutation.isPending ? (
-                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-              ) : (
+            <>
+              <Button
+                size="sm"
+                className="h-7 text-[11px] bg-purple-600 hover:bg-purple-700 text-white"
+                onClick={() => renderVideoMutation.mutate({ contentPostId: content.id, mode: "premium" })}
+                disabled={renderVideoMutation.isPending || !premiumConfigured}
+                title={premiumConfigured ? "Generate premium AI video (100 credits)" : "Premium video provider not configured"}
+              >
+                {renderVideoMutation.isPending ? (
+                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                ) : (
+                  <Video className="w-3 h-3 mr-1" />
+                )}
+                Generate Premium Video
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50"
+                onClick={() => renderVideoMutation.mutate({ contentPostId: content.id, mode: "basic" })}
+                disabled={renderVideoMutation.isPending || !basicConfigured}
+              >
                 <Video className="w-3 h-3 mr-1" />
-              )}
-              Render Video
-            </Button>
+                Basic Draft Video
+              </Button>
+            </>
           )}
 
           {videoUrl && (
             <>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-[11px]"
-                onClick={() => window.open(videoUrl, "_blank")}
-              >
-                <Video className="w-3 h-3 mr-1" />
-                Preview Video
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-[11px]"
-                onClick={() => {
-                  const a = document.createElement("a");
-                  a.href = videoUrl;
-                  a.download = `${content.title}.mp4`;
-                  a.click();
-                }}
-              >
-                <ExternalLink className="w-3 h-3 mr-1" />
-                Download MP4
-              </Button>
+              <video
+                src={videoUrl}
+                poster={metadata?.thumbnailUrl}
+                controls
+                className="w-full rounded-lg border border-slate-200 max-h-[360px] bg-black"
+              />
+              <div className="flex flex-wrap gap-2 w-full">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-[11px]"
+                  onClick={() => window.open(videoUrl, "_blank")}
+                >
+                  <Video className="w-3 h-3 mr-1" />
+                  Preview Video
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-[11px]"
+                  onClick={() => {
+                    const a = document.createElement("a");
+                    a.href = videoUrl;
+                    a.download = `${content.title}.mp4`;
+                    a.click();
+                  }}
+                >
+                  <ExternalLink className="w-3 h-3 mr-1" />
+                  Download MP4
+                </Button>
+                {isPremiumVideo && (
+                  <Badge variant="outline" className="text-[10px] h-6 border-purple-200 text-purple-700 bg-purple-50">
+                    Premium • {metadata?.videoCreditsCharged ?? 100} credits
+                  </Badge>
+                )}
+                {!isPremiumVideo && (
+                  <Badge variant="outline" className="text-[10px] h-6 border-amber-200 text-amber-700 bg-amber-50">
+                    Basic Draft
+                  </Badge>
+                )}
+              </div>
             </>
           )}
 
@@ -614,10 +663,30 @@ Include:
                 </Badge>
               )}
               {job.renderStatus === "failed" && (
-                <Badge variant="outline" className="text-red-600 border-red-200 bg-red-50 text-[10px] h-6">
-                  <AlertCircle className="w-3 h-3 mr-1" />
-                  Failed
-                </Badge>
+                <>
+                  <Badge variant="outline" className="text-red-600 border-red-200 bg-red-50 text-[10px] h-6">
+                    <AlertCircle className="w-3 h-3 mr-1" />
+                    Failed
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-[11px]"
+                    onClick={() => renderVideoMutation.mutate({ contentPostId: content.id, mode: "premium" })}
+                    disabled={renderVideoMutation.isPending}
+                  >
+                    Retry Premium
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-[11px] border-amber-300 text-amber-700 hover:bg-amber-50"
+                    onClick={() => renderVideoMutation.mutate({ contentPostId: content.id, mode: "basic" })}
+                    disabled={renderVideoMutation.isPending}
+                  >
+                    Basic Draft
+                  </Button>
+                </>
               )}
               {(job.renderStatus === "queued" || job.renderStatus === "rendering") && (
                 <Button
@@ -635,10 +704,72 @@ Include:
           )}
         </div>
 
-        {!configured && !videoUrl && (
+        {!basicConfigured && !premiumConfigured && !videoUrl && (
           <p className="text-[10px] text-slate-400">
             Video rendering is not configured. This is a storyboard only.
           </p>
+        )}
+      </div>
+    );
+  }
+
+  function renderMasterImageSection(content: any) {
+    const metadata = (content.metadata || {}) as any;
+    const imageUrl = metadata?.imageUrl;
+    const imageStatus = metadata?.imageStatus;
+    const isGenerating = imageStatus === "generating" || generateImageMutation.isPending;
+
+    if (imageUrl) {
+      return (
+        <div className="mt-3 space-y-2">
+          <img
+            src={imageUrl}
+            alt="Master campaign visual"
+            className="w-full rounded-lg border border-slate-200 object-cover max-h-[360px]"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline" className="text-[10px] h-6 border-emerald-200 text-emerald-700 bg-emerald-50">
+              <Sparkles className="w-3 h-3 mr-1" />
+              Premium Image
+            </Badge>
+            {metadata?.imageCreditsCharged && (
+              <Badge variant="outline" className="text-[10px] h-6">
+                {metadata.imageCreditsCharged} credits
+              </Badge>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px]"
+              onClick={() => generateImageMutation.mutate({ contentPostId: content.id })}
+              disabled={isGenerating}
+            >
+              <Image className="w-3 h-3 mr-1" />
+              Regenerate
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          className="h-7 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
+          onClick={() => generateImageMutation.mutate({ contentPostId: content.id })}
+          disabled={isGenerating}
+        >
+          {isGenerating ? (
+            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+          ) : (
+            <Image className="w-3 h-3 mr-1" />
+          )}
+          Generate Premium Image
+        </Button>
+        <span className="text-[10px] text-slate-500">10 credits</span>
+        {imageStatus === "failed" && metadata?.imageError && (
+          <p className="text-[11px] text-red-600 w-full">{metadata.imageError}</p>
         )}
       </div>
     );
@@ -693,19 +824,29 @@ Include:
             {metadata.salesAngle}
           </Badge>
         )}
-        {metadata.assetKind === "video_blueprint" && metadata.videoStatus === "concept" && (
+        {metadata.assetKind === "master_video_ad" && metadata.videoStatus === "concept" && (
           <Badge variant="outline" className="text-[10px] h-5 border-amber-200 text-amber-600 bg-amber-50">
             Storyboard
           </Badge>
         )}
-        {metadata.assetKind === "video_blueprint" && metadata.videoStatus === "rendering" && (
+        {metadata.assetKind === "master_video_ad" && metadata.videoStatus === "rendering" && (
           <Badge variant="outline" className="text-[10px] h-5 border-purple-200 text-purple-600 bg-purple-50">
             Rendering
           </Badge>
         )}
-        {metadata.assetKind === "video_blueprint" && metadata.videoStatus === "ready" && metadata.videoUrl && (
+        {metadata.assetKind === "master_video_ad" && metadata.videoStatus === "ready" && metadata.videoUrl && (
+          <Badge variant="outline" className={`text-[10px] h-5 ${metadata.isPremiumVideo ? "border-purple-200 text-purple-600 bg-purple-50" : "border-amber-200 text-amber-600 bg-amber-50"}`}>
+            {metadata.isPremiumVideo ? "Premium Video" : "Basic Draft"}
+          </Badge>
+        )}
+        {metadata.assetKind === "master_campaign_post" && metadata.imageStatus === "generating" && (
+          <Badge variant="outline" className="text-[10px] h-5 border-purple-200 text-purple-600 bg-purple-50">
+            Generating image…
+          </Badge>
+        )}
+        {metadata.assetKind === "master_campaign_post" && metadata.imageStatus === "ready" && metadata.imageUrl && (
           <Badge variant="outline" className="text-[10px] h-5 border-emerald-200 text-emerald-600 bg-emerald-50">
-            Ready to Preview
+            Premium Image
           </Badge>
         )}
       </div>
@@ -893,6 +1034,8 @@ Include:
           )}
 
           {renderPremiumBadges(content)}
+
+          {content.type === "social_post" && renderMasterImageSection(content)}
 
           {content.type === "video_concept" && renderVideoBlueprint(content)}
           {content.type === "reel_script" && renderVideoBlueprint(content)}
