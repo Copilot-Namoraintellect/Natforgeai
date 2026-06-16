@@ -61,13 +61,19 @@ export class OpenAIImageProvider implements ImageProvider {
         prompt: req.prompt,
         n: 1,
         size,
-        quality: "standard",
       };
 
       if (isDallE) {
+        // DALL-E 3 supports quality: standard | hd
+        const dallEQuality = env.openaiImageQuality === "hd" ? "hd" : "standard";
+        body.quality = dallEQuality;
         // DALL-E 3 uses response_format to request base64
         body.response_format = "b64_json";
       } else {
+        // gpt-image-1 supports quality: low | medium | high | auto
+        const gptImageQualities = ["low", "medium", "high", "auto"];
+        const rawQuality = env.openaiImageQuality || "high";
+        body.quality = gptImageQualities.includes(rawQuality) ? rawQuality : "high";
         // gpt-image-1 uses output_format for file format (png/jpeg/webp).
         // Base64 data is returned by default in result.data[0].b64_json.
         const outputFormat = env.openaiImageOutputFormat || "png";
