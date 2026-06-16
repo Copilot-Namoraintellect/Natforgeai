@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent } from "@/components/ui/card";
@@ -101,8 +101,33 @@ export default function Integrations() {
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
-  const { data: integrations } = trpc.integration.getConnectedPlatforms.useQuery();
-  const { data: platformStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
+  const { data: connectedPlatforms } = trpc.integration.getConnectedPlatforms.useQuery();
+  const { data: platformConfigStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
+
+  const integrations = useMemo(
+    () =>
+      connectedPlatforms?.map((i) => ({
+        id: i.id,
+        platform: i.provider,
+        accountName: i.providerAccountName,
+        status: i.status,
+        createdAt: i.createdAt,
+      })) ?? [],
+    [connectedPlatforms]
+  );
+
+  const platformStatus = useMemo(
+    () => [
+      { platform: "facebook", configured: platformConfigStatus?.metaConfigured ?? false },
+      { platform: "instagram", configured: platformConfigStatus?.metaConfigured ?? false },
+      { platform: "linkedin", configured: platformConfigStatus?.linkedinConfigured ?? false },
+      { platform: "tiktok", configured: false },
+      { platform: "twitter", configured: false },
+      { platform: "whatsapp", configured: false },
+      { platform: "email", configured: false },
+    ],
+    [platformConfigStatus]
+  );
 
   // Handle OAuth callback results
   useEffect(() => {
@@ -336,7 +361,10 @@ export default function Integrations() {
                         variant="outline"
                         size="sm"
                         className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                        onClick={() => disconnectMutation.mutate({ platform: platform as any })}
+                        onClick={() =>
+                          integration?.id && disconnectMutation.mutate({ id: integration.id })
+                        }
+                        disabled={disconnectMutation.isPending}
                       >
                         Disconnect
                       </Button>

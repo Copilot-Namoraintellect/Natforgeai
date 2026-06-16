@@ -491,7 +491,11 @@ Admin manages payment receiving methods: Bank Transfer, Stripe, PayPal, Crypto.
 
 ### Preferences Tab
 - Notifications (Coming Soon)
-- Platform Integrations: Instagram, LinkedIn, Facebook (Coming Soon)
+- Platform Integrations: Instagram, LinkedIn, Facebook
+  - Shows connection status and configured-state from environment variables.
+  - Connect button opens the provider OAuth authorization URL in a new tab.
+  - Disconnect removes the stored integration row for the authenticated user.
+  - Tokens are never exposed in the UI.
 
 ---
 
@@ -642,3 +646,11 @@ npm run reset:superadmin     # Reset superadmin password
 | `VITE_FIREBASE_MESSAGING_SENDER_ID` | Firebase messaging |
 | `VITE_FIREBASE_APP_ID` | Firebase app ID |
 | `OWNER_UNION_ID` | Firebase UID that gets auto-promoted to admin |
+| `META_APP_ID` | Meta OAuth app ID (Facebook + Instagram) |
+| `META_APP_SECRET` | Meta OAuth app secret |
+| `META_REDIRECT_URI` | Meta OAuth callback URI (default `https://natforgeai.com/api/oauth/meta/callback`) |
+| `LINKEDIN_CLIENT_ID` | LinkedIn OAuth client ID |
+| `LINKEDIN_CLIENT_SECRET` | LinkedIn OAuth client secret |
+| `LINKEDIN_REDIRECT_URI` | LinkedIn OAuth callback URI (default `https://natforgeai.com/api/oauth/linkedin/callback`) |
+| `ENABLE_PREMIUM_VIDEO` | Enable premium video generation features (`false` by default) |
+| `ENABLE_BASIC_DRAFT_VIDEO` | Enable basic draft video generation features (`false` by default) |

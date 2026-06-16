@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { randomBytes } from "crypto";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { socialIntegrations } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { env } from "./lib/env";
 import {
   getOAuthUrl,
   exchangeCodeForToken,
@@ -19,20 +21,103 @@ import {
 import { setOAuthState, getOAuthState, deleteOAuthState } from "./lib/integrations/oauth-state";
 import { encryptToken, decryptToken } from "./lib/crypto";
 
+function generateOAuthState(): string {
+  return randomBytes(16).toString("hex");
+}
+
 export const integrationRouter = createRouter({
   getPlatformConfigStatus: authedQuery.query(async () => {
-    const oauthStatuses = Object.entries(platformConfigs).map(([platform, config]) => ({
-      platform,
-      configured: !!(config && config.clientId),
-    }));
-    // WhatsApp and Email do not have OAuth flows — always report as not configured
-    return [
-      ...oauthStatuses,
-      { platform: "whatsapp", configured: false },
-      { platform: "email", configured: false },
-    ];
+    return {
+      metaConfigured: !!(env.metaAppId && env.metaAppSecret && env.metaRedirectUri),
+      linkedinConfigured: !!(
+        env.linkedinClientId &&
+        env.linkedinClientSecret &&
+        env.linkedinRedirectUri
+      ),
+    };
   }),
 
+  getConnectedPlatforms: authedQuery.query(async ({ ctx }) => {
+    const db = getDb();
+    return db
+      .select({
+        id: socialIntegrations.id,
+        provider: socialIntegrations.platform,
+        providerAccountName: socialIntegrations.accountName,
+        status: socialIntegrations.status,
+        createdAt: socialIntegrations.createdAt,
+      })
+      .from(socialIntegrations)
+      .where(eq(socialIntegrations.userId, ctx.user.id));
+  }),
+
+  initiateConnection: authedQuery
+    .input(z.object({ provider: z.enum(["meta", "linkedin"]) }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.provider === "meta") {
+        if (!env.metaAppId || !env.metaAppSecret || !env.metaRedirectUri) {
+          return {
+            success: false as const,
+            code: "NOT_CONFIGURED" as const,
+            message: "This connection is not configured yet.",
+          };
+        }
+
+        const state = generateOAuthState();
+        await setOAuthState(state, { userId: ctx.user.id, platform: input.provider });
+
+        const authUrl =
+          `https://www.facebook.com/v18.0/dialog/oauth?` +
+          `client_id=${encodeURIComponent(env.metaAppId)}` +
+          `&redirect_uri=${encodeURIComponent(env.metaRedirectUri)}` +
+          `&scope=${encodeURIComponent(
+            "pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish"
+          )}` +
+          `&state=${encodeURIComponent(state)}`;
+
+        return { success: true as const, authUrl };
+      }
+
+      if (!env.linkedinClientId || !env.linkedinClientSecret || !env.linkedinRedirectUri) {
+        return {
+          success: false as const,
+          code: "NOT_CONFIGURED" as const,
+          message: "This connection is not configured yet.",
+        };
+      }
+
+      const state = generateOAuthState();
+      await setOAuthState(state, { userId: ctx.user.id, platform: input.provider });
+
+      const authUrl =
+        `https://www.linkedin.com/oauth/v2/authorization?` +
+        `response_type=code` +
+        `&client_id=${encodeURIComponent(env.linkedinClientId)}` +
+        `&redirect_uri=${encodeURIComponent(env.linkedinRedirectUri)}` +
+        `&scope=${encodeURIComponent(
+          "r_basicprofile,r_organization_social,w_organization_social,r_ads"
+        )}` +
+        `&state=${encodeURIComponent(state)}`;
+
+      return { success: true as const, authUrl };
+    }),
+
+  disconnectPlatform: authedQuery
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await db
+        .delete(socialIntegrations)
+        .where(
+          and(
+            eq(socialIntegrations.id, input.id),
+            eq(socialIntegrations.userId, ctx.user.id)
+          )
+        );
+      return { success: true as const };
+    }),
+
+  // Legacy OAuth URL helper (used by the dedicated Integrations page for all platforms)
   getOAuthUrl: authedQuery
     .input(
       z.object({
@@ -202,42 +287,6 @@ export const integrationRouter = createRouter({
 
       return { success: true };
     }),
-
-  disconnectPlatform: authedQuery
-    .input(
-      z.object({
-        platform: z.enum([
-          "facebook",
-          "instagram",
-          "linkedin",
-          "tiktok",
-          "twitter",
-          "whatsapp",
-          "email",
-        ]),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-      await db
-        .update(socialIntegrations)
-        .set({ status: "disconnected" })
-        .where(
-          and(
-            eq(socialIntegrations.userId, ctx.user.id),
-            eq(socialIntegrations.platform, input.platform)
-          )
-        );
-      return { success: true };
-    }),
-
-  getConnectedPlatforms: authedQuery.query(async ({ ctx }) => {
-    const db = getDb();
-    return db
-      .select()
-      .from(socialIntegrations)
-      .where(eq(socialIntegrations.userId, ctx.user.id));
-  }),
 
   refreshPlatformToken: authedQuery
     .input(

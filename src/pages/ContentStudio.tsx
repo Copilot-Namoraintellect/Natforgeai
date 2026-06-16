@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useSearchParams, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent } from "@/components/ui/card";
@@ -56,6 +56,9 @@ import {
 } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { toast } from "sonner";
+
+const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
+const ENABLE_BASIC_DRAFT_VIDEO = import.meta.env.VITE_ENABLE_BASIC_DRAFT_VIDEO === "true";
 
 const platforms = [
   { value: "instagram", label: "Instagram", icon: Instagram },
@@ -157,8 +160,18 @@ export default function ContentStudio() {
     { enabled: (contents?.length ?? 0) === 0 }
   );
 
-  const { data: connectedIntegrations } = trpc.integration.getConnectedPlatforms.useQuery();
+  const { data: connectedPlatforms } = trpc.integration.getConnectedPlatforms.useQuery();
   const { data: platformConfigStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
+
+  const connectedIntegrations = useMemo(
+    () =>
+      connectedPlatforms?.map((i) => ({
+        platform: i.provider,
+        accountName: i.providerAccountName,
+        status: i.status,
+      })) ?? [],
+    [connectedPlatforms]
+  );
 
   const strategyPendingApproval = approvals?.find((a) => a.approvalType === "strategy_review");
   const strategyGeneratedCampaign = campaigns?.find((c) => c.workflowState === "strategy_generated");
@@ -293,7 +306,13 @@ export default function ContentStudio() {
     if (!platform) return true;
     const connectable = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
     if (!connectable.includes(platform)) return true;
-    return platformConfigStatus?.find((p) => p.platform === platform)?.configured !== false;
+    if (platform === "facebook" || platform === "instagram") {
+      return platformConfigStatus?.metaConfigured === true;
+    }
+    if (platform === "linkedin") {
+      return platformConfigStatus?.linkedinConfigured === true;
+    }
+    return true;
   }
 
   async function generateWithAI() {
@@ -457,7 +476,7 @@ Include:
 
   const generateImageMutation = trpc.image.generateForPost.useMutation({
     onSuccess: (data) => {
-      toast.success(`Premium image generated (${data.creditsCharged} credits). Review the image and caption pack, then approve or regenerate.`);
+      toast.success(`Premium leaflet generated (${data.creditsCharged} credits). Review the leaflet and caption pack, then approve or regenerate.`);
       utils.content.list.invalidate();
       utils.image.list.invalidate({ campaignId: Number(urlCampaignId) });
       utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
@@ -465,13 +484,13 @@ Include:
     onError: (err) => {
       const message = err.message || "";
       if (message.includes("not configured")) {
-        toast.error("Premium image generation is not configured. Please contact admin.");
+        toast.error("Premium leaflet generation is not configured. Please contact admin.");
       } else if (message.includes("System AI generation limit")) {
         toast.error("System AI generation limit reached. Please contact admin or try again later.");
       } else if (message.includes("400")) {
-        toast.error("We could not generate the premium image. No credits were deducted. Please try again or contact support if the issue continues.");
+        toast.error("We could not generate the premium leaflet. No credits were deducted. Please try again or contact support if the issue continues.");
       } else {
-        toast.error(err.message || "We could not generate the premium image. No credits were deducted. Please try again.");
+        toast.error(err.message || "We could not generate the premium leaflet. No credits were deducted. Please try again.");
       }
     },
   });
@@ -516,6 +535,8 @@ Include:
     const job = getVideoJobForContent(content.id);
     const basicConfigured = videoConfig?.basicConfigured ?? true;
     const premiumConfigured = videoConfig?.premiumConfigured ?? false;
+    const anyVideoEnabled = (ENABLE_PREMIUM_VIDEO && premiumConfigured) || (ENABLE_BASIC_DRAFT_VIDEO && basicConfigured);
+    if (!anyVideoEnabled) return null;
     const isPremiumVideo = metadata?.isPremiumVideo === true;
     const videoStatus = metadata?.videoStatus || "concept";
     const videoUrl = metadata?.videoUrl || job?.videoUrl || null;
@@ -779,10 +800,10 @@ Include:
         <div className="mt-4 space-y-3">
           <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3">
             <p className="text-xs text-emerald-800">
-              Premium leaflet generated. Review the image and caption pack, then approve or regenerate.
+              Premium leaflet generated. Review the leaflet and caption pack, then approve or regenerate.
               {!businessForContext?.logo && (
                 <span className="block mt-1 text-[10px] text-emerald-700/80">
-                  Tip: Add your logo and brand colours in Settings to improve future designs.
+                  Tip: Add your logo in Settings to improve brand accuracy.
                 </span>
               )}
             </p>
@@ -791,7 +812,7 @@ Include:
           <div className="relative group overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
             <img
               src={imageUrl}
-              alt="Master campaign visual"
+              alt="Premium marketing leaflet"
               className="w-full object-contain max-h-[420px]"
             />
             <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
@@ -807,7 +828,7 @@ Include:
                 }}
               >
                 <ExternalLink className="w-3 h-3 mr-1" />
-                Download Image
+                Download Leaflet
               </Button>
             </div>
           </div>
@@ -815,7 +836,7 @@ Include:
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="text-[10px] h-6 border-emerald-200 text-emerald-700 bg-emerald-50">
               <Sparkles className="w-3 h-3 mr-1" />
-              Premium Image
+              Premium Marketing Leaflet
             </Badge>
             {metadata?.imageCreditsCharged && (
               <Badge variant="outline" className="text-[10px] h-6">
@@ -830,7 +851,7 @@ Include:
               disabled={isGenerating}
             >
               <Image className="w-3 h-3 mr-1" />
-              Regenerate Image
+              Regenerate Leaflet
             </Button>
             <Button
               size="sm"
@@ -876,8 +897,8 @@ Include:
         {isGenerating ? (
           <div className="text-center space-y-3 py-4">
             <Loader2 className="w-8 h-8 mx-auto text-[#00D4FF] animate-spin" />
-            <p className="text-sm font-medium text-slate-800">Generating your premium marketing image</p>
-            <p className="text-xs text-slate-500">This may take up to a minute. No credits are deducted until the image is ready.</p>
+            <p className="text-sm font-medium text-slate-800">Generating your premium marketing leaflet</p>
+            <p className="text-xs text-slate-500">This may take up to a minute. No credits are deducted until the leaflet is ready.</p>
           </div>
         ) : (
           <>
@@ -886,9 +907,9 @@ Include:
                 <Image className="w-5 h-5 text-white" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-slate-900">Premium image not created yet</p>
+                <p className="text-sm font-semibold text-slate-900">Premium marketing leaflet not created yet</p>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Click Generate Premium Image to create a ready-to-post marketing leaflet using your approved campaign strategy, brand style and caption pack.
+                  Click Generate Premium Leaflet to create a ready-to-post marketing leaflet using your approved campaign strategy, brand style and caption pack.
                 </p>
               </div>
             </div>
@@ -916,7 +937,7 @@ Include:
                 onClick={() => generate(false)}
               >
                 <Image className="w-3 h-3 mr-1" />
-                Generate Premium Image — 10 credits
+                Generate Premium Leaflet — 10 credits
               </Button>
               <Button
                 size="sm"
@@ -933,7 +954,7 @@ Include:
             {!businessForContext?.logo && (
               <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
                 <p className="text-[11px] text-amber-700">
-                  Add your logo in Settings to improve brand accuracy.
+                  Tip: Add your logo in Settings to improve brand accuracy.
                 </p>
               </div>
             )}
@@ -941,7 +962,7 @@ Include:
         )}
         {imageStatus === "failed" && metadata?.imageError && (
           <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-left">
-            <p className="text-xs font-semibold text-red-700">We could not generate the premium image</p>
+            <p className="text-xs font-semibold text-red-700">We could not generate the premium leaflet</p>
             <p className="text-[11px] text-red-600 mt-0.5">No credits were deducted. Please try again or contact support if the issue continues.</p>
             {typeof metadata.imageError === "string" && metadata.imageError.includes("400") && (
               <p className="text-[10px] text-red-500 mt-1 font-mono">{metadata.imageError}</p>
@@ -955,17 +976,38 @@ Include:
   function renderCaptionPack(asset: any, contentPostId: number) {
     const md = (asset.metadata || {}) as any;
     const pack = md.captionPack || md;
-    const sections = [
-      { key: "masterCaption", label: "Master Caption", text: pack?.masterCaption },
-      { key: "linkedIn", label: "LinkedIn", text: pack?.linkedIn },
-      { key: "facebook", label: "Facebook", text: pack?.facebook },
-      { key: "instagram", label: "Instagram", text: pack?.instagram },
-      { key: "whatsApp", label: "WhatsApp", text: pack?.whatsApp },
-      { key: "email", label: "Email", text: pack?.email },
-      { key: "hashtags", label: "Hashtags", text: pack?.hashtags },
-      { key: "ctaVariants", label: "CTA Variants", text: pack?.ctaVariants },
-      { key: "outreachDm", label: "Outreach DM", text: pack?.outreachDm },
-    ].filter((s) => typeof s.text === "string" && s.text.trim().length > 0);
+
+    const formatArray = (value: unknown): string | undefined => {
+      if (Array.isArray(value)) {
+        const text = value.map((v) => (typeof v === "string" ? v : v?.text)).filter(Boolean).join("\n");
+        return text || undefined;
+      }
+      if (typeof value === "string" && value.trim().length > 0) return value;
+      return undefined;
+    };
+
+    const emailParts = [
+      pack?.emailSubject,
+      pack?.emailPreheader,
+      pack?.emailBody,
+    ].filter((v) => typeof v === "string" && v.trim().length > 0);
+    const emailText = emailParts.length > 0 ? emailParts.join("\n\n") : undefined;
+
+    const sections = (
+      [
+        { key: "masterCaption", label: "Master Social Media Caption", text: pack?.masterCaption },
+        { key: "linkedinCaption", label: "LinkedIn Caption", text: pack?.linkedinCaption },
+        { key: "facebookCaption", label: "Facebook Caption", text: pack?.facebookCaption },
+        { key: "instagramCaption", label: "Instagram Caption", text: pack?.instagramCaption },
+        { key: "whatsappCaption", label: "WhatsApp Message", text: pack?.whatsappCaption },
+        { key: "email", label: "Email Subject + Body", text: emailText },
+        { key: "hashtags", label: "Hashtag Pack", text: formatArray(pack?.hashtags) },
+        { key: "ctaVariations", label: "CTA Variations", text: formatArray(pack?.ctaVariations ?? pack?.ctaVariants) },
+        { key: "outreachDm", label: "Outreach DM", text: pack?.outreachDm },
+      ] as { key: string; label: string; text?: string }[]
+    ).filter((s): s is { key: string; label: string; text: string } =>
+      typeof s.text === "string" && s.text.trim().length > 0
+    );
 
     if (!sections.length) return null;
 
@@ -1061,6 +1103,9 @@ Include:
   function renderPremiumBadges(content: any) {
     const metadata = (content.metadata || {}) as any;
     if (!metadata) return null;
+    const basicConfigured = videoConfig?.basicConfigured ?? true;
+    const premiumConfigured = videoConfig?.premiumConfigured ?? false;
+    const videoEnabled = (ENABLE_PREMIUM_VIDEO && premiumConfigured) || (ENABLE_BASIC_DRAFT_VIDEO && basicConfigured);
     return (
       <div className="flex flex-wrap gap-1.5 mt-2">
         {metadata.funnelStage && (
@@ -1078,29 +1123,29 @@ Include:
             {metadata.salesAngle}
           </Badge>
         )}
-        {metadata.assetKind === "master_video_ad" && metadata.videoStatus === "concept" && (
+        {videoEnabled && metadata.assetKind === "master_video_ad" && metadata.videoStatus === "concept" && (
           <Badge variant="outline" className="text-[10px] h-5 border-amber-200 text-amber-600 bg-amber-50">
             Storyboard
           </Badge>
         )}
-        {metadata.assetKind === "master_video_ad" && metadata.videoStatus === "rendering" && (
+        {videoEnabled && metadata.assetKind === "master_video_ad" && metadata.videoStatus === "rendering" && (
           <Badge variant="outline" className="text-[10px] h-5 border-purple-200 text-purple-600 bg-purple-50">
             Rendering
           </Badge>
         )}
-        {metadata.assetKind === "master_video_ad" && metadata.videoStatus === "ready" && metadata.videoUrl && (
+        {videoEnabled && metadata.assetKind === "master_video_ad" && metadata.videoStatus === "ready" && metadata.videoUrl && (
           <Badge variant="outline" className={`text-[10px] h-5 ${metadata.isPremiumVideo ? "border-purple-200 text-purple-600 bg-purple-50" : "border-amber-200 text-amber-600 bg-amber-50"}`}>
             {metadata.isPremiumVideo ? "Premium Video" : "Basic Draft"}
           </Badge>
         )}
         {metadata.assetKind === "master_campaign_post" && metadata.imageStatus === "generating" && (
           <Badge variant="outline" className="text-[10px] h-5 border-purple-200 text-purple-600 bg-purple-50">
-            Generating image…
+            Generating leaflet…
           </Badge>
         )}
         {metadata.assetKind === "master_campaign_post" && metadata.imageStatus === "ready" && metadata.imageUrl && (
           <Badge variant="outline" className="text-[10px] h-5 border-emerald-200 text-emerald-600 bg-emerald-50">
-            Premium Image
+            Premium Marketing Leaflet
           </Badge>
         )}
       </div>
@@ -1114,9 +1159,12 @@ Include:
     const platformRequiresConnection = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform);
     const showConnectGuard = platformRequiresConnection && !connected;
     const meta = (content.metadata || {}) as any;
+    const basicConfigured = videoConfig?.basicConfigured ?? true;
+    const premiumConfigured = videoConfig?.premiumConfigured ?? false;
+    const videoEnabled = (ENABLE_PREMIUM_VIDEO && premiumConfigured) || (ENABLE_BASIC_DRAFT_VIDEO && basicConfigured);
     const isVideo = content.type === "video_concept" || content.type === "reel_script";
     const videoReady = isVideo && meta.videoStatus === "ready" && meta.videoUrl;
-    const videoBlocked = isVideo && !videoReady;
+    const videoBlocked = videoEnabled && isVideo && !videoReady;
 
     return (
       <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -1485,21 +1533,26 @@ Include:
       return;
     }
 
-    // Frontend guard: check video readiness
-    const videos = filtered?.filter((c) => c.type === "video_concept" || c.type === "reel_script") || [];
-    for (const v of videos) {
-      const meta = (v.metadata || {}) as any;
-      if (meta.videoStatus === "concept" || meta.videoStatus === "rendering") {
-        toast.error("This campaign contains a video concept only. Render the video before publishing.");
-        return;
-      }
-      if (meta.videoStatus === "ready" && !meta.videoUrl) {
-        toast.error("This campaign contains a video concept only. Render the video before publishing.");
-        return;
-      }
-      if (meta.videoStatus === "failed") {
-        toast.error("Video rendering failed. Retry rendering or remove the video before publishing.");
-        return;
+    // Frontend guard: check video readiness (only when video features are enabled)
+    const basicConfigured = videoConfig?.basicConfigured ?? true;
+    const premiumConfigured = videoConfig?.premiumConfigured ?? false;
+    const videoEnabled = (ENABLE_PREMIUM_VIDEO && premiumConfigured) || (ENABLE_BASIC_DRAFT_VIDEO && basicConfigured);
+    if (videoEnabled) {
+      const videos = filtered?.filter((c) => c.type === "video_concept" || c.type === "reel_script") || [];
+      for (const v of videos) {
+        const meta = (v.metadata || {}) as any;
+        if (meta.videoStatus === "concept" || meta.videoStatus === "rendering") {
+          toast.error("This campaign contains a video concept only. Render the video before publishing.");
+          return;
+        }
+        if (meta.videoStatus === "ready" && !meta.videoUrl) {
+          toast.error("This campaign contains a video concept only. Render the video before publishing.");
+          return;
+        }
+        if (meta.videoStatus === "failed") {
+          toast.error("Video rendering failed. Retry rendering or remove the video before publishing.");
+          return;
+        }
       }
     }
 
@@ -1547,8 +1600,8 @@ Include:
         tone: "info",
       },
       creatives_ready: {
-        title: "Campaign content is ready. Review the caption, then generate your premium image.",
-        description: "Your campaign pack is ready. Next step: generate your premium marketing image.",
+        title: "Campaign content is ready. Review the caption, then generate your premium marketing leaflet.",
+        description: "Your campaign pack is ready. Next step: generate your premium marketing leaflet.",
         tone: "warning",
       },
       audience_generating: {
@@ -1558,12 +1611,12 @@ Include:
       },
       audience_ready: {
         title: "Audience refinements ready.",
-        description: "Review the audience recommendations, then generate your premium image.",
+        description: "Review the audience recommendations, then generate your premium marketing leaflet.",
         tone: "success",
       },
       schedule_generated: {
-        title: "Your campaign pack is ready. Next step: generate your premium image.",
-        description: "Click Generate Premium Image below to create a ready-to-post marketing poster.",
+        title: "Your campaign pack is ready. Next step: generate your premium marketing leaflet.",
+        description: "Click Generate Premium Leaflet below to create a ready-to-post marketing leaflet.",
         tone: "warning",
       },
       launch_approval_required: {
@@ -1598,7 +1651,7 @@ Include:
     const items = [
       { label: "Campaign strategy approved", done: !["business_onboarding", "strategy_pending", "strategy_generated"].includes(state) },
       { label: "Caption pack created", done: hasCaptionPack },
-      { label: "Premium image ready", done: hasImage, loading: isImageGenerating, failed: isImageFailed },
+      { label: "Premium leaflet ready", done: hasImage, loading: isImageGenerating, failed: isImageFailed },
       { label: "Approval pending", done: approvalsPending === 0 && allApproved, attention: approvalsPending > 0 },
       { label: "Publishing pending", done: campaignForContext.status === "active" || campaignForContext.status === "completed", attention: !allApproved },
     ];
@@ -1639,13 +1692,16 @@ Include:
   function renderCampaignPack() {
     if (!urlCampaignId || !filtered) return null;
 
-    // Primary assets: exactly one master campaign post and one master video ad
+    // Primary assets: one premium marketing leaflet; video is gated by feature flags
     const masterVisual =
       filtered.find((c) => ((c.metadata as any)?.assetKind === "master_campaign_post")) ||
       filtered.find((c) => c.type === "social_post");
     const video =
       filtered.find((c) => ((c.metadata as any)?.assetKind === "master_video_ad")) ||
       filtered.find((c) => c.type === "video_concept" || c.type === "reel_script");
+    const basicConfigured = videoConfig?.basicConfigured ?? true;
+    const premiumConfigured = videoConfig?.premiumConfigured ?? false;
+    const videoEnabled = (ENABLE_PREMIUM_VIDEO && premiumConfigured) || (ENABLE_BASIC_DRAFT_VIDEO && basicConfigured);
 
     // Supporting assets live in campaignAssets, not as primary content cards
     const adaptations = campaignAssets?.filter((a) => a.assetType === "caption_adaptation") || [];
@@ -1689,7 +1745,7 @@ Include:
                   Campaign Pack
                 </h2>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  {campaignForContext?.name} — 2 primary assets
+                  {campaignForContext?.name} — {videoEnabled && video ? 2 : 1} primary asset{videoEnabled && video ? "s" : ""}
                   {campaignAssets && campaignAssets.length > 0 && (
                     <span> · {campaignAssets.length} supporting asset{campaignAssets.length === 1 ? "" : "s"}</span>
                   )}
@@ -1727,12 +1783,12 @@ Include:
 
         {renderWorkflowGuidance()}
 
-        {/* Master Campaign Post — always expanded, adaptations nested inside */}
+        {/* Premium Marketing Leaflet — always expanded, adaptations nested inside */}
         {masterVisual && (
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
               <Image className="w-4 h-4 text-[#00D4FF]" />
-              Master Campaign Post
+              Premium Marketing Leaflet
             </h3>
             {renderContentCard(masterVisual)}
 
@@ -1784,8 +1840,8 @@ Include:
           </div>
         )}
 
-        {/* Master Video Ad — always expanded */}
-        {video && (
+        {/* Master Video Ad — only when video features are enabled */}
+        {videoEnabled && video && (
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
               <Video className="w-4 h-4 text-rose-500" />
@@ -2497,7 +2553,7 @@ Include:
             ) : (
               <>
                 <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
-                  No content has been generated yet. Review your campaign strategy first, then NatForgeAI can generate sales-focused content.
+                  Your campaign strategy is ready. Next, generate a premium marketing leaflet and social media caption pack.
                 </p>
                 <div className="flex gap-2 flex-wrap justify-center">
                   <Link to="/campaigns">

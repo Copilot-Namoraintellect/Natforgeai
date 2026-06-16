@@ -34,6 +34,20 @@ export const env = {
   videoProvider: process.env.VIDEO_PROVIDER ?? "",
   requireTwoFactor: process.env.REQUIRE_TWO_FACTOR !== "false",
 
+  // Social platform OAuth (Meta / LinkedIn)
+  metaAppId: process.env.META_APP_ID ?? "",
+  metaAppSecret: process.env.META_APP_SECRET ?? "",
+  metaRedirectUri:
+    process.env.META_REDIRECT_URI ?? "https://natforgeai.com/api/oauth/meta/callback",
+  linkedinClientId: process.env.LINKEDIN_CLIENT_ID ?? "",
+  linkedinClientSecret: process.env.LINKEDIN_CLIENT_SECRET ?? "",
+  linkedinRedirectUri:
+    process.env.LINKEDIN_REDIRECT_URI ?? "https://natforgeai.com/api/oauth/linkedin/callback",
+
+  // Video feature flags
+  enablePremiumVideo: process.env.ENABLE_PREMIUM_VIDEO === "true",
+  enableBasicDraftVideo: process.env.ENABLE_BASIC_DRAFT_VIDEO === "true",
+
   // Creative generation providers
   creatifyApiBaseUrl: process.env.CREATIFY_API_BASE_URL ?? "https://api.creatify.ai",
   creatifyApiId: process.env.CREATIFY_API_ID ?? "",

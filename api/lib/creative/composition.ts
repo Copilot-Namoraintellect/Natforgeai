@@ -86,14 +86,12 @@ function buildHeaderSvg(
   const textColor = "#0F172A";
   const accentStripe = brandColor;
   const nameSize = Math.max(22, Math.round(width / 22));
-  const taglineSize = Math.max(12, Math.round(width / 45));
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
   <rect width="${width}" height="${height}" fill="${barColor}" opacity="0.96"/>
   <rect x="0" y="${height - 4}" width="${width}" height="4" fill="${accentStripe}"/>
   <text x="${width - 24}" y="${height / 2 + nameSize / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="700" fill="${textColor}" text-anchor="end">${name}</text>
-  <text x="${width - 24}" y="${height / 2 + nameSize / 3 + taglineSize + 6}" font-family="Arial, Helvetica, sans-serif" font-size="${taglineSize}" font-weight="400" fill="#475569" text-anchor="end">Official brand communication</text>
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }

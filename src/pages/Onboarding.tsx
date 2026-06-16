@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useNavigate, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Button } from "@/components/ui/button";
@@ -24,8 +24,6 @@ import {
   ChevronLeft,
   Globe,
   MapPin,
-  Users,
-  Wallet,
   MessageSquare,
   Check,
   AlertTriangle,
@@ -48,6 +46,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+
+const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
+const ENABLE_BASIC_DRAFT_VIDEO = import.meta.env.VITE_ENABLE_BASIC_DRAFT_VIDEO === "true";
 
 const brandTones = [
   "friendly",
@@ -107,7 +108,7 @@ const campaignGoals = [
 const assetTypes = [
   { key: "logo", label: "Logo / Brand Assets" },
   { key: "product_images", label: "Product Photos" },
-  { key: "product_videos", label: "Product Videos" },
+  ...(ENABLE_BASIC_DRAFT_VIDEO ? [{ key: "product_videos", label: "Product Videos" }] : []),
   { key: "testimonials", label: "Customer Testimonials" },
   { key: "past_ads", label: "Past Ads / Content" },
   { key: "brand_guide", label: "Brand Guidelines" },
@@ -115,7 +116,7 @@ const assetTypes = [
 
 const premiumContentTypes = [
   { key: "social_posts", label: "Social Media Posts" },
-  { key: "product_videos_reels", label: "Product Videos / Reels" },
+  ...(ENABLE_PREMIUM_VIDEO ? [{ key: "product_videos_reels", label: "Product Videos / Reels" }] : []),
   { key: "carousel_ads", label: "Carousel Ads" },
   { key: "whatsapp_promo", label: "WhatsApp Promo Messages" },
   { key: "email_campaigns", label: "Email Campaigns" },
@@ -311,6 +312,10 @@ export default function Onboarding() {
   const [step, setStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [limitBlocked, setLimitBlocked] = useState(false);
+  const [duplicateDialog, setDuplicateDialog] = useState<{ open: boolean; existingId: number | null }>({
+    open: false,
+    existingId: null,
+  });
   const { campaigns: campaignUsage } = useUsage();
 
   const [businessForm, setBusinessForm] = useState({
@@ -321,11 +326,15 @@ export default function Onboarding() {
     location: "",
     productOrService: "",
     targetCustomer: "",
+    targetAudience: "",
     monthlyBudget: "",
     brandTone: "",
     mainGoal: "",
     whatsappNumber: "",
     logo: "",
+    description: "",
+    shortDescription: "",
+    premiumContentPreferences: "",
     preferredPlatforms: [] as string[],
   });
 
@@ -385,7 +394,17 @@ export default function Onboarding() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const { data: platformConfigStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
-  const { data: connectedIntegrations } = trpc.integration.getConnectedPlatforms.useQuery();
+  const { data: connectedPlatforms } = trpc.integration.getConnectedPlatforms.useQuery();
+
+  const connectedIntegrations = useMemo(
+    () =>
+      connectedPlatforms?.map((i) => ({
+        platform: i.provider,
+        accountName: i.providerAccountName,
+        status: i.status,
+      })) ?? [],
+    [connectedPlatforms]
+  );
 
   const createBusiness = trpc.business.create.useMutation({
     onSuccess: () => {
@@ -550,6 +569,46 @@ export default function Onboarding() {
     },
   });
 
+  const completeProfileWithAi = trpc.business.completeProfileWithAi.useMutation({
+    onSuccess: (data) => {
+      if (!data.success || !data.suggestions) {
+        toast.error(data.message || "Could not complete your business profile with AI.");
+        return;
+      }
+      const s = data.suggestions;
+      setBusinessForm((prev) => ({
+        ...prev,
+        description: s.description ?? prev.description,
+        industry: s.industry ?? prev.industry,
+        targetAudience: s.targetAudience ?? prev.targetAudience,
+        productOrService: s.productOrService ?? prev.productOrService,
+        mainGoal: s.mainGoal ?? prev.mainGoal,
+        premiumContentPreferences:
+          typeof s.premiumContentPreferences === "string"
+            ? s.premiumContentPreferences
+            : prev.premiumContentPreferences,
+      }));
+      setBrandForm((prev) => ({
+        ...prev,
+        brandTone: s.brandTone ?? prev.brandTone,
+        colorPalette: Array.isArray(s.brandColors)
+          ? s.brandColors.join(", ")
+          : prev.colorPalette,
+        visualStyle: (s.visualStyle ?? prev.visualStyle) as any,
+        brandVoiceNotes: s.brandVoiceNotes ?? prev.brandVoiceNotes,
+        avoidWords: s.avoidWords ?? prev.avoidWords,
+      }));
+      setGoalForm((prev) => ({
+        ...prev,
+        primaryGoal: s.mainGoal ?? prev.primaryGoal,
+      }));
+      toast.success("AI completed your business profile. Review and continue.");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to complete business profile with AI.");
+    },
+  });
+
   const totalSteps = 6;
   const progress = (step / totalSteps) * 100;
 
@@ -601,11 +660,17 @@ export default function Onboarding() {
   }
 
   function isPlatformConfigured(platform: string) {
-    return platformConfigStatus?.find((p) => p.platform === platform)?.configured === true;
+    if (platform === "facebook" || platform === "instagram") {
+      return platformConfigStatus?.metaConfigured === true;
+    }
+    if (platform === "linkedin") {
+      return platformConfigStatus?.linkedinConfigured === true;
+    }
+    return false;
   }
 
   function isPlatformConnected(platform: string) {
-    return connectedIntegrations?.some(
+    return connectedIntegrations.some(
       (i) => i.platform === platform && i.status === "connected"
     );
   }
@@ -667,7 +732,6 @@ export default function Onboarding() {
     const errors: Record<string, string> = {};
     if (step === 1) {
       if (!businessForm.name.trim()) errors["name"] = "Business name is required";
-      if (!businessForm.industry) errors["industry"] = "Please select an industry";
     }
     if (step === 3) {
       if (!goalForm.primaryGoal) errors["primaryGoal"] = "Please select a primary campaign goal";
@@ -699,56 +763,87 @@ export default function Onboarding() {
     setStep((s) => Math.max(s - 1, 1));
   };
 
+  const buildBusinessPayload = (allowDuplicate = false) => ({
+    name: businessForm.name,
+    description: businessForm.description || businessForm.shortDescription || undefined,
+    website: businessForm.website || undefined,
+    email: businessForm.email || undefined,
+    industry: businessForm.industry || undefined,
+    location: businessForm.location || undefined,
+    productOrService: businessForm.productOrService || assetForm.productDescription || undefined,
+    targetAudience: businessForm.targetAudience || businessForm.targetCustomer || undefined,
+    targetCustomer: businessForm.targetCustomer || undefined,
+    monthlyBudget: businessForm.monthlyBudget ? Number(businessForm.monthlyBudget) : undefined,
+    brandTone: brandForm.brandTone || businessForm.brandTone || undefined,
+    brandColors: brandForm.colorPalette
+      ? brandForm.colorPalette.split(",").map((c) => c.trim()).filter(Boolean)
+      : undefined,
+    visualStyle: brandForm.visualStyle || undefined,
+    brandVoiceNotes: brandForm.brandVoiceNotes || undefined,
+    avoidWords: brandForm.avoidWords || undefined,
+    mainGoal: businessForm.mainGoal || goalForm.primaryGoal || undefined,
+    whatsappNumber: businessForm.whatsappNumber || undefined,
+    logo: businessForm.logo || undefined,
+    preferredPlatforms: businessForm.preferredPlatforms.join(","),
+    premiumContentPreferences: businessForm.premiumContentPreferences || assetForm.premiumContentPreferences.join(","),
+    hasProductVideos: assetForm.selectedAssets.includes("product_videos"),
+    allowDuplicate,
+  });
+
+  const finishOnboarding = async (businessId: number, atLimit: boolean) => {
+    await updateUser.mutateAsync({ onboardingComplete: true });
+
+    if (atLimit) {
+      setLimitBlocked(true);
+      toast.info("Your business profile is saved. Campaign launch is blocked because your plan limit has been reached.");
+      return;
+    }
+
+    await startWorkflow.mutateAsync({
+      businessId,
+      name: `${businessForm.name} Marketing Campaign`,
+      goal: goalForm.primaryGoal || businessForm.mainGoal || "Grow brand awareness and drive conversions",
+      strategyText: strategyForm.mode === "paste" ? strategyForm.strategyText : undefined,
+      approvalMode: automationForm.approvalMode,
+      autoPublish: automationForm.approvalMode === "autonomous",
+    });
+
+    toast.success("Onboarding complete! Welcome to NatForge AI.");
+    navigate("/mission-control");
+  };
+
+  const handleCreateAnyway = async () => {
+    setDuplicateDialog({ open: false, existingId: null });
+    setIsSubmitting(true);
+    try {
+      const atLimit = campaignUsage.atLimit;
+      const businessResult = await createBusiness.mutateAsync(buildBusinessPayload(true));
+      if (!businessResult.success) {
+        toast.error(businessResult.message || "Could not create business profile.");
+        return;
+      }
+      await finishOnboarding(businessResult.id, atLimit);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to complete onboarding");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleComplete = async () => {
     setIsSubmitting(true);
     try {
       const atLimit = campaignUsage.atLimit;
-
-      const businessResult = await createBusiness.mutateAsync({
-        name: businessForm.name,
-        website: businessForm.website || undefined,
-        email: businessForm.email || undefined,
-        industry: businessForm.industry || undefined,
-        location: businessForm.location || undefined,
-        productOrService: businessForm.productOrService || assetForm.productDescription || undefined,
-        targetCustomer: businessForm.targetCustomer || undefined,
-        monthlyBudget: businessForm.monthlyBudget ? Number(businessForm.monthlyBudget) : undefined,
-        brandTone: brandForm.brandTone || businessForm.brandTone || undefined,
-        brandColors: brandForm.colorPalette
-          ? brandForm.colorPalette.split(",").map((c) => c.trim()).filter(Boolean)
-          : undefined,
-        visualStyle: brandForm.visualStyle || undefined,
-        brandVoiceNotes: brandForm.brandVoiceNotes || undefined,
-        avoidWords: brandForm.avoidWords || undefined,
-        mainGoal: goalForm.primaryGoal || businessForm.mainGoal || undefined,
-        whatsappNumber: businessForm.whatsappNumber || undefined,
-        logo: businessForm.logo || undefined,
-        preferredPlatforms: businessForm.preferredPlatforms.join(","),
-        premiumContentPreferences: assetForm.premiumContentPreferences.join(","),
-        hasProductVideos: assetForm.selectedAssets.includes("product_videos"),
-      });
-
-      await updateUser.mutateAsync({ onboardingComplete: true });
-
-      if (atLimit) {
-        setLimitBlocked(true);
-        toast.info("Your business profile is saved. Campaign launch is blocked because your plan limit has been reached.");
+      const businessResult = await createBusiness.mutateAsync(buildBusinessPayload(false));
+      if (!businessResult.success) {
+        if (businessResult.code === "DUPLICATE") {
+          setDuplicateDialog({ open: true, existingId: businessResult.existingId ?? null });
+        } else {
+          toast.error(businessResult.message || "Could not create business profile.");
+        }
         return;
       }
-
-      const businessId = businessResult.id;
-
-      await startWorkflow.mutateAsync({
-        businessId,
-        name: `${businessForm.name} Marketing Campaign`,
-        goal: goalForm.primaryGoal || businessForm.mainGoal || "Grow brand awareness and drive conversions",
-        strategyText: strategyForm.mode === "paste" ? strategyForm.strategyText : undefined,
-        approvalMode: automationForm.approvalMode,
-        autoPublish: automationForm.approvalMode === "autonomous",
-      });
-
-      toast.success("Onboarding complete! Welcome to NatForge AI.");
-      navigate("/mission-control");
+      await finishOnboarding(businessResult.id, atLimit);
     } catch (err: any) {
       toast.error(err.message || "Failed to complete onboarding");
     } finally {
@@ -847,6 +942,16 @@ export default function Onboarding() {
       businessName: businessForm.name || undefined,
       industry: businessForm.industry || undefined,
       location: businessForm.location || undefined,
+    });
+  }
+
+  function handleCompleteProfileWithAi() {
+    completeProfileWithAi.mutate({
+      name: businessForm.name,
+      website: businessForm.website,
+      location: businessForm.location,
+      description: businessForm.shortDescription,
+      logo: businessForm.logo,
     });
   }
 
@@ -990,7 +1095,9 @@ export default function Onboarding() {
           <Building2 className="w-6 h-6 text-[#00D4FF]" />
           <h2 className="text-xl font-semibold text-white">Business Profile</h2>
         </div>
-        <p className="text-sm text-gray-400 -mt-3">Tell us about your business so AI can market it accurately.</p>
+        <p className="text-sm text-gray-400 -mt-3">
+          Add your logo and contact details. NatForgeAI can complete the rest of your business profile with AI.
+        </p>
 
         {aiSuggestions && (
           <div className="flex items-center justify-between p-3 rounded-lg bg-[#00D4FF]/5 border border-[#00D4FF]/20">
@@ -1011,230 +1118,334 @@ export default function Onboarding() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label className="text-gray-300">
-              Business Name *
-              {renderAiBadge("name")}
-            </Label>
-            <Input
-              placeholder="Your business name"
-              value={businessForm.name}
-              onChange={(e) => {
-                setBusinessForm((p) => ({ ...p, name: e.target.value }));
-                if (fieldErrors.name && e.target.value.trim()) setFieldErrors((prev) => { const n = { ...prev }; delete n.name; return n; });
-              }}
-              className={`bg-[#0F172A] border-[#334155] text-white ${fieldErrors.name ? "border-red-500" : ""}`}
-            />
-            {fieldErrors.name && <p className="text-xs text-red-400">{fieldErrors.name}</p>}
-          </div>
-          <div className="space-y-2">
-            <Label className="text-gray-300">Website URL</Label>
-            <div className="relative flex gap-2">
-              <Globe className="absolute left-3 top-2.5 w-4 h-4 text-gray-500 z-10" />
+        {/* Section A: User-provided essentials */}
+        <div className="space-y-4">
+          <h3 className="text-sm font-semibold text-white">A. Your essentials</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label className="text-gray-300">Business Name *</Label>
               <Input
-                placeholder="https://yourbusiness.com"
-                value={businessForm.website}
-                onChange={(e) => setBusinessForm((p) => ({ ...p, website: e.target.value }))}
-                className="bg-[#0F172A] border-[#334155] text-white pl-10 flex-1"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={aiAnalyzing || !businessForm.website}
-                onClick={handleAiAnalyse}
-                className="border-[#334155] text-[#00D4FF] hover:bg-[#00D4FF]/10 h-10 whitespace-nowrap"
-              >
-                {aiAnalyzing ? (
-                  <>
-                    <Sparkles className="w-4 h-4 mr-1 animate-spin" />
-                    Analysing…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4 mr-1" />
-                    AI Analyse
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-gray-300">
-              Industry *
-              {renderAiBadge("industry")}
-            </Label>
-            <Select
-              value={businessForm.industry}
-              onValueChange={(v) => {
-                setBusinessForm((p) => ({ ...p, industry: v }));
-                if (fieldErrors.industry) setFieldErrors((prev) => { const n = { ...prev }; delete n.industry; return n; });
-              }}
-            >
-              <SelectTrigger className={`bg-[#0F172A] border-[#334155] text-white ${fieldErrors.industry ? "border-red-500" : ""}`}>
-                <SelectValue placeholder="Select industry" />
-              </SelectTrigger>
-              <SelectContent className="bg-[#1E293B] border-[#334155]">
-                {industries.map((i) => (
-                  <SelectItem key={i} value={i.toLowerCase()} className="text-white">
-                    {i}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {fieldErrors.industry && <p className="text-xs text-red-400">{fieldErrors.industry}</p>}
-          </div>
-          <div className="space-y-2 relative" ref={locationRef}>
-            <Label className="text-gray-300">
-              Location
-              {renderAiBadge("location")}
-            </Label>
-            <div className="relative">
-              <MapPin className="absolute left-3 top-2.5 w-4 h-4 text-gray-500 z-10" />
-              <Input
-                placeholder="Start typing a city…"
-                value={locationQuery}
-                onChange={(e) => handleLocationInput(e.target.value)}
-                onFocus={() => locationQuery.length >= 2 && setShowLocationSuggestions(locationSuggestions.length > 0)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setShowLocationSuggestions(false);
+                placeholder="Your business name"
+                value={businessForm.name}
+                onChange={(e) => {
+                  setBusinessForm((p) => ({ ...p, name: e.target.value }));
+                  if (fieldErrors.name && e.target.value.trim()) setFieldErrors((prev) => { const n = { ...prev }; delete n.name; return n; });
                 }}
-                className="bg-[#0F172A] border-[#334155] text-white pl-10"
+                className={`bg-[#0F172A] border-[#334155] text-white ${fieldErrors.name ? "border-red-500" : ""}`}
+              />
+              {fieldErrors.name && <p className="text-xs text-red-400">{fieldErrors.name}</p>}
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Logo</Label>
+              <Input
+                type="file"
+                accept="image/*"
+                disabled={uploadAsset.isPending}
+                onChange={(e) => handleLogoUpload(e.target.files?.[0] ?? null)}
+                className="bg-[#0F172A] border-[#334155] text-white file:text-white"
+              />
+              {uploadAsset.isPending && <p className="text-xs text-gray-500">Uploading logo…</p>}
+              {businessForm.logo && (
+                <div className="flex items-center gap-3 mt-2">
+                  <img
+                    src={businessForm.logo}
+                    alt="Logo preview"
+                    className="w-12 h-12 object-contain rounded border border-[#334155]"
+                  />
+                  <span className="text-xs text-gray-400">Logo uploaded</span>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Website URL</Label>
+              <div className="relative flex gap-2">
+                <Globe className="absolute left-3 top-2.5 w-4 h-4 text-gray-500 z-10" />
+                <Input
+                  placeholder="https://yourbusiness.com"
+                  value={businessForm.website}
+                  onChange={(e) => setBusinessForm((p) => ({ ...p, website: e.target.value }))}
+                  className="bg-[#0F172A] border-[#334155] text-white pl-10 flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={aiAnalyzing || !businessForm.website}
+                  onClick={handleAiAnalyse}
+                  className="border-[#334155] text-[#00D4FF] hover:bg-[#00D4FF]/10 h-10 whitespace-nowrap"
+                >
+                  {aiAnalyzing ? (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-1 animate-spin" />
+                      Analysing…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-1" />
+                      AI Analyse
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Email</Label>
+              <Input
+                type="email"
+                placeholder="hello@yourbusiness.com"
+                value={businessForm.email}
+                onChange={(e) => setBusinessForm((p) => ({ ...p, email: e.target.value }))}
+                className="bg-[#0F172A] border-[#334155] text-white"
               />
             </div>
-            {showLocationSuggestions && (
-              <div className="absolute z-20 w-full mt-1 bg-[#1E293B] border border-[#334155] rounded-lg shadow-xl max-h-48 overflow-y-auto">
-                {locationSuggestions.map((city) => (
-                  <button
-                    key={city}
-                    type="button"
-                    onMouseDown={(e) => { e.preventDefault(); selectLocation(city); }}
-                    className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-[#0F172A] hover:text-white transition-colors"
-                  >
-                    {city}
-                  </button>
-                ))}
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">WhatsApp Number</Label>
+              <p className="text-xs text-gray-500">Example: +27 82 123 4567 or +1 415 555 0100</p>
+              <div className="flex gap-2">
+                <Select value={countryCode} onValueChange={setCountryCode}>
+                  <SelectTrigger className="w-[150px] bg-[#0F172A] border-[#334155] text-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[#1E293B] border-[#334155]">
+                    {countryCodes.map((c) => (
+                      <SelectItem key={`${c.code}-${c.country}`} value={c.code} className="text-white">
+                        {c.flag} {c.code}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="relative flex-1">
+                  <MessageSquare className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
+                  <Input
+                    placeholder={countryCode === "+27" ? "82 123 4567" : "Phone number"}
+                    value={whatsappLocal}
+                    onChange={(e) => handleWhatsappInput(e.target.value)}
+                    className={`bg-[#0F172A] border-[#334155] text-white pl-10 ${businessForm.whatsappNumber && !validateWhatsapp() ? "border-red-500" : ""}`}
+                  />
+                </div>
               </div>
-            )}
+              {businessForm.whatsappNumber && !validateWhatsapp() && (
+                <p className="text-xs text-red-400">Enter a valid WhatsApp number including country code.</p>
+              )}
+            </div>
+
+            <div className="space-y-2 relative" ref={locationRef}>
+              <Label className="text-gray-300">Location</Label>
+              <div className="relative">
+                <MapPin className="absolute left-3 top-2.5 w-4 h-4 text-gray-500 z-10" />
+                <Input
+                  placeholder="Start typing a city…"
+                  value={locationQuery}
+                  onChange={(e) => handleLocationInput(e.target.value)}
+                  onFocus={() => locationQuery.length >= 2 && setShowLocationSuggestions(locationSuggestions.length > 0)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setShowLocationSuggestions(false);
+                  }}
+                  className="bg-[#0F172A] border-[#334155] text-white pl-10"
+                />
+              </div>
+              {showLocationSuggestions && (
+                <div className="absolute z-20 w-full mt-1 bg-[#1E293B] border border-[#334155] rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                  {locationSuggestions.map((city) => (
+                    <button
+                      key={city}
+                      type="button"
+                      onMouseDown={(e) => { e.preventDefault(); selectLocation(city); }}
+                      className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-[#0F172A] hover:text-white transition-colors"
+                    >
+                      {city}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
 
-        <div className="space-y-2">
-          <Label className="text-gray-300">
-            Product or Service
-            {renderAiBadge("productOrService")}
-          </Label>
-          <Textarea
-            placeholder="What do you sell or offer?"
-            value={businessForm.productOrService}
-            onChange={(e) => setBusinessForm((p) => ({ ...p, productOrService: e.target.value }))}
-            className="bg-[#0F172A] border-[#334155] text-white"
-          />
-          {renderAiSuggestionChip("productOrService")}
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label className="text-gray-300">Email</Label>
-            <Input
-              type="email"
-              placeholder="hello@yourbusiness.com"
-              value={businessForm.email}
-              onChange={(e) => setBusinessForm((p) => ({ ...p, email: e.target.value }))}
+            <Label className="text-gray-300">Short description (optional)</Label>
+            <Textarea
+              placeholder="A brief description of your business"
+              value={businessForm.shortDescription}
+              onChange={(e) => setBusinessForm((p) => ({ ...p, shortDescription: e.target.value }))}
               className="bg-[#0F172A] border-[#334155] text-white"
             />
           </div>
-          <div className="space-y-2">
-            <Label className="text-gray-300">Logo</Label>
-            <Input
-              type="file"
-              accept="image/*"
-              disabled={uploadAsset.isPending}
-              onChange={(e) => handleLogoUpload(e.target.files?.[0] ?? null)}
-              className="bg-[#0F172A] border-[#334155] text-white file:text-white"
-            />
-            {uploadAsset.isPending && (
-              <p className="text-xs text-gray-500">Uploading logo…</p>
-            )}
-            {businessForm.logo && (
-              <div className="flex items-center gap-3 mt-2">
-                <img
-                  src={businessForm.logo}
-                  alt="Logo preview"
-                  className="w-12 h-12 object-contain rounded border border-[#334155]"
-                />
-                <span className="text-xs text-gray-400">Logo uploaded</span>
-              </div>
-            )}
-          </div>
         </div>
 
-        <div className="space-y-2">
-          <Label className="text-gray-300">
-            Target Customer
-            {renderAiBadge("targetCustomer")}
-          </Label>
-          <div className="relative">
-            <Users className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
-            <Input
-              placeholder="e.g. Young professionals aged 25-45"
-              value={businessForm.targetCustomer}
-              onChange={(e) => setBusinessForm((p) => ({ ...p, targetCustomer: e.target.value }))}
-              className="bg-[#0F172A] border-[#334155] text-white pl-10"
-            />
+        {/* Section B: AI-completed business profile */}
+        <div className="space-y-4 pt-6 border-t border-[#334155]">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <h3 className="text-sm font-semibold text-white">B. AI-completed business profile</h3>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={completeProfileWithAi.isPending}
+              onClick={handleCompleteProfileWithAi}
+              className="border-[#00D4FF]/30 text-[#00D4FF] hover:bg-[#00D4FF]/10 h-10"
+            >
+              {completeProfileWithAi.isPending ? (
+                <>
+                  <Sparkles className="w-4 h-4 mr-1 animate-spin" />
+                  Completing…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 mr-1" />
+                  Complete Business Profile with AI
+                </>
+              )}
+            </Button>
           </div>
-          {renderAiSuggestionChip("targetCustomer")}
-        </div>
 
-        <div className="space-y-2">
-          <Label className="text-gray-300">Estimated Monthly Marketing Spend</Label>
-          <p className="text-xs text-gray-500">
-            This guides the AI strategy for ads and campaign promotion. It is not charged by NatForgeAI.
-          </p>
-          <div className="relative">
-            <Wallet className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
-            <Input
-              type="number"
-              placeholder="e.g. $50, $250, $1,000"
-              value={businessForm.monthlyBudget}
-              onChange={(e) => setBusinessForm((p) => ({ ...p, monthlyBudget: e.target.value }))}
-              className="bg-[#0F172A] border-[#334155] text-white pl-10"
-            />
-          </div>
-        </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2 md:col-span-2">
+              <Label className="text-gray-300">Description</Label>
+              <Textarea
+                placeholder="AI will suggest a business description"
+                value={businessForm.description}
+                onChange={(e) => setBusinessForm((p) => ({ ...p, description: e.target.value }))}
+                className="bg-[#0F172A] border-[#334155] text-white min-h-[100px]"
+              />
+            </div>
 
-        <div className="space-y-2">
-          <Label className="text-gray-300">WhatsApp Number</Label>
-          <p className="text-xs text-gray-500">
-            Example: +27 82 123 4567 or +1 415 555 0100
-          </p>
-          <div className="flex gap-2">
-            <Select value={countryCode} onValueChange={setCountryCode}>
-              <SelectTrigger className="w-[150px] bg-[#0F172A] border-[#334155] text-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-[#1E293B] border-[#334155]">
-                {countryCodes.map((c) => (
-                  <SelectItem key={`${c.code}-${c.country}`} value={c.code} className="text-white">
-                    {c.flag} {c.code}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="relative flex-1">
-              <MessageSquare className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
+            <div className="space-y-2">
+              <Label className="text-gray-300">Industry</Label>
+              <Select
+                value={businessForm.industry}
+                onValueChange={(v) => setBusinessForm((p) => ({ ...p, industry: v }))}
+              >
+                <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
+                  <SelectValue placeholder="Select industry" />
+                </SelectTrigger>
+                <SelectContent className="bg-[#1E293B] border-[#334155]">
+                  {industries.map((i) => (
+                    <SelectItem key={i} value={i.toLowerCase()} className="text-white">
+                      {i}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Target Audience</Label>
               <Input
-                placeholder={countryCode === "+27" ? "82 123 4567" : "Phone number"}
-                value={whatsappLocal}
-                onChange={(e) => handleWhatsappInput(e.target.value)}
-                className={`bg-[#0F172A] border-[#334155] text-white pl-10 ${businessForm.whatsappNumber && !validateWhatsapp() ? "border-red-500" : ""}`}
+                placeholder="e.g. Young professionals aged 25-45"
+                value={businessForm.targetAudience}
+                onChange={(e) => setBusinessForm((p) => ({ ...p, targetAudience: e.target.value }))}
+                className="bg-[#0F172A] border-[#334155] text-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Brand Tone</Label>
+              <Select
+                value={brandForm.brandTone}
+                onValueChange={(v) => {
+                  setBrandForm((p) => ({ ...p, brandTone: v }));
+                  setBusinessForm((p) => ({ ...p, brandTone: v }));
+                }}
+              >
+                <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
+                  <SelectValue placeholder="Select tone" />
+                </SelectTrigger>
+                <SelectContent className="bg-[#1E293B] border-[#334155]">
+                  {brandTones.map((t) => (
+                    <SelectItem key={t} value={t} className="text-white">
+                      {t.charAt(0).toUpperCase() + t.slice(1)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Product or Service</Label>
+              <Textarea
+                placeholder="What do you sell or offer?"
+                value={businessForm.productOrService}
+                onChange={(e) => setBusinessForm((p) => ({ ...p, productOrService: e.target.value }))}
+                className="bg-[#0F172A] border-[#334155] text-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Brand Colors</Label>
+              <Input
+                placeholder="e.g. Navy blue, gold, white"
+                value={brandForm.colorPalette}
+                onChange={(e) => setBrandForm((p) => ({ ...p, colorPalette: e.target.value }))}
+                className="bg-[#0F172A] border-[#334155] text-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Visual Style</Label>
+              <Select
+                value={brandForm.visualStyle}
+                onValueChange={(v) => setBrandForm((p) => ({ ...p, visualStyle: v as any }))}
+              >
+                <SelectTrigger className="bg-[#0F172A] border-[#334155] text-white">
+                  <SelectValue placeholder="Select style" />
+                </SelectTrigger>
+                <SelectContent className="bg-[#1E293B] border-[#334155]">
+                  {visualStyles.map((s) => (
+                    <SelectItem key={s.value} value={s.value} className="text-white">
+                      {s.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Main Goal</Label>
+              <Input
+                placeholder="e.g. Increase sales and revenue"
+                value={businessForm.mainGoal}
+                onChange={(e) => {
+                  setBusinessForm((p) => ({ ...p, mainGoal: e.target.value }));
+                  setGoalForm((p) => ({ ...p, primaryGoal: e.target.value }));
+                }}
+                className="bg-[#0F172A] border-[#334155] text-white"
+              />
+            </div>
+
+            <div className="space-y-2 md:col-span-2">
+              <Label className="text-gray-300">Brand Voice Notes</Label>
+              <Textarea
+                placeholder="Notes on how the brand should sound"
+                value={brandForm.brandVoiceNotes}
+                onChange={(e) => setBrandForm((p) => ({ ...p, brandVoiceNotes: e.target.value }))}
+                className="bg-[#0F172A] border-[#334155] text-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Words or Phrases to Avoid</Label>
+              <Input
+                placeholder="e.g. cheap, discount, guaranteed"
+                value={brandForm.avoidWords}
+                onChange={(e) => setBrandForm((p) => ({ ...p, avoidWords: e.target.value }))}
+                className="bg-[#0F172A] border-[#334155] text-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-gray-300">Premium Content Preferences</Label>
+              <Input
+                placeholder="e.g. Social posts, email campaigns"
+                value={businessForm.premiumContentPreferences}
+                onChange={(e) => setBusinessForm((p) => ({ ...p, premiumContentPreferences: e.target.value }))}
+                className="bg-[#0F172A] border-[#334155] text-white"
               />
             </div>
           </div>
-          {businessForm.whatsappNumber && !validateWhatsapp() && (
-            <p className="text-xs text-red-400">Enter a valid WhatsApp number including country code.</p>
-          )}
         </div>
       </div>
     );
@@ -2065,6 +2276,40 @@ export default function Onboarding() {
             </div>
           </CardContent>
         </Card>
+
+        <Dialog open={duplicateDialog.open} onOpenChange={(open) => { if (!open) setDuplicateDialog({ open: false, existingId: null }); }}>
+          <DialogContent className="border-[#334155] bg-[#1E293B] text-white">
+            <DialogHeader>
+              <DialogTitle className="text-white">Business already exists</DialogTitle>
+              <DialogDescription className="text-gray-300">
+                A business with this name already exists. Do you want to edit the existing business instead?
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-4">
+              <Button
+                variant="outline"
+                onClick={() => setDuplicateDialog({ open: false, existingId: null })}
+                className="border-[#334155] text-white hover:bg-[#334155]"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => navigate("/settings?tab=businesses")}
+                className="border-[#334155] text-white hover:bg-[#334155]"
+              >
+                Edit existing
+              </Button>
+              <Button
+                onClick={handleCreateAnyway}
+                disabled={isSubmitting}
+                className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white hover:opacity-90"
+              >
+                {isSubmitting ? "Creating…" : "Create anyway"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
