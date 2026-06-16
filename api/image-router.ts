@@ -125,6 +125,8 @@ export const imageRouter = createRouter({
       z.object({
         contentPostId: z.number(),
         brandColors: z.array(z.string()).optional(),
+        creativeType: z.enum(["leaflet", "poster", "service_menu", "offer_advert", "event_announcement"]).default("leaflet"),
+        strongerBrandFit: z.boolean().default(false),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -132,6 +134,8 @@ export const imageRouter = createRouter({
         userId: ctx.user.id,
         contentPostId: input.contentPostId,
         brandColors: input.brandColors,
+        creativeType: input.creativeType,
+        strongerBrandFit: input.strongerBrandFit,
       });
 
       if (result.status === "failed") {

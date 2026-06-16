@@ -5,6 +5,7 @@ import { getDb } from "./queries/connection";
 import { businesses, users } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { defaultModel } from "./lib/agents/openai";
+import { storeUploadedAsset } from "./lib/creative/storage";
 
 export const businessRouter = createRouter({
   list: authedQuery.query(async ({ ctx }) => {
@@ -41,6 +42,8 @@ export const businessRouter = createRouter({
         location: z.string().optional(),
         targetAudience: z.string().optional(),
         tone: z.string().optional(),
+        logo: z.string().optional(),
+        email: z.string().optional(),
         website: z.string().optional(),
         productOrService: z.string().optional(),
         targetCustomer: z.string().optional(),
@@ -68,6 +71,8 @@ export const businessRouter = createRouter({
         location: input.location,
         targetAudience: input.targetAudience,
         tone: input.tone ?? "professional",
+        logo: input.logo,
+        email: input.email,
         website: input.website,
         productOrService: input.productOrService,
         targetCustomer: input.targetCustomer,
@@ -105,6 +110,8 @@ export const businessRouter = createRouter({
         location: z.string().optional(),
         targetAudience: z.string().optional(),
         tone: z.string().optional(),
+        logo: z.string().optional(),
+        email: z.string().optional(),
         website: z.string().optional(),
         productOrService: z.string().optional(),
         targetCustomer: z.string().optional(),
@@ -143,6 +150,23 @@ export const businessRouter = createRouter({
       }
 
       return { success: true };
+    }),
+
+  uploadAsset: authedQuery
+    .input(
+      z.object({
+        base64: z.string().min(1),
+        fileName: z.string().min(1),
+        assetType: z.enum(["logo", "reference_image", "product_photo"]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const stored = await storeUploadedAsset(input.base64, {
+        userId: ctx.user.id,
+        assetType: input.assetType,
+        fileName: input.fileName,
+      });
+      return { url: stored.publicUrl, path: stored.localPath };
     }),
 
   delete: authedQuery

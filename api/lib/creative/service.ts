@@ -6,13 +6,16 @@ import { contentPosts, campaigns, businesses, generatedImages, videoRenderJobs, 
 import { checkCredits, deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
 import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider } from "./registry";
-import { downloadAndStoreImage, storeBase64Image, downloadAndStoreVideo } from "./storage";
+import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
+import { composeBrandedLeafletImage } from "./composition";
 import {
   getPremiumImageCredits,
   getPremiumVideoCredits,
   creatifyCreditsToUsd,
   usdToMicroCents,
 } from "./costs";
+import { buildPremiumImagePrompt, getImageAspectRatio } from "./prompts/image-prompt";
+import type { CreativeType } from "./prompts/image-prompt";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
 import type {
@@ -65,61 +68,6 @@ function mapAspectRatioToOpenAiSize(ratio?: string): "1024x1024" | "1024x1792" |
     default:
       return "1024x1024";
   }
-}
-
-function mapPlatformToAspectRatio(platform?: string): string {
-  if (!platform) return "1:1";
-  const p = platform.toLowerCase();
-  if (p.includes("instagram")) return "1:1";
-  if (p.includes("facebook")) return "4:5";
-  if (p.includes("linkedin")) return "1.91:1";
-  if (p.includes("tiktok") || p.includes("reel")) return "9:16";
-  if (p.includes("twitter") || p.includes("x")) return "16:9";
-  return "1:1";
-}
-
-// ─── Prompt assembly ───
-function buildImagePrompt(opts: {
-  business: any;
-  campaign: any;
-  post: any;
-  brandColors?: string[];
-}): string {
-  const { business, campaign, post } = opts;
-  const meta = (post.metadata || {}) as any;
-
-  const brandColors = opts.brandColors?.length
-    ? opts.brandColors
-    : (business.brandColors as string[] | undefined) || [];
-
-  const lines = [
-    `Create a premium, conversion-focused social media image for ${business.name}.`,
-    `Business: ${business.name}`,
-    business.industry ? `Industry: ${business.industry}` : "",
-    business.location ? `Location: ${business.location}` : "",
-    business.website ? `Website: ${business.website}` : "",
-    business.brandTone ? `Brand tone: ${business.brandTone}` : "",
-    brandColors.length ? `Brand colours: ${brandColors.join(", ")}` : "",
-    business.visualStyle ? `Visual style: ${business.visualStyle}` : "",
-    campaign.primaryOutcome ? `Primary outcome: ${campaign.primaryOutcome}` : "",
-    campaign.targetBuyer || campaign.targetAudience
-      ? `Target buyer: ${campaign.targetBuyer || campaign.targetAudience}`
-      : "",
-    campaign.mainPainPoint ? `Main pain point: ${campaign.mainPainPoint}` : "",
-    campaign.productOrService ? `Product/service: ${campaign.productOrService}` : "",
-    campaign.offerDetails ? `Offer: ${campaign.offerDetails}` : "",
-    campaign.preferredCta || post.cta ? `CTA: ${campaign.preferredCta || post.cta}` : "",
-    campaign.excludedOffers ? `Do NOT include: ${campaign.excludedOffers}` : "",
-    campaign.referenceStyle ? `Reference style: ${campaign.referenceStyle}` : "",
-    campaign.contentStyle ? `Content style: ${campaign.contentStyle}` : "",
-    post.title ? `Campaign post title: ${post.title}` : "",
-    post.hook ? `Hook: ${post.hook}` : "",
-    post.caption ? `Caption idea: ${post.caption}` : "",
-    meta.visualPrompt ? `Visual direction: ${meta.visualPrompt}` : "",
-    "Design rules: clean layout, readable typography, no invented discounts or fake promotions, consistent brand colours if provided, single clear CTA, professional marketing-ad quality.",
-  ];
-
-  return lines.filter(Boolean).join("\n");
 }
 
 function buildVideoRequest(opts: {
@@ -185,10 +133,14 @@ export async function generateMasterImage({
   userId,
   contentPostId,
   brandColors,
+  creativeType = "leaflet",
+  strongerBrandFit = false,
 }: {
   userId: number;
   contentPostId: number;
   brandColors?: string[];
+  creativeType?: CreativeType;
+  strongerBrandFit?: boolean;
 }): Promise<ImageResult & { imageUrl?: string; creditsCharged?: number }> {
   const db = getDb();
 
@@ -246,8 +198,8 @@ export async function generateMasterImage({
     campaign = {};
   }
 
-  const aspectRatio = mapPlatformToAspectRatio(post.platform || "Instagram");
-  const prompt = buildImagePrompt({ business, campaign, post, brandColors });
+  const aspectRatio = getImageAspectRatio(creativeType, post.platform || "Instagram");
+  const prompt = buildPremiumImagePrompt({ business, campaign, post, brandColors, creativeType, strongerBrandFit });
 
   console.log(`[CreativeService] Generating premium image | userId=${userId} | contentPostId=${contentPostId} | provider=${provider.name}`);
 
@@ -305,23 +257,48 @@ export async function generateMasterImage({
     return { ...result, errorMessage };
   }
 
-  // Store locally from base64 or URL
-  let stored;
+  // Decode raw generated image into a buffer
+  let rawBuffer: Buffer;
   try {
     if (result.imageBase64) {
-      stored = await storeBase64Image(result.imageBase64, {
-        campaignId: post.campaignId ?? undefined,
-        prefix: "master-post",
-        extension: result.extension || "png",
-      });
+      rawBuffer = Buffer.from(result.imageBase64, "base64");
     } else if (result.imageUrl) {
-      stored = await downloadAndStoreImage(result.imageUrl, {
-        campaignId: post.campaignId ?? undefined,
-        prefix: "master-post",
-      });
+      const imgResponse = await fetch(result.imageUrl);
+      if (!imgResponse.ok) {
+        throw new Error(`Failed to download generated image: ${imgResponse.status}`);
+      }
+      rawBuffer = Buffer.from(await imgResponse.arrayBuffer());
     } else {
       throw new Error("No image URL or base64 data received");
     }
+  } catch (decodeErr: any) {
+    console.error(`[CreativeService] Failed to decode generated image | userId=${userId} | error="${decodeErr.message}"`);
+    return { ...result, status: "failed", errorMessage: `Generated image could not be decoded: ${decodeErr.message}` };
+  }
+
+  // Compose deterministic brand overlay (logo + real contact details + CTA)
+  let composedBuffer = rawBuffer;
+  try {
+    composedBuffer = await composeBrandedLeafletImage(rawBuffer, {
+      business,
+      campaign,
+      post,
+      creativeType,
+      offer: campaign.offerDetails,
+      cta: campaign.preferredCta || post.cta,
+    });
+  } catch (composeErr: any) {
+    console.warn(`[CreativeService] Brand overlay failed, using raw image | userId=${userId} | error="${composeErr.message}"`);
+  }
+
+  // Store locally
+  let stored;
+  try {
+    stored = await storeImageBuffer(composedBuffer, {
+      campaignId: post.campaignId ?? undefined,
+      prefix: "master-post",
+      extension: result.extension || "png",
+    });
   } catch (storageErr: any) {
     console.error(`[CreativeService] Failed to store image | userId=${userId} | error="${storageErr.message}"`);
     return { ...result, status: "failed", errorMessage: `Generated image could not be stored: ${storageErr.message}` };
@@ -399,6 +376,7 @@ export async function generateMasterImage({
         imageGeneratedAt: new Date().toISOString(),
         imageError: null,
         imageCreditsCharged: cost,
+        imageExtension: result.extension || "png",
       },
     })
     .where(eq(contentPosts.id, post.id));
@@ -467,13 +445,26 @@ export async function generateCaptionPack({
   if (!campaign) campaign = {};
 
   const brandColors = (business.brandColors as string[] | undefined) || [];
-  const prompt = `You are a senior conversion copywriter for a local marketing agency. Write a commercially specific, ready-to-post "Caption Pack" for the campaign below. The copy must sound like it was written for THIS exact business, not a generic template.
+
+  const isPrintShop =
+    `${business.name || ""} ${business.industry || ""} ${business.productOrService || ""} ${campaign.productOrService || ""}`.toLowerCase()
+      .includes("print") ||
+    `${business.productOrService || ""} ${campaign.productOrService || ""}`.toLowerCase()
+      .match(/print|copy|courier|business card|flyer|poster|banner/);
+
+  const serviceCallouts = isPrintShop
+    ? "Printing & Copying, Business Cards & Flyers, Posters & Banners, Courier Services, Graduation Gifts, Document Support, Photo Prints, Branding & Stationery"
+    : (campaign.productOrService || business.productOrService || "your core service");
+
+  const prompt = `You are a senior conversion copywriter for a local marketing agency. Write a commercially specific, ready-to-post "Caption Pack" that matches the premium leaflet/poster image just generated for this campaign. The copy must support the same message as the image and sound like it was written for THIS exact business.
 
 BUSINESS:
 - Name: ${business.name || "N/A"}
 - Industry: ${business.industry || "N/A"}
 - Location: ${business.location || "N/A"}
 - Website: ${business.website || "N/A"}
+- WhatsApp: ${business.whatsappNumber || "N/A"}
+- Email: ${business.email || "N/A"}
 - Brand tone: ${business.brandTone || business.tone || "professional"}
 - Brand colours: ${brandColors.join(", ") || "not specified"}
 - Visual style: ${business.visualStyle || "not specified"}
@@ -484,9 +475,9 @@ CAMPAIGN BRIEF:
 - Primary outcome: ${campaign.primaryOutcome || "N/A"}
 - Target buyer: ${campaign.targetBuyer || campaign.targetAudience || "N/A"}
 - Main pain point: ${campaign.mainPainPoint || "N/A"}
-- Product/service: ${campaign.productOrService || business.productOrService || "N/A"}
+- Product/service being promoted: ${campaign.productOrService || business.productOrService || "N/A"}
 - Offer: ${campaign.offerDetails || "None — do not invent offers or discounts"}
-- Preferred CTA: ${campaign.preferredCta || post.cta || "N/A"}
+- Preferred CTA: ${campaign.preferredCta || post.cta || "Request a Quote Today"}
 - Exclusions (NEVER use): ${campaign.excludedOffers || business.avoidWords || "None specified"}
 - Reference style: ${campaign.referenceStyle || "N/A"}
 - Content style: ${campaign.contentStyle || "N/A"}
@@ -496,6 +487,9 @@ MASTER POST:
 - Hook: ${post.hook || "N/A"}
 - Caption: ${post.caption || "N/A"}
 - CTA: ${post.cta || "N/A"}
+
+SERVICE CALLOUTS TO SUPPORT (use where relevant):
+${serviceCallouts}
 
 COPY RULES:
 1. NEVER use generic motivational phrases like "Unleash creativity this winter", "Winter vibes are here", "Join the revolution", "Unlock your potential", "Discover the best" or "Transform your future".
@@ -508,6 +502,7 @@ COPY RULES:
 8. Hashtags should be a focused mix of core, local and niche tags (8–12 total). Include location-based tags if a location is provided.
 9. CTA variations must be distinct and platform-appropriate.
 10. Outreach DM should be short, warm and direct — one sentence of context plus a clear ask.
+11. The caption pack must NOT contradict the image offer/CTA or invent a different promotion.
 
 OUTPUT FORMAT — return ONLY a single JSON object with these exact keys:
 {

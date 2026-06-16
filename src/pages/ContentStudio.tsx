@@ -101,6 +101,15 @@ export default function ContentStudio() {
   const [pendingActions, setPendingActions] = useState<Set<PendingActionKey>>(new Set());
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["masterVisual", "masterVideo"]));
+  const [imageCreativeType, setImageCreativeType] = useState<"leaflet" | "poster" | "service_menu" | "offer_advert" | "event_announcement">("leaflet");
+
+  const IMAGE_CREATIVE_TYPE_OPTIONS = [
+    { value: "leaflet", label: "Leaflet / Pamphlet" },
+    { value: "poster", label: "Social media poster" },
+    { value: "service_menu", label: "Service menu" },
+    { value: "offer_advert", label: "Offer advert" },
+    { value: "event_announcement", label: "Event announcement" },
+  ];
 
   const utils = trpc.useUtils();
   const listInput = (() => {
@@ -122,6 +131,10 @@ export default function ContentStudio() {
   const { data: campaignForContext } = trpc.campaign.get.useQuery(
     { id: Number(urlCampaignId) },
     { enabled: !!urlCampaignId }
+  );
+  const { data: businessForContext } = trpc.business.get.useQuery(
+    { id: campaignForContext?.businessId ?? 0 },
+    { enabled: !!campaignForContext?.businessId }
   );
   const { data: postCountForCampaign } = trpc.content.countForCampaign.useQuery(
     { campaignId: Number(urlCampaignId) },
@@ -754,10 +767,27 @@ Include:
     const captionPack = campaignAssets?.find(
       (a) => a.assetType === "caption_pack" && (a.metadata as any)?.contentPostId === content.id
     );
+    const generate = (strongerBrandFit = false) =>
+      generateImageMutation.mutate({
+        contentPostId: content.id,
+        creativeType: imageCreativeType,
+        strongerBrandFit,
+      });
 
     if (imageUrl) {
       return (
         <div className="mt-4 space-y-3">
+          <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3">
+            <p className="text-xs text-emerald-800">
+              Premium leaflet generated. Review the image and caption pack, then approve or regenerate.
+              {!businessForContext?.logo && (
+                <span className="block mt-1 text-[10px] text-emerald-700/80">
+                  Tip: Add your logo and brand colours in Settings to improve future designs.
+                </span>
+              )}
+            </p>
+          </div>
+
           <div className="relative group overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
             <img
               src={imageUrl}
@@ -772,7 +802,7 @@ Include:
                 onClick={() => {
                   const a = document.createElement("a");
                   a.href = imageUrl;
-                  a.download = `${content.title || "campaign"}-image.png`;
+                  a.download = `${content.title || "campaign"}-image.${metadata?.imageExtension || "png"}`;
                   a.click();
                 }}
               >
@@ -796,11 +826,21 @@ Include:
               size="sm"
               variant="outline"
               className="h-7 text-[11px]"
-              onClick={() => generateImageMutation.mutate({ contentPostId: content.id })}
+              onClick={() => generate(false)}
               disabled={isGenerating}
             >
               <Image className="w-3 h-3 mr-1" />
               Regenerate Image
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px] border-purple-300 text-purple-700 hover:bg-purple-50"
+              onClick={() => generate(true)}
+              disabled={isGenerating}
+            >
+              <Sparkles className="w-3 h-3 mr-1" />
+              Regenerate with Stronger Brand Fit
             </Button>
             {!captionPack && (
               <Button
@@ -819,6 +859,12 @@ Include:
               </Button>
             )}
           </div>
+
+          {businessForContext?.logo && (
+            <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md p-2">
+              Logo placement may need manual review. OpenAI cannot always place logos precisely.
+            </p>
+          )}
 
           {captionPack && renderCaptionPack(captionPack, content.id)}
         </div>
@@ -842,21 +888,55 @@ Include:
               <div>
                 <p className="text-sm font-semibold text-slate-900">Premium image not created yet</p>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Click Generate Premium Image to create a ready-to-post marketing poster using your approved campaign strategy, brand style and caption pack.
+                  Click Generate Premium Image to create a ready-to-post marketing leaflet using your approved campaign strategy, brand style and caption pack.
                 </p>
               </div>
             </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">Creative format</Label>
+              <Select value={imageCreativeType} onValueChange={(v) => setImageCreativeType(v as any)}>
+                <SelectTrigger className="w-full h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {IMAGE_CREATIVE_TYPE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 size="sm"
                 className="h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white"
-                onClick={() => generateImageMutation.mutate({ contentPostId: content.id })}
+                onClick={() => generate(false)}
               >
                 <Image className="w-3 h-3 mr-1" />
                 Generate Premium Image — 10 credits
               </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-[12px] border-purple-300 text-purple-700 hover:bg-purple-50"
+                onClick={() => generate(true)}
+              >
+                <Sparkles className="w-3 h-3 mr-1" />
+                Stronger Brand Fit
+              </Button>
               <span className="text-[10px] text-slate-500">Includes caption pack</span>
             </div>
+
+            {!businessForContext?.logo && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
+                <p className="text-[11px] text-amber-700">
+                  Add your logo in Settings to improve brand accuracy.
+                </p>
+              </div>
+            )}
           </>
         )}
         {imageStatus === "failed" && metadata?.imageError && (

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -157,6 +157,13 @@ export default function Settings() {
   const { user } = useAuth();
   const [bizOpen, setBizOpen] = useState(false);
   const [editBiz, setEditBiz] = useState<any>(null);
+  const [createLogoUrl, setCreateLogoUrl] = useState<string | null>(null);
+  const [editLogoUrl, setEditLogoUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEditLogoUrl(editBiz?.logo || null);
+  }, [editBiz]);
+
   const utils = trpc.useUtils();
 
   const { data: businesses } = trpc.business.list.useQuery();
@@ -184,6 +191,14 @@ export default function Settings() {
     },
   });
 
+  const uploadAsset = trpc.business.uploadAsset.useMutation({
+    onSuccess: (data) => {
+      toast.success("Logo uploaded");
+      return data;
+    },
+    onError: (err) => toast.error(err.message || "Logo upload failed"),
+  });
+
   function handleCreateBiz(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
@@ -196,6 +211,10 @@ export default function Settings() {
       targetAudience: (form.get("targetAudience") as string) || undefined,
       tone: (form.get("tone") as string) || undefined,
       website: (form.get("website") as string) || undefined,
+      logo: (form.get("logo") as string) || undefined,
+      email: (form.get("email") as string) || undefined,
+      whatsappNumber: (form.get("whatsappNumber") as string) || undefined,
+      productOrService: (form.get("productOrService") as string) || undefined,
       brandColors: colorInput ? colorInput.split(",").map((c) => c.trim()).filter(Boolean) : undefined,
       visualStyle: (form.get("visualStyle") as string) || undefined,
       brandVoiceNotes: (form.get("brandVoiceNotes") as string) || undefined,
@@ -217,11 +236,40 @@ export default function Settings() {
       targetAudience: (form.get("targetAudience") as string) || undefined,
       tone: (form.get("tone") as string) || undefined,
       website: (form.get("website") as string) || undefined,
+      logo: (form.get("logo") as string) || undefined,
+      email: (form.get("email") as string) || undefined,
+      whatsappNumber: (form.get("whatsappNumber") as string) || undefined,
+      productOrService: (form.get("productOrService") as string) || undefined,
       brandColors: colorInput ? colorInput.split(",").map((c) => c.trim()).filter(Boolean) : undefined,
       visualStyle: (form.get("visualStyle") as string) || undefined,
       brandVoiceNotes: (form.get("brandVoiceNotes") as string) || undefined,
       avoidWords: (form.get("avoidWords") as string) || undefined,
     });
+  }
+
+  async function handleLogoFileChange(
+    file: File | null,
+    setUrl: (url: string | null) => void
+  ) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please upload an image file");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      const base64 = result.split(",")[1] || "";
+      uploadAsset.mutate(
+        { base64, fileName: file.name, assetType: "logo" },
+        {
+          onSuccess: (data) => {
+            setUrl(data.url);
+          },
+        }
+      );
+    };
+    reader.readAsDataURL(file);
   }
 
   return (
@@ -338,6 +386,43 @@ export default function Settings() {
                   <div>
                     <Label>Website</Label>
                     <Input name="website" placeholder="https://example.com" />
+                  </div>
+                  <div>
+                    <Label>Email</Label>
+                    <Input name="email" type="email" placeholder="hello@example.com" />
+                  </div>
+                  <div>
+                    <Label>WhatsApp Number</Label>
+                    <Input name="whatsappNumber" placeholder="+27 82 000 0000" />
+                  </div>
+                  <div>
+                    <Label>Product or Service</Label>
+                    <Input name="productOrService" placeholder="e.g. same-day printing, custom T-shirts" />
+                  </div>
+                  <div>
+                    <Label>Logo</Label>
+                    <Input
+                      type="file"
+                      accept="image/*"
+                      disabled={uploadAsset.isPending}
+                      onChange={(e) =>
+                        handleLogoFileChange(e.target.files?.[0] ?? null, setCreateLogoUrl)
+                      }
+                    />
+                    <input type="hidden" name="logo" value={createLogoUrl || ""} />
+                    {uploadAsset.isPending && (
+                      <p className="text-xs text-muted-foreground mt-1">Uploading logo…</p>
+                    )}
+                    {createLogoUrl && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <img
+                          src={createLogoUrl}
+                          alt="Logo preview"
+                          className="w-12 h-12 object-contain rounded border"
+                        />
+                        <span className="text-xs text-muted-foreground">Logo uploaded</span>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <Label>Brand Colours (comma separated)</Label>
@@ -576,6 +661,43 @@ export default function Settings() {
               <div>
                 <Label>Website</Label>
                 <Input name="website" defaultValue={editBiz.website || ""} />
+              </div>
+              <div>
+                <Label>Email</Label>
+                <Input name="email" type="email" defaultValue={editBiz.email || ""} />
+              </div>
+              <div>
+                <Label>WhatsApp Number</Label>
+                <Input name="whatsappNumber" defaultValue={editBiz.whatsappNumber || ""} />
+              </div>
+              <div>
+                <Label>Product or Service</Label>
+                <Input name="productOrService" defaultValue={editBiz.productOrService || ""} />
+              </div>
+              <div>
+                <Label>Logo</Label>
+                <Input
+                  type="file"
+                  accept="image/*"
+                  disabled={uploadAsset.isPending}
+                  onChange={(e) =>
+                    handleLogoFileChange(e.target.files?.[0] ?? null, setEditLogoUrl)
+                  }
+                />
+                <input type="hidden" name="logo" value={editLogoUrl || ""} />
+                {uploadAsset.isPending && (
+                  <p className="text-xs text-muted-foreground mt-1">Uploading logo…</p>
+                )}
+                {editLogoUrl && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <img
+                      src={editLogoUrl}
+                      alt="Logo preview"
+                      className="w-12 h-12 object-contain rounded border"
+                    />
+                    <span className="text-xs text-muted-foreground">Logo uploaded</span>
+                  </div>
+                )}
               </div>
               <div>
                 <Label>Brand Colours (comma separated)</Label>

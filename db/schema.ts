@@ -167,6 +167,7 @@ export const businesses = mysqlTable("businesses", {
   targetAudience: text("targetAudience"),
   tone: varchar("tone", { length: 50 }).default("professional"),
   logo: text("logo"),
+  email: varchar("email", { length: 255 }),
   website: varchar("website", { length: 500 }),
   productOrService: text("productOrService"),
   targetCustomer: text("targetCustomer"),

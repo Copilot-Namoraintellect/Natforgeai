@@ -316,6 +316,7 @@ export default function Onboarding() {
   const [businessForm, setBusinessForm] = useState({
     name: "",
     website: "",
+    email: "",
     industry: "",
     location: "",
     productOrService: "",
@@ -324,6 +325,7 @@ export default function Onboarding() {
     brandTone: "",
     mainGoal: "",
     whatsappNumber: "",
+    logo: "",
     preferredPlatforms: [] as string[],
   });
 
@@ -389,6 +391,14 @@ export default function Onboarding() {
     onSuccess: () => {
       utils.business.list.invalidate();
     },
+  });
+
+  const uploadAsset = trpc.business.uploadAsset.useMutation({
+    onSuccess: (data) => {
+      toast.success("Logo uploaded");
+      return data;
+    },
+    onError: (err) => toast.error(err.message || "Logo upload failed"),
   });
 
   const updateUser = trpc.auth.updateMe.useMutation({
@@ -625,6 +635,28 @@ export default function Onboarding() {
     setBusinessForm((p) => ({ ...p, whatsappNumber: formatted.trim() }));
   }
 
+  function handleLogoUpload(file: File | null) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please upload an image file");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      const base64 = result.split(",")[1] || "";
+      uploadAsset.mutate(
+        { base64, fileName: file.name, assetType: "logo" },
+        {
+          onSuccess: (data) => {
+            setBusinessForm((p) => ({ ...p, logo: data.url }));
+          },
+        }
+      );
+    };
+    reader.readAsDataURL(file);
+  }
+
   function validateWhatsapp() {
     const full = businessForm.whatsappNumber;
     if (!full) return true;
@@ -675,6 +707,7 @@ export default function Onboarding() {
       const businessResult = await createBusiness.mutateAsync({
         name: businessForm.name,
         website: businessForm.website || undefined,
+        email: businessForm.email || undefined,
         industry: businessForm.industry || undefined,
         location: businessForm.location || undefined,
         productOrService: businessForm.productOrService || assetForm.productDescription || undefined,
@@ -689,6 +722,7 @@ export default function Onboarding() {
         avoidWords: brandForm.avoidWords || undefined,
         mainGoal: goalForm.primaryGoal || businessForm.mainGoal || undefined,
         whatsappNumber: businessForm.whatsappNumber || undefined,
+        logo: businessForm.logo || undefined,
         preferredPlatforms: businessForm.preferredPlatforms.join(","),
         premiumContentPreferences: assetForm.premiumContentPreferences.join(","),
         hasProductVideos: assetForm.selectedAssets.includes("product_videos"),
@@ -1098,6 +1132,42 @@ export default function Onboarding() {
             className="bg-[#0F172A] border-[#334155] text-white"
           />
           {renderAiSuggestionChip("productOrService")}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label className="text-gray-300">Email</Label>
+            <Input
+              type="email"
+              placeholder="hello@yourbusiness.com"
+              value={businessForm.email}
+              onChange={(e) => setBusinessForm((p) => ({ ...p, email: e.target.value }))}
+              className="bg-[#0F172A] border-[#334155] text-white"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label className="text-gray-300">Logo</Label>
+            <Input
+              type="file"
+              accept="image/*"
+              disabled={uploadAsset.isPending}
+              onChange={(e) => handleLogoUpload(e.target.files?.[0] ?? null)}
+              className="bg-[#0F172A] border-[#334155] text-white file:text-white"
+            />
+            {uploadAsset.isPending && (
+              <p className="text-xs text-gray-500">Uploading logo…</p>
+            )}
+            {businessForm.logo && (
+              <div className="flex items-center gap-3 mt-2">
+                <img
+                  src={businessForm.logo}
+                  alt="Logo preview"
+                  className="w-12 h-12 object-contain rounded border border-[#334155]"
+                />
+                <span className="text-xs text-gray-400">Logo uploaded</span>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="space-y-2">
