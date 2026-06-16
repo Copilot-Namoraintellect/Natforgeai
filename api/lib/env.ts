@@ -20,7 +20,7 @@ export const env = {
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   openaiImageModel: process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-1",
-  openaiImageOutputFormat: process.env.OPENAI_IMAGE_OUTPUT_FORMAT ?? "b64_json",
+  openaiImageOutputFormat: process.env.OPENAI_IMAGE_OUTPUT_FORMAT ?? "png",
   tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY ?? "",
   smtpHost: process.env.SMTP_HOST ?? "",
   smtpPort: parseInt(process.env.SMTP_PORT || "587"),

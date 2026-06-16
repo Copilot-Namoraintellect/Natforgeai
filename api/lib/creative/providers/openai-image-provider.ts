@@ -68,8 +68,10 @@ export class OpenAIImageProvider implements ImageProvider {
         // DALL-E 3 uses response_format to request base64
         body.response_format = "b64_json";
       } else {
-        // gpt-image-1 uses output_format
-        body.output_format = env.openaiImageOutputFormat || "b64_json";
+        // gpt-image-1 uses output_format for file format (png/jpeg/webp).
+        // Base64 data is returned by default in result.data[0].b64_json.
+        const outputFormat = env.openaiImageOutputFormat || "png";
+        body.output_format = ["png", "jpeg", "webp"].includes(outputFormat) ? outputFormat : "png";
       }
 
       const response = await fetch("https://api.openai.com/v1/images/generations", {
@@ -116,6 +118,7 @@ export class OpenAIImageProvider implements ImageProvider {
         status: "completed",
         imageUrl,
         imageBase64: b64,
+        extension: isDallE ? "png" : (body.output_format as string),
         rawResponse,
       };
     } catch (err: any) {

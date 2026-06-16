@@ -312,6 +312,7 @@ export async function generateMasterImage({
       stored = await storeBase64Image(result.imageBase64, {
         campaignId: post.campaignId ?? undefined,
         prefix: "master-post",
+        extension: result.extension || "png",
       });
     } else if (result.imageUrl) {
       stored = await downloadAndStoreImage(result.imageUrl, {

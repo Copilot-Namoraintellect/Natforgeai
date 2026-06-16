@@ -13,6 +13,7 @@ export interface ImageResult {
   status: ProviderStatus;
   imageUrl?: string;
   imageBase64?: string;
+  extension?: string;
   errorMessage?: string;
   provider?: string;
   providerJobId?: string;
