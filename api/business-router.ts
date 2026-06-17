@@ -7,6 +7,11 @@ import { businesses, users } from "@db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { defaultModel } from "./lib/agents/openai";
 import { storeUploadedAsset } from "./lib/creative/storage";
+import {
+  crawlWebsitePages,
+  extractBusinessEvidence,
+  buildWebsiteAnalysisPrompt,
+} from "./lib/website-analyser";
 
 type OperationName =
   | "business.list"
@@ -192,6 +197,20 @@ export const businessRouter = createRouter({
           };
         }
 
+        // Auto-analyse website to build structured evidence for downstream gates.
+        let websiteEvidence: unknown = null;
+        if (input.website) {
+          try {
+            const pages = await crawlWebsitePages(input.website, { maxPages: 8, timeoutMs: 5000 });
+            const homepage = pages[0];
+            if (homepage?.fetched) {
+              websiteEvidence = extractBusinessEvidence(pages);
+            }
+          } catch (analyseErr: any) {
+            console.warn(`[businessRouter.create] Website analysis failed: ${analyseErr.message}`);
+          }
+        }
+
         const [biz] = await db.insert(businesses).values({
           userId: ctx.user.id,
           name: input.name,
@@ -217,8 +236,9 @@ export const businessRouter = createRouter({
           preferredPlatforms: input.preferredPlatforms,
           premiumContentPreferences: input.premiumContentPreferences,
           hasProductVideos: input.hasProductVideos,
+          websiteEvidence,
           onboardingComplete: true,
-        });
+        } as any);
 
         await db
           .update(users)
@@ -272,6 +292,26 @@ export const businessRouter = createRouter({
       try {
         const db = getDb();
         const { id, ...data } = input;
+
+        // Re-analyse website if the URL changed.
+        if (data.website) {
+          try {
+            const [current] = await db
+              .select({ website: businesses.website })
+              .from(businesses)
+              .where(and(eq(businesses.id, id), eq(businesses.userId, ctx.user.id)))
+              .limit(1);
+            if (current?.website !== data.website) {
+              const pages = await crawlWebsitePages(data.website, { maxPages: 8, timeoutMs: 5000 });
+              if (pages[0]?.fetched) {
+                (data as any).websiteEvidence = extractBusinessEvidence(pages);
+              }
+            }
+          } catch (analyseErr: any) {
+            console.warn(`[businessRouter.update] Website re-analysis failed: ${analyseErr.message}`);
+          }
+        }
+
         await db
           .update(businesses)
           .set(data)
@@ -357,98 +397,43 @@ export const businessRouter = createRouter({
         businessName: z.string().optional(),
         industry: z.string().optional(),
         location: z.string().optional(),
+        businessId: z.number().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       try {
         let url = input.websiteUrl.trim();
         if (!/^https?:\/\//i.test(url)) {
           url = "https://" + url;
         }
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
+        const pages = await crawlWebsitePages(url, { maxPages: 10, timeoutMs: 6000 });
+        const homepage = pages[0];
 
-        let html: string;
-        try {
-          const res = await fetch(url, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-              Accept: "text/html",
-            },
-            signal: controller.signal,
-          });
-          clearTimeout(timeout);
-          if (!res.ok) {
-            return {
-              success: false,
-              error: "FETCH_FAILED",
-              message: `We could not reach this website (status ${res.status}). You can continue manually.`,
-            };
-          }
-          html = await res.text();
-        } catch (fetchErr: any) {
-          clearTimeout(timeout);
+        if (!homepage || !homepage.fetched) {
           return {
             success: false,
             error: "FETCH_FAILED",
-            message: "We could not analyse this website. You can continue manually.",
+            message: "We could not reach this website. You can continue manually.",
           };
         }
 
-        const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-        const title = titleMatch ? titleMatch[1].trim() : "";
+        const evidence = extractBusinessEvidence(pages);
 
-        const metaDescMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)
-          || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
-        const metaDesc = metaDescMatch ? metaDescMatch[1].trim() : "";
-
-        const ogTitleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
-          || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
-        const ogTitle = ogTitleMatch ? ogTitleMatch[1].trim() : "";
-
-        const ogDescMatch = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)
-          || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i);
-        const ogDesc = ogDescMatch ? ogDescMatch[1].trim() : "";
-
-        const h1Matches = [...html.matchAll(/<h1[^>]*>([^<]*)<\/h1>/gi)].map(m => m[1].trim()).filter(Boolean);
-        const h2Matches = [...html.matchAll(/<h2[^>]*>([^<]*)<\/h2>/gi)].map(m => m[1].trim()).filter(Boolean);
-
-        let text = html
-          .replace(/<script[\s\S]*?<\/script>/gi, " ")
-          .replace(/<style[\s\S]*?<\/style>/gi, " ")
-          .replace(/<nav[\s\S]*?<\/nav>/gi, " ")
-          .replace(/<footer[\s\S]*?<\/footer>/gi, " ")
-          .replace(/<header[\s\S]*?<\/header>/gi, " ")
-          .replace(/<aside[\s\S]*?<\/aside>/gi, " ")
-          .replace(/<[^>]+>/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-
-        if (text.length > 4000) {
-          text = text.slice(0, 4000) + "...";
+        // Low confidence gate: ask the user to confirm instead of guessing.
+        if (evidence.confidence < 0.5) {
+          return {
+            success: false,
+            error: "LOW_CONFIDENCE",
+            message: "We could not confidently determine what this business does from the website. Please confirm your products/services manually.",
+            evidence,
+          };
         }
 
-        const contextParts = [
-          input.businessName ? `Business Name: ${input.businessName}` : "",
-          input.industry ? `Industry: ${input.industry}` : "",
-          input.location ? `Location: ${input.location}` : "",
-          title ? `Page Title: ${title}` : "",
-          metaDesc ? `Meta Description: ${metaDesc}` : "",
-          ogTitle ? `OG Title: ${ogTitle}` : "",
-          ogDesc ? `OG Description: ${ogDesc}` : "",
-          h1Matches.length ? `Headings H1: ${h1Matches.join(" | ")}` : "",
-          h2Matches.length ? `Headings H2: ${h2Matches.slice(0, 6).join(" | ")}` : "",
-          `Visible Text: ${text}`,
-        ].filter(Boolean);
-
-        const prompt = `Analyse the following website content and return structured marketing insights for a business onboarding wizard. Be concise but specific. If information is not clearly available, make reasonable assumptions based on the industry and context, and list those assumptions.
-
-${contextParts.join("\n")}
-
-Return your analysis in the exact structured format requested.`;
+        const prompt = buildWebsiteAnalysisPrompt(evidence);
 
         const analysisSchema = z.object({
+          businessCategory: z.string().describe("Confirmed business category"),
           productOrService: z.string().describe("What the business sells or offers"),
           targetCustomer: z.string().describe("The ideal customer profile"),
           productDescription: z.string().describe("A rich description of the main product or service"),
@@ -471,16 +456,36 @@ Return your analysis in the exact structured format requested.`;
 
         const result = await generateObject({
           model: defaultModel,
-          system: "You are an expert marketing analyst. Analyse websites and return structured, actionable marketing insights. Always use USD for prices. Be concise.",
+          system:
+            "You are an expert marketing analyst. Analyse the structured website evidence and return actionable marketing insights. " +
+            "CRITICAL: Do not classify the business as SEO, digital marketing, social media management, data analytics, restaurant, salon, or consulting " +
+            "unless the evidence explicitly and repeatedly supports that classification. Only list products/services actually mentioned in the evidence. " +
+            "Always use USD for prices. Be concise.",
           prompt,
           schema: analysisSchema,
         });
 
+        const suggestions = result.object;
+
+        // Persist structured evidence on the business row for downstream gates.
+        const db = getDb();
+        if (input.businessId) {
+          await db
+            .update(businesses)
+            .set({
+              websiteEvidence: evidence as any,
+              updatedAt: new Date(),
+            } as any)
+            .where(and(eq(businesses.id, input.businessId), eq(businesses.userId, ctx.user.id)));
+        }
+
         return {
           success: true,
-          suggestions: result.object,
+          suggestions,
+          evidence,
         };
       } catch (err: any) {
+        console.error("[businessRouter.analyseWebsite] error", err);
         return {
           success: false,
           error: "ANALYSIS_FAILED",

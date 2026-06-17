@@ -448,12 +448,23 @@ Include:
   }
 
   function handlePublishNow(content: any) {
-    const connected = isPlatformConnected(content.platform);
-    if (!connected && content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform)) {
-      toast.error("Automatic publishing is not configured for this platform. You can copy or mark this content as manually posted.");
+    if (!urlCampaignId) {
+      toast.error("This content is not part of a campaign.");
       return;
     }
-    toast.info("Auto-publishing is coming soon. Use 'Mark as posted' if you published manually.");
+
+    // Open the campaign-level publish dialog; individual captions are published as part of the pack.
+    const status = getPlatformPublishStatus(content.platform);
+    if (status === "not_supported") {
+      toast.error("Publishing is not supported for this platform yet.");
+      return;
+    }
+    if (content.status !== "draft" && content.status !== "scheduled") {
+      toast.info("This content is already published or approved.");
+      return;
+    }
+
+    setPublishDialogOpen(true);
   }
 
   const renderVideoMutation = trpc.video.renderVideo.useMutation({
@@ -513,6 +524,18 @@ Include:
     },
     onError: (err) => {
       toast.error(err.message || "Failed to publish campaign pack");
+    },
+  });
+
+  const regenerateFromProfileMutation = trpc.campaign.regenerateFromProfile.useMutation({
+    onSuccess: () => {
+      utils.content.list.invalidate();
+      utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.campaign.get.invalidate({ id: Number(urlCampaignId) });
+      toast.success("Campaign pack regenerated from the updated business profile.");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to regenerate campaign pack");
     },
   });
 
@@ -1510,20 +1533,37 @@ Include:
     );
   }
 
-  function getPlatformConnectionStatus() {
-    const platformsUsed = new Set<string>();
-    filtered?.forEach((c) => {
-      if (c.platform) platformsUsed.add(c.platform);
-    });
-    const result: { platform: string; connected: boolean; configurable: boolean }[] = [];
-    platformsUsed.forEach((p) => {
-      result.push({
-        platform: p,
-        connected: !!isPlatformConnected(p),
-        configurable: isPlatformConfigurable(p),
-      });
-    });
-    return result;
+  type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
+
+  function getPlatformPublishStatus(platform: string): PlatformPublishStatus {
+    const normalized = platform.toLowerCase().trim();
+
+    if (normalized === "google ads" || normalized === "google_ads") {
+      return "not_supported";
+    }
+
+    const autoPublishPlatforms = ["facebook", "instagram", "linkedin"];
+    const isAutoPublishPlatform = autoPublishPlatforms.includes(normalized);
+    const connected = isPlatformConnected(normalized);
+    const configurable = isPlatformConfigurable(normalized);
+
+    if (isAutoPublishPlatform) {
+      if (connected && configurable) return "connected";
+      if (connected && !configurable) return "manual";
+      return "not_connected";
+    }
+
+    // TikTok, X/Twitter, WhatsApp, Email, Blog, etc.
+    return "manual";
+  }
+
+  function getCampaignPlatformStatuses(): { platform: string; status: PlatformPublishStatus }[] {
+    const raw = campaignForContext?.platforms || "";
+    const selected = raw
+      .split(/[,;]+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return selected.map((p) => ({ platform: p, status: getPlatformPublishStatus(p) }));
   }
 
   function handlePublishPack() {
@@ -1533,7 +1573,7 @@ Include:
       return;
     }
 
-    // Frontend guard: check video readiness (only when video features are enabled)
+    // Frontend guard: check video readiness ONLY when video features are enabled
     const basicConfigured = videoConfig?.basicConfigured ?? true;
     const premiumConfigured = videoConfig?.premiumConfigured ?? false;
     const videoEnabled = (ENABLE_PREMIUM_VIDEO && premiumConfigured) || (ENABLE_BASIC_DRAFT_VIDEO && basicConfigured);
@@ -1762,6 +1802,23 @@ Include:
                     {filtered.filter((c) => !getApprovalState(c)).length} pending approval
                   </Badge>
                 )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={regenerateFromProfileMutation.isPending}
+                  onClick={() => {
+                    if (confirm("This will regenerate strategy, leaflet, captions and platform adaptations from the latest business profile. Existing AI-generated assets will be replaced. Continue?")) {
+                      regenerateFromProfileMutation.mutate({ campaignId: Number(urlCampaignId) });
+                    }
+                  }}
+                >
+                  {regenerateFromProfileMutation.isPending ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                  )}
+                  Regenerate from Profile
+                </Button>
                 <Button
                   size="sm"
                   className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
@@ -2020,16 +2077,22 @@ Include:
             </DialogHeader>
             <div className="space-y-4 mt-2">
               {(() => {
-                const status = getPlatformConnectionStatus();
-                const connected = status.filter((s) => s.connected);
-                const disconnected = status.filter((s) => !s.connected);
+                const statuses = getCampaignPlatformStatuses();
+                const groups: Record<PlatformPublishStatus, typeof statuses> = {
+                  connected: [],
+                  not_connected: [],
+                  manual: [],
+                  not_supported: [],
+                };
+                for (const s of statuses) groups[s.status].push(s);
+
                 return (
                   <div className="space-y-3">
-                    {connected.length > 0 && (
+                    {groups.connected.length > 0 && (
                       <div>
-                        <p className="text-xs font-medium text-emerald-700 uppercase tracking-wide mb-1">Connected Platforms</p>
+                        <p className="text-xs font-medium text-emerald-700 uppercase tracking-wide mb-1">Connected</p>
                         <div className="flex flex-wrap gap-2">
-                          {connected.map((s) => (
+                          {groups.connected.map((s) => (
                             <Badge key={s.platform} className="bg-emerald-50 text-emerald-700 border-emerald-200 capitalize">
                               <CheckCircle2 className="w-3 h-3 mr-1" />
                               {s.platform}
@@ -2039,23 +2102,49 @@ Include:
                         <p className="text-xs text-muted-foreground mt-1">These will attempt automatic publishing.</p>
                       </div>
                     )}
-                    {disconnected.length > 0 && (
+                    {groups.not_connected.length > 0 && (
                       <div>
-                        <p className="text-xs font-medium text-amber-700 uppercase tracking-wide mb-1">Manual Posting Required</p>
+                        <p className="text-xs font-medium text-red-700 uppercase tracking-wide mb-1">Not connected</p>
                         <div className="flex flex-wrap gap-2">
-                          {disconnected.map((s) => (
+                          {groups.not_connected.map((s) => (
+                            <Badge key={s.platform} variant="outline" className="text-red-700 border-red-200 bg-red-50 capitalize">
+                              <AlertCircle className="w-3 h-3 mr-1" />
+                              {s.platform}
+                            </Badge>
+                          ))}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">Connect this platform in Integrations to auto-publish, or post manually.</p>
+                      </div>
+                    )}
+                    {groups.manual.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-amber-700 uppercase tracking-wide mb-1">Manual publishing only</p>
+                        <div className="flex flex-wrap gap-2">
+                          {groups.manual.map((s) => (
                             <Badge key={s.platform} variant="outline" className="text-amber-700 border-amber-200 bg-amber-50 capitalize">
                               <AlertCircle className="w-3 h-3 mr-1" />
                               {s.platform}
                             </Badge>
                           ))}
                         </div>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          These will be approved and marked as "manually posted". Copy the content and post on each platform.
-                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">These will be approved and marked as "manually posted". Copy the content and post on each platform.</p>
                       </div>
                     )}
-                    {status.length === 0 && (
+                    {groups.not_supported.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-slate-700 uppercase tracking-wide mb-1">Not supported yet</p>
+                        <div className="flex flex-wrap gap-2">
+                          {groups.not_supported.map((s) => (
+                            <Badge key={s.platform} variant="outline" className="text-slate-700 border-slate-200 bg-slate-50 capitalize">
+                              <AlertCircle className="w-3 h-3 mr-1" />
+                              {s.platform}
+                            </Badge>
+                          ))}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">Automatic publishing is not available for this platform yet.</p>
+                      </div>
+                    )}
+                    {statuses.length === 0 && (
                       <div className="p-3 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800">
                         <p className="font-medium">No platforms detected</p>
                         <p className="text-amber-700/80 mt-0.5">All content will be approved and marked for manual posting.</p>

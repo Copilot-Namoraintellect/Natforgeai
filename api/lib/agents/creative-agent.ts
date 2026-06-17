@@ -609,11 +609,18 @@ export async function runCreativeAgent({
   // Fallback: get location from workflowContext or business
   let location = strategyContext?.location || null;
   let industry = strategyContext?.industry || null;
-  if (!location && campaign.businessId) {
+  let businessEvidence: {
+    businessCategory?: string;
+    productsServices?: string[];
+    targetCustomers?: string[];
+    location?: string;
+  } | null = null;
+  if (campaign.businessId) {
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
     if (biz) {
-      location = biz.location || null;
+      location = location || biz.location || null;
       industry = industry || biz.industry || null;
+      businessEvidence = (biz.websiteEvidence || null) as any;
     }
   }
 
@@ -638,6 +645,10 @@ CAMPAIGN DETAILS:
 - Platforms: ${campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn"}
 - Location: ${location || "Not specified"}
 - Industry: ${industry || "Not specified"}
+- Website Evidence (ground truth):
+  - Business Category: ${businessEvidence?.businessCategory || industry || "Not specified"}
+  - Products/Services Mentioned: ${(businessEvidence?.productsServices || []).join(", ") || "Not specified"}
+  - Target Customers Mentioned: ${(businessEvidence?.targetCustomers || []).join(", ") || "Not specified"}
 - Personas: ${personas ? JSON.stringify(personas.map((p: any) => ({ name: p.name, painPoints: p.painPoints, goals: p.goals }))) : "General audience"}
 ${funnelStages ? `- Funnel Stages: ${JSON.stringify(funnelStages.map((f: any) => f.stage))}` : ""}
 ${strategyContext?.campaignTheme ? `- Campaign Theme: ${strategyContext.campaignTheme}` : ""}
@@ -717,6 +728,8 @@ This is the single hero video blueprint. Provide:
 
 C. PLATFORM CAPTION ADAPTATIONS
 For EACH platform in the campaign (${campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn"}), provide a complete, ready-to-post adaptation. Do not write one-liners. Each adaptation must be a full caption/ message the user can copy and publish.
+
+CRITICAL: Generate an adaptation for EVERY platform listed above. Do not skip any platform. Do not introduce SEO, digital marketing, social media management, data analytics, restaurant services, salon services, or consulting services unless they are explicitly listed in the Website Evidence.
 
 For every platform include:
 - Platform name
@@ -1091,29 +1104,55 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     }
   }
 
-  // Save platform adaptations as campaign assets
-  if (pack.platformAdaptations && pack.platformAdaptations.length > 0) {
-    for (const adaptation of pack.platformAdaptations) {
-      try {
-        await db.insert(campaignAssets).values({
-          userId,
-          campaignId,
-          assetType: "caption_adaptation",
-          title: `${adaptation.platform} Adaptation`,
-          status: "ready",
-          metadata: {
-            platform: adaptation.platform,
-            adaptedCaption: adaptation.adaptedCaption,
-            adaptedCta: adaptation.adaptedCta,
-            adaptedHashtags: adaptation.adaptedHashtags,
-            bestTimeToPost: adaptation.bestTimeToPost,
-            formatNotes: adaptation.formatNotes,
-          } as any,
-        });
-        savedAssets++;
-      } catch (err: any) {
-        console.error(`[CreativeAgent] Failed to save platform adaptation | campaignId=${campaignId} | platform=${adaptation.platform} | error="${err.message}"`);
-      }
+  // Ensure every selected campaign platform has an adaptation
+  const selectedPlatforms = (campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn")
+    .split(/[,;]+/)
+    .map((p: string) => p.trim())
+    .filter(Boolean);
+
+  const adaptationsByPlatform = new Map<string, any>();
+  for (const adaptation of pack.platformAdaptations || []) {
+    if (adaptation.platform) {
+      adaptationsByPlatform.set(adaptation.platform.toLowerCase(), adaptation);
+    }
+  }
+
+  const masterPost = pack.socialPosts[0];
+  const fallbackCaption = masterPost
+    ? `${masterPost.hook}\n\n${masterPost.caption}`
+    : "";
+  const fallbackCta = masterPost?.cta || campaign.preferredCta || "Contact us";
+
+  for (const platform of selectedPlatforms) {
+    const existing = adaptationsByPlatform.get(platform.toLowerCase());
+    const adaptation = existing || {
+      platform,
+      adaptedCaption: fallbackCaption,
+      adaptedCta: fallbackCta,
+      adaptedHashtags: masterPost?.hashtags || [],
+      bestTimeToPost: "",
+      formatNotes: `Fallback adaptation for ${platform}.`,
+    };
+
+    try {
+      await db.insert(campaignAssets).values({
+        userId,
+        campaignId,
+        assetType: "caption_adaptation",
+        title: `${adaptation.platform} Adaptation`,
+        status: "ready",
+        metadata: {
+          platform: adaptation.platform,
+          adaptedCaption: adaptation.adaptedCaption,
+          adaptedCta: adaptation.adaptedCta,
+          adaptedHashtags: adaptation.adaptedHashtags,
+          bestTimeToPost: adaptation.bestTimeToPost,
+          formatNotes: adaptation.formatNotes,
+        } as any,
+      });
+      savedAssets++;
+    } catch (err: any) {
+      console.error(`[CreativeAgent] Failed to save platform adaptation | campaignId=${campaignId} | platform=${adaptation.platform} | error="${err.message}"`);
     }
   }
 

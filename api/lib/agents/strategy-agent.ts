@@ -95,6 +95,7 @@ export async function runStrategyAgent({
     monthlyBudget?: number | null;
     preferredPlatforms?: string | null;
     website?: string | null;
+    websiteEvidence?: unknown;
   };
   strategyText?: string;
   campaignBrief?: {
@@ -126,6 +127,7 @@ export async function runStrategyAgent({
     monthlyBudget: business.monthlyBudget ?? undefined,
     preferredPlatforms: business.preferredPlatforms ?? undefined,
     website: business.website ?? undefined,
+    websiteEvidence: business.websiteEvidence,
     strategyText,
     campaignBrief,
   });

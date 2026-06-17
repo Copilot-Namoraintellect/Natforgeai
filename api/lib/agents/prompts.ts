@@ -10,6 +10,7 @@ export function strategyAgentPrompt(input: {
   preferredPlatforms?: string;
   strategyText?: string;
   website?: string;
+  websiteEvidence?: unknown;
   campaignBrief?: {
     name?: string;
     goal?: string;
@@ -30,6 +31,27 @@ export function strategyAgentPrompt(input: {
 }): string {
   const hasStrategy = input.strategyText && input.strategyText.trim().length > 0;
   const cb = input.campaignBrief;
+  const evidence = input.websiteEvidence as {
+    businessCategory?: string;
+    productsServices?: string[];
+    targetCustomers?: string[];
+    location?: string;
+    confidence?: number;
+    evidenceSnippets?: string[];
+  } | undefined;
+
+  const evidenceSection = evidence
+    ? `
+WEBSITE EVIDENCE — USE THIS AS THE GROUND TRUTH FOR WHAT THE BUSINESS DOES:
+- Business Category: ${evidence.businessCategory || "Not specified"}
+- Products/Services Mentioned on Website: ${(evidence.productsServices || []).join(", ") || "Not specified"}
+- Target Customers Mentioned on Website: ${(evidence.targetCustomers || []).join(", ") || "Not specified"}
+- Detected Location: ${evidence.location || "Not specified"}
+- Evidence Confidence: ${evidence.confidence ?? "unknown"}
+- Evidence Snippets:
+${(evidence.evidenceSnippets || []).slice(0, 10).map((s) => "  - " + s).join("\n")}
+`
+    : "";
 
   const briefSection = cb
     ? `
@@ -63,6 +85,7 @@ BUSINESS PROFILE:
 - Monthly Budget: ${input.monthlyBudget ? "$" + input.monthlyBudget : "Not specified"}
 - Preferred Platforms: ${input.preferredPlatforms || "Not specified"}
 - Website: ${input.website || "Not specified"}
+${evidenceSection}
 ${briefSection}
 
 ${hasStrategy ? `EXISTING STRATEGY:\n${input.strategyText}\n\nEnhance this strategy with additional insights.` : "Create a complete marketing strategy from scratch."}
@@ -83,6 +106,8 @@ CRITICAL RULES:
 - For budgetRecommendation.total and budgetRecommendation.allocation.amount, return ONLY plain numbers (e.g. 5000 or 15000). Do NOT include dollar signs, commas, words, or descriptions. The system parses these as numeric values.
 - If no offer is provided in the campaign brief, the offers array MUST be empty. Do not invent discounts, free trials, free e-books, loyalty programmes, limited spots or percentages.
 - The core message must be specific to the business and product/service, not generic motivational filler.
+- NEVER classify the business as SEO, digital marketing, social media management, data analytics, restaurant services, salon services, or consulting unless the website evidence explicitly supports that classification.
+- Only include products/services in the strategy that are listed in the Website Evidence above. Do not introduce unsupported services.
 `;
 }
 

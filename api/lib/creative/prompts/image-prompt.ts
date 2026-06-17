@@ -26,9 +26,21 @@ function sanitize(str?: string | null): string {
 }
 
 function inferServiceCategory(business: any, campaign: any): string {
-  const combined = `${business.name || ""} ${business.industry || ""} ${business.productOrService || ""} ${campaign.productOrService || ""} ${campaign.referenceStyle || ""}`.toLowerCase();
+  const combined = `${business.name || ""} ${business.industry || ""} ${business.productOrService || ""} ${campaign.productOrService || ""} ${campaign.referenceStyle || ""} ${JSON.stringify(business.websiteEvidence || {})}`.toLowerCase();
   if (combined.includes("print") || combined.includes("copy") || combined.includes("courier") || combined.includes("business card") || combined.includes("flyer") || combined.includes("poster") || combined.includes("banner")) {
     return "print_shop";
+  }
+  if (
+    combined.includes("canvas") ||
+    combined.includes("framed poster") ||
+    combined.includes("wall art") ||
+    combined.includes("art print") ||
+    combined.includes("afrocentric") ||
+    combined.includes("home decor") ||
+    combined.includes("office decor") ||
+    combined.includes("interior decor")
+  ) {
+    return "art_decor";
   }
   return "general";
 }
@@ -85,6 +97,7 @@ export function buildPremiumImagePrompt(opts: BuildPromptOpts): string {
 
   const serviceCategory = inferServiceCategory(business, campaign);
   const isPrintShop = serviceCategory === "print_shop";
+  const isArtDecor = serviceCategory === "art_decor";
 
   const layoutType = creativeTypeLabel(creativeType);
   const aspectRatio = getImageAspectRatio(creativeType, post?.platform);
@@ -116,6 +129,15 @@ export function buildPremiumImagePrompt(opts: BuildPromptOpts): string {
         "Photo Prints",
         "Branding & Stationery",
       ]
+    : isArtDecor
+    ? [
+        "Bespoke Afrocentric Canvas Art",
+        "Custom Canvas Prints",
+        "Framed Posters",
+        "Premium Wall Art",
+        "Home & Office Décor",
+        "Turn Photos into Art",
+      ]
     : [
         sanitize(campaign.productOrService || business?.productOrService || "Your core service"),
       ];
@@ -126,6 +148,13 @@ export function buildPremiumImagePrompt(opts: BuildPromptOpts): string {
         "Professional quality",
         "Order online or via WhatsApp",
         "Convenient service point",
+      ]
+    : isArtDecor
+    ? [
+        "Unique Afrocentric designs",
+        "Custom sizes & framing",
+        "Premium quality materials",
+        "Shipped ready to hang",
       ]
     : [
         "Clear value",
@@ -151,7 +180,7 @@ STRONGER BRAND FIT — ENFORCE THESE STRICTLY:
   const domainSpecific = isPrintShop
     ? `
 DOMAIN-SPECIFIC DIRECTION (print / copy / courier shop):
-The image must look like a finished customer-facing leaflet for a local print shop such as 3@1 Newmarket.
+The image must look like a finished customer-facing leaflet for a local print shop.
 Headline idea: "Winter Printing & Business Support Specials" (adapt to the campaign context).
 Subheadline idea: "Print, courier and brand your business without the hassle."
 Main visual: a professional, organised collage showing business cards, flyers, posters, banners, courier parcels, branded stationery, graduation gifts, photo prints and office documents.
@@ -159,6 +188,17 @@ Service callouts to include: ${serviceCallouts.join(", ")}.
 Benefit callouts: ${benefitCallouts.join(", ")}.
 CTA: "${preferredCta}".
 Style: clean, modern retail print-shop leaflet. Bold readable text, good spacing, professional photos/illustrations of real print products.`
+    : isArtDecor
+    ? `
+DOMAIN-SPECIFIC DIRECTION (art, canvas prints, framed posters & home décor):
+The image must look like a premium lifestyle leaflet for an art/décor brand.
+Headline idea: "Bespoke Afrocentric Canvas Art" (adapt to the campaign context).
+Subheadline idea: "Turn your photos or original designs into premium wall art."
+Main visual: a realistic, aspirational interior scene showing canvas prints, framed posters, gallery walls, Afrocentric artwork, and styled home/office décor. Show real products in real rooms, not a grid of icons.
+Service callouts to include: ${serviceCallouts.join(", ")}.
+Benefit callouts: ${benefitCallouts.join(", ")}.
+CTA: "${preferredCta}".
+Style: editorial home-décor flyer, warm lighting, premium photography, elegant typography, generous whitespace.`
     : "";
 
   const prompt = `You are a senior graphic designer creating a ${layoutType} for a real business.
@@ -205,7 +245,8 @@ D. REQUIRED LAYOUT SECTIONS
 
 E. DESIGN RULES
 - Clean, bold and readable. High contrast text.
-- Looks like a finished customer leaflet/poster, not a generic AI art poster.
+- Looks like a finished customer leaflet/poster, not a generic AI art poster or icon grid.
+- Do NOT use simple icon grids, tile layouts, or scattered clipart.
 - Do NOT use vague slogans such as "Your vision, our solution", "Transform your brand", "Unleash creativity", "Quality meets efficiency", or similar.
 - Do NOT invent phone numbers, addresses, websites, emails, prices, discounts or promotions.
 - Do NOT create fake logos, fake social handles, fake QR codes or fake contact details anywhere in the image.
@@ -214,6 +255,7 @@ E. DESIGN RULES
 - Use the business name only where it helps the headline; avoid crowding the reserved header/footer zones.
 - Keep text large enough to read on mobile social feeds.
 - Use the brand colours consistently but tastefully.
+- The visual must clearly relate to the actual business category and products/services listed above.
 ${domainSpecific}
 ${strongerFitRules}
 

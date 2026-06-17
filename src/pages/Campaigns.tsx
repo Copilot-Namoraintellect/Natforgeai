@@ -228,7 +228,12 @@ export default function Campaigns() {
         .map((p: string) => p.trim())
         .filter(Boolean);
       const matched = prefs.filter((p: string) => PLATFORM_OPTIONS.some((o) => o.value === p));
-      if (matched.length > 0) setFormPlatforms(matched);
+      if (matched.length > 0) {
+        setFormPlatforms((prev) => {
+          const merged = new Set([...prev, ...matched]);
+          return Array.from(merged);
+        });
+      }
     }
     setFormBudget((prev) => (suggestions.budget != null ? String(suggestions.budget) : prev));
     setFormCoreMessage((prev) => suggestions.coreMessage ?? prev);

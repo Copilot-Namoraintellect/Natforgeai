@@ -16,6 +16,8 @@ export interface BrandOverlaySpec {
   creativeType?: string;
   offer?: string;
   cta?: string;
+  headline?: string;
+  subheadline?: string;
 }
 
 function sanitize(str?: string | null): string {
@@ -84,14 +86,21 @@ function buildHeaderSvg(
   const name = escapeXml(sanitize(businessName) || "Your Business");
   const barColor = "#FFFFFF";
   const textColor = "#0F172A";
-  const accentStripe = brandColor;
-  const nameSize = Math.max(22, Math.round(width / 22));
+  const nameSize = Math.max(22, Math.round(width / 20));
+  const padX = 24;
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <rect width="${width}" height="${height}" fill="${barColor}" opacity="0.96"/>
-  <rect x="0" y="${height - 4}" width="${width}" height="4" fill="${accentStripe}"/>
-  <text x="${width - 24}" y="${height / 2 + nameSize / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="700" fill="${textColor}" text-anchor="end">${name}</text>
+  <defs>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:${barColor};stop-opacity:1" />
+      <stop offset="85%" style="stop-color:${barColor};stop-opacity:0.98" />
+      <stop offset="100%" style="stop-color:${barColor};stop-opacity:0" />
+    </linearGradient>
+  </defs>
+  <rect width="${width}" height="${height}" fill="url(#headerGrad)"/>
+  <rect x="0" y="${height - 5}" width="${width}" height="5" fill="${brandColor}"/>
+  <text x="${width - padX}" y="${height / 2 + nameSize / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="700" fill="${textColor}" text-anchor="end">${name}</text>
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }
@@ -103,28 +112,62 @@ function buildFooterSvg(
   cta: string,
   brandColor: string
 ): Buffer {
-  const bg = brandColor;
   const textColor = "#FFFFFF";
-  const ctaSize = Math.max(20, Math.round(width / 20));
-  const lineSize = Math.max(14, Math.round(width / 32));
+  const ctaSize = Math.max(22, Math.round(width / 18));
+  const lineSize = Math.max(14, Math.round(width / 34));
   const padX = 28;
-  const padY = 18;
+  const padY = 20;
 
   const safeCta = escapeXml(sanitize(cta) || "Contact us today");
   const safeLines = lines.filter(Boolean).map((l) => escapeXml(sanitize(l)));
 
   const lineBlocks = safeLines
     .map((line, idx) => {
-      const y = padY + ctaSize + 18 + (idx + 1) * (lineSize + 8);
+      const y = padY + ctaSize + 22 + (idx + 1) * (lineSize + 9);
       return `<text x="${padX}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${lineSize}" font-weight="400" fill="${textColor}" opacity="0.95">${line}</text>`;
     })
     .join("");
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <rect width="${width}" height="${height}" fill="${bg}"/>
+  <rect width="${width}" height="${height}" fill="${brandColor}"/>
   <text x="${padX}" y="${padY + ctaSize}" font-family="Arial, Helvetica, sans-serif" font-size="${ctaSize}" font-weight="800" fill="${textColor}">${safeCta}</text>
   ${lineBlocks}
+</svg>`;
+  return Buffer.from(svg, "utf-8");
+}
+
+function buildHeadlineOverlaySvg(
+  width: number,
+  height: number,
+  headline: string,
+  subheadline: string,
+  brandColor: string
+): Buffer {
+  const safeHeadline = escapeXml(sanitize(headline) || "");
+  const safeSub = escapeXml(sanitize(subheadline) || "");
+  if (!safeHeadline && !safeSub) {
+    return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"></svg>`, "utf-8");
+  }
+
+  const headlineSize = Math.max(26, Math.round(width / 14));
+  const subSize = Math.max(15, Math.round(width / 26));
+  const padX = 28;
+  const padY = 24;
+
+  const headlineBlock = safeHeadline
+    ? `<text x="${padX}" y="${padY + headlineSize}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="800" fill="#FFFFFF">${safeHeadline}</text>`
+    : "";
+
+  const subBlock = safeSub
+    ? `<text x="${padX}" y="${padY + headlineSize + (safeHeadline ? 14 : 0) + subSize}" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="500" fill="#FFFFFF" opacity="0.95">${safeSub}</text>`
+    : "";
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+  <rect width="${width}" height="${height}" fill="${brandColor}" opacity="0.82" rx="12"/>
+  ${headlineBlock}
+  ${subBlock}
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }
@@ -152,7 +195,7 @@ export async function composeBrandedLeafletImage(
   baseImageBuffer: Buffer,
   spec: BrandOverlaySpec
 ): Promise<Buffer> {
-  const { business, campaign, post, creativeType = "leaflet", offer, cta } = spec;
+  const { business, campaign, post, creativeType = "leaflet", offer, cta, headline, subheadline } = spec;
 
   const base = sharp(baseImageBuffer);
   const meta = await base.metadata();
@@ -183,9 +226,9 @@ export async function composeBrandedLeafletImage(
   }
 
   // Leaflet layout.
-  const headerHeight = Math.round(height * 0.085);
-  const footerHeight = Math.round(height * 0.13);
-  const logoAreaHeight = headerHeight - 16;
+  const headerHeight = Math.round(height * 0.095);
+  const footerHeight = Math.round(height * 0.15);
+  const logoAreaHeight = headerHeight - 20;
 
   const headerSvg = buildHeaderSvg(width, headerHeight, businessName, brandColor);
 
@@ -209,7 +252,17 @@ export async function composeBrandedLeafletImage(
 
   if (logoBuffer) {
     const logoPng = await resizeLogo(logoBuffer, logoAreaHeight);
-    overlays.push({ input: logoPng, top: 12, left: 20 });
+    overlays.push({ input: logoPng, top: 14, left: 22 });
+  }
+
+  // Optional premium headline band in lower-middle if headline is provided
+  const headlineText = sanitize(headline || campaign?.primaryOutcome || post?.title || "");
+  const subheadlineText = sanitize(subheadline || campaign?.mainPainPoint || campaign?.coreMessage || post?.hook || "");
+  if (headlineText) {
+    const bandHeight = Math.round(height * 0.16);
+    const bandTop = Math.round(height * 0.56);
+    const headlineSvg = buildHeadlineOverlaySvg(width, bandHeight, headlineText, subheadlineText, brandColor);
+    overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
   }
 
   return base.composite(overlays).toBuffer();

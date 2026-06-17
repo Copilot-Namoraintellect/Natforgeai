@@ -4,6 +4,7 @@ import { getDb } from "./queries/connection";
 import { contentPosts, campaigns, campaignAssets } from "@db/schema";
 import { eq, and, desc, count } from "drizzle-orm";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
+import { env } from "./lib/env";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
 
 export const contentRouter = createRouter({
@@ -326,7 +327,7 @@ export const contentRouter = createRouter({
         throw new Error("At least one social post must be approved before publishing the campaign pack.");
       }
 
-      // Guard: platform-specific captions must exist
+      // Guard: platform-specific captions or caption pack must exist
       const adaptations = await db
         .select()
         .from(campaignAssets)
@@ -337,22 +338,34 @@ export const contentRouter = createRouter({
             eq(campaignAssets.assetType, "caption_adaptation")
           )
         );
-      if (adaptations.length === 0) {
-        throw new Error("Platform-specific captions are missing. Generate content first.");
+      const captionPacks = await db
+        .select()
+        .from(campaignAssets)
+        .where(
+          and(
+            eq(campaignAssets.userId, ctx.user.id),
+            eq(campaignAssets.campaignId, input.campaignId),
+            eq(campaignAssets.assetType, "caption_pack")
+          )
+        );
+      if (adaptations.length === 0 && captionPacks.length === 0) {
+        throw new Error("Platform captions are missing. Generate content first.");
       }
 
-      // Guard: if video exists, it must be ready with a videoUrl
-      const videos = posts.filter((p) => p.type === "video_concept" || p.type === "reel_script");
-      for (const video of videos) {
-        const meta = (video.metadata || {}) as any;
-        if (meta.videoStatus === "concept" || meta.videoStatus === "rendering") {
-          throw new Error("This campaign contains a video concept only. Render the video before publishing.");
-        }
-        if (meta.videoStatus === "ready" && !meta.videoUrl) {
-          throw new Error("This campaign contains a video concept only. Render the video before publishing.");
-        }
-        if (meta.videoStatus === "failed") {
-          throw new Error("Video rendering failed. Retry rendering or remove the video before publishing.");
+      // Guard: if video exists, it must be ready with a videoUrl — but only when video features are enabled
+      if (env.enablePremiumVideo || env.enableBasicDraftVideo) {
+        const videos = posts.filter((p) => p.type === "video_concept" || p.type === "reel_script");
+        for (const video of videos) {
+          const meta = (video.metadata || {}) as any;
+          if (meta.videoStatus === "concept" || meta.videoStatus === "rendering") {
+            throw new Error("This campaign contains a video concept only. Render the video before publishing.");
+          }
+          if (meta.videoStatus === "ready" && !meta.videoUrl) {
+            throw new Error("This campaign contains a video concept only. Render the video before publishing.");
+          }
+          if (meta.videoStatus === "failed") {
+            throw new Error("Video rendering failed. Retry rendering or remove the video before publishing.");
+          }
         }
       }
 

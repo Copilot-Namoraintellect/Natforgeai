@@ -864,7 +864,10 @@ export default function Onboarding() {
       setBusinessForm((p) => ({ ...p, mainGoal: value }));
     } else if (field === "preferredPlatforms") {
       const mapped = mapAiPlatforms(value);
-      setBusinessForm((p) => ({ ...p, preferredPlatforms: mapped }));
+      setBusinessForm((p) => ({
+        ...p,
+        preferredPlatforms: Array.from(new Set([...p.preferredPlatforms, ...mapped])),
+      }));
     } else if (field === "productDescription") {
       setAssetForm((p) => ({ ...p, productDescription: value }));
     } else if (field === "uniqueSellingPoint") {
@@ -892,7 +895,10 @@ export default function Onboarding() {
       setBrandForm((p) => ({ ...p, avoidWords: value }));
     } else if (field === "interestedPlatforms") {
       const mapped = mapAiPlatforms(value);
-      setIntegrationForm((p) => ({ ...p, interestedPlatforms: mapped }));
+      setIntegrationForm((p) => ({
+        ...p,
+        interestedPlatforms: Array.from(new Set([...p.interestedPlatforms, ...mapped])),
+      }));
     }
     setAiSuggestedFields((prev) => ({ ...prev, [field]: true }));
   }

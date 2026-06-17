@@ -2,12 +2,13 @@ import { z } from "zod";
 import { generateObject } from "ai";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { campaigns, businesses, agentRuns } from "@db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { campaigns, businesses, agentRuns, contentPosts, campaignAssets } from "@db/schema";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { checkLimit, incrementCampaignUsage, incrementResultUsage } from "./lib/subscription";
 import { TRPCError } from "@trpc/server";
 import { defaultModel } from "./lib/agents/openai";
 import { runStrategyAgent } from "./lib/agents/strategy-agent";
+import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
 
 function campaignSuggestionSchema() {
@@ -174,6 +175,17 @@ export const campaignRouter = createRouter({
 
             if (!business) return;
 
+            // Confidence / evidence gate before auto-starting strategy
+            const evidence = (business.websiteEvidence || null) as {
+              businessCategory?: string;
+              productsServices?: string[];
+              confidence?: number;
+            } | null;
+            if (evidence && (evidence.confidence ?? 0) < 0.6) {
+              console.log(`[CampaignCreate] Strategy auto-start blocked: low website confidence for campaign ${campaignId}`);
+              return;
+            }
+
             // Deduplication guard
             const existing = await db
               .select()
@@ -209,6 +221,7 @@ export const campaignRouter = createRouter({
                 monthlyBudget: business.monthlyBudget,
                 preferredPlatforms: business.preferredPlatforms,
                 website: business.website,
+                websiteEvidence: business.websiteEvidence,
               },
               campaignBrief: {
                 name: input.name,
@@ -258,13 +271,23 @@ export const campaignRouter = createRouter({
           .orderBy(desc(businesses.createdAt))
           .limit(1);
 
+        const evidence = business?.websiteEvidence as {
+          businessCategory?: string;
+          productsServices?: string[];
+          targetCustomers?: string[];
+          location?: string;
+        } | undefined;
+
         const promptParts = [
           `Campaign intent: ${input.intent}`,
           input.targetAudience ? `Target audience hint: ${input.targetAudience}` : "",
           input.offer ? `Offer hint: ${input.offer}` : "",
-          input.platforms ? `Preferred platforms hint: ${input.platforms}` : "",
+          input.platforms ? `Preferred platforms hint (preserve these): ${input.platforms}` : "",
           business
-            ? `Business context:\n- Name: ${business.name}\n- Industry: ${business.industry || "N/A"}\n- Location: ${business.location || "N/A"}\n- Product/Service: ${business.productOrService || "N/A"}\n- Target customer: ${business.targetCustomer || "N/A"}\n- Brand tone: ${business.brandTone || "N/A"}\n- Monthly budget: ${business.monthlyBudget || "N/A"}`
+            ? `Business context:\n- Name: ${business.name}\n- Industry: ${business.industry || "N/A"}\n- Location: ${business.location || evidence?.location || "N/A"}\n- Product/Service: ${business.productOrService || "N/A"}\n- Target customer: ${business.targetCustomer || "N/A"}\n- Brand tone: ${business.brandTone || "N/A"}\n- Monthly budget: ${business.monthlyBudget || "N/A"}`
+            : "",
+          evidence
+            ? `Website evidence (ground truth):\n- Category: ${evidence.businessCategory || "N/A"}\n- Products/Services: ${(evidence.productsServices || []).join(", ") || "N/A"}\n- Target Customers: ${(evidence.targetCustomers || []).join(", ") || "N/A"}\n- CRITICAL: Only suggest products/services and platforms that match this evidence. Do not introduce SEO, digital marketing, social media management, data analytics, restaurant, salon, or consulting services unless they are explicitly listed.`
             : "",
         ].filter(Boolean);
 
@@ -273,7 +296,7 @@ export const campaignRouter = createRouter({
         const result = await generateObject({
           model: defaultModel,
           system:
-            "You are a senior marketing strategist. Turn the user's free-form campaign intent into a complete, concise campaign brief. Keep the same language and tone as the user. If no offer is provided, do not invent discounts, free trials or limited-time offers. Use neutral CTAs. Return null for any field you cannot infer confidently.",
+            "You are a senior marketing strategist. Turn the user's free-form campaign intent into a complete, concise campaign brief. Keep the same language and tone as the user. If no offer is provided, do not invent discounts, free trials or limited-time offers. Use neutral CTAs. Return null for any field you cannot infer confidently. Only suggest products/services and platforms grounded in the website evidence. Preserve the user's preferred platforms if provided.",
           prompt: promptParts.join("\n"),
           schema,
         });
@@ -308,8 +331,23 @@ export const campaignRouter = createRouter({
         contentStyle: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       try {
+        const db = getDb();
+        const [business] = await db
+          .select()
+          .from(businesses)
+          .where(eq(businesses.userId, ctx.user.id))
+          .orderBy(desc(businesses.createdAt))
+          .limit(1);
+
+        const evidence = business?.websiteEvidence as {
+          businessCategory?: string;
+          productsServices?: string[];
+          targetCustomers?: string[];
+          location?: string;
+        } | undefined;
+
         const briefParts = [
           input.name ? `Campaign Name: ${input.name}` : "",
           input.goal ? `Objective: ${input.goal}` : "",
@@ -317,7 +355,10 @@ export const campaignRouter = createRouter({
           input.targetBuyer ? `Target Buyer: ${input.targetBuyer}` : (input.targetAudience ? `Target Audience: ${input.targetAudience}` : ""),
           input.mainPainPoint ? `Main Pain Point: ${input.mainPainPoint}` : "",
           input.productOrService ? `Product/Service: ${input.productOrService}` : "",
-          input.platforms ? `Platforms: ${input.platforms}` : "",
+          input.platforms ? `Platforms (preserve these): ${input.platforms}` : "",
+          evidence
+            ? `Website evidence (ground truth):\n- Category: ${evidence.businessCategory || "N/A"}\n- Products/Services: ${(evidence.productsServices || []).join(", ") || "N/A"}\n- Target Customers: ${(evidence.targetCustomers || []).join(", ") || "N/A"}\n- CRITICAL: Only suggest products/services and platforms that match this evidence. Do not introduce unsupported services.`
+            : "",
           input.budget ? `Budget: $${input.budget}` : "",
           input.coreMessage ? `Core Message: ${input.coreMessage}` : "",
           input.offerDetails ? `Offer: ${input.offerDetails}` : "",
@@ -339,7 +380,7 @@ export const campaignRouter = createRouter({
         const result = await generateObject({
           model: defaultModel,
           system:
-            "You are a senior marketing strategist. Improve the campaign brief below. Keep the same language and tone. Be concise and actionable. If no offer is provided, do not invent discounts, free trials or limited-time offers. Use neutral CTAs. Return null for any field you cannot improve confidently.",
+            "You are a senior marketing strategist. Improve the campaign brief below. Keep the same language and tone. Be concise and actionable. If no offer is provided, do not invent discounts, free trials or limited-time offers. Use neutral CTAs. Return null for any field you cannot improve confidently. Preserve the user's selected platforms. Only suggest products/services grounded in the website evidence.",
           prompt: briefParts.join("\n"),
           schema,
         });
@@ -449,6 +490,131 @@ export const campaignRouter = createRouter({
           and(eq(campaigns.id, id), eq(campaigns.userId, ctx.user.id))
         );
       return { success: true };
+    }),
+
+  regenerateFromProfile: authedQuery
+    .input(z.object({ campaignId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+
+      const [campaign] = await db
+        .select()
+        .from(campaigns)
+        .where(and(eq(campaigns.id, input.campaignId), eq(campaigns.userId, ctx.user.id)))
+        .limit(1);
+
+      if (!campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
+      if (!campaign.businessId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Campaign is not linked to a business" });
+      }
+
+      const [business] = await db
+        .select()
+        .from(businesses)
+        .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, ctx.user.id)))
+        .limit(1);
+
+      if (!business) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+      }
+
+      const evidence = (business.websiteEvidence || {}) as {
+        businessCategory?: string;
+        productsServices?: string[];
+        targetCustomers?: string[];
+        location?: string;
+      };
+
+      // 1. Update campaign brief from latest business evidence
+      await db
+        .update(campaigns)
+        .set({
+          productOrService: business.productOrService || evidence.productsServices?.join(", ") || campaign.productOrService,
+          targetBuyer: business.targetCustomer || evidence.targetCustomers?.join(", ") || campaign.targetBuyer,
+          mainPainPoint: campaign.mainPainPoint,
+          workflowState: "strategy_pending",
+          updatedAt: new Date(),
+        } as any)
+        .where(eq(campaigns.id, input.campaignId));
+
+      // 2. Delete old agent runs so regeneration is not blocked by dedup guards
+      await db
+        .delete(agentRuns)
+        .where(and(eq(agentRuns.campaignId, input.campaignId), eq(agentRuns.userId, ctx.user.id)));
+
+      // 3. Delete old AI-generated content posts
+      await db
+        .delete(contentPosts)
+        .where(
+          and(
+            eq(contentPosts.campaignId, input.campaignId),
+            eq(contentPosts.userId, ctx.user.id),
+            eq(contentPosts.aiGenerated, true)
+          )
+        );
+
+      // 4. Delete old generated campaign assets
+      await db
+        .delete(campaignAssets)
+        .where(
+          and(
+            eq(campaignAssets.campaignId, input.campaignId),
+            eq(campaignAssets.userId, ctx.user.id),
+            inArray(campaignAssets.assetType, [
+              "caption_pack",
+              "caption_adaptation",
+              "carousel_ad",
+              "ad_copy",
+              "whatsapp_promo",
+              "email_copy",
+              "launch_pack",
+              "hashtag_set",
+              "cta_variant",
+            ])
+          )
+        );
+
+      // 4. Regenerate strategy
+      const strategyResult = await runStrategyAgent({
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+        business: {
+          name: business.name,
+          industry: business.industry,
+          location: business.location || evidence.location,
+          productOrService: business.productOrService,
+          targetCustomer: business.targetCustomer,
+          brandTone: business.brandTone,
+          mainGoal: business.mainGoal,
+          monthlyBudget: business.monthlyBudget,
+          preferredPlatforms: business.preferredPlatforms,
+          website: business.website,
+          websiteEvidence: business.websiteEvidence,
+        },
+      });
+
+      await onAgentRunComplete(strategyResult.runId);
+
+      // 5. Regenerate creative pack
+      const creativeResult = await runCreativeAgent({
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+      });
+
+      Promise.resolve().then(() =>
+        onAgentRunComplete(creativeResult.packRunId).catch((err) => {
+          console.error("[regenerateFromProfile] onAgentRunComplete failed:", err.message);
+        })
+      );
+
+      return {
+        success: true,
+        strategyRunId: strategyResult.runId,
+        creativeRunId: creativeResult.packRunId,
+      };
     }),
 
   delete: authedQuery

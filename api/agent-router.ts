@@ -57,6 +57,22 @@ export const agentRouter = createRouter({
         });
       }
 
+      // Confidence / evidence gate: do not generate strategy from unvalidated website data.
+      const evidence = (business.websiteEvidence || null) as {
+        businessCategory?: string;
+        productsServices?: string[];
+        confidence?: number;
+      } | null;
+      const confidence = evidence?.confidence ?? 0;
+      if (evidence && confidence < 0.6) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Website understanding is not confident enough to generate strategy. " +
+            "Please confirm your business category and products/services in the business profile.",
+        });
+      }
+
       // Prevent duplicate strategy runs
       const blockedStates = [
         "strategy_generated",
@@ -126,6 +142,7 @@ export const agentRouter = createRouter({
           monthlyBudget: business.monthlyBudget,
           preferredPlatforms: business.preferredPlatforms,
           website: business.website,
+          websiteEvidence: business.websiteEvidence,
         },
         strategyText: input.strategyText,
       });

@@ -182,6 +182,7 @@ export const businesses = mysqlTable("businesses", {
   whatsappNumber: varchar("whatsappNumber", { length: 50 }),
   preferredPlatforms: text("preferredPlatforms"),
   premiumContentPreferences: text("premiumContentPreferences"),
+  websiteEvidence: json("websiteEvidence"),
   hasProductVideos: boolean("hasProductVideos").default(false),
   onboardingComplete: boolean("onboardingComplete").default(false).notNull(),
   isActive: boolean("isActive").default(true).notNull(),
