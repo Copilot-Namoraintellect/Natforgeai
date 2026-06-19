@@ -55,6 +55,8 @@ export class OpenAIImageProvider implements ImageProvider {
 
     const jobId = `openai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+    console.log(`[OpenAIImageProvider] Requesting image | jobId=${jobId} | model=${model} | size=${size}`);
+
     try {
       const body: Record<string, any> = {
         model,
@@ -93,6 +95,7 @@ export class OpenAIImageProvider implements ImageProvider {
 
       if (!response.ok) {
         const errorDetail = rawResponse?.error?.message || JSON.stringify(rawResponse);
+        console.error(`[OpenAIImageProvider] Generation failed | jobId=${jobId} | status=${response.status} | error="${errorDetail}"`);
         return {
           jobId,
           status: "failed",
@@ -107,6 +110,7 @@ export class OpenAIImageProvider implements ImageProvider {
       const imageUrl = rawResponse?.data?.[0]?.url as string | undefined;
 
       if (!b64 && !imageUrl) {
+        console.error(`[OpenAIImageProvider] No image data | jobId=${jobId} | rawResponseKeys=${Object.keys(rawResponse).join(",")}`);
         return {
           jobId,
           status: "failed",
@@ -116,6 +120,8 @@ export class OpenAIImageProvider implements ImageProvider {
           rawResponse,
         };
       }
+
+      console.log(`[OpenAIImageProvider] Generation succeeded | jobId=${jobId} | hasBase64=${!!b64} | hasUrl=${!!imageUrl}`);
 
       return {
         jobId,
@@ -128,6 +134,7 @@ export class OpenAIImageProvider implements ImageProvider {
         rawResponse,
       };
     } catch (err: any) {
+      console.error(`[OpenAIImageProvider] Request exception | jobId=${jobId} | error="${err.message}"`);
       return {
         jobId,
         status: "failed",

@@ -3,12 +3,13 @@ import fs from "fs";
 import { env } from "../env";
 import { randomUUID } from "crypto";
 
+// Store generated media outside dist/ so it survives builds and deployments.
 const PUBLIC_GENERATED_DIR = env.isProduction
-  ? path.resolve(process.cwd(), "dist/public/generated")
+  ? path.resolve(process.cwd(), "data/public/generated")
   : path.resolve(process.cwd(), "public/generated");
 
 const PUBLIC_UPLOADS_DIR = env.isProduction
-  ? path.resolve(process.cwd(), "dist/public/uploads")
+  ? path.resolve(process.cwd(), "data/public/uploads")
   : path.resolve(process.cwd(), "public/uploads");
 
 function ensureDir(dir: string) {
@@ -18,7 +19,14 @@ function ensureDir(dir: string) {
 }
 
 function publicBaseUrl(): string {
-  return env.isProduction ? "" : "http://localhost:3000";
+  // In production the static server mounts /generated/* at the same origin,
+  // so relative URLs work. In dev, derive from the running dev server instead
+  // of hard-coding localhost:3000.
+  if (env.isProduction) return "";
+  if (typeof process !== "undefined" && process.env.VITE_DEV_SERVER_URL) {
+    return process.env.VITE_DEV_SERVER_URL;
+  }
+  return "";
 }
 
 export interface StoredMedia {

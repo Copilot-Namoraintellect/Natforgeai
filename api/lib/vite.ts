@@ -21,3 +21,17 @@ export function serveStaticFiles(app: App) {
     return c.html(content);
   });
 }
+
+/**
+ * Serve generated media from a persistent directory outside dist/.
+ * This keeps images/videos/uploads available across builds and deployments.
+ */
+export function servePersistentMedia(app: App) {
+  const generatedDir = path.resolve(process.cwd(), "data/public/generated");
+  const uploadsDir = path.resolve(process.cwd(), "data/public/uploads");
+
+  app.use("/generated/*", serveStatic({ root: "./data/public/generated", rewriteRequestPath: (path) => path.replace(/^\/generated/, "") }));
+  app.use("/uploads/*", serveStatic({ root: "./data/public/uploads", rewriteRequestPath: (path) => path.replace(/^\/uploads/, "") }));
+
+  console.log(`[Static] Serving persistent media from ${generatedDir} and ${uploadsDir}`);
+}

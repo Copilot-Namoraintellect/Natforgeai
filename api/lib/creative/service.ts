@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { eq, and } from "drizzle-orm";
+import fs from "fs";
 import { env } from "../env";
 import { getDb } from "../../queries/connection";
 import { contentPosts, campaigns, businesses, generatedImages, videoRenderJobs, campaignAssets } from "@db/schema";
@@ -124,7 +125,7 @@ async function assertCanAfford(userId: number, cost: number, feature: string) {
   if (!preCheck.hasCredits) {
     throw new TRPCError({
       code: "PAYMENT_REQUIRED",
-      message: `Insufficient credits. You have ${preCheck.balance} credits. ${feature} requires ${cost} credits.`,
+      message: `${feature} requires ${cost} credits. You currently have ${preCheck.balance} credits.`,
     });
   }
 }
@@ -178,6 +179,7 @@ export async function generateMasterImage({
     })
     .where(eq(contentPosts.id, post.id));
 
+  try {
   let campaign: any = null;
   let business: any = null;
 
@@ -203,6 +205,8 @@ export async function generateMasterImage({
   const prompt = buildPremiumImagePrompt({ business, campaign, post, brandColors, creativeType, strongerBrandFit });
 
   console.log(`[CreativeService] Generating premium image | userId=${userId} | contentPostId=${contentPostId} | provider=${provider.name}`);
+
+  console.log(`[CreativeService] Requesting OpenAI image | userId=${userId} | contentPostId=${contentPostId} | model=${env.openaiImageModel || "gpt-image-1"} | aspectRatio=${aspectRatio}`);
 
   const result = await provider.generate({
     userId,
@@ -353,6 +357,8 @@ export async function generateMasterImage({
     }
   }
 
+  console.log(`[CreativeService] OpenAI image received | userId=${userId} | contentPostId=${contentPostId} | providerJobId=${result.providerJobId} | hasBase64=${!!result.imageBase64} | hasUrl=${!!result.imageUrl}`);
+
   // Compose deterministic brand overlay (logo + real contact details + CTA)
   let composedBuffer = rawBuffer;
   try {
@@ -368,6 +374,7 @@ export async function generateMasterImage({
         : campaign.primaryOutcome || post?.title || business.name,
       subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
     });
+    console.log(`[CreativeService] Sharp composition completed | userId=${userId} | contentPostId=${contentPostId} | size=${composedBuffer.length}`);
   } catch (composeErr: any) {
     console.warn(`[CreativeService] Brand overlay failed, using raw image | userId=${userId} | error="${composeErr.message}"`);
   }
@@ -380,9 +387,38 @@ export async function generateMasterImage({
       prefix: "master-post",
       extension: result.extension || "png",
     });
+    console.log(`[CreativeService] Image stored | userId=${userId} | contentPostId=${contentPostId} | publicUrl=${stored.publicUrl} | localPath=${stored.localPath} | size=${composedBuffer.length}`);
   } catch (storageErr: any) {
     console.error(`[CreativeService] Failed to store image | userId=${userId} | error="${storageErr.message}"`);
     return { ...result, status: "failed", errorMessage: `Generated image could not be stored: ${storageErr.message}` };
+  }
+
+  // Validate the stored file exists and is non-empty before declaring success
+  try {
+    if (!stored.publicUrl || typeof stored.publicUrl !== "string") {
+      throw new Error("Stored image returned an invalid public URL");
+    }
+    if (!stored.publicUrl.startsWith("/") && !stored.publicUrl.startsWith("http")) {
+      throw new Error(`Stored image returned a malformed public URL: ${stored.publicUrl}`);
+    }
+    const stats = fs.statSync(stored.localPath);
+    if (!stats.isFile() || stats.size === 0) {
+      throw new Error(`Stored image file is missing or empty: ${stored.localPath}`);
+    }
+    console.log(`[CreativeService] Image URL validation passed | userId=${userId} | contentPostId=${contentPostId} | publicUrl=${stored.publicUrl}`);
+  } catch (validationErr: any) {
+    console.error(`[CreativeService] Image URL validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${validationErr.message}"`);
+    await db
+      .update(contentPosts)
+      .set({
+        metadata: {
+          ...currentMeta,
+          imageStatus: "failed",
+          imageError: `Generated image could not be validated: ${validationErr.message}`,
+        },
+      })
+      .where(eq(contentPosts.id, post.id));
+    return { ...result, status: "failed", errorMessage: `Generated image could not be validated: ${validationErr.message}` };
   }
 
   // Deduct credits only on success
@@ -476,6 +512,26 @@ export async function generateMasterImage({
     creditsCharged: cost,
     status: "completed",
   };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error(`[CreativeService] Unexpected error generating premium image | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`, err);
+    try {
+      await db
+        .update(contentPosts)
+        .set({
+          metadata: {
+            ...currentMeta,
+            imageStatus: "failed",
+            imageError: errorMessage,
+          },
+        })
+        .where(eq(contentPosts.id, post.id));
+    } catch (metadataErr) {
+      const metadataErrorMessage = metadataErr instanceof Error ? metadataErr.message : String(metadataErr);
+      console.error(`[CreativeService] Failed to update failure metadata | error="${metadataErrorMessage}"`);
+    }
+    return { status: "failed", jobId: "", errorMessage };
+  }
 }
 
 export interface CaptionPack {

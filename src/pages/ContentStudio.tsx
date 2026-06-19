@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useSearchParams, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -53,6 +53,7 @@ import {
   Image,
   ChevronDown,
   ChevronUp,
+  RefreshCw,
 } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { toast } from "sonner";
@@ -105,6 +106,8 @@ export default function ContentStudio() {
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["masterVisual", "masterVideo"]));
   const [imageCreativeType, setImageCreativeType] = useState<"leaflet" | "poster" | "service_menu" | "offer_advert" | "event_announcement">("leaflet");
+  const [loadingImageIds, setLoadingImageIds] = useState<Set<number>>(new Set());
+  const [brokenImageIds, setBrokenImageIds] = useState<Set<number>>(new Set());
 
   const IMAGE_CREATIVE_TYPE_OPTIONS = [
     { value: "leaflet", label: "Leaflet / Pamphlet" },
@@ -152,6 +155,8 @@ export default function ContentStudio() {
     { enabled: !!urlCampaignId }
   );
   const { data: videoConfig } = trpc.video.getConfigStatus.useQuery();
+  const { data: premiumImageCostData } = trpc.image.premiumImageCost.useQuery();
+  const premiumImageCost = premiumImageCostData?.cost ?? 10;
 
   // Fetch campaigns and approvals to show contextual empty-state guidance
   const { data: campaigns } = trpc.campaign.list.useQuery();
@@ -507,22 +512,33 @@ Include:
   });
 
   const generateImageMutation = trpc.image.generateForPost.useMutation({
+    onMutate: (variables) => {
+      setBrokenImageIds((prev) => {
+        const next = new Set(prev);
+        next.delete(variables.contentPostId);
+        return next;
+      });
+      setLoadingImageIds((prev) => new Set(prev).add(variables.contentPostId));
+    },
     onSuccess: (data) => {
-      toast.success(`Premium leaflet generated (${data.creditsCharged} credits). Review the leaflet and caption pack, then approve or regenerate.`);
+      toast.success(`Premium leaflet generated (${data.creditsCharged ?? premiumImageCost} credits). Review the leaflet and caption pack, then approve or regenerate.`);
       utils.content.list.invalidate();
       utils.image.list.invalidate({ campaignId: Number(urlCampaignId) });
       utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
     },
     onError: (err) => {
       const message = err.message || "";
-      if (message.includes("not configured")) {
+      const code = (err as { data?: { code?: string } } | undefined)?.data?.code;
+      if (code === "PAYMENT_REQUIRED" || message.includes("Insufficient credits") || message.includes("credits.")) {
+        toast.error(message || "You don't have enough credits to generate a premium leaflet.");
+      } else if (code === "NOT_IMPLEMENTED" || message.includes("not configured")) {
         toast.error("Premium leaflet generation is not configured. Please contact admin.");
       } else if (message.includes("System AI generation limit")) {
         toast.error("System AI generation limit reached. Please contact admin or try again later.");
-      } else if (message.includes("400")) {
+      } else if (code === "BAD_REQUEST" || message.includes("400") || message.includes("content policy") || message.includes("safety")) {
         toast.error("We could not generate the premium leaflet. No credits were deducted. Please try again or contact support if the issue continues.");
       } else {
-        toast.error(err.message || "We could not generate the premium leaflet. No credits were deducted. Please try again.");
+        toast.error(message || "We could not generate the premium leaflet. No credits were deducted. Please try again.");
       }
     },
   });
@@ -835,6 +851,10 @@ Include:
     const imageUrl = metadata?.imageUrl;
     const imageStatus = metadata?.imageStatus;
     const isGenerating = imageStatus === "generating" || generateImageMutation.isPending;
+    const isFailed = imageStatus === "failed";
+    const isReady = imageStatus === "ready" && !!imageUrl;
+    const imageLoading = loadingImageIds.has(content.id);
+    const imageBroken = brokenImageIds.has(content.id);
     const captionPack = campaignAssets?.find(
       (a) => a.assetType === "caption_pack" && (a.metadata as any)?.contentPostId === content.id
     );
@@ -845,160 +865,244 @@ Include:
         strongerBrandFit,
       });
 
-    if (imageUrl) {
+    const statusBadge = () => {
+      if (isGenerating || imageLoading) {
+        return (
+          <Badge variant="outline" className="text-[10px] h-6 border-blue-200 text-blue-700 bg-blue-50 flex items-center gap-1">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Generating
+          </Badge>
+        );
+      }
+      if (isFailed || imageBroken) {
+        return (
+          <Badge variant="outline" className="text-[10px] h-6 border-red-200 text-red-700 bg-red-50">
+            Failed
+          </Badge>
+        );
+      }
+      if (isReady) {
+        return (
+          <Badge variant="outline" className="text-[10px] h-6 border-emerald-200 text-emerald-700 bg-emerald-50 flex items-center gap-1">
+            <CheckCircle2 className="w-3 h-3" />
+            Ready
+          </Badge>
+        );
+      }
       return (
-        <div className="mt-4 space-y-3">
-          <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3">
-            <p className="text-xs text-emerald-800">
-              Premium leaflet generated. Review the leaflet and caption pack, then approve or regenerate.
-              {!businessForContext?.logo && (
-                <span className="block mt-1 text-[10px] text-emerald-700/80">
-                  Tip: Add your logo in Settings to improve brand accuracy.
-                </span>
-              )}
-            </p>
-          </div>
-
-          <div className="relative group overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-            <img
-              src={imageUrl}
-              alt="Premium marketing leaflet"
-              className="w-full object-contain max-h-[420px]"
-            />
-            <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                className="h-7 text-[11px]"
-                onClick={() => {
-                  const a = document.createElement("a");
-                  a.href = imageUrl;
-                  a.download = `${content.title || "campaign"}-image.${metadata?.imageExtension || "png"}`;
-                  a.click();
-                }}
-              >
-                <ExternalLink className="w-3 h-3 mr-1" />
-                Download Leaflet
-              </Button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="text-[10px] h-6 border-emerald-200 text-emerald-700 bg-emerald-50">
-              <Sparkles className="w-3 h-3 mr-1" />
-              Premium Marketing Leaflet
-            </Badge>
-            {metadata?.imageCreditsCharged && (
-              <Badge variant="outline" className="text-[10px] h-6">
-                {metadata.imageCreditsCharged} credits
-              </Badge>
-            )}
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-[11px]"
-              onClick={() => generate(false)}
-              disabled={isGenerating}
-            >
-              <Image className="w-3 h-3 mr-1" />
-              Regenerate Leaflet
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-[11px] border-purple-300 text-purple-700 hover:bg-purple-50"
-              onClick={() => generate(true)}
-              disabled={isGenerating}
-            >
-              <Sparkles className="w-3 h-3 mr-1" />
-              Regenerate with Stronger Brand Fit
-            </Button>
-            {!captionPack && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-[11px]"
-                onClick={() => generateCaptionPackMutation.mutate({ contentPostId: content.id })}
-                disabled={generateCaptionPackMutation.isPending}
-              >
-                {generateCaptionPackMutation.isPending ? (
-                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                ) : (
-                  <MessageCircle className="w-3 h-3 mr-1" />
-                )}
-                Generate Caption Pack
-              </Button>
-            )}
-          </div>
-
-          {businessForContext?.logo && (
-            <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md p-2">
-              Logo placement may need manual review. OpenAI cannot always place logos precisely.
-            </p>
-          )}
-
-          {captionPack && renderCaptionPack(captionPack, content.id)}
-        </div>
+        <Badge variant="outline" className="text-[10px] h-6 text-slate-500">
+          Not generated
+        </Badge>
       );
-    }
+    };
+
+    const formatSelect = (
+      <Select value={imageCreativeType} onValueChange={(v) => setImageCreativeType(v as any)}>
+        <SelectTrigger className="w-[180px] h-7 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {IMAGE_CREATIVE_TYPE_OPTIONS.map((opt) => (
+            <SelectItem key={opt.value} value={opt.value} className="text-xs">
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
 
     return (
-      <div className="mt-4 rounded-xl border border-slate-200 bg-white p-5 space-y-4">
-        {isGenerating ? (
-          <div className="text-center space-y-3 py-4">
-            <Loader2 className="w-8 h-8 mx-auto text-[#00D4FF] animate-spin" />
-            <p className="text-sm font-medium text-slate-800">Generating your premium marketing leaflet</p>
-            <p className="text-xs text-slate-500">This may take up to a minute. No credits are deducted until the leaflet is ready.</p>
+      <div className="mt-4 rounded-xl border border-slate-200 bg-white overflow-hidden">
+        {/* Header */}
+        <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50">
+          <div className="flex items-center gap-2">
+            <Image className="w-5 h-5 text-[#00D4FF]" />
+            <h3 className="text-sm font-semibold text-slate-900">Premium Marketing Leaflet</h3>
+            {statusBadge()}
           </div>
-        ) : (
-          <>
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] flex items-center justify-center shrink-0">
-                <Image className="w-5 h-5 text-white" />
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="text-[10px] h-6">
+              {premiumImageCost} credits
+            </Badge>
+            {!isReady && !isGenerating && formatSelect}
+          </div>
+        </div>
+
+        <div className="p-4 grid grid-cols-1 lg:grid-cols-3 gap-5">
+          {/* Preview */}
+          <div className="lg:col-span-2">
+            {isGenerating ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center min-h-[320px] text-center px-6">
+                <Loader2 className="w-10 h-10 text-[#00D4FF] animate-spin mb-3" />
+                <p className="text-sm font-medium text-slate-800">Generating your premium marketing leaflet</p>
+                <p className="text-xs text-slate-500 mt-1 max-w-sm">No credits are deducted until the leaflet is ready. This usually takes 20–45 seconds.</p>
               </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-900">Premium marketing leaflet not created yet</p>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  Click Generate Premium Leaflet to create a ready-to-post marketing leaflet using your approved campaign strategy, brand style and caption pack.
+            ) : isFailed || imageBroken ? (
+              <div className="rounded-xl border border-red-200 bg-red-50 flex flex-col items-center justify-center min-h-[320px] text-center px-6">
+                <AlertCircle className="w-12 h-12 text-red-400 mb-3" />
+                <p className="text-base font-medium text-red-800">We could not generate the premium leaflet</p>
+                <p className="text-sm text-red-600 mt-1 max-w-md">
+                  No credits were deducted. Please try again, or contact support if the issue continues.
                 </p>
+                {metadata?.imageError && typeof metadata.imageError === "string" && (
+                  <p className="text-[10px] text-red-600 mt-3 font-mono bg-red-100/60 px-3 py-1.5 rounded max-w-full truncate">
+                    {metadata.imageError}
+                  </p>
+                )}
+                <Button size="sm" className="mt-4 bg-red-600 hover:bg-red-700 text-white" onClick={() => generate(false)}>
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Retry Generation
+                </Button>
               </div>
-            </div>
+            ) : isReady ? (
+              <div className="relative group overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                {imageLoading && (
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-50">
+                    <Loader2 className="w-8 h-8 text-[#00D4FF] animate-spin mb-2" />
+                    <p className="text-xs text-slate-500">Loading preview…</p>
+                  </div>
+                )}
+                <img
+                  src={imageUrl}
+                  alt="Premium marketing leaflet"
+                  className={`w-full object-contain max-h-[520px] ${imageLoading ? "opacity-0" : "opacity-100"}`}
+                  onLoad={() => {
+                    setLoadingImageIds((prev) => {
+                      const next = new Set(prev);
+                      next.delete(content.id);
+                      return next;
+                    });
+                  }}
+                  onError={() => {
+                    setLoadingImageIds((prev) => {
+                      const next = new Set(prev);
+                      next.delete(content.id);
+                      return next;
+                    });
+                    setBrokenImageIds((prev) => new Set(prev).add(content.id));
+                    console.error(`[PremiumLeaflet] Failed to load image preview | contentPostId=${content.id} | url=${imageUrl}`);
+                  }}
+                />
+                <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="h-8 text-[11px]"
+                    onClick={() => {
+                      const a = document.createElement("a");
+                      a.href = imageUrl;
+                      a.download = `${content.title || "campaign"}-image.${metadata?.imageExtension || "png"}`;
+                      a.click();
+                    }}
+                  >
+                    <ExternalLink className="w-3 h-3 mr-1" />
+                    Download Leaflet
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center min-h-[320px] text-center px-6">
+                <Image className="w-12 h-12 text-slate-300 mb-3" />
+                <p className="text-base font-medium text-slate-800">Premium marketing leaflet not created yet</p>
+                <p className="text-sm text-slate-500 mt-1 max-w-md">
+                  Generate a ready-to-post marketing leaflet using your approved campaign strategy, brand style and caption pack.
+                </p>
+                <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                  <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generate(false)}>
+                    <Image className="w-4 h-4 mr-2" />
+                    Generate Leaflet — {premiumImageCost} credits
+                  </Button>
+                  <Button size="sm" variant="outline" className="border-purple-300 text-purple-700 hover:bg-purple-50" onClick={() => generate(true)}>
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    Stronger Brand Fit
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Details / actions */}
+          <div className="space-y-4">
+            <Card className="border-slate-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Leaflet Details</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2.5 text-xs">
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Headline</span>
+                  <span className="font-medium text-right line-clamp-2">{content.title || campaignForContext?.goal || "—"}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">CTA</span>
+                  <span className="font-medium text-right line-clamp-2">{content.cta || campaignForContext?.preferredCta || "—"}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Business</span>
+                  <span className="font-medium text-right line-clamp-1">{businessForContext?.name || "—"}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Format</span>
+                  <span className="font-medium text-right capitalize">{imageCreativeType.replace("_", " ")}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Credits charged</span>
+                  <span className="font-medium text-right">{metadata?.imageCreditsCharged ?? "—"}</span>
+                </div>
+                {metadata?.imageGeneratedAt && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-slate-500">Generated</span>
+                    <span className="font-medium text-right">
+                      {new Date(metadata.imageGeneratedAt).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
             <div className="space-y-2">
-              <Label className="text-xs">Creative format</Label>
-              <Select value={imageCreativeType} onValueChange={(v) => setImageCreativeType(v as any)}>
-                <SelectTrigger className="w-full h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {IMAGE_CREATIVE_TYPE_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value} className="text-xs">
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <Button
-                size="sm"
-                className="h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white"
-                onClick={() => generate(false)}
-              >
-                <Image className="w-3 h-3 mr-1" />
-                Generate Premium Leaflet — 10 credits
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 text-[12px] border-purple-300 text-purple-700 hover:bg-purple-50"
-                onClick={() => generate(true)}
-              >
-                <Sparkles className="w-3 h-3 mr-1" />
-                Stronger Brand Fit
-              </Button>
-              <span className="text-[10px] text-slate-500">Includes caption pack</span>
+              {isReady && (
+                <Button
+                  size="sm"
+                  className="w-full h-8 text-[12px]"
+                  onClick={() => {
+                    const a = document.createElement("a");
+                    a.href = imageUrl;
+                    a.download = `${content.title || "campaign"}-image.${metadata?.imageExtension || "png"}`;
+                    a.click();
+                  }}
+                >
+                  <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                  Download Leaflet
+                </Button>
+              )}
+              {(isReady || isFailed) && !isGenerating && (
+                <>
+                  <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generate(false)} disabled={isGenerating}>
+                    <Image className="w-3.5 h-3.5 mr-1.5" />
+                    Regenerate Leaflet
+                  </Button>
+                  <Button size="sm" variant="outline" className="w-full h-8 text-[12px] border-purple-300 text-purple-700 hover:bg-purple-50" onClick={() => generate(true)} disabled={isGenerating}>
+                    <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                    Regenerate with Stronger Brand Fit
+                  </Button>
+                </>
+              )}
+              {!captionPack && !isGenerating && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full h-8 text-[12px]"
+                  onClick={() => generateCaptionPackMutation.mutate({ contentPostId: content.id })}
+                  disabled={generateCaptionPackMutation.isPending}
+                >
+                  {generateCaptionPackMutation.isPending ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <MessageCircle className="w-3.5 h-3.5 mr-1.5" />
+                  )}
+                  Generate Caption Pack
+                </Button>
+              )}
             </div>
 
             {!businessForContext?.logo && (
@@ -1008,15 +1112,18 @@ Include:
                 </p>
               </div>
             )}
-          </>
-        )}
-        {imageStatus === "failed" && metadata?.imageError && (
-          <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-left">
-            <p className="text-xs font-semibold text-red-700">We could not generate the premium leaflet</p>
-            <p className="text-[11px] text-red-600 mt-0.5">No credits were deducted. Please try again or contact support if the issue continues.</p>
-            {typeof metadata.imageError === "string" && metadata.imageError.includes("400") && (
-              <p className="text-[10px] text-red-500 mt-1 font-mono">{metadata.imageError}</p>
+            {businessForContext?.logo && (
+              <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md p-2.5">
+                Logo placement may need manual review. OpenAI cannot always place logos precisely.
+              </p>
             )}
+          </div>
+        </div>
+
+        {/* Caption pack */}
+        {captionPack && (
+          <div className="border-t border-slate-100 p-4 bg-slate-50/40">
+            {renderCaptionPack(captionPack, content.id)}
           </div>
         )}
       </div>

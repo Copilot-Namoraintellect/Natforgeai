@@ -556,6 +556,13 @@ export default function Login() {
                   )}
                   Google Account
                 </Button>
+                <button
+                  type="button"
+                  onClick={handleFirebaseGoogleAuth}
+                  className="w-full text-center text-xs text-muted-foreground hover:text-[#00D4FF] mt-2"
+                >
+                  Use another Google account
+                </button>
               </TabsContent>
 
               {/* ─── REGISTER TAB ─── */}
@@ -701,6 +708,13 @@ export default function Login() {
                   )}
                   Google Account
                 </Button>
+                <button
+                  type="button"
+                  onClick={handleFirebaseGoogleAuth}
+                  className="w-full text-center text-xs text-muted-foreground hover:text-[#00D4FF] mt-2"
+                >
+                  Use another Google account
+                </button>
 
                 <p className="text-xs text-center text-muted-foreground mt-4">
                   Already have an account?{" "}

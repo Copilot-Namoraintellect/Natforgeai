@@ -153,7 +153,13 @@ export async function deductCredits({
     });
   }
 
-  const newBalance = wallet.balance - amount;
+  // Re-read wallet to avoid stale balance under concurrency
+  const [updatedWallet] = await db
+    .select()
+    .from(creditWallets)
+    .where(eq(creditWallets.id, wallet.id))
+    .limit(1);
+  const newBalance = updatedWallet?.balance ?? wallet.balance - amount;
 
   await db.insert(creditTransactions).values({
     userId,

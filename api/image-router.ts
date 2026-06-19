@@ -3,12 +3,17 @@ import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { generatedImages } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
-import { checkCredits, deductCredits, recordAiUsage } from "./lib/billing/credit-engine";
+import { checkCredits, deductCredits, recordAiUsage, adminAdjustCredits } from "./lib/billing/credit-engine";
 import { calculateFixedCost } from "./lib/billing/cost-tracker";
 import { generateMasterImage, generateCaptionPack } from "./lib/creative/service";
+import { getPremiumImageCredits } from "./lib/creative/costs";
 import { TRPCError } from "@trpc/server";
 
 export const imageRouter = createRouter({
+  premiumImageCost: authedQuery.query(async () => {
+    return { cost: getPremiumImageCredits() };
+  }),
+
   list: authedQuery
     .input(
       z
@@ -108,6 +113,18 @@ export const imageRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const { id, ...data } = input;
+
+      const [existing] = await db
+        .select()
+        .from(generatedImages)
+        .where(
+          and(
+            eq(generatedImages.id, id),
+            eq(generatedImages.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+
       await db
         .update(generatedImages)
         .set(data)
@@ -117,6 +134,22 @@ export const imageRouter = createRouter({
             eq(generatedImages.userId, ctx.user.id)
           )
         );
+
+      // Legacy image.create charges credits up-front. Refund if the worker marks the job as failed.
+      if (data.status === "failed" && existing && existing.status === "pending" && existing.creditsCharged && existing.creditsCharged > 0) {
+        try {
+          await adminAdjustCredits({
+            userId: ctx.user.id,
+            amount: existing.creditsCharged,
+            description: `Refund for failed image generation (image id ${id})`,
+            adminUserId: 0,
+          });
+          console.log(`[image.update] Refunded ${existing.creditsCharged} credits to user ${ctx.user.id} for failed image ${id}`);
+        } catch (refundErr: any) {
+          console.error(`[image.update] Failed to refund credits for failed image ${id}:`, refundErr.message);
+        }
+      }
+
       return { success: true };
     }),
 
@@ -139,9 +172,22 @@ export const imageRouter = createRouter({
       });
 
       if (result.status === "failed") {
+        const errorMessage = result.errorMessage || "Premium image generation failed";
+        console.error(`[image.generateForPost] failed | userId=${ctx.user.id} | contentPostId=${input.contentPostId} | error="${errorMessage}"`);
+
+        // Map provider/config failures to meaningful codes instead of always returning 500
+        let code: "INTERNAL_SERVER_ERROR" | "PAYMENT_REQUIRED" | "NOT_IMPLEMENTED" | "BAD_REQUEST" = "INTERNAL_SERVER_ERROR";
+        if (errorMessage.includes("not configured")) {
+          code = "NOT_IMPLEMENTED";
+        } else if (errorMessage.includes("Insufficient credits") || errorMessage.includes("spend limit")) {
+          code = "PAYMENT_REQUIRED";
+        } else if (errorMessage.includes("content policy") || errorMessage.includes("safety") || errorMessage.includes("400")) {
+          code = "BAD_REQUEST";
+        }
+
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: result.errorMessage || "Premium image generation failed",
+          code,
+          message: errorMessage,
         });
       }
 

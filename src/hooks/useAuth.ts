@@ -1,5 +1,7 @@
 import { trpc } from "@/providers/trpc";
 import { useCallback, useMemo } from "react";
+import { signOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
 
 export function useAuth() {
   const utils = trpc.useUtils();
@@ -14,8 +16,14 @@ export function useAuth() {
     retry: false,
   });
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
     localStorage.removeItem("auth_token");
+    // Fully clear Firebase session so the next Google login shows the account chooser.
+    try {
+      await signOut(auth);
+    } catch (err: any) {
+      console.warn("[useAuth] Firebase signOut failed:", err.message);
+    }
     utils.invalidate();
     window.location.href = "/login";
   }, [utils]);

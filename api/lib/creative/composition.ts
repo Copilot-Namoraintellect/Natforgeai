@@ -197,6 +197,8 @@ export async function composeBrandedLeafletImage(
 ): Promise<Buffer> {
   const { business, campaign, post, creativeType = "leaflet", offer, cta, headline, subheadline } = spec;
 
+  console.log(`[BrandOverlay] Starting composition | business=${business?.name || "none"} | creativeType=${creativeType} | hasLogo=${!!business?.logo}`);
+
   const base = sharp(baseImageBuffer);
   const meta = await base.metadata();
   const width = meta.width || 1024;

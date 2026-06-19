@@ -13,3 +13,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Force the Google account chooser every time so users can switch accounts,
+// especially after logout on shared machines.
+googleProvider.setCustomParameters({ prompt: "select_account" });

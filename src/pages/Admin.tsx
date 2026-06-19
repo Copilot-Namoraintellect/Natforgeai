@@ -43,6 +43,7 @@ export default function Admin() {
   const [activeTab, setActiveTab] = useState("overview");
   const [searchUsers, setSearchUsers] = useState("");
   const [recordPaymentOpen, setRecordPaymentOpen] = useState(false);
+  const [creditForm, setCreditForm] = useState({ userId: "", amount: "", description: "QA top-up" });
 
   const { data: stats } = trpc.admin.stats.useQuery();
   const { data: allUsers } = trpc.admin.users.useQuery(
@@ -70,6 +71,18 @@ export default function Admin() {
       utils.admin.stats.invalidate();
       setRecordPaymentOpen(false);
       toast.success("Payment recorded!");
+    },
+  });
+
+  const { data: wallets } = trpc.billing.adminListWallets.useQuery({ limit: 100 });
+  const adjustCredits = trpc.billing.adminAdjustCredits.useMutation({
+    onSuccess: (data) => {
+      utils.billing.adminListWallets.invalidate();
+      toast.success(`Credits adjusted. New balance: ${data.newBalance}`);
+      setCreditForm({ userId: "", amount: "", description: "QA top-up" });
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to adjust credits");
     },
   });
 
@@ -128,6 +141,21 @@ export default function Admin() {
       description: (form.get("description") as string) || undefined,
       paymentMethod: (form.get("paymentMethod") as any) || "manual",
       paymentReference: (form.get("reference") as string) || undefined,
+    });
+  }
+
+  function handleAdjustCredits(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const userId = Number(creditForm.userId);
+    const amount = Number(creditForm.amount);
+    if (!userId || Number.isNaN(amount)) {
+      toast.error("Enter a valid user ID and amount.");
+      return;
+    }
+    adjustCredits.mutate({
+      userId,
+      amount,
+      description: creditForm.description || "Admin credit adjustment",
     });
   }
 
@@ -215,6 +243,7 @@ export default function Admin() {
           <TabsTrigger value="payments">Payments</TabsTrigger>
           <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
           <TabsTrigger value="profitability">AI Profitability</TabsTrigger>
+          <TabsTrigger value="credits">Credits</TabsTrigger>
           <TabsTrigger value="systemHealth">System Health</TabsTrigger>
         </TabsList>
 
@@ -485,6 +514,91 @@ export default function Admin() {
                 </div>
               </CardContent>
             </Card>
+          )}
+
+          {/* CREDITS TAB */}
+          {activeTab === "credits" && (
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Coins className="w-4 h-4" />
+                    Adjust User Credits
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleAdjustCredits} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                    <div>
+                      <Label className="text-xs">User ID</Label>
+                      <Input
+                        type="number"
+                        placeholder="User ID"
+                        value={creditForm.userId}
+                        onChange={(e) => setCreditForm({ ...creditForm, userId: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Amount (+ to add, - to remove)</Label>
+                      <Input
+                        type="number"
+                        placeholder="e.g. 100"
+                        value={creditForm.amount}
+                        onChange={(e) => setCreditForm({ ...creditForm, amount: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div className="md:col-span-1">
+                      <Label className="text-xs">Description</Label>
+                      <Input
+                        placeholder="QA top-up"
+                        value={creditForm.description}
+                        onChange={(e) => setCreditForm({ ...creditForm, description: e.target.value })}
+                      />
+                    </div>
+                    <Button type="submit" disabled={adjustCredits.isPending}>
+                      {adjustCredits.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                      Adjust Credits
+                    </Button>
+                  </form>
+                  <p className="text-xs text-muted-foreground mt-3">
+                    Use this during QA to top up test users. Positive amounts add credits; negative amounts remove them.
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Credit Wallets</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>User</TableHead>
+                          <TableHead>Email</TableHead>
+                          <TableHead className="text-right">Balance</TableHead>
+                          <TableHead className="text-right">Lifetime Earned</TableHead>
+                          <TableHead className="text-right">Lifetime Spent</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {wallets?.map((w) => (
+                          <TableRow key={w.id}>
+                            <TableCell className="text-sm font-medium">{w.userName || "-"}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{w.userEmail || "-"}</TableCell>
+                            <TableCell className="text-right font-semibold">{w.balance}</TableCell>
+                            <TableCell className="text-right text-muted-foreground">{w.lifetimeEarned}</TableCell>
+                            <TableCell className="text-right text-muted-foreground">{w.lifetimeSpent}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           )}
 
           {/* SYSTEM HEALTH TAB */}
