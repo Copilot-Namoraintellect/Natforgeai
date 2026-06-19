@@ -365,3 +365,54 @@ export async function validateLeafletQuality(
     passed: criticalFailures.length === 0 && score >= 60,
   };
 }
+
+/**
+ * Brand-fidelity validator.
+ *
+ * Penalises outputs that do not clearly derive from the business identity:
+ * - missing logo
+ * - generic/default colour palette
+ * - weak or generic brand header text
+ */
+export interface BrandFidelityInput {
+  hasLogo: boolean;
+  palette?: { source?: string } | null;
+  businessName?: string;
+  headline?: string;
+}
+
+export function validateBrandFidelity(input: BrandFidelityInput): { scorePenalty: number; issues: string[] } {
+  let scorePenalty = 0;
+  const issues: string[] = [];
+
+  if (!input.hasLogo) {
+    issues.push("No business logo available for the leaflet.");
+    scorePenalty += 30;
+  }
+
+  if (!input.palette || input.palette.source === "default") {
+    issues.push("Brand colours are generic defaults, not derived from logo or saved brand colours.");
+    scorePenalty += 25;
+  }
+
+  const headerText = [input.businessName || "", input.headline || ""].join(" ").trim();
+  const genericHeaderWords = ["your business", "welcome", "hello", "thanks", "special offer", "amazing deal"];
+  const lowerHeader = headerText.toLowerCase();
+  const isGenericHeader = genericHeaderWords.some((w) => lowerHeader.includes(w));
+  if (!input.businessName || isGenericHeader) {
+    issues.push("Brand header is weak or generic.");
+    scorePenalty += 15;
+  }
+
+  // Catch currency that was not normalised to South-African format.
+  if (/\b\d+\s+rands?\b/i.test(input.headline || "")) {
+    issues.push("Headline uses informal currency wording ('rands').");
+    scorePenalty += 12;
+  }
+  if (/\bR\s*\d\s+\d{3}\b/.test(input.headline || "")) {
+    issues.push("Headline has malformed Rand spacing (e.g. 'R3 000').");
+    scorePenalty += 10;
+  }
+
+  return { scorePenalty, issues };
+}

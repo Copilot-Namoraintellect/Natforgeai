@@ -16,10 +16,14 @@ function sanitize(str?: string | null): string {
  */
 function formatRandCurrency(text: string): string {
   return text
+    // Normalise spaced Rand notation first: "R 3 000", "R3 000", "R 3000" → "R3000"
+    .replace(/\bR\s*([\d\s]+)\b/gi, (_, digits) => `R${digits.replace(/\s+/g, "")}`)
+    // "3000 rands" / "3000 rand" → "R3,000"
     .replace(/\b(\d{1,3}(?:,\d{3})+|\d+)\s*rands?\b/gi, (_, amount) => {
       const num = Number(amount.toString().replace(/,/g, ""));
       return `R${num.toLocaleString("en-ZA")}`;
     })
+    // "R3000" / "R 3000" → "R3,000"
     .replace(/\bR\s*(\d{1,3}(?:,\d{3})+|\d+)\b/g, (_, amount) => {
       const num = Number(amount.toString().replace(/,/g, ""));
       return `R${num.toLocaleString("en-ZA")}`;

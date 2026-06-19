@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { generatedImages } from "@db/schema";
+import { generatedImages, contentPosts } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { checkCredits, deductCredits, recordAiUsage, adminAdjustCredits } from "./lib/billing/credit-engine";
 import { calculateFixedCost } from "./lib/billing/cost-tracker";
@@ -160,6 +160,9 @@ export const imageRouter = createRouter({
         brandColors: z.array(z.string()).optional(),
         creativeType: z.enum(["leaflet", "poster", "service_menu", "offer_advert", "event_announcement"]).default("leaflet"),
         strongerBrandFit: z.boolean().default(false),
+        creativeGuidance: z.string().optional(),
+        refinementInstruction: z.string().optional(),
+        allowNoLogo: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -169,6 +172,9 @@ export const imageRouter = createRouter({
         brandColors: input.brandColors,
         creativeType: input.creativeType,
         strongerBrandFit: input.strongerBrandFit,
+        creativeGuidance: input.creativeGuidance,
+        refinementInstruction: input.refinementInstruction,
+        allowNoLogo: input.allowNoLogo,
       });
 
       if (result.status === "failed") {
@@ -216,5 +222,81 @@ export const imageRouter = createRouter({
       }
 
       return { success: true, pack };
+    }),
+
+  versionsForPost: authedQuery
+    .input(z.object({ contentPostId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      const images = await db
+        .select({
+          id: generatedImages.id,
+          url: generatedImages.url,
+          status: generatedImages.status,
+          provider: generatedImages.provider,
+          creditsCharged: generatedImages.creditsCharged,
+          metadata: generatedImages.metadata,
+          createdAt: generatedImages.createdAt,
+        })
+        .from(generatedImages)
+        .where(
+          and(
+            eq(generatedImages.userId, ctx.user.id),
+            eq(generatedImages.contentPostId, input.contentPostId)
+          )
+        )
+        .orderBy(desc(generatedImages.createdAt));
+      return images.map((img) => ({
+        ...img,
+        metadata: typeof img.metadata === "string" ? JSON.parse(img.metadata) : img.metadata,
+      }));
+    }),
+
+  approveVersion: aiActionQuery
+    .input(z.object({ contentPostId: z.number(), generatedImageId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const [image] = await db
+        .select()
+        .from(generatedImages)
+        .where(
+          and(
+            eq(generatedImages.id, input.generatedImageId),
+            eq(generatedImages.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+      if (!image || image.status !== "completed") {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Image version not found or not completed." });
+      }
+
+      const [post] = await db
+        .select({ metadata: contentPosts.metadata })
+        .from(contentPosts)
+        .where(and(eq(contentPosts.id, input.contentPostId), eq(contentPosts.userId, ctx.user.id)))
+        .limit(1);
+      if (!post) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Content post not found." });
+      }
+
+      const existingMeta = typeof post.metadata === "string" ? JSON.parse(post.metadata || "{}") : (post.metadata || {});
+      const imageMeta = typeof image.metadata === "string" ? JSON.parse(image.metadata || "{}") : (image.metadata || {});
+
+      await db
+        .update(contentPosts)
+        .set({
+          metadata: JSON.stringify({
+            ...existingMeta,
+            imageUrl: image.url,
+            imageStatus: "ready",
+            currentVersionId: image.id,
+            imageCurrentVersionId: image.id,
+            versionApprovedAt: new Date().toISOString(),
+            imageQualityScore: imageMeta.qualityScore ?? imageMeta.imageQualityScore ?? existingMeta.imageQualityScore,
+          }),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(contentPosts.id, input.contentPostId), eq(contentPosts.userId, ctx.user.id)));
+      return { success: true, imageUrl: image.url };
     }),
 });

@@ -21,6 +21,9 @@ interface BuildPromptOpts {
   brandColors?: string[];
   creativeType?: CreativeType;
   strongerBrandFit?: boolean;
+  palette?: { primary: string; secondary: string; accent: string; source: string };
+  creativeGuidance?: string;
+  refinementInstruction?: string;
 }
 
 function sanitize(str?: string | null): string {
@@ -92,11 +95,15 @@ export function getImageAspectRatio(type?: CreativeType, platform?: string): str
 }
 
 export function buildPremiumImagePrompt(opts: BuildPromptOpts): string {
-  const { business, campaign, post, creativeType = "leaflet", strongerBrandFit = false } = opts;
+  const { business, campaign, post, creativeType = "leaflet", strongerBrandFit = false, palette, creativeGuidance, refinementInstruction } = opts;
 
-  const brandColors = opts.brandColors?.length
+  const savedBrandColors = opts.brandColors?.length
     ? opts.brandColors
     : (business?.brandColors as string[] | undefined) || [];
+
+  const resolvedBrandColors = palette
+    ? [palette.primary, palette.secondary, palette.accent, ...savedBrandColors]
+    : savedBrandColors;
 
   const serviceCategory = inferServiceCategory(business, campaign);
   const isPrintShop = serviceCategory === "print_shop";
@@ -132,16 +139,29 @@ export function buildPremiumImagePrompt(opts: BuildPromptOpts): string {
 - NatForgeAI will overlay the real logo, business name, headline, offer, CTA, service bullets and contact details AFTER generation.
 - Therefore DO NOT render the business name, headline, offer, CTA, phone numbers, addresses, websites, emails, prices, QR codes, service bullets or contact details inside the image.
 - Keep large clean areas (especially top header, lower-middle offer zone and bottom footer zone) as subtle solid colour or soft texture only, so the text overlay remains perfectly readable.
+- Do NOT render any logo, brand mark, or logo-like graphic in the image. The real uploaded logo will be composited in the header by NatForgeAI.
 - It is OK and expected to show the product/service visually; just do not add the readable marketing text.`;
 
   const strongerFitRules = strongerBrandFit
     ? `
 STRONGER BRAND FIT — ENFORCE THESE STRICTLY:
 - Use the exact business name "${business.name}" in the headline or subheadline (these will be overlaid later; the image itself should still not render text).
-- Use the brand colours (${brandColors.length ? brandColors.join(", ") : "as provided"}) consistently across accent blocks, product tints and background gradients.
+- Use the brand colours (${resolvedBrandColors.length ? resolvedBrandColors.join(", ") : "as provided"}) consistently across accent blocks, product tints and background gradients.
 - Show concrete products/services, not abstract concepts or generic people shaking hands.
 - Use a clear visual composition with sections, not a scattered collage.
 - Avoid any vague motivational slogans.`
+    : "";
+
+  const userGuidanceBlock = creativeGuidance?.trim()
+    ? `
+USER CREATIVE DIRECTION (apply these preferences):
+${sanitize(creativeGuidance)}`
+    : "";
+
+  const refinementBlock = refinementInstruction?.trim()
+    ? `
+REFINEMENT REQUEST FOR THIS REGENERATION (prioritise this feedback):
+${sanitize(refinementInstruction)}`
     : "";
 
   const domainSpecific = isPrintShop
@@ -167,7 +187,7 @@ A. BUSINESS IDENTITY (for visual alignment only — do not write this text in th
 - Industry: ${business.industry || "Not specified"}
 - Location: ${business.location || "Not specified"}
 - Brand tone: ${business.brandTone || business.tone || "professional"}
-- Brand colours: ${brandColors.length ? brandColors.join(", ") : "Not specified"}
+- Brand colours: ${resolvedBrandColors.length ? resolvedBrandColors.join(", ") : "Not specified"}
 - Visual style: ${business.visualStyle || "Not specified"}
 - Words/phrases to avoid: ${business.avoidWords || campaign.excludedOffers || "None specified"}
 
@@ -206,6 +226,8 @@ F. DESIGN RULES
 - The visual must clearly relate to the actual business category and products/services listed above.
 ${domainSpecific}
 ${strongerFitRules}
+${userGuidanceBlock}
+${refinementBlock}
 
 G. OUTPUT
 Single ${layoutType} background image, ${aspectRatio}, ready for NatForgeAI to overlay the final business text. No readable words in the image.`;

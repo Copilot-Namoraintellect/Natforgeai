@@ -8,6 +8,7 @@
 import path from "path";
 import fs from "fs";
 import sharp from "sharp";
+import { resolveBrandPalette, contrastTextColor, isLightColor, type BrandPalette } from "./brand-palette";
 
 export interface BrandOverlaySpec {
   business: any;
@@ -19,6 +20,7 @@ export interface BrandOverlaySpec {
   headline?: string;
   subheadline?: string;
   serviceBullets?: string[];
+  palette?: BrandPalette;
 }
 
 function sanitize(str?: string | null): string {
@@ -50,15 +52,6 @@ function wrapText(text: string, maxChars: number): string[] {
   }
   if (current) lines.push(current);
   return lines.length ? lines : [text];
-}
-
-function pickBrandColor(business: any): string {
-  const colors = (business?.brandColors as string[] | undefined) || [];
-  const first = colors[0];
-  if (first && /^#?[0-9A-Fa-f]{3,8}$/.test(first.trim())) {
-    return first.trim().startsWith("#") ? first.trim() : `#${first.trim()}`;
-  }
-  return "#0F172A"; // slate-900 fallback
 }
 
 function resolveLocalPathFromPublicUrl(publicUrl: string): string | null {
@@ -105,34 +98,25 @@ async function resizeLogo(logoBuffer: Buffer, maxHeight: number): Promise<Buffer
     .toBuffer();
 }
 
-function isLightColor(hex: string): boolean {
-  const num = parseInt(hex.replace("#", ""), 16);
-  const r = num >> 16;
-  const g = (num >> 8) & 0xff;
-  const b = num & 0xff;
-  // YIQ luminance.
-  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
-  return yiq >= 160;
-}
-
 /**
- * Build a compact branded header bar with logo on the left and business name
- * on the right. Uses the brand colour so the leaflet immediately looks branded.
+ * Build a compact branded header bar. The business name is placed on the right;
+ * the logo is composited separately on the left so aspect ratio and padding are
+ * preserved.
  */
 function buildHeaderSvg(
   width: number,
   height: number,
   businessName: string,
-  brandColor: string
+  palette: BrandPalette
 ): Buffer {
   const name = escapeXml(sanitize(businessName) || "Your Business");
-  const textColor = isLightColor(brandColor) ? "#0F172A" : "#FFFFFF";
-  const nameSize = Math.max(20, Math.round(width / 26));
+  const textColor = contrastTextColor(palette.primary);
+  const nameSize = Math.max(18, Math.round(width / 28));
   const padX = 24;
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <rect width="${width}" height="${height}" fill="${brandColor}"/>
+  <rect width="${width}" height="${height}" fill="${palette.primary}"/>
   <text x="${width - padX}" y="${height / 2 + nameSize / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="700" fill="${textColor}" text-anchor="end">${name}</text>
 </svg>`;
   return Buffer.from(svg, "utf-8");
@@ -147,9 +131,9 @@ function buildFooterSvg(
   height: number,
   lines: string[],
   cta: string,
-  brandColor: string
+  palette: BrandPalette
 ): Buffer {
-  const textColor = isLightColor(brandColor) ? "#0F172A" : "#FFFFFF";
+  const textColor = contrastTextColor(palette.primary);
   const ctaSize = Math.max(24, Math.round(width / 16));
   const lineSize = Math.max(14, Math.round(width / 38));
   const padX = 28;
@@ -167,7 +151,7 @@ function buildFooterSvg(
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <rect width="${width}" height="${height}" fill="${brandColor}"/>
+  <rect width="${width}" height="${height}" fill="${palette.primary}"/>
   <text x="${padX}" y="${padY + ctaSize}" font-family="Arial, Helvetica, sans-serif" font-size="${ctaSize}" font-weight="800" fill="${textColor}">${safeCta}</text>
   ${lineBlocks}
 </svg>`;
@@ -182,7 +166,7 @@ function buildOfferBadgeSvg(
   width: number,
   headline: string,
   subheadline: string,
-  brandColor: string
+  palette: BrandPalette
 ): Buffer {
   const safeHeadline = escapeXml(sanitize(headline) || "");
   const safeSub = escapeXml(sanitize(subheadline) || "");
@@ -204,7 +188,7 @@ function buildOfferBadgeSvg(
   const subLineHeight = subSize + 6;
 
   const headlineBlocks = headlineLines.map((line, i) =>
-    `<text x="${padX + 8}" y="${padY + headlineSize + i * headlineLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="800" fill="${brandColor}">${line}</text>`
+    `<text x="${padX + 8}" y="${padY + headlineSize + i * headlineLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="800" fill="${palette.primary}">${line}</text>`
   ).join("");
 
   const subYOffset = padY + headlineSize + (headlineLines.length * headlineLineHeight) + (headlineLines.length && subLines.length ? 8 : 0);
@@ -217,8 +201,8 @@ function buildOfferBadgeSvg(
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <rect x="8" y="4" width="${width - 16}" height="${height - 8}" fill="#FFFFFF" opacity="0.96" rx="14" stroke="${brandColor}" stroke-width="3"/>
-  <rect x="8" y="4" width="7" height="${height - 8}" fill="${brandColor}" rx="3"/>
+  <rect x="8" y="4" width="${width - 16}" height="${height - 8}" fill="#FFFFFF" opacity="0.96" rx="14" stroke="${palette.primary}" stroke-width="3"/>
+  <rect x="8" y="4" width="7" height="${height - 8}" fill="${palette.accent}" rx="3"/>
   ${headlineBlocks}
   ${subBlocks}
 </svg>`;
@@ -232,7 +216,7 @@ function buildOfferBadgeSvg(
 function buildServicesGridSvg(
   width: number,
   bullets: string[],
-  brandColor: string
+  palette: BrandPalette
 ): Buffer {
   const padX = 20;
   const padY = 18;
@@ -268,8 +252,8 @@ function buildServicesGridSvg(
       `<text x="${currentX + 22}" y="${textYOffset + li * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${lineSize}" font-weight="700" fill="#0F172A">${line}</text>`
     ).join("");
 
-    blocks.push(`<rect x="${currentX}" y="${cardY}" width="${cardWidth}" height="${cardHeight}" fill="#FFFFFF" opacity="0.96" rx="${cardRadius}" stroke="${brandColor}" stroke-width="2"/>`);
-    blocks.push(`<circle cx="${currentX + 11}" cy="${cardY + cardHeight / 2}" r="${iconSize / 2}" fill="${brandColor}"/>`);
+    blocks.push(`<rect x="${currentX}" y="${cardY}" width="${cardWidth}" height="${cardHeight}" fill="#FFFFFF" opacity="0.96" rx="${cardRadius}" stroke="${palette.primary}" stroke-width="2"/>`);
+    blocks.push(`<circle cx="${currentX + 11}" cy="${cardY + cardHeight / 2}" r="${iconSize / 2}" fill="${palette.accent}"/>`);
     blocks.push(textBlocks);
   }
 
@@ -288,14 +272,15 @@ function buildServicesGridSvg(
   return Buffer.from(svg, "utf-8");
 }
 
-function buildWatermarkSvg(width: number, businessName: string): Buffer {
+function buildWatermarkSvg(width: number, businessName: string, palette: BrandPalette): Buffer {
   const height = 48;
   const name = escapeXml(sanitize(businessName) || "Your Business");
   const size = Math.max(12, Math.round(width / 40));
+  const textColor = contrastTextColor(palette.primary);
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <rect width="${width}" height="${height}" fill="#000000" opacity="0.55"/>
-  <text x="${width - 16}" y="${height / 2 + size / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${size}" font-weight="600" fill="#FFFFFF" text-anchor="end">${name}</text>
+  <rect width="${width}" height="${height}" fill="${palette.primary}" opacity="0.92"/>
+  <text x="${width - 16}" y="${height / 2 + size / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${size}" font-weight="600" fill="${textColor}" text-anchor="end">${name}</text>
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }
@@ -313,7 +298,7 @@ export async function composeBrandedLeafletImage(
   const width = meta.width || 1024;
   const height = meta.height || 1536;
 
-  const brandColor = pickBrandColor(business);
+  const palette = spec.palette || await resolveBrandPalette(business);
   const businessName = sanitize(business?.name) || sanitize(post?.title) || "Your Business";
   const preferredCta = sanitize(cta || campaign?.preferredCta || post?.cta || "Contact us today");
   const safeOffer = sanitize(offer || campaign?.offerDetails || "");
@@ -325,7 +310,7 @@ export async function composeBrandedLeafletImage(
   if (creativeType !== "leaflet") {
     // Non-leaflet: just add a small branded watermark strip at the bottom.
     const watermarkHeight = 48;
-    const watermarkSvg = buildWatermarkSvg(width, businessName);
+    const watermarkSvg = buildWatermarkSvg(width, businessName, palette);
     const composite = await base
       .composite([
         { input: watermarkSvg, top: height - watermarkHeight, left: 0 },
@@ -339,11 +324,13 @@ export async function composeBrandedLeafletImage(
   }
 
   // Leaflet layout.
-  const headerHeight = Math.round(height * 0.075);
+  const headerHeight = Math.round(height * 0.10);
   const footerHeight = Math.round(height * 0.16);
-  const logoHeight = headerHeight - 16;
+  const logoSafeHeight = headerHeight - 32;
+  const logoPadX = 28;
+  const logoPadY = 16;
 
-  const headerSvg = buildHeaderSvg(width, headerHeight, businessName, brandColor);
+  const headerSvg = buildHeaderSvg(width, headerHeight, businessName, palette);
 
   const contactLines: string[] = [];
   if (business?.whatsappNumber) contactLines.push(`WhatsApp: ${sanitize(business.whatsappNumber)}`);
@@ -351,17 +338,63 @@ export async function composeBrandedLeafletImage(
   if (business?.website) contactLines.push(`Website: ${sanitize(business.website)}`);
   if (business?.location) contactLines.push(`Location: ${sanitize(business.location)}`);
 
-  const footerSvg = buildFooterSvg(width, footerHeight, contactLines, preferredCta, brandColor);
+  const footerSvg = buildFooterSvg(width, footerHeight, contactLines, preferredCta, palette);
 
   const overlays: sharp.OverlayOptions[] = [
     { input: headerSvg, top: 0, left: 0 },
     { input: footerSvg, top: height - footerHeight, left: 0 },
   ];
 
-  // Logo: larger and placed clearly in the header.
+  // Logo: large, deterministic placement in the header with a contrasting
+  // backdrop so the real uploaded logo is always clearly visible.
   if (logoBuffer) {
-    const logoPng = await resizeLogo(logoBuffer, logoHeight);
-    overlays.push({ input: logoPng, top: 10, left: 22 });
+    const logoMeta = await sharp(logoBuffer).metadata();
+    const logoAspect = (logoMeta.width || 1) / (logoMeta.height || 1);
+    const logoHeight = logoSafeHeight;
+    const logoWidth = Math.round(logoHeight * logoAspect);
+    const maxLogoWidth = Math.round(width * 0.45);
+    let finalLogoHeight = logoHeight;
+    let finalLogoWidth = logoWidth;
+    if (logoWidth > maxLogoWidth) {
+      finalLogoWidth = maxLogoWidth;
+      finalLogoHeight = Math.round(finalLogoWidth / logoAspect);
+    }
+
+    const logoPng = await sharp(logoBuffer)
+      .resize(finalLogoWidth, finalLogoHeight, { fit: "fill" })
+      .png()
+      .toBuffer();
+
+    const logoTop = logoPadY + Math.round((headerHeight - 2 * logoPadY - finalLogoHeight) / 2);
+    const backdropPadX = 16;
+    const backdropPadY = 12;
+    const backdropWidth = finalLogoWidth + backdropPadX * 2;
+    const backdropHeight = finalLogoHeight + backdropPadY * 2;
+    const backdropFill = isLightColor(palette.primary) ? "#0F172A" : "#FFFFFF";
+    const backdropSvg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${backdropWidth}" height="${backdropHeight}">
+  <rect width="${backdropWidth}" height="${backdropHeight}" rx="16" ry="16" fill="${backdropFill}"/>
+</svg>`;
+
+    overlays.push(
+      { input: Buffer.from(backdropSvg, "utf-8"), top: logoTop - backdropPadY, left: logoPadX - backdropPadX },
+      { input: logoPng, top: logoTop, left: logoPadX }
+    );
+
+    // Also place a small, clean logo mark in the footer so the brand is
+    // visible in both the header and footer.
+    const footerLogoHeight = 56;
+    const footerLogoPng = await sharp(logoBuffer)
+      .resize({ height: footerLogoHeight, fit: sharp.fit.inside, withoutEnlargement: true })
+      .png()
+      .toBuffer();
+    const footerLogoMeta = await sharp(footerLogoPng).metadata();
+    const footerLogoWidth = footerLogoMeta.width || footerLogoHeight;
+    overlays.push({
+      input: footerLogoPng,
+      top: height - footerHeight + footerHeight - footerLogoHeight - 20,
+      left: width - footerLogoWidth - 28,
+    });
   }
 
   // Offer badge in upper area so the hero visual stays dominant in the centre.
@@ -369,7 +402,7 @@ export async function composeBrandedLeafletImage(
   let offerBadgeHeight = 0;
   if (headlineText || safeOffer) {
     const offerText = headlineText || safeOffer;
-    const badgeSvg = buildOfferBadgeSvg(width, offerText, subheadlineText, brandColor);
+    const badgeSvg = buildOfferBadgeSvg(width, offerText, subheadlineText, palette);
     const badgeMeta = await sharp(badgeSvg).metadata();
     offerBadgeHeight = badgeMeta.height || Math.round(height * 0.11);
     overlays.push({ input: badgeSvg, top: offerBadgeTop, left: 0 });
@@ -383,7 +416,7 @@ export async function composeBrandedLeafletImage(
     const gridWidth = Math.round(width * 0.92);
     const gridLeft = Math.round((width - gridWidth) / 2);
     const gridTop = offerBadgeTop + offerBadgeHeight + Math.round(height * 0.04);
-    const gridSvg = buildServicesGridSvg(gridWidth, bullets.slice(0, 6), brandColor);
+    const gridSvg = buildServicesGridSvg(gridWidth, bullets.slice(0, 6), palette);
     const gridMeta = await sharp(gridSvg).metadata();
     const actualGridHeight = gridMeta.height || Math.round(height * 0.22);
     if (gridTop + actualGridHeight <= height - footerHeight - Math.round(height * 0.02)) {
@@ -421,7 +454,7 @@ export async function overlayContactFooter(
   const width = meta.width || 1024;
   const height = meta.height || 1024;
   const footerHeight = Math.round(height * 0.12);
-  const brandColor = pickBrandColor(business);
+  const palette = await resolveBrandPalette(business);
 
   const lines: string[] = [];
   if (business?.whatsappNumber) lines.push(`WhatsApp: ${sanitize(business.whatsappNumber)}`);
@@ -430,7 +463,7 @@ export async function overlayContactFooter(
   if (business?.location) lines.push(`Location: ${sanitize(business.location)}`);
   if (lines.length === 0) lines.push("Contact us today");
 
-  const footerSvg = buildFooterSvg(width, footerHeight, lines, cta || "Contact us today", brandColor);
+  const footerSvg = buildFooterSvg(width, footerHeight, lines, cta || "Contact us today", palette);
   return sharp(baseImageBuffer)
     .composite([{ input: footerSvg, top: height - footerHeight, left: 0 }])
     .toBuffer();
@@ -488,18 +521,18 @@ export function defaultServiceBullets(business: any, campaign: any): string[] {
   ];
 }
 
-function buildFallbackBackgroundSvg(width: number, height: number, brandColor: string): Buffer {
+function buildFallbackBackgroundSvg(width: number, height: number, palette: BrandPalette): Buffer {
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
   <defs>
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:${brandColor};stop-opacity:0.12" />
+      <stop offset="0%" style="stop-color:${palette.primary};stop-opacity:0.12" />
       <stop offset="45%" style="stop-color:#FFFFFF;stop-opacity:1" />
       <stop offset="100%" style="stop-color:#F1F5F9;stop-opacity:1" />
     </linearGradient>
   </defs>
   <rect width="${width}" height="${height}" fill="url(#bgGrad)"/>
-  <rect x="0" y="0" width="${width}" height="12" fill="${brandColor}"/>
+  <rect x="0" y="0" width="${width}" height="12" fill="${palette.accent}"/>
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }
@@ -516,7 +549,7 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
   const isSquare = creativeType === "poster" || creativeType === "offer_advert" || creativeType === "event_announcement";
   const height = isSquare ? 1080 : 1350;
 
-  const brandColor = pickBrandColor(business);
+  const palette = spec.palette || await resolveBrandPalette(business);
   const businessName = sanitize(business?.name) || sanitize(post?.title) || "Your Business";
   const headlineText = sanitize(headline || campaign?.primaryOutcome || post?.title || businessName);
   const subheadlineText = sanitize(subheadline || campaign?.mainPainPoint || campaign?.coreMessage || post?.hook || "");
@@ -527,27 +560,41 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
   console.log(`[FallbackLeaflet] Rendering deterministic leaflet | business=${businessName} | creativeType=${creativeType} | size=${width}x${height}`);
 
   // Build background
-  const backgroundSvg = buildFallbackBackgroundSvg(width, height, brandColor);
+  const backgroundSvg = buildFallbackBackgroundSvg(width, height, palette);
   let canvas = sharp(backgroundSvg).resize(width, height, { fit: "fill" });
 
   const overlays: sharp.OverlayOptions[] = [];
 
   // Header
   const headerHeight = Math.round(height * 0.095);
-  const headerSvg = buildHeaderSvg(width, headerHeight, businessName, brandColor);
+  const headerSvg = buildHeaderSvg(width, headerHeight, businessName, palette);
   overlays.push({ input: headerSvg, top: 0, left: 0 });
 
-  // Logo
+  // Logo with safe padding and aspect ratio preserved.
   const logoBuffer = await loadLogoBuffer(business?.logo);
-  let logoPng: Buffer | null = null;
   if (logoBuffer) {
-    logoPng = await resizeLogo(logoBuffer, headerHeight - 24);
-    overlays.push({ input: logoPng, top: 14, left: 22 });
+    const logoMeta = await sharp(logoBuffer).metadata();
+    const logoAspect = (logoMeta.width || 1) / (logoMeta.height || 1);
+    const logoHeight = headerHeight - 26;
+    const logoWidth = Math.round(logoHeight * logoAspect);
+    const maxLogoWidth = Math.round(width * 0.32);
+    let finalHeight = logoHeight;
+    let finalWidth = logoWidth;
+    if (logoWidth > maxLogoWidth) {
+      finalWidth = maxLogoWidth;
+      finalHeight = Math.round(finalWidth / logoAspect);
+    }
+    const logoPng = await sharp(logoBuffer)
+      .resize(finalWidth, finalHeight, { fit: "fill" })
+      .png()
+      .toBuffer();
+    const logoTop = 13 + Math.round((headerHeight - 26 - finalHeight) / 2);
+    overlays.push({ input: logoPng, top: logoTop, left: 20 });
   }
 
   // Headline band
   const bandTop = Math.round(height * 0.16);
-  const headlineSvg = buildOfferBadgeSvg(width, headlineText, subheadlineText, brandColor);
+  const headlineSvg = buildOfferBadgeSvg(width, headlineText, subheadlineText, palette);
   const headlineMeta = await sharp(headlineSvg).metadata();
   const bandHeight = headlineMeta.height || Math.round(height * 0.18);
   overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
@@ -564,7 +611,7 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
     ).join("");
     const offerSvg = Buffer.from(`
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${offerHeight}">
-  <rect x="32" y="0" width="${width - 64}" height="${offerHeight}" fill="#FEF3C7" stroke="#F59E0B" stroke-width="3" rx="14"/>
+  <rect x="32" y="0" width="${width - 64}" height="${offerHeight}" fill="#FFFFFF" stroke="${palette.primary}" stroke-width="3" rx="14"/>
   ${offerBlocks}
 </svg>`, "utf-8");
     overlays.push({ input: offerSvg, top: currentY, left: 0 });
@@ -572,7 +619,7 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
   }
 
   // Service bullets
-  const bulletSvg = buildServicesGridSvg(width - 64, bullets, brandColor);
+  const bulletSvg = buildServicesGridSvg(width - 64, bullets, palette);
   const bulletMeta = await sharp(bulletSvg).metadata();
   const bulletHeight = bulletMeta.height || 260;
   overlays.push({ input: bulletSvg, top: currentY, left: 32 });
@@ -589,7 +636,7 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
   if (business?.location) contactLines.push(`Location: ${sanitize(business.location)}`);
   if (contactLines.length === 0) contactLines.push("Contact us today");
 
-  const footerSvg = buildFooterSvg(width, footerHeight, contactLines, ctaText, brandColor);
+  const footerSvg = buildFooterSvg(width, footerHeight, contactLines, ctaText, palette);
   overlays.push({ input: footerSvg, top: footerTop, left: 0 });
 
   return canvas.composite(overlays).png().toBuffer();

@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import fs from "fs";
 import { env } from "../env";
 import { getDb } from "../../queries/connection";
@@ -10,8 +10,9 @@ import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider } from
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
 import { composeBrandedLeafletImage, generateFallbackLeafletImage, defaultServiceBullets } from "./composition";
 import sharp from "sharp";
-import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable, validateLeafletComposition } from "./quality";
+import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable, validateLeafletComposition, validateBrandFidelity } from "./quality";
 import { formatOffer, offerToHeadline, normalizeCta, validateMarketingText } from "./text-formatter";
+import { resolveBrandPalette } from "./brand-palette";
 import {
   getPremiumImageCredits,
   getPremiumVideoCredits,
@@ -139,12 +140,18 @@ export async function generateMasterImage({
   brandColors,
   creativeType = "leaflet",
   strongerBrandFit = false,
+  creativeGuidance,
+  refinementInstruction,
+  allowNoLogo = false,
 }: {
   userId: number;
   contentPostId: number;
   brandColors?: string[];
   creativeType?: CreativeType;
   strongerBrandFit?: boolean;
+  creativeGuidance?: string;
+  refinementInstruction?: string;
+  allowNoLogo?: boolean;
 }): Promise<ImageResult & { imageUrl?: string; creditsCharged?: number }> {
   const db = getDb();
 
@@ -203,6 +210,28 @@ export async function generateMasterImage({
       campaign = {};
     }
 
+    // ─── Brand palette resolution ───
+    const brandPalette = await resolveBrandPalette({ ...business, brandColors });
+    const hasLogo = !!business?.logo;
+    if (!hasLogo && !allowNoLogo) {
+      console.warn(`[CreativeService] Premium leaflet blocked: no business logo | userId=${userId} | contentPostId=${contentPostId}`);
+      await db
+        .update(contentPosts)
+        .set({
+          metadata: {
+            ...currentMeta,
+            imageStatus: "failed",
+            imageError: "Please upload your business logo in Settings before generating a premium leaflet. Premium leaflets use your logo and brand colours for best results.",
+          },
+        })
+        .where(eq(contentPosts.id, post.id));
+      return {
+        status: "failed",
+        jobId: "",
+        errorMessage: "Please upload your business logo in Settings before generating a premium leaflet. Premium leaflets use your logo and brand colours for best results.",
+      };
+    }
+
     // ─── Normalised customer-facing text ───
     const formattedOffer = formatOffer(campaign.offerDetails, business.name);
     const leafletHeadline = offerToHeadline(campaign.offerDetails);
@@ -218,7 +247,17 @@ export async function generateMasterImage({
 
     // ─── Prompt helpers ───
     const buildPrompt = (stronger: boolean) =>
-      buildPremiumImagePrompt({ business, campaign, post, brandColors, creativeType, strongerBrandFit: stronger });
+      buildPremiumImagePrompt({
+        business,
+        campaign,
+        post,
+        brandColors,
+        creativeType,
+        strongerBrandFit: stronger,
+        palette: brandPalette,
+        creativeGuidance,
+        refinementInstruction,
+      });
 
     const preparePrompt = (rawPrompt: string) => {
       const firstCheck = validateLeafletPrompt(rawPrompt, business);
@@ -332,6 +371,7 @@ export async function generateMasterImage({
         cta: leafletCta,
         headline: leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
         subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
+        palette: brandPalette,
       });
       return {
         number: 0,
@@ -424,6 +464,7 @@ export async function generateMasterImage({
           cta: leafletCta,
           headline: leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
           subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
+          palette: brandPalette,
         });
         console.log(`[CreativeService] Sharp composition completed | userId=${userId} | contentPostId=${contentPostId} | size=${composedBuffer.length}`);
       } catch (composeErr) {
@@ -452,8 +493,16 @@ export async function generateMasterImage({
       imageHeight,
     });
 
-    const totalPenalty = marketingTextCheck.scorePenalty + compositionCheck.scorePenalty;
-    const allTextIssues = [...marketingTextCheck.issues, ...compositionCheck.issues];
+    // Brand fidelity check.
+    const brandFidelityCheck = validateBrandFidelity({
+      hasLogo,
+      palette: brandPalette,
+      businessName: business.name,
+      headline: leafletHeadline,
+    });
+
+    const totalPenalty = marketingTextCheck.scorePenalty + compositionCheck.scorePenalty + brandFidelityCheck.scorePenalty;
+    const allTextIssues = [...marketingTextCheck.issues, ...compositionCheck.issues, ...brandFidelityCheck.issues];
     if (allTextIssues.length > 0) {
       finalAttempt.score = Math.max(0, finalAttempt.score - totalPenalty);
       finalAttempt.warnings = [...finalAttempt.warnings, ...allTextIssues];
@@ -579,6 +628,24 @@ export async function generateMasterImage({
       strongerBrandFitUsed: a.strongerBrandFit,
     }));
 
+    // ─── Version history ───
+    const previousVersions = Array.isArray(currentMeta?.imageVersions) ? currentMeta.imageVersions : [];
+    const newVersion = {
+      version: previousVersions.length + 1,
+      url: stored.publicUrl,
+      source: usingFallback ? "fallback" : "openai",
+      score: finalAttempt.score,
+      promptUsed: finalPrompt,
+      strongerBrandFitUsed: finalAttempt.strongerBrandFit,
+      creativeGuidance,
+      refinementInstruction,
+      brandPalette,
+      hasLogo,
+      generatedAt: new Date().toISOString(),
+      approved: false,
+    };
+    const imageVersions = [...previousVersions, newVersion];
+
     // ─── Persist audit row ───
     await db.insert(generatedImages).values({
       userId,
@@ -608,16 +675,31 @@ export async function generateMasterImage({
         fallbackUsed: usingFallback,
         promptUsed: finalPrompt,
         strongerBrandFitUsed: finalAttempt.strongerBrandFit,
+        creativeGuidance,
+        refinementInstruction,
+        brandPalette,
+        hasLogo,
         attempts: attemptsSummary,
+        versions: imageVersions,
       },
     });
 
     // ─── Update master post metadata ───
+    const [latestGenerated] = await db
+      .select({ id: generatedImages.id })
+      .from(generatedImages)
+      .where(eq(generatedImages.contentPostId, post.id))
+      .orderBy(desc(generatedImages.createdAt))
+      .limit(1);
+    const currentVersionId = latestGenerated?.id ?? null;
+
     await db
       .update(contentPosts)
       .set({
         metadata: {
           ...currentMeta,
+          currentVersionId,
+          imageCurrentVersionId: currentVersionId,
           imageUrl: stored.publicUrl,
           imageProvider: provider.name,
           imageJobId: finalResult?.providerJobId || "fallback",
@@ -641,6 +723,12 @@ export async function generateMasterImage({
           imageStrongerBrandFitUsed: finalAttempt.strongerBrandFit,
           strongerBrandFitUsed: finalAttempt.strongerBrandFit,
           imageAttempts: attemptsSummary,
+          imageVersions,
+          imageBrandPalette: brandPalette,
+          imageHasLogo: hasLogo,
+          imageCreativeGuidance: creativeGuidance,
+          imageRefinementInstruction: refinementInstruction,
+          imageApprovedVersion: currentMeta?.imageApprovedVersion,
         },
       })
       .where(eq(contentPosts.id, post.id));
