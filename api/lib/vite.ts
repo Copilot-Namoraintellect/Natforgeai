@@ -30,6 +30,15 @@ export function servePersistentMedia(app: App) {
   const generatedDir = path.resolve(process.cwd(), "data/public/generated");
   const uploadsDir = path.resolve(process.cwd(), "data/public/uploads");
 
+  if (!fs.existsSync(generatedDir)) {
+    fs.mkdirSync(generatedDir, { recursive: true });
+    console.log(`[Static] Created persistent generated directory: ${generatedDir}`);
+  }
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+    console.log(`[Static] Created persistent uploads directory: ${uploadsDir}`);
+  }
+
   app.use("/generated/*", serveStatic({ root: "./data/public/generated", rewriteRequestPath: (path) => path.replace(/^\/generated/, "") }));
   app.use("/uploads/*", serveStatic({ root: "./data/public/uploads", rewriteRequestPath: (path) => path.replace(/^\/uploads/, "") }));
 

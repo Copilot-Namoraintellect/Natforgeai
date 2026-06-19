@@ -18,6 +18,7 @@ export interface BrandOverlaySpec {
   cta?: string;
   headline?: string;
   subheadline?: string;
+  serviceBullets?: string[];
 }
 
 function sanitize(str?: string | null): string {
@@ -32,6 +33,23 @@ function escapeXml(unsafe: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+function wrapText(text: string, maxChars: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length > maxChars) {
+      if (current) lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length ? lines : [text];
 }
 
 function pickBrandColor(business: any): string {
@@ -53,11 +71,14 @@ function resolveLocalPathFromPublicUrl(publicUrl: string): string | null {
 
   const publicDir = path.resolve(process.cwd(), "public");
   const prodPublicDir = path.resolve(process.cwd(), "dist/public");
+  const persistentUploadsDir = path.resolve(process.cwd(), "data/public/uploads");
   const relative = pathname.slice(1);
   const devPath = path.join(publicDir, relative);
   const prodPath = path.join(prodPublicDir, relative);
+  const persistentPath = path.join(persistentUploadsDir, relative);
   if (fs.existsSync(devPath)) return devPath;
   if (fs.existsSync(prodPath)) return prodPath;
+  if (fs.existsSync(persistentPath)) return persistentPath;
   return null;
 }
 
@@ -153,21 +174,29 @@ function buildHeadlineOverlaySvg(
   const headlineSize = Math.max(26, Math.round(width / 14));
   const subSize = Math.max(15, Math.round(width / 26));
   const padX = 28;
-  const padY = 24;
+  const padY = 22;
+  const maxChars = Math.max(20, Math.round((width - padX * 2) / (headlineSize * 0.55)));
+  const subMaxChars = Math.max(30, Math.round((width - padX * 2) / (subSize * 0.55)));
 
-  const headlineBlock = safeHeadline
-    ? `<text x="${padX}" y="${padY + headlineSize}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="800" fill="#FFFFFF">${safeHeadline}</text>`
-    : "";
+  const headlineLines = safeHeadline ? wrapText(safeHeadline, maxChars) : [];
+  const subLines = safeSub ? wrapText(safeSub, subMaxChars) : [];
 
-  const subBlock = safeSub
-    ? `<text x="${padX}" y="${padY + headlineSize + (safeHeadline ? 14 : 0) + subSize}" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="500" fill="#FFFFFF" opacity="0.95">${safeSub}</text>`
-    : "";
+  const headlineLineHeight = headlineSize + 8;
+  const subLineHeight = subSize + 8;
+  const headlineBlocks = headlineLines.map((line, i) =>
+    `<text x="${padX}" y="${padY + headlineSize + i * headlineLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="800" fill="#FFFFFF">${line}</text>`
+  ).join("");
+
+  const subYOffset = padY + headlineSize + (headlineLines.length * headlineLineHeight) + (headlineLines.length ? 10 : 0);
+  const subBlocks = subLines.map((line, i) =>
+    `<text x="${padX}" y="${subYOffset + subSize + i * subLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="500" fill="#FFFFFF" opacity="0.95">${line}</text>`
+  ).join("");
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
   <rect width="${width}" height="${height}" fill="${brandColor}" opacity="0.82" rx="12"/>
-  ${headlineBlock}
-  ${subBlock}
+  ${headlineBlocks}
+  ${subBlocks}
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }
@@ -310,4 +339,192 @@ export async function overlayContactFooter(
   return sharp(baseImageBuffer)
     .composite([{ input: footerSvg, top: height - footerHeight, left: 0 }])
     .toBuffer();
+}
+
+// ─── Deterministic fallback leaflet renderer ───
+
+function inferServiceCategory(business: any, campaign: any): string {
+  const combined = `${business?.name || ""} ${business?.industry || ""} ${business?.productOrService || ""} ${campaign?.productOrService || ""} ${JSON.stringify(business?.websiteEvidence || {})}`.toLowerCase();
+  if (combined.includes("print") || combined.includes("copy") || combined.includes("courier") || combined.includes("business card") || combined.includes("flyer") || combined.includes("poster") || combined.includes("banner")) {
+    return "print_shop";
+  }
+  if (
+    combined.includes("canvas") ||
+    combined.includes("framed poster") ||
+    combined.includes("wall art") ||
+    combined.includes("art print") ||
+    combined.includes("afrocentric") ||
+    combined.includes("home decor") ||
+    combined.includes("office decor") ||
+    combined.includes("interior decor")
+  ) {
+    return "art_decor";
+  }
+  return "general";
+}
+
+function defaultServiceBullets(business: any, campaign: any): string[] {
+  const category = inferServiceCategory(business, campaign);
+  if (category === "print_shop") {
+    return [
+      "Business Cards & Stationery",
+      "Flyers, Posters & Banners",
+      "Canvas & Photo Prints",
+      "Document Copying & Binding",
+      "Courier & Delivery",
+      "Branding & Design Support",
+    ];
+  }
+  if (category === "art_decor") {
+    return [
+      "Custom Canvas Prints",
+      "Framed Posters",
+      "Afrocentric Wall Art",
+      "Home & Office Décor",
+      "Premium Quality Materials",
+      "Ready to Hang",
+    ];
+  }
+  return [
+    "Professional Quality",
+    "Fast Turnaround",
+    "Easy to Order",
+    "Customer Support",
+  ];
+}
+
+function buildBulletSvg(width: number, bullets: string[], brandColor: string): Buffer {
+  const padX = 32;
+  const padY = 28;
+  const bulletSize = 14;
+  const lineSize = Math.max(18, Math.round(width / 46));
+  const lineHeight = lineSize + 18;
+  const maxChars = Math.max(30, Math.round((width - padX * 2 - 32) / (lineSize * 0.55)));
+
+  let y = padY + lineSize;
+  const blocks: string[] = [];
+  for (const bullet of bullets) {
+    const safeBullet = escapeXml(sanitize(bullet));
+    const lines = wrapText(safeBullet, maxChars);
+    blocks.push(`<circle cx="${padX + 6}" cy="${y - lineSize / 3}" r="${bulletSize / 2}" fill="${brandColor}"/>`);
+    for (let i = 0; i < lines.length; i++) {
+      blocks.push(`<text x="${padX + 24}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${lineSize}" font-weight="600" fill="#0F172A">${lines[i]}</text>`);
+      y += lineHeight;
+    }
+    y += 8;
+  }
+
+  const height = y + padY - lineHeight;
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+  <rect width="${width}" height="${height}" fill="#FFFFFF" opacity="0.92" rx="14"/>
+  ${blocks.join("\n")}
+</svg>`;
+  return Buffer.from(svg, "utf-8");
+}
+
+function buildFallbackBackgroundSvg(width: number, height: number, brandColor: string): Buffer {
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:${brandColor};stop-opacity:0.12" />
+      <stop offset="45%" style="stop-color:#FFFFFF;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#F1F5F9;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="${width}" height="${height}" fill="url(#bgGrad)"/>
+  <rect x="0" y="0" width="${width}" height="12" fill="${brandColor}"/>
+</svg>`;
+  return Buffer.from(svg, "utf-8");
+}
+
+/**
+ * Render a clean, deterministic branded leaflet when AI generation or quality
+ * validation cannot produce a usable image. The output is always on-brand and
+ * never contains invented contact details.
+ */
+export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Promise<Buffer> {
+  const { business, campaign, post, creativeType = "leaflet", offer, cta, headline, subheadline, serviceBullets } = spec;
+
+  const width = 1080;
+  const isSquare = creativeType === "poster" || creativeType === "offer_advert" || creativeType === "event_announcement";
+  const height = isSquare ? 1080 : 1350;
+
+  const brandColor = pickBrandColor(business);
+  const businessName = sanitize(business?.name) || sanitize(post?.title) || "Your Business";
+  const headlineText = sanitize(headline || campaign?.primaryOutcome || post?.title || businessName);
+  const subheadlineText = sanitize(subheadline || campaign?.mainPainPoint || campaign?.coreMessage || post?.hook || "");
+  const offerText = sanitize(offer || campaign?.offerDetails || "");
+  const ctaText = sanitize(cta || campaign?.preferredCta || post?.cta || "Contact us today");
+  const bullets = serviceBullets?.length ? serviceBullets : defaultServiceBullets(business, campaign);
+
+  console.log(`[FallbackLeaflet] Rendering deterministic leaflet | business=${businessName} | creativeType=${creativeType} | size=${width}x${height}`);
+
+  // Build background
+  const backgroundSvg = buildFallbackBackgroundSvg(width, height, brandColor);
+  let canvas = sharp(backgroundSvg).resize(width, height, { fit: "fill" });
+
+  const overlays: sharp.OverlayOptions[] = [];
+
+  // Header
+  const headerHeight = Math.round(height * 0.095);
+  const headerSvg = buildHeaderSvg(width, headerHeight, businessName, brandColor);
+  overlays.push({ input: headerSvg, top: 0, left: 0 });
+
+  // Logo
+  const logoBuffer = await loadLogoBuffer(business?.logo);
+  let logoPng: Buffer | null = null;
+  if (logoBuffer) {
+    logoPng = await resizeLogo(logoBuffer, headerHeight - 24);
+    overlays.push({ input: logoPng, top: 14, left: 22 });
+  }
+
+  // Headline band
+  const bandHeight = Math.round(height * 0.18);
+  const bandTop = Math.round(height * 0.16);
+  const headlineSvg = buildHeadlineOverlaySvg(width, bandHeight, headlineText, subheadlineText, brandColor);
+  overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
+
+  // Offer badge (if provided)
+  let currentY = bandTop + bandHeight + 24;
+  if (offerText && !offerText.toLowerCase().includes("none")) {
+    const offerLines = wrapText(escapeXml(offerText), Math.max(30, Math.round((width - 80) / 18)));
+    const offerFontSize = Math.max(20, Math.round(width / 42));
+    const offerLineHeight = offerFontSize + 10;
+    const offerHeight = offerLines.length * offerLineHeight + 40;
+    const offerBlocks = offerLines.map((line, i) =>
+      `<text x="${width / 2}" y="${28 + offerFontSize + i * offerLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${offerFontSize}" font-weight="700" fill="#0F172A" text-anchor="middle">${line}</text>`
+    ).join("");
+    const offerSvg = Buffer.from(`
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${offerHeight}">
+  <rect x="32" y="0" width="${width - 64}" height="${offerHeight}" fill="#FEF3C7" stroke="#F59E0B" stroke-width="3" rx="14"/>
+  ${offerBlocks}
+</svg>`, "utf-8");
+    overlays.push({ input: offerSvg, top: currentY, left: 0 });
+    currentY += offerHeight + 24;
+  }
+
+  // Service bullets
+  const bulletSvg = buildBulletSvg(width - 64, bullets, brandColor);
+  const bulletMeta = await sharp(bulletSvg).metadata();
+  const bulletHeight = bulletMeta.height || 260;
+  overlays.push({ input: bulletSvg, top: currentY, left: 32 });
+  currentY += bulletHeight + 24;
+
+  // Footer + CTA
+  const footerHeight = Math.round(height * 0.18);
+  const footerTop = height - footerHeight;
+
+  const contactLines: string[] = [];
+  if (business?.whatsappNumber) contactLines.push(`WhatsApp: ${sanitize(business.whatsappNumber)}`);
+  if (business?.email) contactLines.push(`Email: ${sanitize(business.email)}`);
+  if (business?.website) contactLines.push(`Website: ${sanitize(business.website)}`);
+  if (business?.location) contactLines.push(`Location: ${sanitize(business.location)}`);
+  if (contactLines.length === 0) contactLines.push("Contact us today");
+
+  const footerSvg = buildFooterSvg(width, footerHeight, contactLines, ctaText, brandColor);
+  overlays.push({ input: footerSvg, top: footerTop, left: 0 });
+
+  return canvas.composite(overlays).png().toBuffer();
 }

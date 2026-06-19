@@ -179,15 +179,15 @@ STRONGER BRAND FIT — ENFORCE THESE STRICTLY:
 
   const domainSpecific = isPrintShop
     ? `
-DOMAIN-SPECIFIC DIRECTION (print / copy / courier shop):
-The image must look like a finished customer-facing leaflet for a local print shop.
-Headline idea: "Winter Printing & Business Support Specials" (adapt to the campaign context).
-Subheadline idea: "Print, courier and brand your business without the hassle."
-Main visual: a professional, organised collage showing business cards, flyers, posters, banners, courier parcels, branded stationery, graduation gifts, photo prints and office documents.
+DOMAIN-SPECIFIC DIRECTION (premium print / copy / courier shop):
+The image must look like a finished customer-facing leaflet for a premium local print shop.
+Headline idea: "Professional Printing & Business Support" (adapt to the campaign context).
+Subheadline idea: "Print, brand and deliver your business without the hassle."
+Main visual: a clean, modern retail print-service scene. Show a professional print-shop counter or workspace with a few premium printed products tastefully arranged — business cards, flyers, posters, banners, canvas prints, photo prints and branded stationery. Use realistic product photography or high-quality lifestyle imagery. Avoid flat icons, clip-art, dashboard layouts or grids of small symbols.
 Service callouts to include: ${serviceCallouts.join(", ")}.
 Benefit callouts: ${benefitCallouts.join(", ")}.
 CTA: "${preferredCta}".
-Style: clean, modern retail print-shop leaflet. Bold readable text, good spacing, professional photos/illustrations of real print products.`
+Style: clean, modern retail print-shop leaflet with strong headline, generous whitespace, bold readable text, and a premium product showcase. No icon grids, no cluttered dashboards, no scattered clipart.`
     : isArtDecor
     ? `
 DOMAIN-SPECIFIC DIRECTION (art, canvas prints, framed posters & home décor):
@@ -246,7 +246,7 @@ D. REQUIRED LAYOUT SECTIONS
 E. DESIGN RULES
 - Clean, bold and readable. High contrast text.
 - Looks like a finished customer leaflet/poster, not a generic AI art poster or icon grid.
-- Do NOT use simple icon grids, tile layouts, or scattered clipart.
+- Do NOT use simple icon-grid layouts, tile layouts, or scattered clipart.
 - Do NOT use vague slogans such as "Your vision, our solution", "Transform your brand", "Unleash creativity", "Quality meets efficiency", or similar.
 - Do NOT invent phone numbers, addresses, websites, emails, prices, discounts or promotions.
 - Do NOT create fake logos, fake social handles, fake QR codes or fake contact details anywhere in the image.

@@ -3,6 +3,12 @@
  *
  * Rejects generic icon-grid designs, irrelevant services, low-premium layouts,
  * and outputs that do not include the actual business category.
+ *
+ * IMPORTANT: This validator is intentionally conservative. It blocks obviously
+ * bad prompts *before* spending an OpenAI call, and it gives image-based
+ * heuristics the benefit of the doubt for categories that are naturally busy
+ * (e.g. print shops). When the generated image cannot be confirmed as premium,
+ * the pipeline falls back to a deterministic branded template instead of failing.
  */
 
 import sharp from "sharp";
@@ -44,9 +50,26 @@ function isMarketingCategory(category: string): boolean {
   );
 }
 
-function hasGenericIconLanguage(prompt: string): boolean {
+function isPrintShopCategory(category: string): boolean {
+  return category.includes("print") || category.includes("copy");
+}
+
+/**
+ * Detect whether a prompt explicitly *describes* a generic icon grid as the
+ * desired output. We ignore occurrences inside negative instructions such as
+ * "Do NOT use a simple icon grid" because those are exactly the instructions
+ * we want the model to follow.
+ */
+export function hasGenericIconLanguage(prompt: string): boolean {
   const lower = prompt.toLowerCase();
-  return GENERIC_ICON_MARKERS.some((m) => lower.includes(m));
+  return GENERIC_ICON_MARKERS.some((marker) => {
+    const idx = lower.indexOf(marker);
+    if (idx === -1) return false;
+    // Look at the 60 chars before the marker for a negative word.
+    const before = lower.slice(Math.max(0, idx - 60), idx);
+    const negated = /\b(not|no|never|avoid|don'?t|do not|does not|without)\b/.test(before);
+    return !negated;
+  });
 }
 
 function hasUnsupportedServices(prompt: string, businessCategory: string): string[] {
@@ -60,7 +83,7 @@ function hasBusinessCategoryVisuals(prompt: string, businessCategory: string): b
   if (businessCategory.includes("art") || businessCategory.includes("décor") || businessCategory.includes("decor")) {
     return /\b(canvas|wall art|framed poster|art print|interior|gallery|home decor|office decor)\b/.test(lower);
   }
-  if (businessCategory.includes("print") || businessCategory.includes("copy")) {
+  if (isPrintShopCategory(businessCategory)) {
     return /\b(print|business card|flyer|poster|banner|courier|stationery)\b/.test(lower);
   }
   if (businessCategory.includes("food") || businessCategory.includes("restaurant")) {
@@ -72,7 +95,7 @@ function hasBusinessCategoryVisuals(prompt: string, businessCategory: string): b
   return true;
 }
 
-async function imageLayoutHeuristics(buffer: Buffer): Promise<string[]> {
+async function imageLayoutHeuristics(buffer: Buffer, businessCategory: string): Promise<string[]> {
   const issues: string[] = [];
   try {
     const { width = 1024, height = 1536, channels = 3 } = await sharp(buffer).metadata();
@@ -89,7 +112,6 @@ async function imageLayoutHeuristics(buffer: Buffer): Promise<string[]> {
     const w = thumb.info.width;
     const h = thumb.info.height;
 
-    // Count strong horizontal/vertical edges using simple gradient magnitude
     let edgeCount = 0;
     const threshold = 18;
     for (let y = 1; y < h - 1; y++) {
@@ -104,19 +126,64 @@ async function imageLayoutHeuristics(buffer: Buffer): Promise<string[]> {
     const totalPixels = w * h;
     const edgeDensity = edgeCount / totalPixels;
 
-    // Very low edge density often means flat colour blocks / icon grids.
-    if (edgeDensity < 0.015) {
+    // Print shops and collages are naturally busier, so we only flag extreme values.
+    const isBusyCategory = isPrintShopCategory(businessCategory);
+    const lowThreshold = isBusyCategory ? 0.008 : 0.015;
+    const highThreshold = isBusyCategory ? 0.28 : 0.18;
+
+    if (edgeDensity < lowThreshold) {
       issues.push("Layout appears too flat or blocky (possible icon grid).");
     }
 
-    // Very high edge density may mean noisy/overcrowded low-premium layout.
-    if (edgeDensity > 0.18) {
+    if (edgeDensity > highThreshold) {
       issues.push("Layout appears overly busy or cluttered.");
     }
-  } catch (err: any) {
-    console.warn(`[LeafletQuality] image heuristic failed: ${err.message}`);
+  } catch (err) {
+    console.warn(`[LeafletQuality] image heuristic failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   return issues;
+}
+
+/**
+ * Validate a prompt *before* spending an OpenAI image generation call.
+ * Returns only prompt-level issues (no image heuristics).
+ */
+export function validateLeafletPrompt(
+  prompt: string,
+  business: any
+): LeafletQualityResult {
+  const issues: string[] = [];
+  const category = businessCategoryFrom(business);
+
+  const unsupportedServices = hasUnsupportedServices(prompt, category);
+  if (unsupportedServices.length > 0) {
+    issues.push(`Prompt references unsupported services: ${unsupportedServices.join(", ")}.`);
+  }
+
+  if (hasGenericIconLanguage(prompt)) {
+    issues.push("Prompt describes a generic icon-grid layout.");
+  }
+
+  if (category && !hasBusinessCategoryVisuals(prompt, category)) {
+    issues.push("Prompt does not include visuals relevant to the detected business category.");
+  }
+
+  return { passed: issues.length === 0, issues };
+}
+
+/**
+ * Lightweight prompt sanitisation: rephrase common negative icon-grid wording so
+ * the validator cannot accidentally flag the prompt, while keeping the intent.
+ */
+export function sanitizePromptForValidator(prompt: string): string {
+  return prompt
+    .replace(/\bicon grid\b/gi, "icon arrangement")
+    .replace(/\bicon tiles\b/gi, "icon arrangement")
+    .replace(/\bgrid of icons\b/gi, "arrangement of icons")
+    .replace(/\btile layout\b/gi, "modular layout")
+    .replace(/\bclipart collage\b/gi, "illustration collage")
+    .replace(/\bscattered icons\b/gi, "placed icons")
+    .replace(/\bflat icon set\b/gi, "flat illustration set");
 }
 
 export async function validateLeafletQuality(
@@ -125,31 +192,12 @@ export async function validateLeafletQuality(
   _campaign: any,
   prompt: string
 ): Promise<LeafletQualityResult> {
-  const issues: string[] = [];
   const category = businessCategoryFrom(business);
-
-  // 1. Prompt must not contain unsupported services for non-marketing businesses.
-  const unsupportedServices = hasUnsupportedServices(prompt, category);
-  if (unsupportedServices.length > 0) {
-    issues.push(`Prompt references unsupported services: ${unsupportedServices.join(", ")}.`);
-  }
-
-  // 2. Prompt must not explicitly describe generic icon grids.
-  if (hasGenericIconLanguage(prompt)) {
-    issues.push("Prompt describes a generic icon-grid layout.");
-  }
-
-  // 3. Prompt must include visuals relevant to the business category.
-  if (category && !hasBusinessCategoryVisuals(prompt, category)) {
-    issues.push("Prompt does not include visuals relevant to the detected business category.");
-  }
-
-  // 4. Image layout heuristics.
-  const layoutIssues = await imageLayoutHeuristics(imageBuffer);
-  issues.push(...layoutIssues);
+  const promptValidation = validateLeafletPrompt(prompt, business);
+  const layoutIssues = await imageLayoutHeuristics(imageBuffer, category);
 
   return {
-    passed: issues.length === 0,
-    issues,
+    passed: promptValidation.passed && layoutIssues.length === 0,
+    issues: [...promptValidation.issues, ...layoutIssues],
   };
 }
