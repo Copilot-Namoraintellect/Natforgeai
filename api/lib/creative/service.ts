@@ -203,12 +203,26 @@ export async function generateMasterImage({
       }
     }
 
+    // Fallback to the user's most recent business if the campaign is not
+    // linked, so a logo/brand identity is still available.
     if (!business) {
-      business = { name: campaign?.name || post.title || "Your Business" };
+      const [latestBiz] = await db
+        .select()
+        .from(businesses)
+        .where(eq(businesses.userId, userId))
+        .orderBy(desc(businesses.createdAt))
+        .limit(1);
+      if (latestBiz) {
+        business = latestBiz;
+      } else {
+        business = { name: campaign?.name || post.title || "Your Business" };
+      }
     }
     if (!campaign) {
       campaign = {};
     }
+
+    console.log(`[CreativeService] Resolved business for generation | contentPostId=${contentPostId} | businessId=${business?.id ?? "none"} | name=${business?.name ?? "none"} | logo=${business?.logo ?? "none"}`);
 
     // ─── Brand palette resolution ───
     const brandPalette = await resolveBrandPalette({ ...business, brandColors });
@@ -235,6 +249,7 @@ export async function generateMasterImage({
     // ─── Normalised customer-facing text ───
     const formattedOffer = formatOffer(campaign.offerDetails, business.name);
     const leafletHeadline = offerToHeadline(campaign.offerDetails);
+    console.log(`[LeafletCopy] rawOffer="${campaign.offerDetails ?? ""}" | formattedOffer="${formattedOffer}" | headline="${leafletHeadline}"`);
     const businessCategory = (
       business?.websiteEvidence?.businessCategory ||
       business?.industry ||
@@ -453,9 +468,10 @@ export async function generateMasterImage({
 
     // ─── Brand overlay for OpenAI images (fallback is already branded) ───
     let composedBuffer = rawBuffer;
+    let logoOverlayApplied = false;
     if (finalAttempt.source === "openai") {
       try {
-        composedBuffer = await composeBrandedLeafletImage(rawBuffer, {
+        const composed = await composeBrandedLeafletImage(rawBuffer, {
           business,
           campaign,
           post,
@@ -466,11 +482,20 @@ export async function generateMasterImage({
           subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
           palette: brandPalette,
         });
-        console.log(`[CreativeService] Sharp composition completed | userId=${userId} | contentPostId=${contentPostId} | size=${composedBuffer.length}`);
+        composedBuffer = composed.buffer;
+        logoOverlayApplied = composed.logoApplied;
+        console.log(`[CreativeService] Sharp composition completed | userId=${userId} | contentPostId=${contentPostId} | size=${composedBuffer.length} | logoOverlayApplied=${logoOverlayApplied}`);
       } catch (composeErr) {
         const message = composeErr instanceof Error ? composeErr.message : String(composeErr);
         console.warn(`[CreativeService] Brand overlay failed, using raw image | userId=${userId} | error="${message}"`);
       }
+    } else {
+      // Fallback renderer always applies the logo if available.
+      logoOverlayApplied = !!business?.logo;
+    }
+
+    if (hasLogo && !logoOverlayApplied) {
+      throw new Error(`Business logo exists but could not be applied to the leaflet: ${business.logo}`);
     }
 
     // ─── Final overlay quality checks (text + composition) ───
@@ -496,6 +521,7 @@ export async function generateMasterImage({
     // Brand fidelity check.
     const brandFidelityCheck = validateBrandFidelity({
       hasLogo,
+      logoOverlayApplied: hasLogo ? logoOverlayApplied : undefined,
       palette: brandPalette,
       businessName: business.name,
       headline: leafletHeadline,
@@ -726,6 +752,7 @@ export async function generateMasterImage({
           imageVersions,
           imageBrandPalette: brandPalette,
           imageHasLogo: hasLogo,
+          imageLogoOverlayApplied: logoOverlayApplied,
           imageCreativeGuidance: creativeGuidance,
           imageRefinementInstruction: refinementInstruction,
           imageApprovedVersion: currentMeta?.imageApprovedVersion,

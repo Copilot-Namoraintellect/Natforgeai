@@ -40,11 +40,17 @@ export function formatOffer(offer: string, businessName?: string): string {
   let clean = sanitize(offer);
   if (!clean || clean.toLowerCase() === "none") return "";
 
+  // Normalise non-breaking spaces and collapse whitespace.
+  clean = clean.replace(/\u00A0/g, " ").replace(/\s+/g, " ");
+
   // Strip leading business name dash if present.
   if (businessName) {
     const escapedName = businessName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     clean = clean.replace(new RegExp(`^${escapedName}\\s*[-—]\\s*`, "i"), "");
   }
+
+  // Fix common OCR-style typos (zero instead of letter O in "off").
+  clean = clean.replace(/\b(\d+)%\s*0ff\b/gi, "$1% off");
 
   // Currency formatting.
   clean = formatRandCurrency(clean);

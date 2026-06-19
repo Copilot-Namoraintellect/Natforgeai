@@ -191,10 +191,11 @@ export async function extractLogoPalette(logoUrl: string): Promise<BrandPalette 
         const prodPublicDir = path.resolve(process.cwd(), "dist/public");
         const persistentDir = path.resolve(process.cwd(), "data/public/uploads");
         const relative = pathname.startsWith("/") ? pathname.slice(1) : pathname;
+        const persistentRelative = relative.replace(/^uploads[\\/]/, "");
         const candidates = [
           path.join(publicDir, relative),
           path.join(prodPublicDir, relative),
-          path.join(persistentDir, relative),
+          path.join(persistentDir, persistentRelative),
         ];
         const found = candidates.find((c) => fs.existsSync(c));
         if (found) {
@@ -217,10 +218,11 @@ export async function extractLogoPalette(logoUrl: string): Promise<BrandPalette 
       const prodPublicDir = path.resolve(process.cwd(), "dist/public");
       const persistentDir = path.resolve(process.cwd(), "data/public/uploads");
       const relative = logoUrl.startsWith("/") ? logoUrl.slice(1) : logoUrl;
+      const persistentRelative = relative.replace(/^uploads[\\/]/, "");
       const candidates = [
         path.join(publicDir, relative),
         path.join(prodPublicDir, relative),
-        path.join(persistentDir, relative),
+        path.join(persistentDir, persistentRelative),
       ];
       const found = candidates.find((c) => fs.existsSync(c));
       if (!found) return null;

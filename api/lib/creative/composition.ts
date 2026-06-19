@@ -60,15 +60,28 @@ function resolveLocalPathFromPublicUrl(publicUrl: string): string | null {
   if (pathname.startsWith(baseUrl)) {
     pathname = pathname.slice(baseUrl.length);
   }
+  // Strip any absolute production origin so we can resolve locally.
+  if (pathname.startsWith("http://") || pathname.startsWith("https://")) {
+    try {
+      pathname = new URL(pathname).pathname;
+    } catch {
+      return null;
+    }
+  }
   if (!pathname.startsWith("/")) return null;
 
   const publicDir = path.resolve(process.cwd(), "public");
   const prodPublicDir = path.resolve(process.cwd(), "dist/public");
+  // Persistent media is served from data/public/uploads with the /uploads
+  // prefix stripped, so the file lives directly under data/public/uploads.
   const persistentUploadsDir = path.resolve(process.cwd(), "data/public/uploads");
-  const relative = pathname.slice(1);
+  const relative = pathname.slice(1); // e.g. "uploads/logo/14/..."
   const devPath = path.join(publicDir, relative);
   const prodPath = path.join(prodPublicDir, relative);
-  const persistentPath = path.join(persistentUploadsDir, relative);
+  // For persistent storage the path already includes the uploads prefix in
+  // the request, but the root is data/public/uploads, so strip that prefix.
+  const persistentRelative = relative.replace(/^uploads[\\/]/, "");
+  const persistentPath = path.join(persistentUploadsDir, persistentRelative);
   if (fs.existsSync(devPath)) return devPath;
   if (fs.existsSync(prodPath)) return prodPath;
   if (fs.existsSync(persistentPath)) return persistentPath;
@@ -80,13 +93,26 @@ async function loadLogoBuffer(logoUrl?: string): Promise<Buffer | null> {
   try {
     const localPath = resolveLocalPathFromPublicUrl(logoUrl);
     if (localPath) {
+      console.log(`[LeafletBrand] resolvedLogoPath=${localPath}`);
       return fs.readFileSync(localPath);
     }
-    const response = await fetch(logoUrl);
-    if (!response.ok) return null;
+
+    console.warn(`[LeafletBrand] Logo file not found locally, attempting fetch | logoUrl=${logoUrl}`);
+    // Node fetch needs an absolute URL.
+    let fetchUrl = logoUrl;
+    if (fetchUrl.startsWith("/")) {
+      const backendPort = process.env.PORT || "3001";
+      fetchUrl = `http://127.0.0.1:${backendPort}${fetchUrl}`;
+    }
+    const response = await fetch(fetchUrl);
+    if (!response.ok) {
+      console.warn(`[LeafletBrand] Logo fetch failed | status=${response.status} | url=${fetchUrl}`);
+      return null;
+    }
+    console.log(`[LeafletBrand] Logo fetched successfully | url=${fetchUrl}`);
     return Buffer.from(await response.arrayBuffer());
   } catch (err: any) {
-    console.warn(`[BrandOverlay] Could not load logo: ${err.message}`);
+    console.warn(`[LeafletBrand] Could not load logo: ${err.message}`);
     return null;
   }
 }
@@ -288,10 +314,12 @@ function buildWatermarkSvg(width: number, businessName: string, palette: BrandPa
 export async function composeBrandedLeafletImage(
   baseImageBuffer: Buffer,
   spec: BrandOverlaySpec
-): Promise<Buffer> {
+): Promise<{ buffer: Buffer; logoApplied: boolean }> {
   const { business, campaign, post, creativeType = "leaflet", offer, cta, headline, subheadline } = spec;
 
-  console.log(`[BrandOverlay] Starting composition | business=${business?.name || "none"} | creativeType=${creativeType} | hasLogo=${!!business?.logo}`);
+  console.log(`[LeafletBrand] businessId=${business?.id ?? "none"} | business.logo=${business?.logo ?? "none"}`);
+  const resolvedLogoPath = business?.logo ? resolveLocalPathFromPublicUrl(business.logo) : null;
+  console.log(`[LeafletBrand] resolvedLogoPath=${resolvedLogoPath ?? "none"} | logoFileExists=${resolvedLogoPath ? fs.existsSync(resolvedLogoPath) : false}`);
 
   const base = sharp(baseImageBuffer);
   const meta = await base.metadata();
@@ -306,6 +334,13 @@ export async function composeBrandedLeafletImage(
   const subheadlineText = sanitize(subheadline || campaign?.mainPainPoint || campaign?.coreMessage || post?.hook || "");
 
   const logoBuffer = await loadLogoBuffer(business?.logo);
+  const logoLoadSuccess = !!logoBuffer;
+  console.log(`[LeafletBrand] logoLoadSuccess=${logoLoadSuccess}`);
+  if (business?.logo && !logoBuffer) {
+    console.warn(`[LeafletBrand] Could not load logo buffer | logo=${business.logo}`);
+  }
+
+  let logoApplied = false;
 
   if (creativeType !== "leaflet") {
     // Non-leaflet: just add a small branded watermark strip at the bottom.
@@ -317,10 +352,11 @@ export async function composeBrandedLeafletImage(
       ])
       .toBuffer();
 
-    if (!logoBuffer) return composite;
+    if (!logoBuffer) return { buffer: composite, logoApplied: false };
 
     const logoPng = await resizeLogo(logoBuffer, 40);
-    return sharp(composite).composite([{ input: logoPng, top: 12, left: 12 }]).toBuffer();
+    const buffer = await sharp(composite).composite([{ input: logoPng, top: 12, left: 12 }]).toBuffer();
+    return { buffer, logoApplied: true };
   }
 
   // Leaflet layout.
@@ -380,6 +416,7 @@ export async function composeBrandedLeafletImage(
       { input: Buffer.from(backdropSvg, "utf-8"), top: logoTop - backdropPadY, left: logoPadX - backdropPadX },
       { input: logoPng, top: logoTop, left: logoPadX }
     );
+    logoApplied = true;
 
     // Also place a small, clean logo mark in the footer so the brand is
     // visible in both the header and footer.
@@ -424,7 +461,9 @@ export async function composeBrandedLeafletImage(
     }
   }
 
-  return base.composite(overlays).toBuffer();
+  const buffer = await base.composite(overlays).toBuffer();
+  console.log(`[LeafletBrand] logoOverlayApplied=${logoApplied} | paletteSource=${palette.source} | resolvedPalette=${JSON.stringify(palette)}`);
+  return { buffer, logoApplied };
 }
 
 export async function overlayBusinessLogo(
