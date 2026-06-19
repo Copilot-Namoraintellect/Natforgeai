@@ -8,8 +8,10 @@ import { checkCredits, deductCredits, recordAiUsage } from "../billing/credit-en
 import { enforceCostControl } from "../billing/cost-control";
 import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider } from "./registry";
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
-import { composeBrandedLeafletImage, generateFallbackLeafletImage } from "./composition";
-import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable } from "./quality";
+import { composeBrandedLeafletImage, generateFallbackLeafletImage, defaultServiceBullets } from "./composition";
+import sharp from "sharp";
+import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable, validateLeafletComposition } from "./quality";
+import { formatOffer, offerToHeadline, normalizeCta, validateMarketingText } from "./text-formatter";
 import {
   getPremiumImageCredits,
   getPremiumVideoCredits,
@@ -201,6 +203,17 @@ export async function generateMasterImage({
       campaign = {};
     }
 
+    // ─── Normalised customer-facing text ───
+    const formattedOffer = formatOffer(campaign.offerDetails, business.name);
+    const leafletHeadline = offerToHeadline(campaign.offerDetails);
+    const businessCategory = (
+      business?.websiteEvidence?.businessCategory ||
+      business?.industry ||
+      business?.productOrService ||
+      ""
+    ).toString();
+    const leafletCta = normalizeCta(campaign.preferredCta || post.cta, businessCategory);
+
     const aspectRatio = getImageAspectRatio(creativeType, post.platform || "Instagram");
 
     // ─── Prompt helpers ───
@@ -315,11 +328,9 @@ export async function generateMasterImage({
         campaign,
         post,
         creativeType,
-        offer: campaign.offerDetails,
-        cta: campaign.preferredCta || post.cta,
-        headline: campaign.offerDetails && !campaign.offerDetails.toLowerCase().includes("none")
-          ? `${business.name} — ${campaign.offerDetails}`
-          : campaign.primaryOutcome || post?.title || business.name,
+        offer: formattedOffer,
+        cta: leafletCta,
+        headline: leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
         subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
       });
       return {
@@ -409,11 +420,9 @@ export async function generateMasterImage({
           campaign,
           post,
           creativeType,
-          offer: campaign.offerDetails,
-          cta: campaign.preferredCta || post.cta,
-          headline: campaign.offerDetails && !campaign.offerDetails.toLowerCase().includes("none")
-            ? `${business.name} — ${campaign.offerDetails}`
-            : campaign.primaryOutcome || post?.title || business.name,
+          offer: formattedOffer,
+          cta: leafletCta,
+          headline: leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
           subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
         });
         console.log(`[CreativeService] Sharp composition completed | userId=${userId} | contentPostId=${contentPostId} | size=${composedBuffer.length}`);
@@ -421,6 +430,34 @@ export async function generateMasterImage({
         const message = composeErr instanceof Error ? composeErr.message : String(composeErr);
         console.warn(`[CreativeService] Brand overlay failed, using raw image | userId=${userId} | error="${message}"`);
       }
+    }
+
+    // ─── Final overlay quality checks (text + composition) ───
+    const imageMeta = await sharp(composedBuffer).metadata();
+    const imageHeight = imageMeta.height || 1536;
+
+    const marketingTextCheck = validateMarketingText({
+      headline: leafletHeadline,
+      offer: formattedOffer,
+      cta: leafletCta,
+      businessName: business.name,
+    });
+    const compositionCheck = validateLeafletComposition({
+      hasLogo: !!business?.logo,
+      headline: leafletHeadline,
+      cta: leafletCta,
+      serviceBullets: defaultServiceBullets(business, campaign),
+      headerHeight: Math.round(imageHeight * 0.075),
+      footerHeight: Math.round(imageHeight * 0.16),
+      imageHeight,
+    });
+
+    const totalPenalty = marketingTextCheck.scorePenalty + compositionCheck.scorePenalty;
+    const allTextIssues = [...marketingTextCheck.issues, ...compositionCheck.issues];
+    if (allTextIssues.length > 0) {
+      finalAttempt.score = Math.max(0, finalAttempt.score - totalPenalty);
+      finalAttempt.warnings = [...finalAttempt.warnings, ...allTextIssues];
+      console.log(`[CreativeService] Overlay quality penalty | userId=${userId} | contentPostId=${contentPostId} | penalty=${totalPenalty} | newScore=${finalAttempt.score} | issues=${JSON.stringify(allTextIssues)}`);
     }
 
     // ─── Store locally with fallback on storage/URL failure ───

@@ -98,6 +98,27 @@ async function loadLogoBuffer(logoUrl?: string): Promise<Buffer | null> {
   }
 }
 
+async function resizeLogo(logoBuffer: Buffer, maxHeight: number): Promise<Buffer> {
+  return sharp(logoBuffer)
+    .resize({ height: maxHeight, fit: sharp.fit.inside, withoutEnlargement: true })
+    .png()
+    .toBuffer();
+}
+
+function isLightColor(hex: string): boolean {
+  const num = parseInt(hex.replace("#", ""), 16);
+  const r = num >> 16;
+  const g = (num >> 8) & 0xff;
+  const b = num & 0xff;
+  // YIQ luminance.
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+  return yiq >= 160;
+}
+
+/**
+ * Build a compact branded header bar with logo on the left and business name
+ * on the right. Uses the brand colour so the leaflet immediately looks branded.
+ */
 function buildHeaderSvg(
   width: number,
   height: number,
@@ -105,27 +126,22 @@ function buildHeaderSvg(
   brandColor: string
 ): Buffer {
   const name = escapeXml(sanitize(businessName) || "Your Business");
-  const barColor = "#FFFFFF";
-  const textColor = "#0F172A";
-  const nameSize = Math.max(22, Math.round(width / 20));
+  const textColor = isLightColor(brandColor) ? "#0F172A" : "#FFFFFF";
+  const nameSize = Math.max(20, Math.round(width / 26));
   const padX = 24;
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <defs>
-    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:${barColor};stop-opacity:1" />
-      <stop offset="85%" style="stop-color:${barColor};stop-opacity:0.98" />
-      <stop offset="100%" style="stop-color:${barColor};stop-opacity:0" />
-    </linearGradient>
-  </defs>
-  <rect width="${width}" height="${height}" fill="url(#headerGrad)"/>
-  <rect x="0" y="${height - 5}" width="${width}" height="5" fill="${brandColor}"/>
+  <rect width="${width}" height="${height}" fill="${brandColor}"/>
   <text x="${width - padX}" y="${height / 2 + nameSize / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="700" fill="${textColor}" text-anchor="end">${name}</text>
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }
 
+/**
+ * Build a prominent, easy-to-read footer with the CTA as the hero element.
+ * Contact details are smaller and sit beneath the CTA so nothing is cut off.
+ */
 function buildFooterSvg(
   width: number,
   height: number,
@@ -133,19 +149,19 @@ function buildFooterSvg(
   cta: string,
   brandColor: string
 ): Buffer {
-  const textColor = "#FFFFFF";
-  const ctaSize = Math.max(22, Math.round(width / 18));
-  const lineSize = Math.max(14, Math.round(width / 34));
+  const textColor = isLightColor(brandColor) ? "#0F172A" : "#FFFFFF";
+  const ctaSize = Math.max(24, Math.round(width / 16));
+  const lineSize = Math.max(14, Math.round(width / 38));
   const padX = 28;
-  const padY = 20;
+  const padY = 18;
 
   const safeCta = escapeXml(sanitize(cta) || "Contact us today");
   const safeLines = lines.filter(Boolean).map((l) => escapeXml(sanitize(l)));
 
   const lineBlocks = safeLines
     .map((line, idx) => {
-      const y = padY + ctaSize + 22 + (idx + 1) * (lineSize + 9);
-      return `<text x="${padX}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${lineSize}" font-weight="400" fill="${textColor}" opacity="0.95">${line}</text>`;
+      const y = padY + ctaSize + 28 + (idx + 1) * (lineSize + 10);
+      return `<text x="${padX}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${lineSize}" font-weight="500" fill="${textColor}" opacity="0.92">${line}</text>`;
     })
     .join("");
 
@@ -158,9 +174,12 @@ function buildFooterSvg(
   return Buffer.from(svg, "utf-8");
 }
 
-function buildHeadlineOverlaySvg(
+/**
+ * Build a clean offer badge — white card with a brand-colour accent so it
+ * floats over the image without hiding the hero visual.
+ */
+function buildOfferBadgeSvg(
   width: number,
-  height: number,
   headline: string,
   subheadline: string,
   brandColor: string
@@ -168,35 +187,103 @@ function buildHeadlineOverlaySvg(
   const safeHeadline = escapeXml(sanitize(headline) || "");
   const safeSub = escapeXml(sanitize(subheadline) || "");
   if (!safeHeadline && !safeSub) {
-    return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"></svg>`, "utf-8");
+    return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="1"></svg>`, "utf-8");
   }
 
-  const headlineSize = Math.max(26, Math.round(width / 14));
-  const subSize = Math.max(15, Math.round(width / 26));
+  const headlineSize = Math.max(20, Math.round(width / 22));
+  const subSize = Math.max(14, Math.round(width / 34));
   const padX = 28;
-  const padY = 22;
-  const maxChars = Math.max(20, Math.round((width - padX * 2) / (headlineSize * 0.55)));
-  const subMaxChars = Math.max(30, Math.round((width - padX * 2) / (subSize * 0.55)));
+  const padY = 18;
+  const maxChars = Math.max(26, Math.round((width - padX * 2 - 40) / (headlineSize * 0.55)));
+  const subMaxChars = Math.max(36, Math.round((width - padX * 2 - 40) / (subSize * 0.55)));
 
   const headlineLines = safeHeadline ? wrapText(safeHeadline, maxChars) : [];
   const subLines = safeSub ? wrapText(safeSub, subMaxChars) : [];
 
   const headlineLineHeight = headlineSize + 8;
-  const subLineHeight = subSize + 8;
+  const subLineHeight = subSize + 6;
+
   const headlineBlocks = headlineLines.map((line, i) =>
-    `<text x="${padX}" y="${padY + headlineSize + i * headlineLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="800" fill="#FFFFFF">${line}</text>`
+    `<text x="${padX + 8}" y="${padY + headlineSize + i * headlineLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="800" fill="${brandColor}">${line}</text>`
   ).join("");
 
-  const subYOffset = padY + headlineSize + (headlineLines.length * headlineLineHeight) + (headlineLines.length ? 10 : 0);
+  const subYOffset = padY + headlineSize + (headlineLines.length * headlineLineHeight) + (headlineLines.length && subLines.length ? 8 : 0);
   const subBlocks = subLines.map((line, i) =>
-    `<text x="${padX}" y="${subYOffset + subSize + i * subLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="500" fill="#FFFFFF" opacity="0.95">${line}</text>`
+    `<text x="${padX + 8}" y="${subYOffset + subSize + i * subLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="500" fill="#334155">${line}</text>`
   ).join("");
+
+  const contentHeight = subYOffset + (subLines.length * subLineHeight) + (subLines.length ? 4 : 0);
+  const height = Math.max(Math.round(width * 0.09), contentHeight + padY);
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <rect width="${width}" height="${height}" fill="${brandColor}" opacity="0.82" rx="12"/>
+  <rect x="8" y="4" width="${width - 16}" height="${height - 8}" fill="#FFFFFF" opacity="0.96" rx="14" stroke="${brandColor}" stroke-width="3"/>
+  <rect x="8" y="4" width="7" height="${height - 8}" fill="${brandColor}" rx="3"/>
   ${headlineBlocks}
   ${subBlocks}
+</svg>`;
+  return Buffer.from(svg, "utf-8");
+}
+
+/**
+ * Build a 2-column service cards grid. Large, readable text with brand-colour
+ * icons instead of tiny bullets.
+ */
+function buildServicesGridSvg(
+  width: number,
+  bullets: string[],
+  brandColor: string
+): Buffer {
+  const padX = 20;
+  const padY = 18;
+  const gapX = 14;
+  const gapY = 12;
+  const cardRadius = 12;
+  const iconSize = 9;
+  const lineSize = Math.max(17, Math.round(width / 50));
+  const lineHeight = lineSize + 8;
+
+  const colCount = 2;
+  const cardWidth = Math.floor((width - padX * 2 - gapX * (colCount - 1)) / colCount);
+
+  const blocks: string[] = [];
+  let currentY = padY;
+  let currentX = padX;
+
+  for (let i = 0; i < bullets.length; i++) {
+    const bullet = escapeXml(sanitize(bullets[i]));
+    const col = i % colCount;
+    currentX = padX + col * (cardWidth + gapX);
+
+    const textMaxChars = Math.max(16, Math.round((cardWidth - 36) / (lineSize * 0.55)));
+    const lines = wrapText(bullet, textMaxChars);
+    const cardHeight = Math.max(56, lines.length * lineHeight + 22);
+
+    if (col === 0 && i > 0) currentY += cardHeight + gapY;
+
+    const cardY = currentY;
+    const textYOffset = cardY + 18 + (cardHeight - lines.length * lineHeight) / 2;
+
+    const textBlocks = lines.map((line, li) =>
+      `<text x="${currentX + 22}" y="${textYOffset + li * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${lineSize}" font-weight="700" fill="#0F172A">${line}</text>`
+    ).join("");
+
+    blocks.push(`<rect x="${currentX}" y="${cardY}" width="${cardWidth}" height="${cardHeight}" fill="#FFFFFF" opacity="0.96" rx="${cardRadius}" stroke="${brandColor}" stroke-width="2"/>`);
+    blocks.push(`<circle cx="${currentX + 11}" cy="${cardY + cardHeight / 2}" r="${iconSize / 2}" fill="${brandColor}"/>`);
+    blocks.push(textBlocks);
+  }
+
+  // Compute final height from last row.
+  const rows = Math.ceil(bullets.length / colCount);
+  const lastIdx = bullets.length - 1;
+  const lastTextMaxChars = Math.max(16, Math.round((cardWidth - 36) / (lineSize * 0.55)));
+  const lastLines = rows > 0 ? wrapText(sanitize(bullets[lastIdx]) || "", lastTextMaxChars).length : 0;
+  const lastRowHeight = rows > 0 ? Math.max(56, lastLines * lineHeight + 22) : 0;
+  const finalHeight = rows > 0 ? currentY + lastRowHeight + padY : padY;
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${finalHeight}">
+  ${blocks.join("\n")}
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }
@@ -211,13 +298,6 @@ function buildWatermarkSvg(width: number, businessName: string): Buffer {
   <text x="${width - 16}" y="${height / 2 + size / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${size}" font-weight="600" fill="#FFFFFF" text-anchor="end">${name}</text>
 </svg>`;
   return Buffer.from(svg, "utf-8");
-}
-
-async function resizeLogo(logoBuffer: Buffer, maxHeight: number): Promise<Buffer> {
-  return sharp(logoBuffer)
-    .resize({ height: maxHeight, fit: sharp.fit.inside, withoutEnlargement: true })
-    .png()
-    .toBuffer();
 }
 
 export async function composeBrandedLeafletImage(
@@ -237,6 +317,8 @@ export async function composeBrandedLeafletImage(
   const businessName = sanitize(business?.name) || sanitize(post?.title) || "Your Business";
   const preferredCta = sanitize(cta || campaign?.preferredCta || post?.cta || "Contact us today");
   const safeOffer = sanitize(offer || campaign?.offerDetails || "");
+  const headlineText = sanitize(headline || campaign?.primaryOutcome || post?.title || "");
+  const subheadlineText = sanitize(subheadline || campaign?.mainPainPoint || campaign?.coreMessage || post?.hook || "");
 
   const logoBuffer = await loadLogoBuffer(business?.logo);
 
@@ -257,9 +339,9 @@ export async function composeBrandedLeafletImage(
   }
 
   // Leaflet layout.
-  const headerHeight = Math.round(height * 0.095);
-  const footerHeight = Math.round(height * 0.15);
-  const logoAreaHeight = headerHeight - 20;
+  const headerHeight = Math.round(height * 0.075);
+  const footerHeight = Math.round(height * 0.16);
+  const logoHeight = headerHeight - 16;
 
   const headerSvg = buildHeaderSvg(width, headerHeight, businessName, brandColor);
 
@@ -268,52 +350,44 @@ export async function composeBrandedLeafletImage(
   if (business?.email) contactLines.push(`Email: ${sanitize(business.email)}`);
   if (business?.website) contactLines.push(`Website: ${sanitize(business.website)}`);
   if (business?.location) contactLines.push(`Location: ${sanitize(business.location)}`);
-  if (contactLines.length === 0) contactLines.push("Contact us today");
 
-  const footerLines = safeOffer && !safeOffer.toLowerCase().includes("none")
-    ? [`Offer: ${safeOffer}`, ...contactLines]
-    : contactLines;
-
-  const footerSvg = buildFooterSvg(width, footerHeight, footerLines, preferredCta, brandColor);
+  const footerSvg = buildFooterSvg(width, footerHeight, contactLines, preferredCta, brandColor);
 
   const overlays: sharp.OverlayOptions[] = [
     { input: headerSvg, top: 0, left: 0 },
     { input: footerSvg, top: height - footerHeight, left: 0 },
   ];
 
+  // Logo: larger and placed clearly in the header.
   if (logoBuffer) {
-    const logoPng = await resizeLogo(logoBuffer, logoAreaHeight);
-    overlays.push({ input: logoPng, top: 14, left: 22 });
+    const logoPng = await resizeLogo(logoBuffer, logoHeight);
+    overlays.push({ input: logoPng, top: 10, left: 22 });
   }
 
-  // Optional premium headline band in middle-upper area if headline is provided
-  const headlineText = sanitize(headline || campaign?.primaryOutcome || post?.title || "");
-  const subheadlineText = sanitize(subheadline || campaign?.mainPainPoint || campaign?.coreMessage || post?.hook || "");
-  let headlineBottom = 0;
-  if (headlineText) {
-    const bandHeight = Math.round(height * 0.16);
-    const bandTop = Math.round(height * 0.45);
-    const headlineSvg = buildHeadlineOverlaySvg(width, bandHeight, headlineText, subheadlineText, brandColor);
-    overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
-    headlineBottom = bandTop + bandHeight;
+  // Offer badge in upper area so the hero visual stays dominant in the centre.
+  const offerBadgeTop = Math.round(height * 0.36);
+  let offerBadgeHeight = 0;
+  if (headlineText || safeOffer) {
+    const offerText = headlineText || safeOffer;
+    const badgeSvg = buildOfferBadgeSvg(width, offerText, subheadlineText, brandColor);
+    const badgeMeta = await sharp(badgeSvg).metadata();
+    offerBadgeHeight = badgeMeta.height || Math.round(height * 0.11);
+    overlays.push({ input: badgeSvg, top: offerBadgeTop, left: 0 });
   }
 
-  // Service bullets overlay (deterministic, factually accurate)
+  // Service cards grid between offer badge and footer.
   const bullets = spec.serviceBullets?.length
     ? spec.serviceBullets
-    : defaultOverlayServiceBullets(business, campaign);
+    : defaultServiceBullets(business, campaign);
   if (bullets.length > 0) {
-    const bulletMaxWidth = Math.round(width * 0.72);
-    const bulletSvg = buildBulletSvg(bulletMaxWidth, bullets.slice(0, 5), brandColor);
-    const bulletMeta = await sharp(bulletSvg).metadata();
-    const bulletHeight = bulletMeta.height || Math.round(height * 0.22);
-    const bulletTop = Math.max(
-      headlineBottom + Math.round(height * 0.04),
-      Math.round(height * 0.64)
-    );
-    const bulletLeft = Math.round((width - bulletMaxWidth) / 2);
-    if (bulletTop + bulletHeight < height - footerHeight - Math.round(height * 0.02)) {
-      overlays.push({ input: bulletSvg, top: bulletTop, left: bulletLeft });
+    const gridWidth = Math.round(width * 0.92);
+    const gridLeft = Math.round((width - gridWidth) / 2);
+    const gridTop = offerBadgeTop + offerBadgeHeight + Math.round(height * 0.04);
+    const gridSvg = buildServicesGridSvg(gridWidth, bullets.slice(0, 6), brandColor);
+    const gridMeta = await sharp(gridSvg).metadata();
+    const actualGridHeight = gridMeta.height || Math.round(height * 0.22);
+    if (gridTop + actualGridHeight <= height - footerHeight - Math.round(height * 0.02)) {
+      overlays.push({ input: gridSvg, top: gridTop, left: gridLeft });
     }
   }
 
@@ -384,7 +458,7 @@ function inferServiceCategory(business: any, campaign: any): string {
   return "general";
 }
 
-function defaultServiceBullets(business: any, campaign: any): string[] {
+export function defaultServiceBullets(business: any, campaign: any): string[] {
   const category = inferServiceCategory(business, campaign);
   if (category === "print_shop") {
     return [
@@ -404,85 +478,6 @@ function defaultServiceBullets(business: any, campaign: any): string[] {
       "Home & Office Décor",
       "Premium Quality Materials",
       "Ready to Hang",
-    ];
-  }
-  return [
-    "Professional Quality",
-    "Fast Turnaround",
-    "Easy to Order",
-    "Customer Support",
-  ];
-}
-
-function buildBulletSvg(width: number, bullets: string[], brandColor: string): Buffer {
-  const padX = 32;
-  const padY = 28;
-  const bulletSize = 14;
-  const lineSize = Math.max(18, Math.round(width / 46));
-  const lineHeight = lineSize + 18;
-  const maxChars = Math.max(30, Math.round((width - padX * 2 - 32) / (lineSize * 0.55)));
-
-  let y = padY + lineSize;
-  const blocks: string[] = [];
-  for (const bullet of bullets) {
-    const safeBullet = escapeXml(sanitize(bullet));
-    const lines = wrapText(safeBullet, maxChars);
-    blocks.push(`<circle cx="${padX + 6}" cy="${y - lineSize / 3}" r="${bulletSize / 2}" fill="${brandColor}"/>`);
-    for (let i = 0; i < lines.length; i++) {
-      blocks.push(`<text x="${padX + 24}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${lineSize}" font-weight="600" fill="#0F172A">${lines[i]}</text>`);
-      y += lineHeight;
-    }
-    y += 8;
-  }
-
-  const height = y + padY - lineHeight;
-  const svg = `
-<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <rect width="${width}" height="${height}" fill="#FFFFFF" opacity="0.92" rx="14"/>
-  ${blocks.join("\n")}
-</svg>`;
-  return Buffer.from(svg, "utf-8");
-}
-
-function inferServiceCategoryForOverlay(business: any, campaign: any): string {
-  const combined = `${business?.name || ""} ${business?.industry || ""} ${business?.productOrService || ""} ${campaign?.productOrService || ""} ${JSON.stringify(business?.websiteEvidence || {})}`.toLowerCase();
-  if (combined.includes("print") || combined.includes("copy") || combined.includes("courier") || combined.includes("business card") || combined.includes("flyer") || combined.includes("poster") || combined.includes("banner") || combined.includes("branding")) {
-    return "print_shop";
-  }
-  if (
-    combined.includes("canvas") ||
-    combined.includes("framed poster") ||
-    combined.includes("wall art") ||
-    combined.includes("art print") ||
-    combined.includes("afrocentric") ||
-    combined.includes("home decor") ||
-    combined.includes("office decor") ||
-    combined.includes("interior decor")
-  ) {
-    return "art_decor";
-  }
-  return "general";
-}
-
-function defaultOverlayServiceBullets(business: any, campaign: any): string[] {
-  const category = inferServiceCategoryForOverlay(business, campaign);
-  if (category === "print_shop") {
-    return [
-      "Business Cards & Stationery",
-      "Flyers, Posters & Banners",
-      "Canvas & Photo Prints",
-      "Document Copying & Binding",
-      "Courier & Delivery",
-      "Branding & Design Support",
-    ];
-  }
-  if (category === "art_decor") {
-    return [
-      "Custom Canvas Prints",
-      "Framed Posters",
-      "Premium Wall Art",
-      "Home & Office Décor",
-      "Turn Photos into Art",
     ];
   }
   return [
@@ -551,9 +546,10 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
   }
 
   // Headline band
-  const bandHeight = Math.round(height * 0.18);
   const bandTop = Math.round(height * 0.16);
-  const headlineSvg = buildHeadlineOverlaySvg(width, bandHeight, headlineText, subheadlineText, brandColor);
+  const headlineSvg = buildOfferBadgeSvg(width, headlineText, subheadlineText, brandColor);
+  const headlineMeta = await sharp(headlineSvg).metadata();
+  const bandHeight = headlineMeta.height || Math.round(height * 0.18);
   overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
 
   // Offer badge (if provided)
@@ -576,7 +572,7 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
   }
 
   // Service bullets
-  const bulletSvg = buildBulletSvg(width - 64, bullets, brandColor);
+  const bulletSvg = buildServicesGridSvg(width - 64, bullets, brandColor);
   const bulletMeta = await sharp(bulletSvg).metadata();
   const bulletHeight = bulletMeta.height || 260;
   overlays.push({ input: bulletSvg, top: currentY, left: 32 });

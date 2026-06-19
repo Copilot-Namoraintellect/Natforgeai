@@ -102,6 +102,63 @@ function hasBusinessCategoryVisuals(prompt: string, businessCategory: string): b
   return true;
 }
 
+export interface CompositionValidationResult {
+  scorePenalty: number;
+  issues: string[];
+}
+
+/**
+ * Validate the deterministic overlay composition. Deducts from the final score
+ * for layout/text choices that make the leaflet feel less premium, so a 100/100
+ * score only happens when both the OpenAI visual and the NatForgeAI overlay are
+ * polished.
+ */
+export function validateLeafletComposition(opts: {
+  hasLogo?: boolean;
+  headline?: string;
+  cta?: string;
+  serviceBullets?: string[];
+  headerHeight?: number;
+  footerHeight?: number;
+  imageHeight?: number;
+}): CompositionValidationResult {
+  const issues: string[] = [];
+  let scorePenalty = 0;
+
+  if (!opts.hasLogo) {
+    issues.push("No business logo provided for overlay.");
+    scorePenalty += 5;
+  }
+
+  const headline = (opts.headline || "").trim();
+  if (headline.length > 60) {
+    issues.push("Headline is long and may dominate the design.");
+    scorePenalty += 5;
+  }
+
+  const cta = (opts.cta || "").trim();
+  if (cta.length > 30) {
+    issues.push("CTA is long and may be cut off or hard to read.");
+    scorePenalty += 5;
+  }
+
+  const bullets = opts.serviceBullets || [];
+  if (bullets.length > 6) {
+    issues.push("Too many service bullets; layout may feel crowded.");
+    scorePenalty += 5;
+  }
+
+  if (opts.imageHeight && opts.headerHeight && opts.footerHeight) {
+    const coverage = (opts.headerHeight + opts.footerHeight) / opts.imageHeight;
+    if (coverage > 0.35) {
+      issues.push("Header and footer cover too much of the image.");
+      scorePenalty += 10;
+    }
+  }
+
+  return { scorePenalty, issues };
+}
+
 /**
  * Check whether a public image URL is actually loadable. Returns true if the
  * URL responds with an image content type and non-empty body.

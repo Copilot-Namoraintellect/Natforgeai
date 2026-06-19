@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --open",
-    "build": "vite build && esbuild api/boot.ts api/worker.ts --platform=node --bundle --format=esm --outdir=dist --external:ffmpeg-static --external:sharp --external:execa --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\"",
+    "build": "vite build && esbuild api/boot.ts api/worker.ts --platform=node --bundle --format=esm --outdir=dist --external:ffmpeg-static --external:sharp --external:execa --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\" && node scripts/verify-deployment.mjs",
+    "verify:deploy": "node scripts/verify-deployment.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "cross-env NODE_ENV=production node dist/boot.js",
