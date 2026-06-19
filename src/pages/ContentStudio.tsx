@@ -921,6 +921,14 @@ Include:
             {statusBadge()}
           </div>
           <div className="flex items-center gap-2">
+            {isReady && (
+              <Badge
+                variant="outline"
+                className={`text-[10px] h-6 ${metadata?.imageFallbackUsed ? "border-amber-300 text-amber-700 bg-amber-50" : "border-emerald-200 text-emerald-700 bg-emerald-50"}`}
+              >
+                {metadata?.imageFallbackUsed ? "Fallback template used" : metadata?.imageSource === "openai" ? "Generated using OpenAI" : "Generated"}
+              </Badge>
+            )}
             <Badge variant="outline" className="text-[10px] h-6">
               {premiumImageCost} credits
             </Badge>
@@ -1048,6 +1056,20 @@ Include:
                   <span className="text-slate-500">Credits charged</span>
                   <span className="font-medium text-right">{metadata?.imageCreditsCharged ?? "—"}</span>
                 </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Source</span>
+                  <span className={`font-medium text-right ${metadata?.imageFallbackUsed ? "text-amber-700" : "text-emerald-700"}`}>
+                    {metadata?.imageFallbackUsed ? "Fallback template used" : metadata?.imageSource === "openai" ? "Generated using OpenAI" : "Generated"}
+                  </span>
+                </div>
+                {typeof metadata?.imageQualityScore === "number" && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-slate-500">Quality score</span>
+                    <span className={`font-medium text-right ${metadata.imageQualityScore >= 80 ? "text-emerald-700" : metadata.imageQualityScore >= 60 ? "text-amber-700" : "text-red-700"}`}>
+                      {metadata.imageQualityScore}/100
+                    </span>
+                  </div>
+                )}
                 {metadata?.imageGeneratedAt && (
                   <div className="flex justify-between gap-2">
                     <span className="text-slate-500">Generated</span>
@@ -1058,6 +1080,65 @@ Include:
                 )}
               </CardContent>
             </Card>
+
+            {Array.isArray(metadata?.imageAttempts) && metadata.imageAttempts.length > 0 && (
+              <details className="rounded-lg border border-slate-200 bg-slate-50 text-xs group">
+                <summary className="cursor-pointer list-none px-3 py-2.5 flex items-center justify-between select-none">
+                  <span className="font-medium text-slate-700">Generation attempts</span>
+                  <span className="transition-transform group-open:rotate-180">
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                  </span>
+                </summary>
+                <div className="px-3 pb-3 space-y-2 border-t border-slate-100 pt-2">
+                  {metadata.imageAttempts.map((attempt: any, idx: number) => (
+                    <div key={idx} className="rounded-md bg-white border border-slate-200 p-2.5">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="font-medium text-slate-800">
+                          {attempt.source === "fallback" ? "Fallback" : `OpenAI attempt ${attempt.number}`}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] h-5 ${attempt.passed ? "border-emerald-200 text-emerald-700 bg-emerald-50" : "border-red-200 text-red-700 bg-red-50"}`}
+                        >
+                          {attempt.score}/100
+                        </Badge>
+                      </div>
+                      {attempt.criticalFailures?.length > 0 && (
+                        <div className="mt-1.5">
+                          <span className="text-[10px] font-medium text-red-700">Critical failures:</span>
+                          <ul className="mt-0.5 list-disc list-inside text-[10px] text-red-700">
+                            {attempt.criticalFailures.map((issue: string, i: number) => (
+                              <li key={i}>{issue}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {attempt.warnings?.length > 0 && (
+                        <div className="mt-1.5">
+                          <span className="text-[10px] font-medium text-amber-700">Warnings:</span>
+                          <ul className="mt-0.5 list-disc list-inside text-[10px] text-amber-700">
+                            {attempt.warnings.map((issue: string, i: number) => (
+                              <li key={i}>{issue}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {attempt.storedUrl && (
+                        <a
+                          href={attempt.storedUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1.5 inline-flex items-center gap-1 text-[10px] text-blue-600 hover:underline"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          View raw attempt
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
 
             <div className="space-y-2">
               {isReady && (

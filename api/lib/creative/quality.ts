@@ -1,14 +1,10 @@
 /**
- * Leaflet quality validation.
+ * Leaflet quality validation — scored model.
  *
- * Rejects generic icon-grid designs, irrelevant services, low-premium layouts,
- * and outputs that do not include the actual business category.
- *
- * IMPORTANT: This validator is intentionally conservative. It blocks obviously
- * bad prompts *before* spending an OpenAI call, and it gives image-based
- * heuristics the benefit of the doubt for categories that are naturally busy
- * (e.g. print shops). When the generated image cannot be confirmed as premium,
- * the pipeline falls back to a deterministic branded template instead of failing.
+ * Instead of hard-rejecting every imperfection, we return a 0–100 quality score,
+ * a list of critical failures, and a list of warnings. This lets the pipeline
+ * accept business-relevant but visually busy print-shop leaflets while still
+ * blocking genuinely wrong or unsafe outputs.
  */
 
 import sharp from "sharp";
@@ -24,8 +20,10 @@ const GENERIC_ICON_MARKERS = [
 ];
 
 export interface LeafletQualityResult {
+  score: number;
+  criticalFailures: string[];
+  warnings: string[];
   passed: boolean;
-  issues: string[];
 }
 
 function businessCategoryFrom(business: any): string {
@@ -50,8 +48,18 @@ function isMarketingCategory(category: string): boolean {
   );
 }
 
-function isPrintShopCategory(category: string): boolean {
-  return category.includes("print") || category.includes("copy");
+/**
+ * Categories where product collages, print-shop mockups and moderate visual
+ * density are expected and should not be treated as design failures.
+ */
+export function isBusyCategory(category: string): boolean {
+  return (
+    category.includes("print") ||
+    category.includes("copy") ||
+    category.includes("courier") ||
+    category.includes("branding") ||
+    category.includes("retail")
+  );
 }
 
 /**
@@ -65,7 +73,6 @@ export function hasGenericIconLanguage(prompt: string): boolean {
   return GENERIC_ICON_MARKERS.some((marker) => {
     const idx = lower.indexOf(marker);
     if (idx === -1) return false;
-    // Look at the 60 chars before the marker for a negative word.
     const before = lower.slice(Math.max(0, idx - 60), idx);
     const negated = /\b(not|no|never|avoid|don'?t|do not|does not|without)\b/.test(before);
     return !negated;
@@ -83,8 +90,8 @@ function hasBusinessCategoryVisuals(prompt: string, businessCategory: string): b
   if (businessCategory.includes("art") || businessCategory.includes("décor") || businessCategory.includes("decor")) {
     return /\b(canvas|wall art|framed poster|art print|interior|gallery|home decor|office decor)\b/.test(lower);
   }
-  if (isPrintShopCategory(businessCategory)) {
-    return /\b(print|business card|flyer|poster|banner|courier|stationery)\b/.test(lower);
+  if (businessCategory.includes("print") || businessCategory.includes("copy") || businessCategory.includes("branding")) {
+    return /\b(print|business card|flyer|poster|banner|courier|stationery|branding|canvas|photo print)\b/.test(lower);
   }
   if (businessCategory.includes("food") || businessCategory.includes("restaurant")) {
     return /\b(food|restaurant|menu|dish|cafe|meal)\b/.test(lower);
@@ -95,13 +102,33 @@ function hasBusinessCategoryVisuals(prompt: string, businessCategory: string): b
   return true;
 }
 
-async function imageLayoutHeuristics(buffer: Buffer, businessCategory: string): Promise<string[]> {
+/**
+ * Check whether a public image URL is actually loadable. Returns true if the
+ * URL responds with an image content type and non-empty body.
+ */
+export async function isPublicImageLoadable(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, { method: "HEAD", redirect: "follow" });
+    if (!response.ok) return false;
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    return contentType.startsWith("image/");
+  } catch {
+    return false;
+  }
+}
+
+interface LayoutHeuristics {
+  edgeDensity: number;
+  issues: string[];
+}
+
+async function imageLayoutHeuristics(buffer: Buffer, businessCategory: string): Promise<LayoutHeuristics> {
   const issues: string[] = [];
+  let edgeDensity = 0;
   try {
     const { width = 1024, height = 1536, channels = 3 } = await sharp(buffer).metadata();
-    if (!width || !height || !channels) return issues;
+    if (!width || !height || !channels) return { edgeDensity, issues };
 
-    // Edge-density heuristic: low edge density in the central area suggests a flat/icon-grid layout.
     const thumb = await sharp(buffer)
       .resize(200, Math.round(200 * (height / width)), { fit: "fill" })
       .greyscale()
@@ -124,51 +151,66 @@ async function imageLayoutHeuristics(buffer: Buffer, businessCategory: string): 
     }
 
     const totalPixels = w * h;
-    const edgeDensity = edgeCount / totalPixels;
+    edgeDensity = edgeCount / totalPixels;
 
-    // Print shops and collages are naturally busier, so we only flag extreme values.
-    const isBusyCategory = isPrintShopCategory(businessCategory);
-    const lowThreshold = isBusyCategory ? 0.008 : 0.015;
-    const highThreshold = isBusyCategory ? 0.28 : 0.18;
+    // Print/copy/courier/branding/retail leaflets are expected to show several products.
+    const busy = isBusyCategory(businessCategory);
+    const lowThreshold = busy ? 0.004 : 0.012;
+    const highThreshold = busy ? 0.35 : 0.20;
 
     if (edgeDensity < lowThreshold) {
       issues.push("Layout appears too flat or blocky (possible icon grid).");
-    }
-
-    if (edgeDensity > highThreshold) {
+    } else if (edgeDensity > highThreshold) {
       issues.push("Layout appears overly busy or cluttered.");
     }
   } catch (err) {
     console.warn(`[LeafletQuality] image heuristic failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  return issues;
+  return { edgeDensity, issues };
 }
 
 /**
  * Validate a prompt *before* spending an OpenAI image generation call.
- * Returns only prompt-level issues (no image heuristics).
+ * Returns score + critical failures + warnings.
+ *
+ * Critical failures block generation:
+ * - wrong business category / irrelevant imagery
+ * - unsupported services
+ * - generic icon-grid layout requested
+ *
+ * Design preferences are warnings only.
  */
 export function validateLeafletPrompt(
   prompt: string,
   business: any
 ): LeafletQualityResult {
-  const issues: string[] = [];
+  const criticalFailures: string[] = [];
+  const warnings: string[] = [];
   const category = businessCategoryFrom(business);
 
   const unsupportedServices = hasUnsupportedServices(prompt, category);
   if (unsupportedServices.length > 0) {
-    issues.push(`Prompt references unsupported services: ${unsupportedServices.join(", ")}.`);
+    criticalFailures.push(`Prompt references unsupported services: ${unsupportedServices.join(", ")}.`);
   }
 
   if (hasGenericIconLanguage(prompt)) {
-    issues.push("Prompt describes a generic icon-grid layout.");
+    criticalFailures.push("Prompt explicitly describes a generic icon-grid layout.");
   }
 
   if (category && !hasBusinessCategoryVisuals(prompt, category)) {
-    issues.push("Prompt does not include visuals relevant to the detected business category.");
+    criticalFailures.push("Prompt does not include visuals relevant to the detected business category.");
   }
 
-  return { passed: issues.length === 0, issues };
+  let score = 100;
+  for (const _ of criticalFailures) score -= 50;
+  for (const _ of warnings) score -= 10;
+
+  return {
+    score: Math.max(0, score),
+    criticalFailures,
+    warnings,
+    passed: criticalFailures.length === 0 && score >= 60,
+  };
 }
 
 /**
@@ -186,6 +228,31 @@ export function sanitizePromptForValidator(prompt: string): string {
     .replace(/\bflat icon set\b/gi, "flat illustration set");
 }
 
+/**
+ * Check that the generated image buffer is a valid, decodable image.
+ */
+async function isImageCorrupt(buffer: Buffer): Promise<boolean> {
+  try {
+    await sharp(buffer).metadata();
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Score a generated image.
+ *
+ * Acceptance rules:
+ * - 80–100: accept OpenAI image.
+ * - 60–79: accept OpenAI image but store warnings.
+ * - below 60: retry once with stronger prompt.
+ * - any critical failure: reject and retry.
+ * - after retry, fallback only if both attempts have critical failures or score < 60.
+ *
+ * Busy/cluttered layouts are penalised less for print/copy/courier/branding/retail
+ * categories because product collages and print-shop mockups are expected there.
+ */
 export async function validateLeafletQuality(
   imageBuffer: Buffer,
   business: any,
@@ -193,11 +260,51 @@ export async function validateLeafletQuality(
   prompt: string
 ): Promise<LeafletQualityResult> {
   const category = businessCategoryFrom(business);
+
+  // Corrupt image is an immediate critical failure.
+  if (await isImageCorrupt(imageBuffer)) {
+    return {
+      score: 0,
+      criticalFailures: ["Generated image is corrupt or cannot be decoded."],
+      warnings: [],
+      passed: false,
+    };
+  }
+
   const promptValidation = validateLeafletPrompt(prompt, business);
-  const layoutIssues = await imageLayoutHeuristics(imageBuffer, category);
+  const { edgeDensity, issues: layoutIssues } = await imageLayoutHeuristics(imageBuffer, category);
+
+  // Critical failures always block. Prompt-level issues are treated as critical
+  // because they describe what the model was explicitly asked to generate.
+  const criticalFailures = [...promptValidation.criticalFailures];
+  const warnings = [...promptValidation.warnings, ...layoutIssues];
+
+  let score = 100;
+  for (const _ of criticalFailures) score -= 50;
+
+  const busy = isBusyCategory(category);
+  for (const warning of warnings) {
+    if (warning.includes("busy or cluttered")) {
+      // Product collages and print-shop mockups are acceptable for busy categories.
+      score -= busy ? 5 : 15;
+    } else if (warning.includes("flat or blocky")) {
+      score -= 20;
+    } else {
+      score -= 10;
+    }
+  }
+
+  // Slight bonus for healthy edge density in the moderate range.
+  if (edgeDensity >= 0.03 && edgeDensity <= 0.18) {
+    score = Math.min(100, score + 5);
+  }
+
+  score = Math.max(0, score);
 
   return {
-    passed: promptValidation.passed && layoutIssues.length === 0,
-    issues: [...promptValidation.issues, ...layoutIssues],
+    score,
+    criticalFailures,
+    warnings,
+    passed: criticalFailures.length === 0 && score >= 60,
   };
 }

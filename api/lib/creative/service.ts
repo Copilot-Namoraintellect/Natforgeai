@@ -9,7 +9,7 @@ import { enforceCostControl } from "../billing/cost-control";
 import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider } from "./registry";
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
 import { composeBrandedLeafletImage, generateFallbackLeafletImage } from "./composition";
-import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator } from "./quality";
+import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable } from "./quality";
 import {
   getPremiumImageCredits,
   getPremiumVideoCredits,
@@ -209,22 +209,34 @@ export async function generateMasterImage({
 
     const preparePrompt = (rawPrompt: string) => {
       const firstCheck = validateLeafletPrompt(rawPrompt, business);
-      if (firstCheck.passed) return { prompt: rawPrompt, valid: true, issues: [] as string[] };
+      if (firstCheck.passed) return { prompt: rawPrompt, valid: true, reasons: [] as string[] };
       const sanitized = sanitizePromptForValidator(rawPrompt);
       const secondCheck = validateLeafletPrompt(sanitized, business);
       if (secondCheck.passed) {
-        console.log(`[CreativeService] Prompt sanitized before generation | userId=${userId} | contentPostId=${contentPostId} | originalIssues=${JSON.stringify(firstCheck.issues)}`);
-        return { prompt: sanitized, valid: true, issues: [] as string[] };
+        console.log(`[CreativeService] Prompt sanitized before generation | userId=${userId} | contentPostId=${contentPostId} | originalFailures=${JSON.stringify(firstCheck.criticalFailures)} | originalWarnings=${JSON.stringify(firstCheck.warnings)}`);
+        return { prompt: sanitized, valid: true, reasons: [] as string[] };
       }
-      return { prompt: sanitized, valid: false, issues: secondCheck.issues };
+      return { prompt: sanitized, valid: false, reasons: [...secondCheck.criticalFailures, ...secondCheck.warnings] };
     };
 
-    // ─── Single generation attempt: generate + decode + quality check ───
-    async function attemptGeneration(prompt: string): Promise<
-      | { status: "success"; buffer: Buffer; result: ImageResult }
-      | { status: "failed"; errorMessage: string; issues?: string[] }
-    > {
-      console.log(`[CreativeService] Requesting OpenAI image | userId=${userId} | contentPostId=${contentPostId} | model=${env.openaiImageModel || "gpt-image-1"} | aspectRatio=${aspectRatio}`);
+    // ─── Single OpenAI attempt: generate + decode + score + store raw attempt ───
+    interface AttemptRecord {
+      number: number;
+      source: "openai" | "fallback";
+      prompt: string;
+      strongerBrandFit: boolean;
+      buffer: Buffer;
+      result?: ImageResult;
+      score: number;
+      criticalFailures: string[];
+      warnings: string[];
+      passed: boolean;
+      storedUrl?: string;
+      storedLocalPath?: string;
+    }
+
+    async function runOpenAiAttempt(prompt: string, stronger: boolean, attemptNumber: number): Promise<AttemptRecord | null> {
+      console.log(`[CreativeService] Requesting OpenAI image | userId=${userId} | contentPostId=${contentPostId} | attempt=${attemptNumber} | model=${env.openaiImageModel || "gpt-image-1"} | aspectRatio=${aspectRatio}`);
 
       const generationResult = await provider.generate({
         userId,
@@ -239,8 +251,8 @@ export async function generateMasterImage({
 
       if (generationResult.status === "failed" || (!generationResult.imageUrl && !generationResult.imageBase64)) {
         const errorMessage = generationResult.errorMessage || "Image generation failed";
-        console.error(`[CreativeService] Image generation failed | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`);
-        return { status: "failed", errorMessage };
+        console.error(`[CreativeService] Image generation failed | userId=${userId} | contentPostId=${contentPostId} | attempt=${attemptNumber} | error="${errorMessage}"`);
+        return null;
       }
 
       let buffer: Buffer;
@@ -256,58 +268,49 @@ export async function generateMasterImage({
         }
       } catch (decodeErr) {
         const message = decodeErr instanceof Error ? decodeErr.message : String(decodeErr);
-        console.error(`[CreativeService] Failed to decode generated image | userId=${userId} | error="${message}"`);
-        return { status: "failed", errorMessage: `Generated image could not be decoded: ${message}` };
+        console.error(`[CreativeService] Failed to decode generated image | userId=${userId} | attempt=${attemptNumber} | error="${message}"`);
+        return null;
       }
 
       const quality = await validateLeafletQuality(buffer, business, campaign, prompt);
-      if (!quality.passed) {
-        console.warn(`[CreativeService] Leaflet quality check failed | userId=${userId} | contentPostId=${contentPostId} | issues=${JSON.stringify(quality.issues)}`);
-        return { status: "failed", errorMessage: `Leaflet did not meet quality standards: ${quality.issues.join("; ")}`, issues: quality.issues };
+      console.log(`[CreativeService] Quality score | userId=${userId} | contentPostId=${contentPostId} | attempt=${attemptNumber} | score=${quality.score} | critical=${JSON.stringify(quality.criticalFailures)} | warnings=${JSON.stringify(quality.warnings)}`);
+
+      // Store the raw OpenAI attempt so admin/testing can inspect it even if not selected.
+      let storedUrl: string | undefined;
+      let storedLocalPath: string | undefined;
+      try {
+        const stored = await storeImageBuffer(buffer, {
+          campaignId: post.campaignId ?? undefined,
+          prefix: `master-post-attempt-${attemptNumber}`,
+          extension: generationResult.extension || "png",
+        });
+        storedUrl = stored.publicUrl;
+        storedLocalPath = stored.localPath;
+        console.log(`[CreativeService] Stored attempt ${attemptNumber} | url=${stored.publicUrl}`);
+      } catch (storeErr) {
+        const message = storeErr instanceof Error ? storeErr.message : String(storeErr);
+        console.warn(`[CreativeService] Failed to store attempt ${attemptNumber} | error="${message}"`);
       }
 
-      return { status: "success", buffer, result: generationResult };
+      return {
+        number: attemptNumber,
+        source: "openai",
+        prompt,
+        strongerBrandFit: stronger,
+        buffer,
+        result: generationResult,
+        score: quality.score,
+        criticalFailures: quality.criticalFailures,
+        warnings: quality.warnings,
+        passed: quality.passed,
+        storedUrl,
+        storedLocalPath,
+      };
     }
 
-    // ─── First attempt ───
-    const promptPrep = preparePrompt(buildPrompt(strongerBrandFit));
-    let finalPrompt = promptPrep.prompt;
-    let finalResult: ImageResult | null = null;
-    let rawBuffer: Buffer | null = null;
-
-    if (promptPrep.valid) {
-      const attempt = await attemptGeneration(finalPrompt);
-      if (attempt.status === "success") {
-        rawBuffer = attempt.buffer;
-        finalResult = attempt.result;
-      }
-    } else {
-      console.warn(`[CreativeService] Prompt invalid even after sanitisation; skipping first OpenAI call | userId=${userId} | contentPostId=${contentPostId} | issues=${JSON.stringify(promptPrep.issues)}`);
-    }
-
-    // ─── Retry with rebuilt, stronger prompt ───
-    if (!rawBuffer) {
-      const retryPrep = preparePrompt(buildPrompt(true));
-      if (retryPrep.valid) {
-        console.log(`[CreativeService] Retrying with rebuilt prompt | userId=${userId} | contentPostId=${contentPostId}`);
-        finalPrompt = retryPrep.prompt;
-        const retryAttempt = await attemptGeneration(finalPrompt);
-        if (retryAttempt.status === "success") {
-          rawBuffer = retryAttempt.buffer;
-          finalResult = retryAttempt.result;
-        } else {
-          console.warn(`[CreativeService] Retry failed; rendering deterministic fallback leaflet | userId=${userId} | contentPostId=${contentPostId} | reason=${retryAttempt.errorMessage}`);
-        }
-      } else {
-        console.warn(`[CreativeService] Retry prompt invalid; rendering deterministic fallback leaflet | userId=${userId} | contentPostId=${contentPostId} | issues=${JSON.stringify(retryPrep.issues)}`);
-      }
-    }
-
-    // ─── Deterministic fallback if both attempts failed ───
-    let usingFallback = false;
-    if (!rawBuffer) {
-      usingFallback = true;
-      rawBuffer = await generateFallbackLeafletImage({
+    async function createFallbackAttempt(): Promise<AttemptRecord> {
+      const fallbackPrompt = buildPrompt(true);
+      const buffer = await generateFallbackLeafletImage({
         business,
         campaign,
         post,
@@ -319,12 +322,87 @@ export async function generateMasterImage({
           : campaign.primaryOutcome || post?.title || business.name,
         subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
       });
-      console.log(`[CreativeService] Fallback leaflet rendered | userId=${userId} | contentPostId=${contentPostId} | size=${rawBuffer.length}`);
+      return {
+        number: 0,
+        source: "fallback",
+        prompt: fallbackPrompt,
+        strongerBrandFit: true,
+        buffer,
+        score: 100,
+        criticalFailures: [],
+        warnings: ["Fallback template used because OpenAI attempts did not meet acceptance criteria."],
+        passed: true,
+      };
     }
 
-    // ─── Brand overlay (only for AI images; fallback is already branded) ───
+    function isAcceptable(attempt: AttemptRecord | null): boolean {
+      return !!attempt && attempt.criticalFailures.length === 0 && attempt.score >= 60;
+    }
+
+    function shouldRetry(attempt: AttemptRecord | null): boolean {
+      // Retry if the attempt is missing, has a critical failure, or scores below
+      // the usable threshold. Score 60–79 is accepted with warnings; 80+ is ideal.
+      if (!attempt) return true;
+      return attempt.criticalFailures.length > 0 || attempt.score < 60;
+    }
+
+    function pickBestAttempt(a: AttemptRecord | null, b: AttemptRecord | null): AttemptRecord | null {
+      if (!a) return b;
+      if (!b) return a;
+      // Prefer an attempt with no critical failures.
+      if (a.criticalFailures.length === 0 && b.criticalFailures.length > 0) return a;
+      if (b.criticalFailures.length === 0 && a.criticalFailures.length > 0) return b;
+      return a.score >= b.score ? a : b;
+    }
+
+    const allAttempts: AttemptRecord[] = [];
+
+    // ─── Attempt 1 ───
+    const promptPrep = preparePrompt(buildPrompt(strongerBrandFit));
+    let bestAttempt: AttemptRecord | null = null;
+
+    if (promptPrep.valid) {
+      const firstAttempt = await runOpenAiAttempt(promptPrep.prompt, strongerBrandFit, 1);
+      if (firstAttempt) {
+        allAttempts.push(firstAttempt);
+        bestAttempt = firstAttempt;
+      }
+    } else {
+      console.warn(`[CreativeService] Prompt invalid even after sanitisation; skipping first OpenAI call | userId=${userId} | contentPostId=${contentPostId} | reasons=${JSON.stringify(promptPrep.reasons)}`);
+    }
+
+    // ─── Attempt 2 if first attempt needs improvement ───
+    if (shouldRetry(bestAttempt)) {
+      const retryPrep = preparePrompt(buildPrompt(true));
+      if (retryPrep.valid) {
+        console.log(`[CreativeService] Retrying with stronger prompt | userId=${userId} | contentPostId=${contentPostId} | firstScore=${bestAttempt?.score ?? "null"} | firstCritical=${JSON.stringify(bestAttempt?.criticalFailures ?? [])}`);
+        const retryAttempt = await runOpenAiAttempt(retryPrep.prompt, true, 2);
+        if (retryAttempt) {
+          allAttempts.push(retryAttempt);
+          bestAttempt = pickBestAttempt(bestAttempt, retryAttempt);
+        }
+      } else {
+        console.warn(`[CreativeService] Retry prompt invalid after sanitisation | userId=${userId} | contentPostId=${contentPostId} | reasons=${JSON.stringify(retryPrep.reasons)}`);
+      }
+    }
+
+    // ─── Fallback only if no acceptable OpenAI attempt ───
+    let usingFallback = false;
+    if (!isAcceptable(bestAttempt)) {
+      usingFallback = true;
+      bestAttempt = await createFallbackAttempt();
+      allAttempts.push(bestAttempt);
+      console.log(`[CreativeService] Fallback leaflet rendered | userId=${userId} | contentPostId=${contentPostId} | size=${bestAttempt.buffer.length}`);
+    }
+
+    let finalAttempt = bestAttempt!;
+    let finalPrompt = finalAttempt.prompt;
+    let finalResult: ImageResult | undefined = finalAttempt.result;
+    let rawBuffer: Buffer = finalAttempt.buffer;
+
+    // ─── Brand overlay for OpenAI images (fallback is already branded) ───
     let composedBuffer = rawBuffer;
-    if (!usingFallback) {
+    if (finalAttempt.source === "openai") {
       try {
         composedBuffer = await composeBrandedLeafletImage(rawBuffer, {
           business,
@@ -345,23 +423,8 @@ export async function generateMasterImage({
       }
     }
 
-    // ─── Store locally ───
-    let stored;
-    try {
-      stored = await storeImageBuffer(composedBuffer, {
-        campaignId: post.campaignId ?? undefined,
-        prefix: usingFallback ? "master-post-fallback" : "master-post",
-        extension: finalResult?.extension || "png",
-      });
-      console.log(`[CreativeService] Image stored | userId=${userId} | contentPostId=${contentPostId} | publicUrl=${stored.publicUrl} | localPath=${stored.localPath} | size=${composedBuffer.length}`);
-    } catch (storageErr) {
-      const message = storageErr instanceof Error ? storageErr.message : String(storageErr);
-      console.error(`[CreativeService] Failed to store image | userId=${userId} | error="${message}"`);
-      return { status: "failed", jobId: finalResult?.providerJobId || "fallback", errorMessage: `Generated image could not be stored: ${message}` };
-    }
-
-    // ─── Validate stored file and URL ───
-    try {
+    // ─── Store locally with fallback on storage/URL failure ───
+    async function validateStoredImage(stored: { publicUrl: string; localPath: string }) {
       if (!stored.publicUrl || typeof stored.publicUrl !== "string") {
         throw new Error("Stored image returned an invalid public URL");
       }
@@ -372,21 +435,57 @@ export async function generateMasterImage({
       if (!stats.isFile() || stats.size === 0) {
         throw new Error(`Stored image file is missing or empty: ${stored.localPath}`);
       }
-      console.log(`[CreativeService] Image URL validation passed | userId=${userId} | contentPostId=${contentPostId} | publicUrl=${stored.publicUrl}`);
-    } catch (validationErr) {
-      const message = validationErr instanceof Error ? validationErr.message : String(validationErr);
-      console.error(`[CreativeService] Image URL validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
-      await db
-        .update(contentPosts)
-        .set({
-          metadata: {
-            ...currentMeta,
-            imageStatus: "failed",
-            imageError: `Generated image could not be validated: ${message}`,
-          },
-        })
-        .where(eq(contentPosts.id, post.id));
-      return { status: "failed", jobId: finalResult?.providerJobId || "fallback", errorMessage: `Generated image could not be validated: ${message}` };
+      // For absolute public URLs, confirm they are actually reachable.
+      if (stored.publicUrl.startsWith("http") && !(await isPublicImageLoadable(stored.publicUrl))) {
+        throw new Error(`Stored image public URL is not loadable: ${stored.publicUrl}`);
+      }
+    }
+
+    let stored;
+    try {
+      stored = await storeImageBuffer(composedBuffer, {
+        campaignId: post.campaignId ?? undefined,
+        prefix: usingFallback ? "master-post-fallback" : "master-post",
+        extension: finalResult?.extension || "png",
+      });
+      await validateStoredImage(stored);
+      console.log(`[CreativeService] Image stored and validated | userId=${userId} | contentPostId=${contentPostId} | publicUrl=${stored.publicUrl} | localPath=${stored.localPath} | size=${composedBuffer.length}`);
+    } catch (storeOrValidateErr) {
+      const message = storeOrValidateErr instanceof Error ? storeOrValidateErr.message : String(storeOrValidateErr);
+      console.error(`[CreativeService] Failed to store or validate image | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
+
+      // If the OpenAI image cannot be stored or served, render the deterministic
+      // fallback instead of returning a hard failure.
+      if (finalAttempt.source === "openai") {
+        console.log(`[CreativeService] Rendering fallback because OpenAI image could not be stored/served | userId=${userId} | contentPostId=${contentPostId}`);
+        usingFallback = true;
+        bestAttempt = await createFallbackAttempt();
+        allAttempts.push(bestAttempt);
+        finalAttempt = bestAttempt;
+        finalPrompt = finalAttempt.prompt;
+        finalResult = finalAttempt.result;
+        rawBuffer = finalAttempt.buffer;
+        composedBuffer = rawBuffer;
+        stored = await storeImageBuffer(composedBuffer, {
+          campaignId: post.campaignId ?? undefined,
+          prefix: "master-post-fallback",
+          extension: "png",
+        });
+        await validateStoredImage(stored);
+        console.log(`[CreativeService] Fallback image stored and validated | userId=${userId} | contentPostId=${contentPostId} | publicUrl=${stored.publicUrl}`);
+      } else {
+        await db
+          .update(contentPosts)
+          .set({
+            metadata: {
+              ...currentMeta,
+              imageStatus: "failed",
+              imageError: `Generated image could not be stored or validated: ${message}`,
+            },
+          })
+          .where(eq(contentPosts.id, post.id));
+        return { status: "failed", jobId: finalResult?.providerJobId || "fallback", errorMessage: `Generated image could not be stored or validated: ${message}` };
+      }
     }
 
     // ─── Deduct credits only on success ───
@@ -430,6 +529,19 @@ export async function generateMasterImage({
       },
     });
 
+    const attemptsSummary = allAttempts.map((a) => ({
+      number: a.number,
+      source: a.source,
+      score: a.score,
+      passed: a.passed,
+      criticalFailures: a.criticalFailures,
+      warnings: a.warnings,
+      validationIssues: a.warnings,
+      storedUrl: a.storedUrl,
+      promptUsed: a.prompt,
+      strongerBrandFitUsed: a.strongerBrandFit,
+    }));
+
     // ─── Persist audit row ───
     await db.insert(generatedImages).values({
       userId,
@@ -450,6 +562,16 @@ export async function generateMasterImage({
         localPath: stored.localPath,
         balanceAfter: deduction.newBalance,
         usingFallback,
+        source: usingFallback ? "fallback" : "openai",
+        qualityScore: finalAttempt.score,
+        validationIssues: finalAttempt.warnings,
+        criticalFailures: finalAttempt.criticalFailures,
+        qualityWarnings: finalAttempt.warnings,
+        qualityCriticalFailures: finalAttempt.criticalFailures,
+        fallbackUsed: usingFallback,
+        promptUsed: finalPrompt,
+        strongerBrandFitUsed: finalAttempt.strongerBrandFit,
+        attempts: attemptsSummary,
       },
     });
 
@@ -467,7 +589,21 @@ export async function generateMasterImage({
           imageError: null,
           imageCreditsCharged: cost,
           imageExtension: finalResult?.extension || "png",
-          imageQualityIssues: undefined,
+          imageSource: usingFallback ? "fallback" : "openai",
+          source: usingFallback ? "fallback" : "openai",
+          imageQualityScore: finalAttempt.score,
+          qualityScore: finalAttempt.score,
+          imageQualityWarnings: finalAttempt.warnings,
+          validationIssues: finalAttempt.warnings,
+          imageQualityCriticalFailures: finalAttempt.criticalFailures,
+          criticalFailures: finalAttempt.criticalFailures,
+          imageFallbackUsed: usingFallback,
+          fallbackUsed: usingFallback,
+          imagePromptUsed: finalPrompt,
+          promptUsed: finalPrompt,
+          imageStrongerBrandFitUsed: finalAttempt.strongerBrandFit,
+          strongerBrandFitUsed: finalAttempt.strongerBrandFit,
+          imageAttempts: attemptsSummary,
         },
       })
       .where(eq(contentPosts.id, post.id));

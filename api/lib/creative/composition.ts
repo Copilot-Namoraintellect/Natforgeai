@@ -286,14 +286,35 @@ export async function composeBrandedLeafletImage(
     overlays.push({ input: logoPng, top: 14, left: 22 });
   }
 
-  // Optional premium headline band in lower-middle if headline is provided
+  // Optional premium headline band in middle-upper area if headline is provided
   const headlineText = sanitize(headline || campaign?.primaryOutcome || post?.title || "");
   const subheadlineText = sanitize(subheadline || campaign?.mainPainPoint || campaign?.coreMessage || post?.hook || "");
+  let headlineBottom = 0;
   if (headlineText) {
     const bandHeight = Math.round(height * 0.16);
-    const bandTop = Math.round(height * 0.56);
+    const bandTop = Math.round(height * 0.45);
     const headlineSvg = buildHeadlineOverlaySvg(width, bandHeight, headlineText, subheadlineText, brandColor);
     overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
+    headlineBottom = bandTop + bandHeight;
+  }
+
+  // Service bullets overlay (deterministic, factually accurate)
+  const bullets = spec.serviceBullets?.length
+    ? spec.serviceBullets
+    : defaultOverlayServiceBullets(business, campaign);
+  if (bullets.length > 0) {
+    const bulletMaxWidth = Math.round(width * 0.72);
+    const bulletSvg = buildBulletSvg(bulletMaxWidth, bullets.slice(0, 5), brandColor);
+    const bulletMeta = await sharp(bulletSvg).metadata();
+    const bulletHeight = bulletMeta.height || Math.round(height * 0.22);
+    const bulletTop = Math.max(
+      headlineBottom + Math.round(height * 0.04),
+      Math.round(height * 0.64)
+    );
+    const bulletLeft = Math.round((width - bulletMaxWidth) / 2);
+    if (bulletTop + bulletHeight < height - footerHeight - Math.round(height * 0.02)) {
+      overlays.push({ input: bulletSvg, top: bulletTop, left: bulletLeft });
+    }
   }
 
   return base.composite(overlays).toBuffer();
@@ -421,6 +442,55 @@ function buildBulletSvg(width: number, bullets: string[], brandColor: string): B
   ${blocks.join("\n")}
 </svg>`;
   return Buffer.from(svg, "utf-8");
+}
+
+function inferServiceCategoryForOverlay(business: any, campaign: any): string {
+  const combined = `${business?.name || ""} ${business?.industry || ""} ${business?.productOrService || ""} ${campaign?.productOrService || ""} ${JSON.stringify(business?.websiteEvidence || {})}`.toLowerCase();
+  if (combined.includes("print") || combined.includes("copy") || combined.includes("courier") || combined.includes("business card") || combined.includes("flyer") || combined.includes("poster") || combined.includes("banner") || combined.includes("branding")) {
+    return "print_shop";
+  }
+  if (
+    combined.includes("canvas") ||
+    combined.includes("framed poster") ||
+    combined.includes("wall art") ||
+    combined.includes("art print") ||
+    combined.includes("afrocentric") ||
+    combined.includes("home decor") ||
+    combined.includes("office decor") ||
+    combined.includes("interior decor")
+  ) {
+    return "art_decor";
+  }
+  return "general";
+}
+
+function defaultOverlayServiceBullets(business: any, campaign: any): string[] {
+  const category = inferServiceCategoryForOverlay(business, campaign);
+  if (category === "print_shop") {
+    return [
+      "Business Cards & Stationery",
+      "Flyers, Posters & Banners",
+      "Canvas & Photo Prints",
+      "Document Copying & Binding",
+      "Courier & Delivery",
+      "Branding & Design Support",
+    ];
+  }
+  if (category === "art_decor") {
+    return [
+      "Custom Canvas Prints",
+      "Framed Posters",
+      "Premium Wall Art",
+      "Home & Office Décor",
+      "Turn Photos into Art",
+    ];
+  }
+  return [
+    "Professional Quality",
+    "Fast Turnaround",
+    "Easy to Order",
+    "Customer Support",
+  ];
 }
 
 function buildFallbackBackgroundSvg(width: number, height: number, brandColor: string): Buffer {
