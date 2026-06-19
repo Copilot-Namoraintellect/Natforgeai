@@ -79,6 +79,122 @@ function actionKey(contentId: number, action: string): PendingActionKey {
   return `${contentId}:${action}`;
 }
 
+function LeafletVersionHistory({ contentPostId, metadata }: { contentPostId: number; metadata: any }) {
+  const utils = trpc.useUtils();
+  const [showVersions, setShowVersions] = useState(false);
+  const { data: versionRows } = trpc.image.versionsForPost.useQuery(
+    { contentPostId },
+    { enabled: showVersions }
+  );
+  const approveVersionMutation = trpc.image.approveVersion.useMutation({
+    onSuccess: () => {
+      toast.success("Version approved and set as current leaflet.");
+      utils.content.list.invalidate();
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to approve version");
+    },
+  });
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+      <button
+        type="button"
+        className="w-full px-3 py-2.5 flex items-center justify-between bg-slate-50 hover:bg-slate-100 transition-colors"
+        onClick={() => setShowVersions((prev) => !prev)}
+      >
+        <span className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
+          <History className="w-3.5 h-3.5 text-slate-500" />
+          Version history
+        </span>
+        <span className="flex items-center gap-2">
+          <Badge variant="outline" className="text-[10px] h-5">
+            {(versionRows?.length ?? (metadata?.imageVersions?.length || 0))} versions
+          </Badge>
+          {showVersions ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
+        </span>
+      </button>
+      {showVersions && (
+        <div className="p-3 space-y-2 border-t border-slate-100 max-h-[360px] overflow-y-auto">
+          {!versionRows?.length && !metadata?.imageVersions?.length && (
+            <p className="text-xs text-slate-500 text-center py-4">No versions yet.</p>
+          )}
+          {(versionRows || metadata?.imageVersions || []).map((version: any, idx: number) => {
+            const isApproved = (metadata?.currentVersionId ?? metadata?.imageCurrentVersionId) === version.id;
+            return (
+              <div
+                key={version.id ?? idx}
+                className={`rounded-md border p-2.5 ${isApproved ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-white"}`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-slate-800 truncate">
+                      Version {version.version ?? idx + 1}
+                      {isApproved && (
+                        <Badge variant="outline" className="ml-2 text-[10px] h-4 border-emerald-200 text-emerald-700 bg-emerald-50">
+                          Current
+                        </Badge>
+                      )}
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      {new Date(version.createdAt || version.generatedAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="text-[10px] h-5 shrink-0">
+                    {version.source || "openai"} · {typeof version.score === "number" ? `${version.score}/100` : "—"}
+                  </Badge>
+                </div>
+                {(version.creativeGuidance || version.refinementInstruction) && (
+                  <p className="text-[10px] text-slate-600 mt-1.5 line-clamp-2">
+                    {version.refinementInstruction || version.creativeGuidance}
+                  </p>
+                )}
+                <div className="flex gap-2 mt-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-[10px] flex-1"
+                    onClick={() => {
+                      const a = document.createElement("a");
+                      a.href = version.url;
+                      a.target = "_blank";
+                      a.click();
+                    }}
+                    disabled={!version.url}
+                  >
+                    <ExternalLink className="w-3 h-3 mr-1" />
+                    View
+                  </Button>
+                  {!isApproved && (
+                    <Button
+                      size="sm"
+                      className="h-7 text-[10px] flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                      onClick={() =>
+                        approveVersionMutation.mutate({
+                          contentPostId,
+                          generatedImageId: version.id,
+                        })
+                      }
+                      disabled={approveVersionMutation.isPending || !version.id}
+                    >
+                      {approveVersionMutation.isPending && approveVersionMutation.variables?.generatedImageId === version.id ? (
+                        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="w-3 h-3 mr-1" />
+                      )}
+                      Approve
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ContentStudio() {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlCampaignId = searchParams.get("campaignId");
@@ -112,7 +228,6 @@ export default function ContentStudio() {
   const [creativeGuidanceById, setCreativeGuidanceById] = useState<Record<number, string>>({});
   const [refinementById, setRefinementById] = useState<Record<number, string>>({});
   const [allowNoLogoById, setAllowNoLogoById] = useState<Record<number, boolean>>({});
-  const [showVersionsForId, setShowVersionsForId] = useState<number | null>(null);
 
   const IMAGE_CREATIVE_TYPE_OPTIONS = [
     { value: "leaflet", label: "Leaflet / Pamphlet" },
@@ -558,16 +673,6 @@ Include:
     },
   });
 
-  const approveVersionMutation = trpc.image.approveVersion.useMutation({
-    onSuccess: () => {
-      toast.success("Version approved and set as current leaflet.");
-      utils.content.list.invalidate();
-    },
-    onError: (err) => {
-      toast.error(err.message || "Failed to approve version");
-    },
-  });
-
   const publishCampaignPackMutation = trpc.content.publishCampaignPack.useMutation({
     onSuccess: (data) => {
       utils.content.list.invalidate();
@@ -876,11 +981,6 @@ Include:
     const creativeGuidance = creativeGuidanceById[content.id] || "";
     const refinementInstruction = refinementById[content.id] || "";
     const allowNoLogo = !!allowNoLogoById[content.id];
-    const versionsQueryEnabled = showVersionsForId === content.id;
-    const { data: versionRows } = trpc.image.versionsForPost.useQuery(
-      { contentPostId: content.id },
-      { enabled: versionsQueryEnabled }
-    );
 
     const generate = (strongerBrandFit = false) =>
       generateImageMutation.mutate({
@@ -1332,101 +1432,7 @@ Include:
                 </Button>
               )}
             </div>
-            <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-              <button
-                type="button"
-                className="w-full px-3 py-2.5 flex items-center justify-between bg-slate-50 hover:bg-slate-100 transition-colors"
-                onClick={() => setShowVersionsForId((prev) => (prev === content.id ? null : content.id))}
-              >
-                <span className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
-                  <History className="w-3.5 h-3.5 text-slate-500" />
-                  Version history
-                </span>
-                <span className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-[10px] h-5">
-                    {(versionRows?.length ?? (metadata?.imageVersions?.length || 0))} versions
-                  </Badge>
-                  {showVersionsForId === content.id ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
-                </span>
-              </button>
-              {showVersionsForId === content.id && (
-                <div className="p-3 space-y-2 border-t border-slate-100 max-h-[360px] overflow-y-auto">
-                  {!versionRows?.length && !metadata?.imageVersions?.length && (
-                    <p className="text-xs text-slate-500 text-center py-4">No versions yet.</p>
-                  )}
-                  {(versionRows || metadata?.imageVersions || []).map((version: any, idx: number) => {
-                    const isApproved = (metadata?.currentVersionId ?? metadata?.imageCurrentVersionId) === version.id;
-                    return (
-                      <div
-                        key={version.id ?? idx}
-                        className={`rounded-md border p-2.5 ${isApproved ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-white"}`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="text-xs font-medium text-slate-800 truncate">
-                              Version {version.version ?? idx + 1}
-                              {isApproved && (
-                                <Badge variant="outline" className="ml-2 text-[10px] h-4 border-emerald-200 text-emerald-700 bg-emerald-50">
-                                  Current
-                                </Badge>
-                              )}
-                            </p>
-                            <p className="text-[10px] text-slate-500 mt-0.5">
-                              {new Date(version.createdAt || version.generatedAt).toLocaleString()}
-                            </p>
-                          </div>
-                          <Badge variant="outline" className="text-[10px] h-5 shrink-0">
-                            {version.source || "openai"} · {typeof version.score === "number" ? `${version.score}/100` : "—"}
-                          </Badge>
-                        </div>
-                        {(version.creativeGuidance || version.refinementInstruction) && (
-                          <p className="text-[10px] text-slate-600 mt-1.5 line-clamp-2">
-                            {version.refinementInstruction || version.creativeGuidance}
-                          </p>
-                        )}
-                        <div className="flex gap-2 mt-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-[10px] flex-1"
-                            onClick={() => {
-                              const a = document.createElement("a");
-                              a.href = version.url;
-                              a.target = "_blank";
-                              a.click();
-                            }}
-                            disabled={!version.url}
-                          >
-                            <ExternalLink className="w-3 h-3 mr-1" />
-                            View
-                          </Button>
-                          {!isApproved && (
-                            <Button
-                              size="sm"
-                              className="h-7 text-[10px] flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                              onClick={() =>
-                                approveVersionMutation.mutate({
-                                  contentPostId: content.id,
-                                  generatedImageId: version.id,
-                                })
-                              }
-                              disabled={approveVersionMutation.isPending || !version.id}
-                            >
-                              {approveVersionMutation.isPending && approveVersionMutation.variables?.generatedImageId === version.id ? (
-                                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                              ) : (
-                                <CheckCircle2 className="w-3 h-3 mr-1" />
-                              )}
-                              Approve
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <LeafletVersionHistory contentPostId={content.id} metadata={metadata} />
 
             {!businessForContext?.logo && (
               <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
