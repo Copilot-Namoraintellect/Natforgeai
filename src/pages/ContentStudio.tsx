@@ -163,6 +163,16 @@ export default function ContentStudio() {
   const { data: connectedPlatforms } = trpc.integration.getConnectedPlatforms.useQuery();
   const { data: platformConfigStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
 
+  // Fetch agent runs so we can detect failed regenerations and avoid showing "completed" creative rows with no content
+  const { data: creativeAgentRuns } = trpc.agent.getAgentRuns.useQuery(
+    { campaignId: Number(urlCampaignId), agentType: "creative" },
+    { enabled: !!urlCampaignId, refetchInterval: 10000 }
+  );
+  const { data: strategyAgentRuns } = trpc.agent.getAgentRuns.useQuery(
+    { campaignId: Number(urlCampaignId), agentType: "strategy" },
+    { enabled: !!urlCampaignId, refetchInterval: 10000 }
+  );
+
   const connectedIntegrations = useMemo(
     () =>
       connectedPlatforms?.map((i) => ({
@@ -177,17 +187,28 @@ export default function ContentStudio() {
   const strategyGeneratedCampaign = campaigns?.find((c) => c.workflowState === "strategy_generated");
   const strategyPendingCampaign = campaigns?.find((c) => c.workflowState === "strategy_pending");
 
+  const hasFailedCreativeRun = creativeAgentRuns?.some((r) => r.status === "failed");
+  const hasFailedStrategyRun = strategyAgentRuns?.some((r) => r.status === "failed");
+
   const campaignNeedsRecovery = !!urlCampaignId && campaignForContext &&
-    (campaignForContext.workflowState === "creatives_generating" || campaignForContext.workflowState === "creatives_ready") &&
-    (postCountForCampaign === 0 || (contents?.length ?? 0) === 0);
+    ((["creatives_generating", "creatives_ready"].includes(campaignForContext.workflowState) &&
+      (postCountForCampaign === 0 || (contents?.length ?? 0) === 0)) ||
+      hasFailedCreativeRun ||
+      hasFailedStrategyRun);
 
   const generateForCampaignMutation = trpc.content.generateForCampaign.useMutation({
     onSuccess: (data) => {
       utils.content.list.invalidate();
       utils.content.countForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.campaign.get.invalidate({ id: Number(urlCampaignId) });
+      utils.agent.getAgentRuns.invalidate({ campaignId: Number(urlCampaignId) });
       toast.success(`Content generated successfully. ${data.postCount} posts created.`);
     },
     onError: (err) => {
+      utils.content.list.invalidate();
+      utils.content.countForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.campaign.get.invalidate({ id: Number(urlCampaignId) });
+      utils.agent.getAgentRuns.invalidate({ campaignId: Number(urlCampaignId) });
       toast.error(err.message || "Failed to generate content for campaign");
     },
   });
@@ -531,10 +552,16 @@ Include:
     onSuccess: () => {
       utils.content.list.invalidate();
       utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.content.countForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
       utils.campaign.get.invalidate({ id: Number(urlCampaignId) });
+      utils.agent.getAgentRuns.invalidate({ campaignId: Number(urlCampaignId) });
       toast.success("Campaign pack regenerated from the updated business profile.");
     },
     onError: (err) => {
+      utils.content.list.invalidate();
+      utils.content.countForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.campaign.get.invalidate({ id: Number(urlCampaignId) });
+      utils.agent.getAgentRuns.invalidate({ campaignId: Number(urlCampaignId) });
       toast.error(err.message || "Failed to regenerate campaign pack");
     },
   });
@@ -2566,23 +2593,44 @@ Include:
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16">
             <AlertCircle className="w-12 h-12 text-amber-400 mb-4" />
-            <p className="text-lg font-medium text-slate-900">Content generation did not complete successfully</p>
+            <p className="text-lg font-medium text-slate-900">
+              {hasFailedStrategyRun
+                ? "Regeneration from profile did not complete"
+                : "Content generation did not complete successfully"}
+            </p>
             <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
-              The Creative Agent ran but no posts were saved. You can retry content generation for this campaign.
+              {hasFailedStrategyRun
+                ? "The Strategy Agent failed while regenerating from your updated business profile. You can retry the full regeneration."
+                : "The Creative Agent ran but no posts were saved. You can retry content generation for this campaign."}
             </p>
             <div className="flex gap-2 flex-wrap justify-center">
-              <Button
-                variant="outline"
-                onClick={() => generateForCampaignMutation.mutate({ campaignId: Number(urlCampaignId) })}
-                disabled={generateForCampaignMutation.isPending}
-              >
-                {generateForCampaignMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <Sparkles className="w-4 h-4 mr-2" />
-                )}
-                Retry Content Generation
-              </Button>
+              {hasFailedStrategyRun ? (
+                <Button
+                  variant="outline"
+                  onClick={() => regenerateFromProfileMutation.mutate({ campaignId: Number(urlCampaignId) })}
+                  disabled={regenerateFromProfileMutation.isPending}
+                >
+                  {regenerateFromProfileMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-4 h-4 mr-2" />
+                  )}
+                  Retry Regenerate from Profile
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  onClick={() => generateForCampaignMutation.mutate({ campaignId: Number(urlCampaignId) })}
+                  disabled={generateForCampaignMutation.isPending}
+                >
+                  {generateForCampaignMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-4 h-4 mr-2" />
+                  )}
+                  Retry Content Generation
+                </Button>
+              )}
               <Link to="/agent-activity">
                 <Button variant="outline">
                   <ArrowRight className="w-4 h-4 mr-2" />

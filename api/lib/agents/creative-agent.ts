@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { runAgent } from "./runner";
 import { getDb } from "../../queries/connection";
-import { campaigns, contentPosts, campaignAssets, businesses } from "@db/schema";
+import { campaigns, contentPosts, campaignAssets, businesses, agentRuns } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 
 // ─── Schema Normalisation Helpers ───
@@ -568,11 +568,15 @@ function assessPackQuality(
 export async function runCreativeAgent({
   userId,
   campaignId,
+  deleteExistingDrafts = true,
 }: {
   userId: number;
   campaignId: number;
+  deleteExistingDrafts?: boolean;
 }) {
   const db = getDb();
+
+  console.log(`[CreativeAgent] Started | campaignId=${campaignId} | userId=${userId} | deleteExistingDrafts=${deleteExistingDrafts}`);
 
   // Get campaign and business info
   const [campaign] = await db
@@ -582,8 +586,11 @@ export async function runCreativeAgent({
     .limit(1);
 
   if (!campaign) {
+    console.error(`[CreativeAgent] Campaign not found | campaignId=${campaignId}`);
     throw new Error("Campaign not found");
   }
+
+  console.log(`[CreativeAgent] Campaign loaded | campaignId=${campaignId} | workflowState=${campaign.workflowState}`);
 
   const strategyContext = campaign.workflowContext as any;
   const personas = campaign.personas as any[];
@@ -623,6 +630,8 @@ export async function runCreativeAgent({
       businessEvidence = (biz.websiteEvidence || null) as any;
     }
   }
+
+  console.log(`[CreativeAgent] Business evidence loaded | campaignId=${campaignId} | location=${location || "none"} | industry=${industry || "none"}`);
 
   // Step 1: Generate Hero Campaign Pack
   const packPrompt = `You are an elite creative director for a premium marketing agency. You build tight, high-performing Hero Campaign Packs — not content factories. Approved strategy becomes one strong campaign idea, then platform adaptations and supporting assets.
@@ -810,6 +819,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     throw new Error("Content generation needs to be retried. No content was published.");
   }
 
+  console.log(`[CreativeAgent] Pack generated | campaignId=${campaignId} | runId=${packResult.runId}`);
+
   // Normalise the AI output so missing/undefined fields become safe defaults
   let pack = normalisePremiumPack(packResult.output);
 
@@ -836,9 +847,31 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         throw new Error(`Generated content did not meet quality standards: ${retryQuality.issues.join("; ")}`);
       }
     } catch (err: any) {
-      if (err.message?.includes("Generated content did not meet quality standards")) throw err;
-      console.error(`[CreativeAgent] Retry generation failed | campaignId=${campaignId} | error="${err.message}"`);
-      throw new Error("Content generation needs to be retried. The first draft did not meet quality standards.");
+      const failMsg = err.message?.includes("Generated content did not meet quality standards")
+        ? err.message
+        : `Content generation needs to be retried. The first draft did not meet quality standards: ${err.message}`;
+      console.error(`[CreativeAgent] Retry generation failed | campaignId=${campaignId} | error="${failMsg}"`);
+      await markPackRunFailed(failMsg);
+      throw new Error(failMsg);
+    }
+  }
+
+  console.log(`[CreativeAgent] Quality gate passed | campaignId=${campaignId} | runId=${packResult.runId}`);
+
+  // Helper to mark the creative run as failed when post-save fails
+  async function markPackRunFailed(error: string) {
+    try {
+      await db
+        .update(agentRuns)
+        .set({
+          status: "failed",
+          error,
+          completedAt: new Date(),
+        })
+        .where(eq(agentRuns.id, packResult!.runId));
+      console.log(`[CreativeAgent] Marked run ${packResult!.runId} as failed | campaignId=${campaignId} | error="${error}"`);
+    } catch (markErr: any) {
+      console.error(`[CreativeAgent] Could not mark run ${packResult!.runId} as failed | campaignId=${campaignId} | error="${markErr.message}"`);
     }
   }
 
@@ -860,25 +893,33 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     })
     .where(eq(campaigns.id, campaignId));
 
-  // Prevent duplicate content posts on retry
-  const existingDrafts = await db
-    .select()
-    .from(contentPosts)
-    .where(
-      and(
-        eq(contentPosts.campaignId, campaignId),
-        eq(contentPosts.aiGenerated, true),
-        eq(contentPosts.status, "draft")
-      )
-    );
+  console.log(`[CreativeAgent] Saving pack summary | campaignId=${campaignId} | runId=${packResult.runId}`);
 
-  for (const draft of existingDrafts) {
-    await db.delete(contentPosts).where(eq(contentPosts.id, draft.id));
+  // Prevent duplicate content posts on retry (skip when caller will manage old content itself)
+  if (deleteExistingDrafts) {
+    const existingDrafts = await db
+      .select()
+      .from(contentPosts)
+      .where(
+        and(
+          eq(contentPosts.campaignId, campaignId),
+          eq(contentPosts.aiGenerated, true),
+          eq(contentPosts.status, "draft")
+        )
+      );
+
+    for (const draft of existingDrafts) {
+      await db.delete(contentPosts).where(eq(contentPosts.id, draft.id));
+    }
+
+    console.log(`[CreativeAgent] Existing drafts deleted | campaignId=${campaignId} | count=${existingDrafts.length}`);
   }
 
   let savedPosts = 0;
   let failedInserts = 0;
   let savedAssets = 0;
+
+  console.log(`[CreativeAgent] Inserting posts and assets | campaignId=${campaignId} | runId=${packResult.runId}`);
 
   // Helper to insert content post with metadata
   async function insertPost(
@@ -1186,8 +1227,11 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
   if (savedPosts === 0) {
     const errMsg = `Content generation completed but no posts were saved. failedInserts=${failedInserts}`;
     console.error(`[CreativeAgent] CRITICAL: ${errMsg} | campaignId=${campaignId} | userId=${userId}`);
+    await markPackRunFailed(errMsg);
     throw new Error("Content generation needs to be retried. No content was published.");
   }
+
+  console.log(`[CreativeAgent] Posts and assets inserted | campaignId=${campaignId} | savedPosts=${savedPosts} | savedAssets=${savedAssets} | failedInserts=${failedInserts}`);
 
   // Step 2: Generate additional creative assets (best-effort)
   const assetsPrompt = `You are a conversion-focused creative director. Generate supplementary high-performing sales assets for this campaign.
@@ -1268,6 +1312,8 @@ Respond with structured data.`;
     }
   }
   console.log(`[CreativeAgent] Saved ${savedAssets} supplementary assets for campaign ${campaignId}`);
+
+  console.log(`[CreativeAgent] Completed | campaignId=${campaignId} | runId=${packResult.runId} | savedPosts=${savedPosts} | savedAssets=${savedAssets}`);
 
   return {
     packRunId: packResult.runId,

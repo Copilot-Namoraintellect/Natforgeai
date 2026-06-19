@@ -198,7 +198,7 @@ export const agentRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
 
-      // Deduplication guard — don't run if a creative agent is already running or completed
+      // Deduplication guard — don't run if a creative agent is already running or genuinely completed
       const existingCreative = await db
         .select()
         .from(agentRuns)
@@ -212,12 +212,21 @@ export const agentRouter = createRouter({
         .orderBy(agentRuns.createdAt)
         .limit(1);
 
-      if (existingCreative.length > 0 && ["running", "completed"].includes(existingCreative[0].status)) {
+      const workflowContext = (campaign.workflowContext || {}) as { savedPosts?: number } | undefined;
+      const savedPosts = typeof workflowContext?.savedPosts === "number" ? workflowContext.savedPosts : null;
+      const existingRun = existingCreative[0];
+      const hasNoContent = savedPosts === 0;
+
+      if (
+        existingRun &&
+        ((existingRun.status === "running") ||
+          (existingRun.status === "completed" && !hasNoContent))
+      ) {
         return {
           success: true,
           skipped: true,
-          reason: `A creative agent run already exists with status "${existingCreative[0].status}".`,
-          packRunId: existingCreative[0].id,
+          reason: `A creative agent run already exists with status "${existingRun.status}".`,
+          packRunId: existingRun.id,
           assetsRunId: null,
           pack: null,
           assets: null,

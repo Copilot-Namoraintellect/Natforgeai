@@ -10,6 +10,7 @@ import { defaultModel } from "./lib/agents/openai";
 import { runStrategyAgent } from "./lib/agents/strategy-agent";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
+import { transitionCampaignState } from "./lib/workflow/engine";
 
 function campaignSuggestionSchema() {
   return z.object({
@@ -496,125 +497,228 @@ export const campaignRouter = createRouter({
     .input(z.object({ campaignId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
+      const { campaignId } = input;
+      const { id: userId } = ctx.user;
 
-      const [campaign] = await db
-        .select()
-        .from(campaigns)
-        .where(and(eq(campaigns.id, input.campaignId), eq(campaigns.userId, ctx.user.id)))
-        .limit(1);
+      console.log(`[regenerateFromProfile] route entered | campaignId=${campaignId} | userId=${userId}`);
 
-      if (!campaign) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      let strategyRunId: number | null = null;
+      let creativeRunId: number | null = null;
+
+      try {
+        // 1. Load campaign
+        const [campaign] = await db
+          .select()
+          .from(campaigns)
+          .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
+          .limit(1);
+
+        if (!campaign) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+        }
+        console.log(`[regenerateFromProfile] campaign loaded | campaignId=${campaignId} | businessId=${campaign.businessId}`);
+
+        if (!campaign.businessId) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Campaign is not linked to a business" });
+        }
+
+        // 2. Load business
+        const [business] = await db
+          .select()
+          .from(businesses)
+          .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, userId)))
+          .limit(1);
+
+        if (!business) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+        }
+        console.log(`[regenerateFromProfile] business loaded | businessId=${business.id} | name=${business.name}`);
+
+        // 3. Parse website evidence
+        const evidence = (business.websiteEvidence || {}) as {
+          businessCategory?: string;
+          productsServices?: string[];
+          targetCustomers?: string[];
+          location?: string;
+        };
+        console.log(`[regenerateFromProfile] websiteEvidence parsed | businessId=${business.id} | category=${evidence.businessCategory || "none"}`);
+
+        // 4. Update campaign brief from latest business evidence
+        await db
+          .update(campaigns)
+          .set({
+            productOrService: business.productOrService || evidence.productsServices?.join(", ") || campaign.productOrService,
+            targetBuyer: business.targetCustomer || evidence.targetCustomers?.join(", ") || campaign.targetBuyer,
+            mainPainPoint: campaign.mainPainPoint,
+            workflowState: "strategy_pending",
+            updatedAt: new Date(),
+          } as any)
+          .where(eq(campaigns.id, campaignId));
+        console.log(`[regenerateFromProfile] campaign brief updated | campaignId=${campaignId}`);
+
+        // 5. Delete old agent runs so regeneration is not blocked by dedup guards
+        await db
+          .delete(agentRuns)
+          .where(and(eq(agentRuns.campaignId, campaignId), eq(agentRuns.userId, userId)));
+        console.log(`[regenerateFromProfile] old agent runs deleted | campaignId=${campaignId}`);
+
+        // Snapshot existing AI-generated content so we can delete ONLY the old items after new content is created
+        const oldContentPosts = await db
+          .select({ id: contentPosts.id })
+          .from(contentPosts)
+          .where(
+            and(
+              eq(contentPosts.campaignId, campaignId),
+              eq(contentPosts.userId, userId),
+              eq(contentPosts.aiGenerated, true)
+            )
+          );
+        const oldPostIds = oldContentPosts.map((p) => p.id);
+        console.log(`[regenerateFromProfile] old content posts snapshot | campaignId=${campaignId} | count=${oldPostIds.length}`);
+
+        const oldGeneratedAssets = await db
+          .select({ id: campaignAssets.id })
+          .from(campaignAssets)
+          .where(
+            and(
+              eq(campaignAssets.campaignId, campaignId),
+              eq(campaignAssets.userId, userId),
+              inArray(campaignAssets.assetType, [
+                "caption_pack",
+                "caption_adaptation",
+                "carousel_ad",
+                "ad_copy",
+                "whatsapp_promo",
+                "email_copy",
+                "launch_pack",
+                "hashtag_set",
+                "cta_variant",
+              ])
+            )
+          );
+        const oldAssetIds = oldGeneratedAssets.map((a) => a.id);
+        console.log(`[regenerateFromProfile] old generated assets snapshot | campaignId=${campaignId} | count=${oldAssetIds.length}`);
+
+        // 6. Regenerate strategy
+        console.log(`[regenerateFromProfile] strategy regeneration started | campaignId=${campaignId}`);
+        const strategyResult = await runStrategyAgent({
+          userId,
+          campaignId,
+          business: {
+            name: business.name,
+            industry: business.industry,
+            location: business.location || evidence.location,
+            productOrService: business.productOrService,
+            targetCustomer: business.targetCustomer,
+            brandTone: business.brandTone,
+            mainGoal: business.mainGoal,
+            monthlyBudget: business.monthlyBudget,
+            preferredPlatforms: business.preferredPlatforms,
+            website: business.website,
+            websiteEvidence: business.websiteEvidence,
+          },
+        });
+        strategyRunId = strategyResult.runId;
+        console.log(`[regenerateFromProfile] strategy regenerated | campaignId=${campaignId} | strategyRunId=${strategyRunId}`);
+
+        // Advance workflow to strategy_generated and then strategy_approved so creative can run
+        await transitionCampaignState(campaignId, userId, "generate_strategy");
+        console.log(`[regenerateFromProfile] campaign state transitioned to strategy_generated | campaignId=${campaignId}`);
+        await transitionCampaignState(campaignId, userId, "approve_strategy");
+        console.log(`[regenerateFromProfile] campaign state transitioned to strategy_approved | campaignId=${campaignId}`);
+
+        // 7. Move to creatives_generating so the UI shows a loading/progress state
+        await transitionCampaignState(campaignId, userId, "generate_creatives");
+        console.log(`[regenerateFromProfile] campaign state transitioned to creatives_generating | campaignId=${campaignId}`);
+
+        // 8. Regenerate creative pack (do NOT delete old drafts yet; we keep them as a fallback)
+        console.log(`[regenerateFromProfile] creative pack generation started | campaignId=${campaignId}`);
+        const creativeResult = await runCreativeAgent({
+          userId,
+          campaignId,
+          deleteExistingDrafts: false,
+        });
+        creativeRunId = creativeResult.packRunId;
+        console.log(`[regenerateFromProfile] creative pack generated | campaignId=${campaignId} | creativeRunId=${creativeRunId} | savedPosts=${creativeResult.savedPosts} | savedAssets=${creativeResult.savedAssets}`);
+
+        if (creativeResult.savedPosts === 0) {
+          throw new Error("Creative Agent completed but no posts were saved.");
+        }
+
+        console.log(`[regenerateFromProfile] posts inserted | campaignId=${campaignId} | count=${creativeResult.savedPosts}`);
+        console.log(`[regenerateFromProfile] assets inserted | campaignId=${campaignId} | count=${creativeResult.savedAssets}`);
+
+        // 9. Only now that new content exists, delete the OLD AI-generated content posts
+        if (oldPostIds.length > 0) {
+          await db
+            .delete(contentPosts)
+            .where(
+              and(
+                eq(contentPosts.campaignId, campaignId),
+                eq(contentPosts.userId, userId),
+                inArray(contentPosts.id, oldPostIds)
+              )
+            );
+          console.log(`[regenerateFromProfile] old AI-generated content posts deleted | campaignId=${campaignId} | count=${oldPostIds.length}`);
+        } else {
+          console.log(`[regenerateFromProfile] no old content posts to delete | campaignId=${campaignId}`);
+        }
+
+        // 10. Delete the OLD generated campaign assets
+        if (oldAssetIds.length > 0) {
+          await db
+            .delete(campaignAssets)
+            .where(
+              and(
+                eq(campaignAssets.campaignId, campaignId),
+                eq(campaignAssets.userId, userId),
+                inArray(campaignAssets.id, oldAssetIds)
+              )
+            );
+          console.log(`[regenerateFromProfile] old generated campaign assets deleted | campaignId=${campaignId} | count=${oldAssetIds.length}`);
+        } else {
+          console.log(`[regenerateFromProfile] no old generated assets to delete | campaignId=${campaignId}`);
+        }
+
+        // 11. Advance campaign state now that content is safely created
+        await onAgentRunComplete(creativeRunId);
+        console.log(`[regenerateFromProfile] campaign state updated | campaignId=${campaignId} | creativeRunId=${creativeRunId}`);
+
+        console.log(`[regenerateFromProfile] route completed | campaignId=${campaignId} | strategyRunId=${strategyRunId} | creativeRunId=${creativeRunId}`);
+
+        return {
+          success: true,
+          strategyRunId,
+          creativeRunId,
+        };
+      } catch (err: any) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        console.error(`[regenerateFromProfile] step failed | campaignId=${campaignId} | userId=${userId} | error="${errorMessage}"`, err);
+
+        // Mark any runs we created as failed so the UI does not show them as completed
+        if (strategyRunId) {
+          await db
+            .update(agentRuns)
+            .set({ status: "failed", error: errorMessage, completedAt: new Date() })
+            .where(eq(agentRuns.id, strategyRunId))
+            .catch((e) => console.error(`[regenerateFromProfile] could not mark strategy run ${strategyRunId} failed:`, e.message));
+        }
+        if (creativeRunId) {
+          await db
+            .update(agentRuns)
+            .set({ status: "failed", error: errorMessage, completedAt: new Date() })
+            .where(eq(agentRuns.id, creativeRunId))
+            .catch((e) => console.error(`[regenerateFromProfile] could not mark creative run ${creativeRunId} failed:`, e.message));
+        }
+
+        if (err instanceof TRPCError) {
+          throw err;
+        }
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: errorMessage || "Failed to regenerate campaign from profile. Please try again.",
+        });
       }
-
-      if (!campaign.businessId) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Campaign is not linked to a business" });
-      }
-
-      const [business] = await db
-        .select()
-        .from(businesses)
-        .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, ctx.user.id)))
-        .limit(1);
-
-      if (!business) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
-      }
-
-      const evidence = (business.websiteEvidence || {}) as {
-        businessCategory?: string;
-        productsServices?: string[];
-        targetCustomers?: string[];
-        location?: string;
-      };
-
-      // 1. Update campaign brief from latest business evidence
-      await db
-        .update(campaigns)
-        .set({
-          productOrService: business.productOrService || evidence.productsServices?.join(", ") || campaign.productOrService,
-          targetBuyer: business.targetCustomer || evidence.targetCustomers?.join(", ") || campaign.targetBuyer,
-          mainPainPoint: campaign.mainPainPoint,
-          workflowState: "strategy_pending",
-          updatedAt: new Date(),
-        } as any)
-        .where(eq(campaigns.id, input.campaignId));
-
-      // 2. Delete old agent runs so regeneration is not blocked by dedup guards
-      await db
-        .delete(agentRuns)
-        .where(and(eq(agentRuns.campaignId, input.campaignId), eq(agentRuns.userId, ctx.user.id)));
-
-      // 3. Delete old AI-generated content posts
-      await db
-        .delete(contentPosts)
-        .where(
-          and(
-            eq(contentPosts.campaignId, input.campaignId),
-            eq(contentPosts.userId, ctx.user.id),
-            eq(contentPosts.aiGenerated, true)
-          )
-        );
-
-      // 4. Delete old generated campaign assets
-      await db
-        .delete(campaignAssets)
-        .where(
-          and(
-            eq(campaignAssets.campaignId, input.campaignId),
-            eq(campaignAssets.userId, ctx.user.id),
-            inArray(campaignAssets.assetType, [
-              "caption_pack",
-              "caption_adaptation",
-              "carousel_ad",
-              "ad_copy",
-              "whatsapp_promo",
-              "email_copy",
-              "launch_pack",
-              "hashtag_set",
-              "cta_variant",
-            ])
-          )
-        );
-
-      // 4. Regenerate strategy
-      const strategyResult = await runStrategyAgent({
-        userId: ctx.user.id,
-        campaignId: input.campaignId,
-        business: {
-          name: business.name,
-          industry: business.industry,
-          location: business.location || evidence.location,
-          productOrService: business.productOrService,
-          targetCustomer: business.targetCustomer,
-          brandTone: business.brandTone,
-          mainGoal: business.mainGoal,
-          monthlyBudget: business.monthlyBudget,
-          preferredPlatforms: business.preferredPlatforms,
-          website: business.website,
-          websiteEvidence: business.websiteEvidence,
-        },
-      });
-
-      await onAgentRunComplete(strategyResult.runId);
-
-      // 5. Regenerate creative pack
-      const creativeResult = await runCreativeAgent({
-        userId: ctx.user.id,
-        campaignId: input.campaignId,
-      });
-
-      Promise.resolve().then(() =>
-        onAgentRunComplete(creativeResult.packRunId).catch((err) => {
-          console.error("[regenerateFromProfile] onAgentRunComplete failed:", err.message);
-        })
-      );
-
-      return {
-        success: true,
-        strategyRunId: strategyResult.runId,
-        creativeRunId: creativeResult.packRunId,
-      };
     }),
 
   delete: authedQuery

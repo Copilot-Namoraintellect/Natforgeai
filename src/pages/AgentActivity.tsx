@@ -408,12 +408,24 @@ export default function AgentActivity() {
           <div className="p-8 text-center text-gray-400">Loading activity...</div>
         ) : agentRuns && agentRuns.length > 0 ? (
           agentRuns.map((run) => {
+            const campaign = run.campaignId ? campaignMap.get(run.campaignId) : null;
+            const savedPosts = (campaign?.workflowContext as { savedPosts?: number } | undefined)?.savedPosts;
+            // A "completed" creative run that produced no saved posts is effectively a failure.
+            const effectiveStatus =
+              run.agentType === "creative" && run.status === "completed" && savedPosts === 0
+                ? "failed"
+                : run.status;
+            const effectiveError =
+              effectiveStatus === "failed" && run.status === "completed" && savedPosts === 0
+                ? "Creative Agent completed but no content was created."
+                : run.error;
+
             const agentConfig = agentTypeConfig[run.agentType] || {
               icon: Activity,
               color: "text-gray-400",
               label: run.agentType,
             };
-            const statusConfigItem = statusConfig[run.status] || {
+            const statusConfigItem = statusConfig[effectiveStatus] || {
               color: "bg-gray-500/10 text-gray-600",
               icon: Clock,
             };
@@ -435,7 +447,7 @@ export default function AgentActivity() {
                         <span className="font-semibold text-white">{agentConfig.label}</span>
                         <Badge className={statusConfigItem.color}>
                           <StatusIcon className="w-3 h-3 mr-1" />
-                          {run.status}
+                          {effectiveStatus}
                         </Badge>
                       </div>
                       <p className="text-sm text-gray-400">
@@ -445,14 +457,14 @@ export default function AgentActivity() {
                           : "Unknown date"}
                       </p>
 
-                      {run.status === "failed" && (
+                      {effectiveStatus === "failed" && (
                         <div className="mt-2 p-2 rounded-lg bg-red-500/10 border border-red-500/20">
-                          <p className="text-sm text-red-400">{friendlyErrorMessage(run.error)}</p>
+                          <p className="text-sm text-red-400">{friendlyErrorMessage(effectiveError)}</p>
                           <p className="text-xs text-red-400/70 mt-1">Credits were not refunded for this failed attempt.</p>
                         </div>
                       )}
 
-                      {run.status === "completed" && (
+                      {effectiveStatus === "completed" && (
                         <div className="mt-2 flex items-center gap-2 flex-wrap">
                           {run.campaignId && (
                             (() => {
@@ -535,7 +547,7 @@ export default function AgentActivity() {
                       )}
                     </div>
 
-                    {run.status === "failed" && (
+                    {effectiveStatus === "failed" && (
                       <Button
                         variant="outline"
                         size="sm"
