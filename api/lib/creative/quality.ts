@@ -8,6 +8,8 @@
  */
 
 import sharp from "sharp";
+import { generateText } from "ai";
+import { openai } from "@ai-sdk/openai";
 
 const UNSUPPORTED_SERVICE_WORDS = [
   "seo", "social media management", "content creation", "data analytics",
@@ -376,6 +378,7 @@ export async function validateLeafletQuality(
  */
 export interface BrandFidelityInput {
   hasLogo: boolean;
+  logoOverlayApplied?: boolean;
   palette?: { source?: string } | null;
   businessName?: string;
   headline?: string;
@@ -387,6 +390,9 @@ export function validateBrandFidelity(input: BrandFidelityInput): { scorePenalty
 
   if (!input.hasLogo) {
     issues.push("No business logo available for the leaflet.");
+    scorePenalty += 30;
+  } else if (input.logoOverlayApplied === false) {
+    issues.push("Business logo exists but was not applied to the final leaflet.");
     scorePenalty += 30;
   }
 
@@ -415,4 +421,60 @@ export function validateBrandFidelity(input: BrandFidelityInput): { scorePenalty
   }
 
   return { scorePenalty, issues };
+}
+
+/**
+ * Vision-based check for AI-generated fake branding in the raw image.
+ *
+ * OpenAI image models sometimes still render business names, logos or readable
+ * text despite negative instructions. This lightweight gpt-4o-mini vision pass
+ * catches those cases so they can be penalised or rejected before the real logo
+ * and text are overlaid.
+ */
+export interface FakeBrandingResult {
+  hasText: boolean;
+  hasLogo: boolean;
+  hasBusinessName: boolean;
+  details: string;
+}
+
+export async function detectFakeBranding(imageBuffer: Buffer, business: any): Promise<FakeBrandingResult> {
+  const safeResult: FakeBrandingResult = { hasText: false, hasLogo: false, hasBusinessName: false, details: "Vision check skipped." };
+  try {
+    const dataUri = `data:image/png;base64,${imageBuffer.toString("base64")}`;
+    const result = await generateText({
+      model: openai("gpt-4o-mini"),
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: "You are a strict image-quality checker. Respond ONLY with a compact JSON object and no markdown.",
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Inspect the attached AI-generated marketing background image for a business called "${business?.name || "the business"}". This image MUST contain NO readable text, NO logos/brand marks, and NO business name rendered inside it. Look carefully at signage, labels, packaging, screens, documents, menu boards, price tags, QR codes, monograms, signatures and stylised words.
+Return strict JSON: {"hasText":boolean,"hasLogo":boolean,"hasBusinessName":boolean,"details":"one-sentence explanation"}. Be conservative: if you are unsure, set the flag to true.`,
+            },
+            { type: "image", image: dataUri },
+          ],
+        },
+      ],
+    });
+
+    const raw = result.text || "";
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    const json = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+    return {
+      hasText: !!json.hasText,
+      hasLogo: !!json.hasLogo,
+      hasBusinessName: !!json.hasBusinessName,
+      details: typeof json.details === "string" ? json.details : raw.slice(0, 200),
+    };
+  } catch (err) {
+    console.warn(`[LeafletQuality] Fake-branding vision check failed: ${err instanceof Error ? err.message : String(err)}`);
+    return safeResult;
+  }
 }

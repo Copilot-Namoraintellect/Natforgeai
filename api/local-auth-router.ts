@@ -600,8 +600,9 @@ export const localAuthRouter = createRouter({
 
     if (!user) return null;
 
-    // Treat user as onboarded if they have a completed business profile
-    let onboardingComplete = user.onboardingComplete;
+    // Admins and super-admins bypass business onboarding so they can manage
+    // users, businesses, credits, system health and settings immediately.
+    let onboardingComplete = user.onboardingComplete || user.role === "admin";
     if (!onboardingComplete) {
       const [biz] = await db
         .select()

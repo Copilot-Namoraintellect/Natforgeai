@@ -32,8 +32,10 @@ export function AppLayout() {
     return <Navigate to="/login?verify=required" replace />;
   }
 
-  // Redirect to onboarding if not completed
-  if (user && !user.onboardingComplete && location.pathname !== "/onboarding") {
+  // Redirect to onboarding if not completed (admins can access the platform
+  // immediately to manage users, businesses, credits, system health and settings).
+  const isAdmin = user?.role === "admin";
+  if (user && !user.onboardingComplete && !isAdmin && location.pathname !== "/onboarding") {
     return <Navigate to="/onboarding" replace />;
   }
 

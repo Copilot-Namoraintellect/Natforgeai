@@ -21,6 +21,32 @@ export interface BrandOverlaySpec {
   subheadline?: string;
   serviceBullets?: string[];
   palette?: BrandPalette;
+  creativeGuidance?: string;
+  refinementInstruction?: string;
+}
+
+export interface LayoutHints {
+  cleaner?: boolean;
+  fewerServices?: boolean;
+  noServiceBoxes?: boolean;
+  largerText?: boolean;
+  moreSpacing?: boolean;
+  darkerBackground?: boolean;
+  centered?: boolean;
+}
+
+function parseLayoutHints(text?: string): LayoutHints {
+  if (!text) return {};
+  const lower = text.toLowerCase();
+  return {
+    cleaner: /\b(clean|minimal|simpler|less clutter|tidier)\b/.test(lower),
+    fewerServices: /\b(fewer|less)\b.*\b(services?|boxes|bullets?)\b|\bminimal\b/.test(lower),
+    noServiceBoxes: /\b(no boxes|no cards|no service boxes|no icons?|list only|simple list|no bullet cards?)\b/.test(lower),
+    largerText: /\b(larger text|bigger text|bigger font|larger font|more readable)\b/.test(lower),
+    moreSpacing: /\b(more spacing|more whitespace|more space|spread out|room|airy)\b/.test(lower),
+    darkerBackground: /\b(darker background|darker|deeper background)\b/.test(lower),
+    centered: /\b(centered|centre|center align|centred)\b/.test(lower),
+  };
 }
 
 function sanitize(str?: string | null): string {
@@ -125,9 +151,9 @@ async function resizeLogo(logoBuffer: Buffer, maxHeight: number): Promise<Buffer
 }
 
 /**
- * Build a compact branded header bar. The business name is placed on the right;
- * the logo is composited separately on the left so aspect ratio and padding are
- * preserved.
+ * Build a branded header bar. The business name is placed on the right at a
+ * size that always fits next to the logo area. The real logo is composited
+ * separately on the left.
  */
 function buildHeaderSvg(
   width: number,
@@ -137,20 +163,28 @@ function buildHeaderSvg(
 ): Buffer {
   const name = escapeXml(sanitize(businessName) || "Your Business");
   const textColor = contrastTextColor(palette.primary);
-  const nameSize = Math.max(18, Math.round(width / 28));
-  const padX = 24;
+  const padX = 28;
+  const maxTextWidth = Math.round(width * 0.48);
+  const nameSize = Math.max(
+    20,
+    Math.min(
+      Math.round(width / 24),
+      Math.round(maxTextWidth / Math.max(name.length * 0.58, 1))
+    )
+  );
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
   <rect width="${width}" height="${height}" fill="${palette.primary}"/>
-  <text x="${width - padX}" y="${height / 2 + nameSize / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="700" fill="${textColor}" text-anchor="end">${name}</text>
+  <text x="${width - padX}" y="${height / 2 + nameSize / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="800" fill="${textColor}" text-anchor="end">${name}</text>
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }
 
 /**
- * Build a prominent, easy-to-read footer with the CTA as the hero element.
- * Contact details are smaller and sit beneath the CTA so nothing is cut off.
+ * Build a prominent, easy-to-read footer. The CTA is the hero element and
+ * contact details sit beneath it. If height <= 0 the height is computed
+ * dynamically from the content, so nothing is clipped.
  */
 function buildFooterSvg(
   width: number,
@@ -160,26 +194,50 @@ function buildFooterSvg(
   palette: BrandPalette
 ): Buffer {
   const textColor = contrastTextColor(palette.primary);
-  const ctaSize = Math.max(24, Math.round(width / 16));
-  const lineSize = Math.max(14, Math.round(width / 38));
-  const padX = 28;
-  const padY = 18;
+  const padX = 32;
+  const padY = 24;
+  const rightReserve = 140; // reserve space for the footer logo mark
+  const availableWidth = width - padX - rightReserve;
+
+  const ctaBaseSize = Math.max(28, Math.round(width / 14));
+  const lineBaseSize = Math.max(16, Math.round(width / 34));
 
   const safeCta = escapeXml(sanitize(cta) || "Contact us today");
-  const safeLines = lines.filter(Boolean).map((l) => escapeXml(sanitize(l)));
+  const safeLines = lines.filter(Boolean).map((l) => escapeXml(sanitize(l))).slice(0, 3);
 
-  const lineBlocks = safeLines
-    .map((line, idx) => {
-      const y = padY + ctaSize + 28 + (idx + 1) * (lineSize + 10);
-      return `<text x="${padX}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${lineSize}" font-weight="500" fill="${textColor}" opacity="0.92">${line}</text>`;
-    })
+  const ctaMaxChars = Math.max(12, Math.round(availableWidth / (ctaBaseSize * 0.55)));
+  const ctaLines = wrapText(safeCta, ctaMaxChars);
+  const ctaLineHeight = ctaBaseSize + 8;
+  const ctaBlockHeight = ctaLines.length * ctaLineHeight;
+
+  const lineMaxChars = Math.max(22, Math.round(availableWidth / (lineBaseSize * 0.55)));
+  const lineBlocks: string[] = [];
+  let currentY = padY + ctaBlockHeight + 40;
+  for (const line of safeLines) {
+    const wrapped = wrapText(line, lineMaxChars);
+    for (const text of wrapped) {
+      lineBlocks.push(
+        `<text x="${padX}" y="${currentY + lineBaseSize}" font-family="Arial, Helvetica, sans-serif" font-size="${lineBaseSize}" font-weight="600" fill="${textColor}" opacity="0.95">${text}</text>`
+      );
+      currentY += lineBaseSize + 14;
+    }
+  }
+
+  const contentHeight = currentY + padY;
+  const finalHeight = height > 0 ? height : Math.max(Math.round(width * 0.12), contentHeight);
+
+  const ctaBlocks = ctaLines
+    .map(
+      (line, i) =>
+        `<text x="${padX}" y="${padY + (i + 1) * ctaLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${ctaBaseSize}" font-weight="900" fill="${textColor}">${line}</text>`
+    )
     .join("");
 
   const svg = `
-<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <rect width="${width}" height="${height}" fill="${palette.primary}"/>
-  <text x="${padX}" y="${padY + ctaSize}" font-family="Arial, Helvetica, sans-serif" font-size="${ctaSize}" font-weight="800" fill="${textColor}">${safeCta}</text>
-  ${lineBlocks}
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${finalHeight}">
+  <rect width="${width}" height="${finalHeight}" fill="${palette.primary}"/>
+  ${ctaBlocks}
+  ${lineBlocks.join("")}
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }
@@ -192,7 +250,8 @@ function buildOfferBadgeSvg(
   width: number,
   headline: string,
   subheadline: string,
-  palette: BrandPalette
+  palette: BrandPalette,
+  hints?: LayoutHints
 ): Buffer {
   const safeHeadline = escapeXml(sanitize(headline) || "");
   const safeSub = escapeXml(sanitize(subheadline) || "");
@@ -200,35 +259,47 @@ function buildOfferBadgeSvg(
     return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="1"></svg>`, "utf-8");
   }
 
-  const headlineSize = Math.max(20, Math.round(width / 22));
-  const subSize = Math.max(14, Math.round(width / 34));
-  const padX = 28;
-  const padY = 18;
-  const maxChars = Math.max(26, Math.round((width - padX * 2 - 40) / (headlineSize * 0.55)));
-  const subMaxChars = Math.max(36, Math.round((width - padX * 2 - 40) / (subSize * 0.55)));
+  const scale = hints?.largerText ? 1.2 : 1;
+  const padX = 32;
+  const padY = 24;
+  const accentBar = 10;
+  const textLeft = padX + accentBar + 12;
+  const usableWidth = width - textLeft - padX;
+
+  const headlineSize = Math.max(26, Math.round((width / 18) * scale));
+  const subSize = Math.max(18, Math.round((width / 30) * scale));
+
+  const maxChars = Math.max(18, Math.round(usableWidth / (headlineSize * 0.55)));
+  const subMaxChars = Math.max(28, Math.round(usableWidth / (subSize * 0.55)));
 
   const headlineLines = safeHeadline ? wrapText(safeHeadline, maxChars) : [];
   const subLines = safeSub ? wrapText(safeSub, subMaxChars) : [];
 
-  const headlineLineHeight = headlineSize + 8;
-  const subLineHeight = subSize + 6;
+  const headlineLineHeight = headlineSize + 10;
+  const subLineHeight = subSize + 8;
 
-  const headlineBlocks = headlineLines.map((line, i) =>
-    `<text x="${padX + 8}" y="${padY + headlineSize + i * headlineLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="800" fill="${palette.primary}">${line}</text>`
-  ).join("");
+  const headlineBlocks = headlineLines
+    .map(
+      (line, i) =>
+        `<text x="${textLeft}" y="${padY + headlineSize + i * headlineLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="900" fill="${palette.primary}">${line}</text>`
+    )
+    .join("");
 
-  const subYOffset = padY + headlineSize + (headlineLines.length * headlineLineHeight) + (headlineLines.length && subLines.length ? 8 : 0);
-  const subBlocks = subLines.map((line, i) =>
-    `<text x="${padX + 8}" y="${subYOffset + subSize + i * subLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="500" fill="#334155">${line}</text>`
-  ).join("");
+  const subYOffset = padY + headlineSize + headlineLines.length * headlineLineHeight - 10 + (headlineLines.length && subLines.length ? 12 : 0);
+  const subBlocks = subLines
+    .map(
+      (line, i) =>
+        `<text x="${textLeft}" y="${subYOffset + subSize + i * subLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="600" fill="#334155">${line}</text>`
+    )
+    .join("");
 
-  const contentHeight = subYOffset + (subLines.length * subLineHeight) + (subLines.length ? 4 : 0);
-  const height = Math.max(Math.round(width * 0.09), contentHeight + padY);
+  const contentHeight = subYOffset + (subLines.length ? subLines.length * subLineHeight + 8 : 0);
+  const height = Math.max(Math.round(width * 0.10), contentHeight + padY);
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-  <rect x="8" y="4" width="${width - 16}" height="${height - 8}" fill="#FFFFFF" opacity="0.96" rx="14" stroke="${palette.primary}" stroke-width="3"/>
-  <rect x="8" y="4" width="7" height="${height - 8}" fill="${palette.accent}" rx="3"/>
+  <rect x="10" y="6" width="${width - 20}" height="${height - 12}" fill="#FFFFFF" opacity="0.97" rx="16" stroke="${palette.primary}" stroke-width="3"/>
+  <rect x="10" y="6" width="${accentBar}" height="${height - 12}" fill="${palette.accent}" rx="4"/>
   ${headlineBlocks}
   ${subBlocks}
 </svg>`;
@@ -237,24 +308,29 @@ function buildOfferBadgeSvg(
 
 /**
  * Build a 2-column service cards grid. Large, readable text with brand-colour
- * icons instead of tiny bullets.
+ * icons instead of tiny bullets. If hints.noServiceBoxes is set, render a
+ * simple list without card backgrounds.
  */
 function buildServicesGridSvg(
   width: number,
   bullets: string[],
-  palette: BrandPalette
+  palette: BrandPalette,
+  hints?: LayoutHints
 ): Buffer {
-  const padX = 20;
-  const padY = 18;
-  const gapX = 14;
-  const gapY = 12;
-  const cardRadius = 12;
-  const iconSize = 9;
-  const lineSize = Math.max(17, Math.round(width / 50));
-  const lineHeight = lineSize + 8;
+  const scale = hints?.largerText ? 1.15 : 1;
+  const padX = 22;
+  const padY = 20;
+  const gapX = 16;
+  const gapY = hints?.moreSpacing ? 18 : 14;
+  const cardRadius = 14;
+  const iconSize = 10;
+  const lineSize = Math.max(20, Math.round((width / 45) * scale));
+  const lineHeight = lineSize + 10;
 
-  const colCount = 2;
-  const cardWidth = Math.floor((width - padX * 2 - gapX * (colCount - 1)) / colCount);
+  const colCount = hints?.noServiceBoxes ? 1 : 2;
+  const cardWidth = colCount > 1
+    ? Math.floor((width - padX * 2 - gapX * (colCount - 1)) / colCount)
+    : width - padX * 2;
 
   const blocks: string[] = [];
   let currentY = padY;
@@ -265,30 +341,39 @@ function buildServicesGridSvg(
     const col = i % colCount;
     currentX = padX + col * (cardWidth + gapX);
 
-    const textMaxChars = Math.max(16, Math.round((cardWidth - 36) / (lineSize * 0.55)));
+    const textLeft = hints?.noServiceBoxes ? currentX + 26 : currentX + 26;
+    const textMaxChars = Math.max(14, Math.round((cardWidth - 44) / (lineSize * 0.55)));
     const lines = wrapText(bullet, textMaxChars);
-    const cardHeight = Math.max(56, lines.length * lineHeight + 22);
+    const cardHeight = Math.max(64, lines.length * lineHeight + 26);
 
     if (col === 0 && i > 0) currentY += cardHeight + gapY;
 
     const cardY = currentY;
-    const textYOffset = cardY + 18 + (cardHeight - lines.length * lineHeight) / 2;
+    const textYOffset = cardY + 20 + (cardHeight - lines.length * lineHeight) / 2;
 
-    const textBlocks = lines.map((line, li) =>
-      `<text x="${currentX + 22}" y="${textYOffset + li * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${lineSize}" font-weight="700" fill="#0F172A">${line}</text>`
-    ).join("");
+    const textBlocks = lines
+      .map(
+        (line, li) =>
+          `<text x="${textLeft}" y="${textYOffset + li * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${lineSize}" font-weight="800" fill="#0F172A">${line}</text>`
+      )
+      .join("");
 
-    blocks.push(`<rect x="${currentX}" y="${cardY}" width="${cardWidth}" height="${cardHeight}" fill="#FFFFFF" opacity="0.96" rx="${cardRadius}" stroke="${palette.primary}" stroke-width="2"/>`);
-    blocks.push(`<circle cx="${currentX + 11}" cy="${cardY + cardHeight / 2}" r="${iconSize / 2}" fill="${palette.accent}"/>`);
-    blocks.push(textBlocks);
+    if (hints?.noServiceBoxes) {
+      blocks.push(`<circle cx="${currentX + 9}" cy="${cardY + cardHeight / 2}" r="${iconSize / 2}" fill="${palette.accent}"/>`);
+      blocks.push(textBlocks);
+    } else {
+      blocks.push(`<rect x="${currentX}" y="${cardY}" width="${cardWidth}" height="${cardHeight}" fill="#FFFFFF" opacity="0.97" rx="${cardRadius}" stroke="${palette.primary}" stroke-width="2.5"/>`);
+      blocks.push(`<circle cx="${currentX + 13}" cy="${cardY + cardHeight / 2}" r="${iconSize / 2}" fill="${palette.accent}"/>`);
+      blocks.push(textBlocks);
+    }
   }
 
   // Compute final height from last row.
   const rows = Math.ceil(bullets.length / colCount);
   const lastIdx = bullets.length - 1;
-  const lastTextMaxChars = Math.max(16, Math.round((cardWidth - 36) / (lineSize * 0.55)));
+  const lastTextMaxChars = Math.max(14, Math.round((cardWidth - 44) / (lineSize * 0.55)));
   const lastLines = rows > 0 ? wrapText(sanitize(bullets[lastIdx]) || "", lastTextMaxChars).length : 0;
-  const lastRowHeight = rows > 0 ? Math.max(56, lastLines * lineHeight + 22) : 0;
+  const lastRowHeight = rows > 0 ? Math.max(64, lastLines * lineHeight + 26) : 0;
   const finalHeight = rows > 0 ? currentY + lastRowHeight + padY : padY;
 
   const svg = `
@@ -360,29 +445,35 @@ export async function composeBrandedLeafletImage(
   }
 
   // Leaflet layout.
+  const hints = parseLayoutHints(`${spec.creativeGuidance || ""} ${spec.refinementInstruction || ""}`);
   const headerHeight = Math.round(height * 0.10);
-  const footerHeight = Math.round(height * 0.16);
-  const logoSafeHeight = headerHeight - 32;
+  const logoSafeHeight = headerHeight - 36;
   const logoPadX = 28;
-  const logoPadY = 16;
+  const logoPadY = 18;
 
   const headerSvg = buildHeaderSvg(width, headerHeight, businessName, palette);
 
   const contactLines: string[] = [];
   if (business?.whatsappNumber) contactLines.push(`WhatsApp: ${sanitize(business.whatsappNumber)}`);
-  if (business?.email) contactLines.push(`Email: ${sanitize(business.email)}`);
-  if (business?.website) contactLines.push(`Website: ${sanitize(business.website)}`);
   if (business?.location) contactLines.push(`Location: ${sanitize(business.location)}`);
+  if (business?.website) contactLines.push(`Website: ${sanitize(business.website)}`);
+  if (business?.email) contactLines.push(`Email: ${sanitize(business.email)}`);
 
-  const footerSvg = buildFooterSvg(width, footerHeight, contactLines, preferredCta, palette);
+  // Dynamic footer height: content always fits and never clips.
+  const footerSvg = buildFooterSvg(width, 0, contactLines.slice(0, 3), preferredCta, palette);
+  const footerMeta = await sharp(footerSvg).metadata();
+  const footerHeight = footerMeta.height || Math.round(height * 0.18);
+  const footerTop = height - footerHeight;
 
   const overlays: sharp.OverlayOptions[] = [
     { input: headerSvg, top: 0, left: 0 },
-    { input: footerSvg, top: height - footerHeight, left: 0 },
+    { input: footerSvg, top: footerTop, left: 0 },
   ];
 
   // Logo: large, deterministic placement in the header with a contrasting
   // backdrop so the real uploaded logo is always clearly visible.
+  let footerLogoWidth = 0;
+  let footerLogoHeight = 0;
   if (logoBuffer) {
     const logoMeta = await sharp(logoBuffer).metadata();
     const logoAspect = (logoMeta.width || 1) / (logoMeta.height || 1);
@@ -418,46 +509,55 @@ export async function composeBrandedLeafletImage(
     );
     logoApplied = true;
 
-    // Also place a small, clean logo mark in the footer so the brand is
-    // visible in both the header and footer.
-    const footerLogoHeight = 56;
+    // Small logo mark in the footer, vertically centred on the right.
+    footerLogoHeight = 56;
     const footerLogoPng = await sharp(logoBuffer)
       .resize({ height: footerLogoHeight, fit: sharp.fit.inside, withoutEnlargement: true })
       .png()
       .toBuffer();
     const footerLogoMeta = await sharp(footerLogoPng).metadata();
-    const footerLogoWidth = footerLogoMeta.width || footerLogoHeight;
+    footerLogoWidth = footerLogoMeta.width || footerLogoHeight;
     overlays.push({
       input: footerLogoPng,
-      top: height - footerHeight + footerHeight - footerLogoHeight - 20,
-      left: width - footerLogoWidth - 28,
+      top: footerTop + Math.round((footerHeight - footerLogoHeight) / 2),
+      left: width - footerLogoWidth - 32,
     });
   }
 
   // Offer badge in upper area so the hero visual stays dominant in the centre.
-  const offerBadgeTop = Math.round(height * 0.36);
+  const offerBadgeTop = Math.round(height * 0.34);
   let offerBadgeHeight = 0;
   if (headlineText || safeOffer) {
     const offerText = headlineText || safeOffer;
-    const badgeSvg = buildOfferBadgeSvg(width, offerText, subheadlineText, palette);
+    const badgeSvg = buildOfferBadgeSvg(width, offerText, subheadlineText, palette, hints);
     const badgeMeta = await sharp(badgeSvg).metadata();
-    offerBadgeHeight = badgeMeta.height || Math.round(height * 0.11);
+    offerBadgeHeight = badgeMeta.height || Math.round(height * 0.12);
     overlays.push({ input: badgeSvg, top: offerBadgeTop, left: 0 });
   }
 
   // Service cards grid between offer badge and footer.
-  const bullets = spec.serviceBullets?.length
+  const rawBullets = spec.serviceBullets?.length
     ? spec.serviceBullets
     : defaultServiceBullets(business, campaign);
+  const maxBullets = hints.fewerServices || hints.cleaner ? 2 : 4;
+  let bullets = rawBullets.slice(0, maxBullets);
+
   if (bullets.length > 0) {
     const gridWidth = Math.round(width * 0.92);
     const gridLeft = Math.round((width - gridWidth) / 2);
-    const gridTop = offerBadgeTop + offerBadgeHeight + Math.round(height * 0.04);
-    const gridSvg = buildServicesGridSvg(gridWidth, bullets.slice(0, 6), palette);
-    const gridMeta = await sharp(gridSvg).metadata();
-    const actualGridHeight = gridMeta.height || Math.round(height * 0.22);
-    if (gridTop + actualGridHeight <= height - footerHeight - Math.round(height * 0.02)) {
-      overlays.push({ input: gridSvg, top: gridTop, left: gridLeft });
+    const gridTop = offerBadgeTop + offerBadgeHeight + Math.round(height * 0.045);
+    const minFooterClearance = Math.round(height * 0.025);
+
+    // Drop bullets one at a time until the grid fits comfortably above the footer.
+    while (bullets.length > 0) {
+      const gridSvg = buildServicesGridSvg(gridWidth, bullets, palette, hints);
+      const gridMeta = await sharp(gridSvg).metadata();
+      const actualGridHeight = gridMeta.height || Math.round(height * 0.22);
+      if (gridTop + actualGridHeight <= footerTop - minFooterClearance) {
+        overlays.push({ input: gridSvg, top: gridTop, left: gridLeft });
+        break;
+      }
+      bullets = bullets.slice(0, -1);
     }
   }
 
@@ -492,17 +592,18 @@ export async function overlayContactFooter(
   const meta = await sharp(baseImageBuffer).metadata();
   const width = meta.width || 1024;
   const height = meta.height || 1024;
-  const footerHeight = Math.round(height * 0.12);
   const palette = await resolveBrandPalette(business);
 
   const lines: string[] = [];
   if (business?.whatsappNumber) lines.push(`WhatsApp: ${sanitize(business.whatsappNumber)}`);
-  if (business?.email) lines.push(`Email: ${sanitize(business.email)}`);
-  if (business?.website) lines.push(`Website: ${sanitize(business.website)}`);
   if (business?.location) lines.push(`Location: ${sanitize(business.location)}`);
+  if (business?.website) lines.push(`Website: ${sanitize(business.website)}`);
+  if (business?.email) lines.push(`Email: ${sanitize(business.email)}`);
   if (lines.length === 0) lines.push("Contact us today");
 
-  const footerSvg = buildFooterSvg(width, footerHeight, lines, cta || "Contact us today", palette);
+  const footerSvg = buildFooterSvg(width, 0, lines.slice(0, 3), cta || "Contact us today", palette);
+  const footerMeta = await sharp(footerSvg).metadata();
+  const footerHeight = footerMeta.height || Math.round(height * 0.12);
   return sharp(baseImageBuffer)
     .composite([{ input: footerSvg, top: height - footerHeight, left: 0 }])
     .toBuffer();
@@ -595,6 +696,7 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
   const offerText = sanitize(offer || campaign?.offerDetails || "");
   const ctaText = sanitize(cta || campaign?.preferredCta || post?.cta || "Contact us today");
   const bullets = serviceBullets?.length ? serviceBullets : defaultServiceBullets(business, campaign);
+  const hints = parseLayoutHints(`${spec.creativeGuidance || ""} ${spec.refinementInstruction || ""}`);
 
   console.log(`[FallbackLeaflet] Rendering deterministic leaflet | business=${businessName} | creativeType=${creativeType} | size=${width}x${height}`);
 
@@ -633,7 +735,7 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
 
   // Headline band
   const bandTop = Math.round(height * 0.16);
-  const headlineSvg = buildOfferBadgeSvg(width, headlineText, subheadlineText, palette);
+  const headlineSvg = buildOfferBadgeSvg(width, headlineText, subheadlineText, palette, hints);
   const headlineMeta = await sharp(headlineSvg).metadata();
   const bandHeight = headlineMeta.height || Math.round(height * 0.18);
   overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
@@ -658,24 +760,24 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
   }
 
   // Service bullets
-  const bulletSvg = buildServicesGridSvg(width - 64, bullets, palette);
+  const bulletSvg = buildServicesGridSvg(width - 64, bullets.slice(0, hints.fewerServices || hints.cleaner ? 2 : 4), palette, hints);
   const bulletMeta = await sharp(bulletSvg).metadata();
   const bulletHeight = bulletMeta.height || 260;
   overlays.push({ input: bulletSvg, top: currentY, left: 32 });
   currentY += bulletHeight + 24;
 
-  // Footer + CTA
-  const footerHeight = Math.round(height * 0.18);
-  const footerTop = height - footerHeight;
-
+  // Footer + CTA (dynamic height so text is never clipped)
   const contactLines: string[] = [];
   if (business?.whatsappNumber) contactLines.push(`WhatsApp: ${sanitize(business.whatsappNumber)}`);
-  if (business?.email) contactLines.push(`Email: ${sanitize(business.email)}`);
-  if (business?.website) contactLines.push(`Website: ${sanitize(business.website)}`);
   if (business?.location) contactLines.push(`Location: ${sanitize(business.location)}`);
+  if (business?.website) contactLines.push(`Website: ${sanitize(business.website)}`);
+  if (business?.email) contactLines.push(`Email: ${sanitize(business.email)}`);
   if (contactLines.length === 0) contactLines.push("Contact us today");
 
-  const footerSvg = buildFooterSvg(width, footerHeight, contactLines, ctaText, palette);
+  const footerSvg = buildFooterSvg(width, 0, contactLines.slice(0, 3), ctaText, palette);
+  const footerMeta = await sharp(footerSvg).metadata();
+  const footerHeight = footerMeta.height || Math.round(height * 0.18);
+  const footerTop = height - footerHeight;
   overlays.push({ input: footerSvg, top: footerTop, left: 0 });
 
   return canvas.composite(overlays).png().toBuffer();

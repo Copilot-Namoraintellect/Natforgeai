@@ -262,6 +262,11 @@ export default function ContentStudio() {
     { id: campaignForContext?.businessId ?? 0 },
     { enabled: !!campaignForContext?.businessId }
   );
+  const { data: businessesList } = trpc.business.list.useQuery();
+  const businessForLeaflet =
+    businessForContext ??
+    businessesList?.find((b) => b.id === campaignForContext?.businessId) ??
+    businessesList?.[businessesList.length - 1];
   const { data: postCountForCampaign } = trpc.content.countForCampaign.useQuery(
     { campaignId: Number(urlCampaignId) },
     { enabled: !!urlCampaignId }
@@ -1146,7 +1151,7 @@ Include:
                 </div>
 
                 <div className="w-full max-w-lg mt-5 space-y-4">
-                  {!businessForContext?.logo && (
+                  {!businessForLeaflet?.logo && (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-left">
                       <p className="text-xs text-amber-800 font-medium flex items-start gap-2">
                         <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -1155,17 +1160,24 @@ Include:
                       <p className="text-[11px] text-amber-700 mt-1 ml-6">
                         Upload your logo in Settings, or generate below without it.
                       </p>
-                      <label className="flex items-center gap-2 mt-2 ml-6 text-[11px] text-amber-800">
-                        <input
-                          type="checkbox"
-                          className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
-                          checked={allowNoLogo}
-                          onChange={(e) =>
-                            setAllowNoLogoById((prev) => ({ ...prev, [content.id]: e.target.checked }))
-                          }
-                        />
-                        Generate anyway (generic colours may be used)
-                      </label>
+                      <div className="mt-2 ml-6 flex flex-wrap items-center gap-2">
+                        <Link to="/settings">
+                          <Button size="sm" variant="outline" className="h-7 text-[11px] border-amber-300 text-amber-800 hover:bg-amber-100">
+                            Upload Logo in Settings
+                          </Button>
+                        </Link>
+                        <label className="flex items-center gap-2 text-[11px] text-amber-800">
+                          <input
+                            type="checkbox"
+                            className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                            checked={allowNoLogo}
+                            onChange={(e) =>
+                              setAllowNoLogoById((prev) => ({ ...prev, [content.id]: e.target.checked }))
+                            }
+                          />
+                          Generate anyway (generic colours may be used)
+                        </label>
+                      </div>
                     </div>
                   )}
 
@@ -1189,7 +1201,7 @@ Include:
                       size="sm"
                       className="bg-emerald-600 hover:bg-emerald-700 text-white"
                       onClick={() => generate(false)}
-                      disabled={!businessForContext?.logo && !allowNoLogo}
+                      disabled={!businessForLeaflet?.logo && !allowNoLogo}
                     >
                       <Image className="w-4 h-4 mr-2" />
                       Generate Leaflet — {premiumImageCost} credits
@@ -1199,7 +1211,7 @@ Include:
                       variant="outline"
                       className="border-purple-300 text-purple-700 hover:bg-purple-50"
                       onClick={() => generate(true)}
-                      disabled={!businessForContext?.logo && !allowNoLogo}
+                      disabled={!businessForLeaflet?.logo && !allowNoLogo}
                     >
                       <Sparkles className="w-4 h-4 mr-2" />
                       Stronger Brand Fit — {premiumImageCost} credits
@@ -1227,7 +1239,23 @@ Include:
                 </div>
                 <div className="flex justify-between gap-2">
                   <span className="text-slate-500">Business</span>
-                  <span className="font-medium text-right line-clamp-1">{businessForContext?.name || "—"}</span>
+                  <span className="font-medium text-right line-clamp-1">{businessForLeaflet?.name || "—"}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Logo</span>
+                  <span className="font-medium text-right">
+                    {businessForLeaflet?.logo ? (
+                      <img
+                        src={businessForLeaflet.logo}
+                        alt="Business logo"
+                        className="h-8 w-auto max-w-[120px] object-contain border rounded bg-white px-1 py-0.5"
+                      />
+                    ) : (
+                      <Link to="/settings" className="text-amber-700 underline text-[10px]">
+                        Upload logo
+                      </Link>
+                    )}
+                  </span>
                 </div>
                 <div className="flex justify-between gap-2">
                   <span className="text-slate-500">Format</span>
@@ -1434,16 +1462,20 @@ Include:
             </div>
             <LeafletVersionHistory contentPostId={content.id} metadata={metadata} />
 
-            {!businessForContext?.logo && (
+            {!businessForLeaflet?.logo && (
               <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
                 <p className="text-[11px] text-amber-700">
-                  Tip: Add your logo in Settings to improve brand accuracy.
+                  Tip: Add your logo in{" "}
+                  <Link to="/settings" className="font-medium underline">
+                    Settings
+                  </Link>{" "}
+                  to improve brand accuracy.
                 </p>
               </div>
             )}
-            {businessForContext?.logo && (
-              <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md p-2.5">
-                Logo placement may need manual review. OpenAI cannot always place logos precisely.
+            {businessForLeaflet?.logo && (
+              <p className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md p-2.5">
+                Your uploaded logo will be applied deterministically in the header and footer. OpenAI only generates the background scene.
               </p>
             )}
           </div>

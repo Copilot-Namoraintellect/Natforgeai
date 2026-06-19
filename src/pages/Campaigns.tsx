@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useUsage } from "@/hooks/useUsage";
+import { useAuth } from "@/hooks/useAuth";
 import {
   workflowStateLabels,
   workflowGuidance,
@@ -40,6 +41,7 @@ import {
 import { toast } from "sonner";
 
 export default function Campaigns() {
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlCampaignId = searchParams.get("campaignId");
   const [search, setSearch] = useState("");
@@ -198,9 +200,13 @@ export default function Campaigns() {
       if (data.id) {
         setHighlightedId(data.id);
         setTimeout(() => setHighlightedId(null), 4000);
-        // Route immediately using the workflowState returned by the server
-        if (data.workflowState === "business_onboarding") {
+        // Route immediately using the workflowState returned by the server.
+        // Admins bypass onboarding so they can keep managing the platform.
+        if (data.workflowState === "business_onboarding" && user?.role !== "admin") {
           navigate("/onboarding");
+        } else if (data.workflowState === "business_onboarding" && user?.role === "admin") {
+          // Admin-created campaign stays in onboarding state but we stay on the page.
+          toast.info("Admin campaign created. Complete business details when ready.");
         } else if (data.workflowState === "strategy_pending") {
           navigate(`/agent-activity?campaignId=${data.id}`);
           // Fallback frontend trigger in case backend async start missed

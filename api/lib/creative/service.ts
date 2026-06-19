@@ -10,7 +10,7 @@ import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider } from
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
 import { composeBrandedLeafletImage, generateFallbackLeafletImage, defaultServiceBullets } from "./composition";
 import sharp from "sharp";
-import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable, validateLeafletComposition, validateBrandFidelity } from "./quality";
+import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable, validateLeafletComposition, validateBrandFidelity, detectFakeBranding } from "./quality";
 import { formatOffer, offerToHeadline, normalizeCta, validateMarketingText } from "./text-formatter";
 import { resolveBrandPalette } from "./brand-palette";
 import {
@@ -466,6 +466,35 @@ export async function generateMasterImage({
     let finalResult: ImageResult | undefined = finalAttempt.result;
     let rawBuffer: Buffer = finalAttempt.buffer;
 
+    // ─── Vision-based fake-branding check for OpenAI images ───
+    if (finalAttempt.source === "openai") {
+      try {
+        const fakeCheck = await detectFakeBranding(rawBuffer, business);
+        console.log(`[CreativeService] Fake-branding vision check | userId=${userId} | contentPostId=${contentPostId} | hasText=${fakeCheck.hasText} | hasLogo=${fakeCheck.hasLogo} | hasBusinessName=${fakeCheck.hasBusinessName} | details="${fakeCheck.details}"`);
+        const preCriticalCount = finalAttempt.criticalFailures.length;
+        if (fakeCheck.hasText || fakeCheck.hasLogo || fakeCheck.hasBusinessName) {
+          if (fakeCheck.hasLogo) {
+            finalAttempt.criticalFailures.push("AI-generated image contains a fake logo or brand mark.");
+          }
+          if (fakeCheck.hasBusinessName) {
+            finalAttempt.criticalFailures.push(`AI-generated image contains the business name "${business.name}" instead of leaving text for the overlay.`);
+          }
+          if (fakeCheck.hasText && !fakeCheck.hasBusinessName) {
+            finalAttempt.warnings.push(`AI-generated image contains readable text: ${fakeCheck.details}`);
+          }
+        }
+        const newCriticals = finalAttempt.criticalFailures.length - preCriticalCount;
+        if (newCriticals > 0) {
+          finalAttempt.score = Math.max(0, finalAttempt.score - newCriticals * 50);
+        } else if (fakeCheck.hasText) {
+          finalAttempt.score = Math.max(0, finalAttempt.score - 20);
+        }
+      } catch (visionErr) {
+        const message = visionErr instanceof Error ? visionErr.message : String(visionErr);
+        console.warn(`[CreativeService] Fake-branding check failed, continuing | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
+      }
+    }
+
     // ─── Brand overlay for OpenAI images (fallback is already branded) ───
     let composedBuffer = rawBuffer;
     let logoOverlayApplied = false;
@@ -481,6 +510,8 @@ export async function generateMasterImage({
           headline: leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
           subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
           palette: brandPalette,
+          creativeGuidance,
+          refinementInstruction,
         });
         composedBuffer = composed.buffer;
         logoOverlayApplied = composed.logoApplied;

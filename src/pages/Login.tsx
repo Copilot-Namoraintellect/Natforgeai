@@ -72,7 +72,7 @@ export default function Login() {
         try {
           utils.auth.me.invalidate();
           const user = await utils.auth.me.fetch(undefined);
-          if (user && !user.onboardingComplete) {
+          if (user && !user.onboardingComplete && user.role !== "admin") {
             navigate("/onboarding");
           } else {
             navigate("/mission-control");
@@ -99,7 +99,7 @@ export default function Login() {
       try {
         utils.auth.me.invalidate();
         const user = await utils.auth.me.fetch(undefined);
-        if (user && !user.onboardingComplete) {
+        if (user && !user.onboardingComplete && user.role !== "admin") {
           navigate("/onboarding");
         } else {
           navigate("/mission-control");
@@ -168,7 +168,7 @@ export default function Login() {
       try {
         utils.auth.me.invalidate();
         const user = await utils.auth.me.fetch(undefined);
-        if (user && !user.onboardingComplete) {
+        if (user && !user.onboardingComplete && user.role !== "admin") {
           navigate("/onboarding");
         } else {
           navigate("/mission-control");
