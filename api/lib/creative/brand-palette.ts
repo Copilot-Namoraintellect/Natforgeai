@@ -262,7 +262,7 @@ export async function extractLogoPalette(logoUrl: string): Promise<BrandPalette 
     return {
       primary: rgbToHex(colors[0].r, colors[0].g, colors[0].b),
       secondary: colors[1] ? rgbToHex(colors[1].r, colors[1].g, colors[1].b) : rgbToHex(colors[0].r, colors[0].g, colors[0].b),
-      accent: colors[2] ? rgbToHex(colors[2].r, colors[2].g, colors[2].b) : rgbToHex(colors[0].r, colors[0].g, colors[0].b),
+      accent: colors[2] ? rgbToHex(colors[2].r, colors[2].g, colors[2].b) : colors[1] ? rgbToHex(colors[1].r, colors[1].g, colors[1].b) : rgbToHex(colors[0].r, colors[0].g, colors[0].b),
       source: "logo",
     };
   } catch (err: any) {
@@ -287,7 +287,7 @@ export async function resolveBrandPalette(business: any): Promise<BrandPalette> 
     return {
       primary: validColors[0],
       secondary: validColors[1] || validColors[0],
-      accent: validColors[2] || validColors[0],
+      accent: validColors[2] || validColors[1] || validColors[0],
       source: "brandColors",
     };
   }

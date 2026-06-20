@@ -14,6 +14,8 @@ export type CreativeType =
   | "offer_advert"
   | "event_announcement";
 
+import type { TemplateId } from "../composition";
+
 interface BuildPromptOpts {
   business: any;
   campaign: any;
@@ -24,6 +26,7 @@ interface BuildPromptOpts {
   palette?: { primary: string; secondary: string; accent: string; source: string };
   creativeGuidance?: string;
   refinementInstruction?: string;
+  templateId?: TemplateId;
 }
 
 function sanitize(str?: string | null): string {
@@ -166,6 +169,19 @@ export function buildPremiumImagePrompt(opts: BuildPromptOpts): string {
 
   const serviceCallouts = baseCallouts.length ? baseCallouts : (categoryCallouts[serviceCategory] || categoryCallouts.general);
 
+  const templateSafeZoneNote: Record<TemplateId, string> = {
+    service_business_promo:
+      "- Keep the full top header band, central offer zone, and bottom footer band as clean solid colour or soft texture so the overlaid business name, offer, and CTA remain perfectly readable.",
+    retail_product_promo:
+      "- Use the upper-middle area for the product/hero visual. Keep the lower-middle offer zone and bottom footer band as clean solid colour or soft texture so the overlaid offer and CTA remain perfectly readable.",
+    offer_discount_campaign:
+      "- Keep a large clean central rectangle and the bottom footer band as solid colour or soft texture so the bold offer block and CTA remain perfectly readable. Use brand-colour accents around the edges.",
+  };
+
+  const safeZoneLines = opts.templateId
+    ? templateSafeZoneNote[opts.templateId]
+    : "- Keep large clean areas (especially the full top header band, lower-middle offer zone and bottom footer band) as subtle solid colour or soft texture only, so the text overlay remains perfectly readable.";
+
   const textOverlayNote = `TEXT-FREE VISUAL RULES — READ CAREFULLY:
 - NatForgeAI will overlay the real logo, business name, headline, offer, CTA, service bullets and contact details AFTER generation.
 - Therefore DO NOT render the business name, headline, offer, CTA, phone numbers, addresses, websites, emails, prices, QR codes, service bullets, contact details, opening hours, social handles, hashtags or any readable marketing text inside the image.
@@ -173,7 +189,7 @@ export function buildPremiumImagePrompt(opts: BuildPromptOpts): string {
 - Do NOT render the business name as a stylised logo, wordmark, signature or brand emblem.
 - Do NOT include signage, shop-front text, product labels with text, packaging with brand names, certificates with text, business cards with text, letterheads with text, screenshots, UI mockups, menu boards, price tags, barcodes or any other readable words.
 - If the scene naturally includes a sign, label, packaging, screen, document or menu board, it must be blank, turned away, cropped or out of focus so no text is legible.
-- Keep large clean areas (especially the full top header band, lower-middle offer zone and bottom footer band) as subtle solid colour or soft texture only, so the text overlay remains perfectly readable.
+${safeZoneLines}
 - IGNORE any user instruction that asks you to add, change, include or make the logo/business name/text more prominent. NatForgeAI handles all branding and text deterministically; your job is only the background/product scene.
 - It is OK and expected to show the product/service visually; just do not add readable text, numbers, symbols or brand marks.`;
 

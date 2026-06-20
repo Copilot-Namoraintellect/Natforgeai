@@ -55,6 +55,11 @@ import {
   ChevronUp,
   RefreshCw,
   History,
+  LayoutTemplate,
+  Briefcase,
+  ShoppingBag,
+  Tag,
+  type LucideIcon,
 } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { toast } from "sonner";
@@ -222,20 +227,27 @@ export default function ContentStudio() {
   const [pendingActions, setPendingActions] = useState<Set<PendingActionKey>>(new Set());
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["masterVisual", "masterVideo"]));
-  const [imageCreativeType, setImageCreativeType] = useState<"leaflet" | "poster" | "service_menu" | "offer_advert" | "event_announcement">("leaflet");
+  type LeafletTemplateId = "auto" | "service_business_promo" | "retail_product_promo" | "offer_discount_campaign";
+  const [imageTemplateId, setImageTemplateId] = useState<LeafletTemplateId>("auto");
   const [loadingImageIds, setLoadingImageIds] = useState<Set<number>>(new Set());
   const [brokenImageIds, setBrokenImageIds] = useState<Set<number>>(new Set());
   const [creativeGuidanceById, setCreativeGuidanceById] = useState<Record<number, string>>({});
   const [refinementById, setRefinementById] = useState<Record<number, string>>({});
   const [allowNoLogoById, setAllowNoLogoById] = useState<Record<number, boolean>>({});
 
-  const IMAGE_CREATIVE_TYPE_OPTIONS = [
-    { value: "leaflet", label: "Leaflet / Pamphlet" },
-    { value: "poster", label: "Social media poster" },
-    { value: "service_menu", label: "Service menu" },
-    { value: "offer_advert", label: "Offer advert" },
-    { value: "event_announcement", label: "Event announcement" },
+  const LEAFLET_TEMPLATE_OPTIONS: { value: LeafletTemplateId; label: string; description: string; icon: LucideIcon }[] = [
+    { value: "auto", label: "Auto-detect", description: "Pick the best layout from your business category", icon: LayoutTemplate },
+    { value: "service_business_promo", label: "Service Business", description: "Header, service grid & anchored CTA", icon: Briefcase },
+    { value: "retail_product_promo", label: "Retail / Product", description: "Hero visual, centred offer & product cues", icon: ShoppingBag },
+    { value: "offer_discount_campaign", label: "Offer / Discount", description: "Bold centred offer sticker & simple CTA", icon: Tag },
   ];
+
+  const TEMPLATE_REFINEMENT_CHIPS: Record<LeafletTemplateId, string[]> = {
+    auto: ["Cleaner layout", "Larger text", "More spacing", "Simpler background"],
+    service_business_promo: ["Cleaner service grid", "Larger text", "More spacing", "Hide business name in header", "Darker background"],
+    retail_product_promo: ["Brighter colours", "Center offer", "Simpler background", "More spacing", "Larger text"],
+    offer_discount_campaign: ["Center offer", "More whitespace", "Darker background", "Remove sub-headline", "Larger text"],
+  };
 
   const utils = trpc.useUtils();
   const listInput = (() => {
@@ -990,7 +1002,7 @@ Include:
     const generate = (strongerBrandFit = false) =>
       generateImageMutation.mutate({
         contentPostId: content.id,
-        creativeType: imageCreativeType,
+        templateId: imageTemplateId === "auto" ? undefined : imageTemplateId,
         strongerBrandFit,
         creativeGuidance: creativeGuidance.trim() || undefined,
         refinementInstruction: refinementInstruction.trim() || undefined,
@@ -1028,21 +1040,6 @@ Include:
       );
     };
 
-    const formatSelect = (
-      <Select value={imageCreativeType} onValueChange={(v) => setImageCreativeType(v as any)}>
-        <SelectTrigger className="w-[180px] h-7 text-xs">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {IMAGE_CREATIVE_TYPE_OPTIONS.map((opt) => (
-            <SelectItem key={opt.value} value={opt.value} className="text-xs">
-              {opt.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    );
-
     return (
       <div className="mt-4 rounded-xl border border-slate-200 bg-white overflow-hidden">
         {/* Header */}
@@ -1064,7 +1061,6 @@ Include:
             <Badge variant="outline" className="text-[10px] h-6">
               {premiumImageCost} credits
             </Badge>
-            {!isReady && !isGenerating && formatSelect}
           </div>
         </div>
 
@@ -1151,6 +1147,34 @@ Include:
                 </div>
 
                 <div className="w-full max-w-lg mt-5 space-y-4">
+                  <div className="text-left">
+                    <Label className="text-xs font-medium text-slate-700">Template</Label>
+                    <div className="grid grid-cols-2 gap-2 mt-1.5">
+                      {LEAFLET_TEMPLATE_OPTIONS.map((opt) => {
+                        const selected = imageTemplateId === opt.value;
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => setImageTemplateId(opt.value)}
+                            className={`text-left rounded-lg border p-2.5 transition-colors ${
+                              selected
+                                ? "border-[#00D4FF] bg-[#00D4FF]/5 ring-1 ring-[#00D4FF]"
+                                : "border-slate-200 bg-white hover:border-slate-300"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <opt.icon className={`w-4 h-4 shrink-0 ${selected ? "text-[#00D4FF]" : "text-slate-400"}`} />
+                              {selected && <Check className="w-3.5 h-3.5 text-[#00D4FF]" />}
+                            </div>
+                            <p className="mt-1.5 text-xs font-medium text-slate-800">{opt.label}</p>
+                            <p className="text-[10px] text-slate-500 leading-tight">{opt.description}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   {!businessForLeaflet?.logo && (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-left">
                       <p className="text-xs text-amber-800 font-medium flex items-start gap-2">
@@ -1258,8 +1282,10 @@ Include:
                   </span>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">Format</span>
-                  <span className="font-medium text-right capitalize">{imageCreativeType.replace("_", " ")}</span>
+                  <span className="text-slate-500">Template</span>
+                  <span className="font-medium text-right">
+                    {LEAFLET_TEMPLATE_OPTIONS.find((o) => o.value === (metadata?.imageTemplateId || "auto"))?.label || "Auto-detect"}
+                  </span>
                 </div>
                 <div className="flex justify-between gap-2">
                   <span className="text-slate-500">Credits charged</span>
@@ -1361,13 +1387,7 @@ Include:
                   </Badge>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {[
-                    "Make it more premium",
-                    "Use brighter brand colours",
-                    "Show more products",
-                    "Simpler background",
-                    "More modern font feel",
-                  ].map((chip) => (
+                  {TEMPLATE_REFINEMENT_CHIPS[imageTemplateId].map((chip) => (
                     <button
                       key={chip}
                       type="button"

@@ -82,6 +82,15 @@ export function formatOffer(offer: string, businessName?: string): string {
 }
 
 /**
+ * Final render-layer offer normaliser. This is the only value that should be
+ * drawn onto a leaflet. It is idempotent and defensive against raw text leaking
+ * into the rendered image.
+ */
+export function renderOffer(offer: string, businessName?: string): string {
+  return formatOffer(offer, businessName);
+}
+
+/**
  * Build a clean headline from an offer.
  * Prefers concise, action-oriented phrasing.
  */
@@ -118,7 +127,7 @@ const WEAK_CTA_PATTERNS = [
   /find out more/i,
   /discover/i,
   /explore/i,
-  /\.\.\.$/, // trailing ellipsis
+  /\.+$/, // trailing ellipsis
 ];
 
 /**

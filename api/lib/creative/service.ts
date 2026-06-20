@@ -8,10 +8,10 @@ import { checkCredits, deductCredits, recordAiUsage } from "../billing/credit-en
 import { enforceCostControl } from "../billing/cost-control";
 import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider } from "./registry";
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
-import { composeBrandedLeafletImage, generateFallbackLeafletImage, defaultServiceBullets } from "./composition";
+import { composeBrandedLeafletImage, generateFallbackLeafletImage, defaultServiceBullets, selectTemplate, type TemplateId } from "./composition";
 import sharp from "sharp";
 import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable, validateLeafletComposition, validateBrandFidelity, detectFakeBranding } from "./quality";
-import { formatOffer, offerToHeadline, normalizeCta, validateMarketingText } from "./text-formatter";
+import { renderOffer, offerToHeadline, normalizeCta, validateMarketingText } from "./text-formatter";
 import { resolveBrandPalette } from "./brand-palette";
 import {
   getPremiumImageCredits,
@@ -139,6 +139,7 @@ export async function generateMasterImage({
   contentPostId,
   brandColors,
   creativeType = "leaflet",
+  templateId,
   strongerBrandFit = false,
   creativeGuidance,
   refinementInstruction,
@@ -148,6 +149,7 @@ export async function generateMasterImage({
   contentPostId: number;
   brandColors?: string[];
   creativeType?: CreativeType;
+  templateId?: TemplateId;
   strongerBrandFit?: boolean;
   creativeGuidance?: string;
   refinementInstruction?: string;
@@ -247,9 +249,10 @@ export async function generateMasterImage({
     }
 
     // ─── Normalised customer-facing text ───
-    const formattedOffer = formatOffer(campaign.offerDetails, business.name);
+    const formattedOffer = renderOffer(campaign.offerDetails, business.name);
     const leafletHeadline = offerToHeadline(campaign.offerDetails);
-    console.log(`[LeafletCopy] rawOffer="${campaign.offerDetails ?? ""}" | formattedOffer="${formattedOffer}" | headline="${leafletHeadline}"`);
+    const selectedTemplate = selectTemplate({ business, campaign, creativeType, templateId, creativeGuidance, refinementInstruction });
+    console.log(`[LeafletCopy] rawOffer="${campaign.offerDetails ?? ""}" | formattedOffer="${formattedOffer}" | headline="${leafletHeadline}" | template=${selectedTemplate}`);
     const businessCategory = (
       business?.websiteEvidence?.businessCategory ||
       business?.industry ||
@@ -272,6 +275,7 @@ export async function generateMasterImage({
         palette: brandPalette,
         creativeGuidance,
         refinementInstruction,
+        templateId: selectedTemplate,
       });
 
     const preparePrompt = (rawPrompt: string) => {
@@ -384,6 +388,8 @@ export async function generateMasterImage({
         campaign,
         post,
         creativeType,
+        templateId: selectedTemplate,
+        aspectRatio,
         offer: formattedOffer,
         cta: leafletCta,
         headline: formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
@@ -502,7 +508,8 @@ export async function generateMasterImage({
     }
 
     // ─── Brand overlay for OpenAI images (fallback is already branded) ───
-    const MIN_QUALITY_SCORE = 60;
+    // Fallback templates must look genuinely premium; hold them to a higher bar.
+    const getMinQualityScore = () => (finalAttempt.source === "fallback" ? 70 : 60);
     const STRONGER_LAYOUT_HINTS = "cleaner, fewer services, more spacing, no service boxes, larger text";
 
     async function composeFinalAttempt(extraHints = ""): Promise<{ buffer: Buffer; logoApplied: boolean; footerTop?: number; footerHeight?: number }> {
@@ -512,6 +519,7 @@ export async function generateMasterImage({
           campaign,
           post,
           creativeType,
+          templateId: selectedTemplate,
           offer: formattedOffer,
           cta: leafletCta,
           headline: leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
@@ -612,7 +620,7 @@ export async function generateMasterImage({
     await runOverlayQualityChecks(composedBuffer);
 
     // Retry with stronger layout constraints if the first composition does not meet the threshold.
-    if (finalAttempt.score < MIN_QUALITY_SCORE) {
+    if (finalAttempt.score < getMinQualityScore()) {
       console.log(`[CreativeService] First composition below quality threshold, retrying with stronger layout constraints | userId=${userId} | contentPostId=${contentPostId} | score=${finalAttempt.score}`);
       const retryComposition = await composeFinalAttempt(STRONGER_LAYOUT_HINTS);
       composedBuffer = retryComposition.buffer;
@@ -629,8 +637,8 @@ export async function generateMasterImage({
       throw new Error(`Business logo exists but could not be applied to the leaflet: ${business.logo}`);
     }
 
-    if (finalAttempt.score < MIN_QUALITY_SCORE || finalAttempt.criticalFailures.length > 0) {
-      const failureReason = `Leaflet quality score ${finalAttempt.score}/100 is below the acceptable threshold of ${MIN_QUALITY_SCORE}. ${finalAttempt.criticalFailures.join(" ")} ${finalAttempt.warnings.slice(-5).join(" ")}`.trim();
+    if (finalAttempt.score < getMinQualityScore() || finalAttempt.criticalFailures.length > 0) {
+      const failureReason = `Leaflet quality score ${finalAttempt.score}/100 is below the acceptable threshold of ${getMinQualityScore()}. ${finalAttempt.criticalFailures.join(" ")} ${finalAttempt.warnings.slice(-5).join(" ")}`.trim();
       console.error(`[CreativeService] Quality validation failed | userId=${userId} | contentPostId=${contentPostId} | score=${finalAttempt.score} | reason="${failureReason}"`);
       await db
         .update(contentPosts)
@@ -792,6 +800,7 @@ export async function generateMasterImage({
       refinementInstruction,
       brandPalette,
       hasLogo,
+      templateId: selectedTemplate,
       generatedAt: new Date().toISOString(),
       approved: false,
     };
@@ -830,6 +839,7 @@ export async function generateMasterImage({
         refinementInstruction,
         brandPalette,
         hasLogo,
+        templateId: selectedTemplate,
         attempts: attemptsSummary,
         versions: imageVersions,
       },
@@ -861,6 +871,8 @@ export async function generateMasterImage({
           imageExtension: finalResult?.extension || "png",
           imageSource: usingFallback ? "fallback" : "openai",
           source: usingFallback ? "fallback" : "openai",
+          imageTemplateId: selectedTemplate,
+          templateId: selectedTemplate,
           imageQualityScore: finalAttempt.score,
           qualityScore: finalAttempt.score,
           imageQualityWarnings: finalAttempt.warnings,
