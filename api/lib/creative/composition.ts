@@ -446,10 +446,10 @@ export async function composeBrandedLeafletImage(
 
   // Leaflet layout.
   const hints = parseLayoutHints(`${spec.creativeGuidance || ""} ${spec.refinementInstruction || ""}`);
-  const headerHeight = Math.round(height * 0.10);
-  const logoSafeHeight = headerHeight - 36;
+  const headerHeight = Math.round(height * 0.085);
+  const logoSafeHeight = headerHeight - 32;
   const logoPadX = 28;
-  const logoPadY = 18;
+  const logoPadY = 16;
 
   const headerSvg = buildHeaderSvg(width, headerHeight, businessName, palette);
 
@@ -459,11 +459,15 @@ export async function composeBrandedLeafletImage(
   if (business?.website) contactLines.push(`Website: ${sanitize(business.website)}`);
   if (business?.email) contactLines.push(`Email: ${sanitize(business.email)}`);
 
-  // Dynamic footer height: content always fits and never clips.
+  // Reserve the footer height first so body content can never overlap it.
   const footerSvg = buildFooterSvg(width, 0, contactLines.slice(0, 3), preferredCta, palette);
   const footerMeta = await sharp(footerSvg).metadata();
   const footerHeight = footerMeta.height || Math.round(height * 0.18);
   const footerTop = height - footerHeight;
+  const bottomClearance = Math.round(height * 0.03);
+  const bodyBottomLimit = footerTop - bottomClearance;
+  const topMargin = Math.round(height * 0.025);
+  const bodyTop = headerHeight + topMargin;
 
   const overlays: sharp.OverlayOptions[] = [
     { input: headerSvg, top: 0, left: 0 },
@@ -479,7 +483,7 @@ export async function composeBrandedLeafletImage(
     const logoAspect = (logoMeta.width || 1) / (logoMeta.height || 1);
     const logoHeight = logoSafeHeight;
     const logoWidth = Math.round(logoHeight * logoAspect);
-    const maxLogoWidth = Math.round(width * 0.45);
+    const maxLogoWidth = Math.round(width * 0.40);
     let finalLogoHeight = logoHeight;
     let finalLogoWidth = logoWidth;
     if (logoWidth > maxLogoWidth) {
@@ -524,15 +528,18 @@ export async function composeBrandedLeafletImage(
     });
   }
 
-  // Offer badge in upper area so the hero visual stays dominant in the centre.
-  const offerBadgeTop = Math.round(height * 0.34);
+  // Single offer block — never render the offer twice.
   let offerBadgeHeight = 0;
-  if (headlineText || safeOffer) {
-    const offerText = headlineText || safeOffer;
-    const badgeSvg = buildOfferBadgeSvg(width, offerText, subheadlineText, palette, hints);
+  const offerText = headlineText || safeOffer;
+  let contentTop = bodyTop;
+  if (offerText) {
+    const badgeWidth = Math.round(width * 0.92);
+    const badgeLeft = Math.round((width - badgeWidth) / 2);
+    const badgeSvg = buildOfferBadgeSvg(badgeWidth, offerText, subheadlineText, palette, hints);
     const badgeMeta = await sharp(badgeSvg).metadata();
     offerBadgeHeight = badgeMeta.height || Math.round(height * 0.12);
-    overlays.push({ input: badgeSvg, top: offerBadgeTop, left: 0 });
+    overlays.push({ input: badgeSvg, top: bodyTop, left: badgeLeft });
+    contentTop = bodyTop + offerBadgeHeight + Math.round(height * 0.04);
   }
 
   // Service cards grid between offer badge and footer.
@@ -545,16 +552,15 @@ export async function composeBrandedLeafletImage(
   if (bullets.length > 0) {
     const gridWidth = Math.round(width * 0.92);
     const gridLeft = Math.round((width - gridWidth) / 2);
-    const gridTop = offerBadgeTop + offerBadgeHeight + Math.round(height * 0.045);
-    const minFooterClearance = Math.round(height * 0.025);
+    const minFooterClearance = Math.round(height * 0.02);
 
     // Drop bullets one at a time until the grid fits comfortably above the footer.
     while (bullets.length > 0) {
       const gridSvg = buildServicesGridSvg(gridWidth, bullets, palette, hints);
       const gridMeta = await sharp(gridSvg).metadata();
       const actualGridHeight = gridMeta.height || Math.round(height * 0.22);
-      if (gridTop + actualGridHeight <= footerTop - minFooterClearance) {
-        overlays.push({ input: gridSvg, top: gridTop, left: gridLeft });
+      if (contentTop + actualGridHeight <= bodyBottomLimit - minFooterClearance) {
+        overlays.push({ input: gridSvg, top: contentTop, left: gridLeft });
         break;
       }
       bullets = bullets.slice(0, -1);
@@ -691,9 +697,9 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
 
   const palette = spec.palette || await resolveBrandPalette(business);
   const businessName = sanitize(business?.name) || sanitize(post?.title) || "Your Business";
-  const headlineText = sanitize(headline || campaign?.primaryOutcome || post?.title || businessName);
+  // The offer headline is the single offer block; never render it twice.
+  const headlineText = sanitize(headline || offer || campaign?.primaryOutcome || post?.title || businessName);
   const subheadlineText = sanitize(subheadline || campaign?.mainPainPoint || campaign?.coreMessage || post?.hook || "");
-  const offerText = sanitize(offer || campaign?.offerDetails || "");
   const ctaText = sanitize(cta || campaign?.preferredCta || post?.cta || "Contact us today");
   const bullets = serviceBullets?.length ? serviceBullets : defaultServiceBullets(business, campaign);
   const hints = parseLayoutHints(`${spec.creativeGuidance || ""} ${spec.refinementInstruction || ""}`);
@@ -733,40 +739,7 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
     overlays.push({ input: logoPng, top: logoTop, left: 20 });
   }
 
-  // Headline band
-  const bandTop = Math.round(height * 0.16);
-  const headlineSvg = buildOfferBadgeSvg(width, headlineText, subheadlineText, palette, hints);
-  const headlineMeta = await sharp(headlineSvg).metadata();
-  const bandHeight = headlineMeta.height || Math.round(height * 0.18);
-  overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
-
-  // Offer badge (if provided)
-  let currentY = bandTop + bandHeight + 24;
-  if (offerText && !offerText.toLowerCase().includes("none")) {
-    const offerLines = wrapText(escapeXml(offerText), Math.max(30, Math.round((width - 80) / 18)));
-    const offerFontSize = Math.max(20, Math.round(width / 42));
-    const offerLineHeight = offerFontSize + 10;
-    const offerHeight = offerLines.length * offerLineHeight + 40;
-    const offerBlocks = offerLines.map((line, i) =>
-      `<text x="${width / 2}" y="${28 + offerFontSize + i * offerLineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${offerFontSize}" font-weight="700" fill="#0F172A" text-anchor="middle">${line}</text>`
-    ).join("");
-    const offerSvg = Buffer.from(`
-<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${offerHeight}">
-  <rect x="32" y="0" width="${width - 64}" height="${offerHeight}" fill="#FFFFFF" stroke="${palette.primary}" stroke-width="3" rx="14"/>
-  ${offerBlocks}
-</svg>`, "utf-8");
-    overlays.push({ input: offerSvg, top: currentY, left: 0 });
-    currentY += offerHeight + 24;
-  }
-
-  // Service bullets
-  const bulletSvg = buildServicesGridSvg(width - 64, bullets.slice(0, hints.fewerServices || hints.cleaner ? 2 : 4), palette, hints);
-  const bulletMeta = await sharp(bulletSvg).metadata();
-  const bulletHeight = bulletMeta.height || 260;
-  overlays.push({ input: bulletSvg, top: currentY, left: 32 });
-  currentY += bulletHeight + 24;
-
-  // Footer + CTA (dynamic height so text is never clipped)
+  // Footer + CTA (dynamic height so text is never clipped). Reserve space first.
   const contactLines: string[] = [];
   if (business?.whatsappNumber) contactLines.push(`WhatsApp: ${sanitize(business.whatsappNumber)}`);
   if (business?.location) contactLines.push(`Location: ${sanitize(business.location)}`);
@@ -779,6 +752,32 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
   const footerHeight = footerMeta.height || Math.round(height * 0.18);
   const footerTop = height - footerHeight;
   overlays.push({ input: footerSvg, top: footerTop, left: 0 });
+
+  // Single headline/offer block just below the header.
+  const bodyTop = headerHeight + 28;
+  const bandTop = bodyTop;
+  const headlineSvg = buildOfferBadgeSvg(width, headlineText, subheadlineText, palette, hints);
+  const headlineMeta = await sharp(headlineSvg).metadata();
+  const bandHeight = headlineMeta.height || Math.round(height * 0.18);
+  overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
+
+  // Service bullets between the headline band and the reserved footer area.
+  const bulletGap = 28;
+  const bulletTop = bandTop + bandHeight + bulletGap;
+  const bulletMaxWidth = width - 64;
+  const maxBulletCount = hints.fewerServices || hints.cleaner ? 2 : 4;
+  let bulletsToRender = bullets.slice(0, maxBulletCount);
+
+  while (bulletsToRender.length > 0) {
+    const bulletSvg = buildServicesGridSvg(bulletMaxWidth, bulletsToRender, palette, hints);
+    const bulletMeta = await sharp(bulletSvg).metadata();
+    const bulletHeight = bulletMeta.height || 260;
+    if (bulletTop + bulletHeight <= footerTop - 24) {
+      overlays.push({ input: bulletSvg, top: bulletTop, left: 32 });
+      break;
+    }
+    bulletsToRender = bulletsToRender.slice(0, -1);
+  }
 
   return canvas.composite(overlays).png().toBuffer();
 }

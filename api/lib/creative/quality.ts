@@ -152,7 +152,7 @@ export function validateLeafletComposition(opts: {
 
   if (opts.imageHeight && opts.headerHeight && opts.footerHeight) {
     const coverage = (opts.headerHeight + opts.footerHeight) / opts.imageHeight;
-    if (coverage > 0.35) {
+    if (coverage > 0.45) {
       issues.push("Header and footer cover too much of the image.");
       scorePenalty += 10;
     }

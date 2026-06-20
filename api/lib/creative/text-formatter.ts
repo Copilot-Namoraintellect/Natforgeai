@@ -17,7 +17,8 @@ function sanitize(str?: string | null): string {
 function formatRandCurrency(text: string): string {
   return text
     // Normalise spaced Rand notation first: "R 3 000", "R3 000", "R 3000" → "R3000"
-    .replace(/\bR\s*([\d\s]+)\b/gi, (_, digits) => `R${digits.replace(/\s+/g, "")}`)
+    // The group must end in a digit so trailing spaces are not swallowed.
+    .replace(/\bR\s*([\d]+(?:\s+[\d]+)*)\b/gi, (_, digits) => `R${digits.replace(/\s+/g, "")}`)
     // "3000 rands" / "3000 rand" → "R3,000"
     .replace(/\b(\d{1,3}(?:,\d{3})+|\d+)\s*rands?\b/gi, (_, amount) => {
       const num = Number(amount.toString().replace(/,/g, ""));
@@ -71,6 +72,11 @@ export function formatOffer(offer: string, businessName?: string): string {
   // Trim and collapse whitespace.
   clean = clean.replace(/\s+/g, " ").trim();
 
+  // Make percent-off offers customer-facing, e.g. "10% off orders above R3,000".
+  if (/^\d+%\s+off\b/i.test(clean) && !/^(enjoy|get|save|claim|unlock|receive)\b/i.test(clean)) {
+    clean = `Enjoy ${clean.charAt(0).toLowerCase()}${clean.slice(1)}`;
+  }
+
   // Capitalise first letter.
   return clean.charAt(0).toUpperCase() + clean.slice(1);
 }
@@ -83,15 +89,15 @@ export function offerToHeadline(offer: string): string {
   const clean = formatOffer(offer);
   if (!clean) return "";
 
+  // If it already starts with an action verb, use it directly.
+  if (/^(enjoy|get|save|claim|unlock|receive)\s+/i.test(clean)) {
+    return clean.charAt(0).toUpperCase() + clean.slice(1);
+  }
+
   // If it contains a percentage discount, prefix with "Enjoy".
   if (/\d+%\s+off/i.test(clean)) {
     const body = clean.charAt(0).toLowerCase() + clean.slice(1);
     return `Enjoy ${body}`;
-  }
-
-  // If it already starts with an action verb, use it directly.
-  if (/^(enjoy|get|save|claim|unlock|receive)\s+/i.test(clean)) {
-    return clean;
   }
 
   return clean;

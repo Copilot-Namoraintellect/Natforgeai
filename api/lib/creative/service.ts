@@ -375,7 +375,7 @@ export async function generateMasterImage({
       };
     }
 
-    async function createFallbackAttempt(): Promise<AttemptRecord> {
+    async function createFallbackAttempt(extraHints = ""): Promise<AttemptRecord> {
       const fallbackPrompt = buildPrompt(true);
       const buffer = await generateFallbackLeafletImage({
         business,
@@ -384,9 +384,11 @@ export async function generateMasterImage({
         creativeType,
         offer: formattedOffer,
         cta: leafletCta,
-        headline: leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
+        headline: formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
         subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
         palette: brandPalette,
+        creativeGuidance: [creativeGuidance, extraHints].filter(Boolean).join(". "),
+        refinementInstruction,
       });
       return {
         number: 0,
@@ -496,10 +498,11 @@ export async function generateMasterImage({
     }
 
     // ─── Brand overlay for OpenAI images (fallback is already branded) ───
-    let composedBuffer = rawBuffer;
-    let logoOverlayApplied = false;
-    if (finalAttempt.source === "openai") {
-      try {
+    const MIN_QUALITY_SCORE = 60;
+    const STRONGER_LAYOUT_HINTS = "cleaner, fewer services, more spacing, no service boxes, larger text";
+
+    async function composeFinalAttempt(extraHints = ""): Promise<{ buffer: Buffer; logoApplied: boolean }> {
+      if (finalAttempt.source === "openai") {
         const composed = await composeBrandedLeafletImage(rawBuffer, {
           business,
           campaign,
@@ -510,60 +513,106 @@ export async function generateMasterImage({
           headline: leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
           subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
           palette: brandPalette,
-          creativeGuidance,
+          creativeGuidance: [creativeGuidance, extraHints].filter(Boolean).join(". "),
           refinementInstruction,
         });
-        composedBuffer = composed.buffer;
-        logoOverlayApplied = composed.logoApplied;
-        console.log(`[CreativeService] Sharp composition completed | userId=${userId} | contentPostId=${contentPostId} | size=${composedBuffer.length} | logoOverlayApplied=${logoOverlayApplied}`);
-      } catch (composeErr) {
-        const message = composeErr instanceof Error ? composeErr.message : String(composeErr);
-        console.warn(`[CreativeService] Brand overlay failed, using raw image | userId=${userId} | error="${message}"`);
+        return composed;
       }
-    } else {
-      // Fallback renderer always applies the logo if available.
-      logoOverlayApplied = !!business?.logo;
+      // Fallback renderer is already branded; re-render with stronger hints if needed.
+      const buffer = await createFallbackAttempt(extraHints).then((a) => a.buffer);
+      return { buffer, logoApplied: !!business?.logo };
+    }
+
+    let composedBuffer = rawBuffer;
+    let logoOverlayApplied = false;
+
+    // Remember the pre-overlay score so retries are evaluated from the same baseline.
+    let baseScore = finalAttempt.score;
+    let baseWarnings = [...finalAttempt.warnings];
+
+    const firstComposition = await composeFinalAttempt();
+    composedBuffer = firstComposition.buffer;
+    logoOverlayApplied = firstComposition.logoApplied;
+
+    // ─── Final overlay quality checks (text + composition) ───
+    async function runOverlayQualityChecks(buffer: Buffer) {
+      const imageMeta = await sharp(buffer).metadata();
+      const imageHeight = imageMeta.height || 1536;
+
+      const marketingTextCheck = validateMarketingText({
+        headline: leafletHeadline,
+        offer: formattedOffer,
+        cta: leafletCta,
+        businessName: business.name,
+      });
+      const compositionCheck = validateLeafletComposition({
+        hasLogo: !!business?.logo,
+        headline: leafletHeadline,
+        cta: leafletCta,
+        serviceBullets: defaultServiceBullets(business, campaign),
+        headerHeight: Math.round(imageHeight * 0.085),
+        footerHeight: Math.round(imageHeight * 0.18),
+        imageHeight,
+      });
+
+      // Brand fidelity check.
+      const brandFidelityCheck = validateBrandFidelity({
+        hasLogo,
+        logoOverlayApplied: hasLogo ? logoOverlayApplied : undefined,
+        palette: brandPalette,
+        businessName: business.name,
+        headline: leafletHeadline,
+      });
+
+      const totalPenalty = marketingTextCheck.scorePenalty + compositionCheck.scorePenalty + brandFidelityCheck.scorePenalty;
+      const allTextIssues = [...marketingTextCheck.issues, ...compositionCheck.issues, ...brandFidelityCheck.issues];
+      if (allTextIssues.length > 0) {
+        finalAttempt.score = Math.max(0, baseScore - totalPenalty);
+        finalAttempt.warnings = [...baseWarnings, ...allTextIssues];
+        console.log(`[CreativeService] Overlay quality penalty | userId=${userId} | contentPostId=${contentPostId} | penalty=${totalPenalty} | newScore=${finalAttempt.score} | issues=${JSON.stringify(allTextIssues)}`);
+      } else {
+        finalAttempt.score = baseScore;
+        finalAttempt.warnings = baseWarnings;
+      }
+    }
+
+    await runOverlayQualityChecks(composedBuffer);
+
+    // Retry with stronger layout constraints if the first composition does not meet the threshold.
+    if (finalAttempt.score < MIN_QUALITY_SCORE) {
+      console.log(`[CreativeService] First composition below quality threshold, retrying with stronger layout constraints | userId=${userId} | contentPostId=${contentPostId} | score=${finalAttempt.score}`);
+      const retryComposition = await composeFinalAttempt(STRONGER_LAYOUT_HINTS);
+      composedBuffer = retryComposition.buffer;
+      logoOverlayApplied = retryComposition.logoApplied;
+      await runOverlayQualityChecks(composedBuffer);
     }
 
     if (hasLogo && !logoOverlayApplied) {
       throw new Error(`Business logo exists but could not be applied to the leaflet: ${business.logo}`);
     }
 
-    // ─── Final overlay quality checks (text + composition) ───
-    const imageMeta = await sharp(composedBuffer).metadata();
-    const imageHeight = imageMeta.height || 1536;
-
-    const marketingTextCheck = validateMarketingText({
-      headline: leafletHeadline,
-      offer: formattedOffer,
-      cta: leafletCta,
-      businessName: business.name,
-    });
-    const compositionCheck = validateLeafletComposition({
-      hasLogo: !!business?.logo,
-      headline: leafletHeadline,
-      cta: leafletCta,
-      serviceBullets: defaultServiceBullets(business, campaign),
-      headerHeight: Math.round(imageHeight * 0.075),
-      footerHeight: Math.round(imageHeight * 0.16),
-      imageHeight,
-    });
-
-    // Brand fidelity check.
-    const brandFidelityCheck = validateBrandFidelity({
-      hasLogo,
-      logoOverlayApplied: hasLogo ? logoOverlayApplied : undefined,
-      palette: brandPalette,
-      businessName: business.name,
-      headline: leafletHeadline,
-    });
-
-    const totalPenalty = marketingTextCheck.scorePenalty + compositionCheck.scorePenalty + brandFidelityCheck.scorePenalty;
-    const allTextIssues = [...marketingTextCheck.issues, ...compositionCheck.issues, ...brandFidelityCheck.issues];
-    if (allTextIssues.length > 0) {
-      finalAttempt.score = Math.max(0, finalAttempt.score - totalPenalty);
-      finalAttempt.warnings = [...finalAttempt.warnings, ...allTextIssues];
-      console.log(`[CreativeService] Overlay quality penalty | userId=${userId} | contentPostId=${contentPostId} | penalty=${totalPenalty} | newScore=${finalAttempt.score} | issues=${JSON.stringify(allTextIssues)}`);
+    if (finalAttempt.score < MIN_QUALITY_SCORE || finalAttempt.criticalFailures.length > 0) {
+      const failureReason = `Leaflet quality score ${finalAttempt.score}/100 is below the acceptable threshold of ${MIN_QUALITY_SCORE}. ${finalAttempt.criticalFailures.join(" ")} ${finalAttempt.warnings.slice(-5).join(" ")}`.trim();
+      console.error(`[CreativeService] Quality validation failed | userId=${userId} | contentPostId=${contentPostId} | score=${finalAttempt.score} | reason="${failureReason}"`);
+      await db
+        .update(contentPosts)
+        .set({
+          metadata: {
+            ...currentMeta,
+            imageStatus: "failed",
+            imageError: failureReason,
+            imageQualityScore: finalAttempt.score,
+            qualityScore: finalAttempt.score,
+            imageQualityWarnings: finalAttempt.warnings,
+            validationIssues: finalAttempt.warnings,
+            imageQualityCriticalFailures: finalAttempt.criticalFailures,
+            criticalFailures: finalAttempt.criticalFailures,
+            imageFallbackUsed: usingFallback,
+            fallbackUsed: usingFallback,
+          },
+        })
+        .where(eq(contentPosts.id, post.id));
+      return { status: "failed", jobId: finalResult?.providerJobId || "fallback", errorMessage: failureReason };
     }
 
     // ─── Store locally with fallback on storage/URL failure ───
@@ -609,6 +658,10 @@ export async function generateMasterImage({
         finalResult = finalAttempt.result;
         rawBuffer = finalAttempt.buffer;
         composedBuffer = rawBuffer;
+        logoOverlayApplied = !!business?.logo;
+        baseScore = finalAttempt.score;
+        baseWarnings = [...finalAttempt.warnings];
+        await runOverlayQualityChecks(composedBuffer);
         stored = await storeImageBuffer(composedBuffer, {
           campaignId: post.campaignId ?? undefined,
           prefix: "master-post-fallback",
