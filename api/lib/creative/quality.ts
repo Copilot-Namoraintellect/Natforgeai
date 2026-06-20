@@ -122,6 +122,7 @@ export function validateLeafletComposition(opts: {
   serviceBullets?: string[];
   headerHeight?: number;
   footerHeight?: number;
+  footerTop?: number;
   imageHeight?: number;
 }): CompositionValidationResult {
   const issues: string[] = [];
@@ -155,6 +156,22 @@ export function validateLeafletComposition(opts: {
     if (coverage > 0.45) {
       issues.push("Header and footer cover too much of the image.");
       scorePenalty += 10;
+    }
+  }
+
+  if (opts.imageHeight && opts.footerTop) {
+    const footerTopRatio = opts.footerTop / opts.imageHeight;
+    if (footerTopRatio > 0.82) {
+      issues.push("Footer is pushed too far down.");
+      scorePenalty += 15;
+    }
+
+    if (opts.headerHeight) {
+      const bodyCentre = (opts.headerHeight + opts.footerTop) / 2 / opts.imageHeight;
+      if (bodyCentre < 0.30 || bodyCentre > 0.70) {
+        issues.push("Poor vertical balance.");
+        scorePenalty += 10;
+      }
     }
   }
 
@@ -221,6 +238,24 @@ async function imageLayoutHeuristics(buffer: Buffer, businessCategory: string): 
       issues.push("Layout appears too flat or blocky (possible icon grid).");
     } else if (edgeDensity > highThreshold) {
       issues.push("Layout appears overly busy or cluttered.");
+    }
+
+    // Detect a large empty central area (common in weak fallback templates).
+    const centralTop = Math.round(h * 0.25);
+    const centralBottom = Math.round(h * 0.80);
+    const centralLeft = Math.round(w * 0.10);
+    const centralRight = Math.round(w * 0.90);
+    let lightCount = 0;
+    let centralPixels = 0;
+    for (let y = centralTop; y < centralBottom; y++) {
+      for (let x = centralLeft; x < centralRight; x++) {
+        centralPixels++;
+        if (data[y * w + x] > 245) lightCount++;
+      }
+    }
+    const lightRatio = centralPixels > 0 ? lightCount / centralPixels : 0;
+    if (lightRatio > 0.55) {
+      issues.push("Large empty central area.");
     }
   } catch (err) {
     console.warn(`[LeafletQuality] image heuristic failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -348,6 +383,8 @@ export async function validateLeafletQuality(
       score -= busy ? 5 : 15;
     } else if (warning.includes("flat or blocky")) {
       score -= 20;
+    } else if (warning.includes("Large empty central area")) {
+      score -= 25;
     } else {
       score -= 10;
     }

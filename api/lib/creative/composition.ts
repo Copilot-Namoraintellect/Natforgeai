@@ -399,7 +399,7 @@ function buildWatermarkSvg(width: number, businessName: string, palette: BrandPa
 export async function composeBrandedLeafletImage(
   baseImageBuffer: Buffer,
   spec: BrandOverlaySpec
-): Promise<{ buffer: Buffer; logoApplied: boolean }> {
+): Promise<{ buffer: Buffer; logoApplied: boolean; footerTop?: number; footerHeight?: number }> {
   const { business, campaign, post, creativeType = "leaflet", offer, cta, headline, subheadline } = spec;
 
   console.log(`[LeafletBrand] businessId=${business?.id ?? "none"} | business.logo=${business?.logo ?? "none"}`);
@@ -569,7 +569,7 @@ export async function composeBrandedLeafletImage(
 
   const buffer = await base.composite(overlays).toBuffer();
   console.log(`[LeafletBrand] logoOverlayApplied=${logoApplied} | paletteSource=${palette.source} | resolvedPalette=${JSON.stringify(palette)}`);
-  return { buffer, logoApplied };
+  return { buffer, logoApplied, footerTop, footerHeight };
 }
 
 export async function overlayBusinessLogo(
@@ -668,17 +668,28 @@ export function defaultServiceBullets(business: any, campaign: any): string[] {
 }
 
 function buildFallbackBackgroundSvg(width: number, height: number, palette: BrandPalette): Buffer {
+  const bandY1 = Math.round(height * 0.12);
+  const bandY2 = Math.round(height * 0.32);
+  const panelY = Math.round(height * 0.28);
+  const panelH = Math.round(height * 0.42);
+  const bottomShapeY = height - 80;
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
   <defs>
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:${palette.primary};stop-opacity:0.12" />
-      <stop offset="45%" style="stop-color:#FFFFFF;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#F1F5F9;stop-opacity:1" />
+      <stop offset="0%" style="stop-color:${palette.primary};stop-opacity:0.22" />
+      <stop offset="30%" style="stop-color:#FAFBFC;stop-opacity:1" />
+      <stop offset="60%" style="stop-color:#F1F5F9;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:${palette.secondary};stop-opacity:0.16" />
     </linearGradient>
   </defs>
   <rect width="${width}" height="${height}" fill="url(#bgGrad)"/>
   <rect x="0" y="0" width="${width}" height="12" fill="${palette.accent}"/>
+  <path d="M0,${bandY1} L${width},${bandY1 - Math.round(height * 0.10)} L${width},${bandY2} L0,${bandY2 + Math.round(height * 0.10)} Z" fill="${palette.primary}" opacity="0.12"/>
+  <rect x="${Math.round(width * 0.05)}" y="${panelY}" width="${Math.round(width * 0.90)}" height="${panelH}" rx="24" fill="${palette.primary}" opacity="0.10" stroke="${palette.primary}" stroke-width="2" stroke-opacity="0.22"/>
+  <ellipse cx="${Math.round(width * 0.85)}" cy="${Math.round(height * 0.20)}" rx="${Math.round(width * 0.35)}" ry="${Math.round(height * 0.18)}" fill="${palette.accent}" opacity="0.16"/>
+  <ellipse cx="${Math.round(width * 0.12)}" cy="${Math.round(height * 0.78)}" rx="${Math.round(width * 0.30)}" ry="${Math.round(height * 0.20)}" fill="${palette.primary}" opacity="0.14"/>
+  <path d="M0,${bottomShapeY} Q${Math.round(width / 2)},${bottomShapeY - 60} ${width},${bottomShapeY + 20} L${width},${height} L0,${height} Z" fill="${palette.primary}" opacity="0.10"/>
 </svg>`;
   return Buffer.from(svg, "utf-8");
 }
@@ -688,7 +699,7 @@ function buildFallbackBackgroundSvg(width: number, height: number, palette: Bran
  * validation cannot produce a usable image. The output is always on-brand and
  * never contains invented contact details.
  */
-export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Promise<Buffer> {
+export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Promise<{ buffer: Buffer; footerTop?: number; footerHeight?: number }> {
   const { business, campaign, post, creativeType = "leaflet", offer, cta, headline, subheadline, serviceBullets } = spec;
 
   const width = 1080;
@@ -739,7 +750,36 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
     overlays.push({ input: logoPng, top: logoTop, left: 20 });
   }
 
-  // Footer + CTA (dynamic height so text is never clipped). Reserve space first.
+  // Single headline/offer block just below the header.
+  const bodyTop = headerHeight + 28;
+  const bandTop = bodyTop;
+  const headlineSvg = buildOfferBadgeSvg(width, headlineText, subheadlineText, palette, hints);
+  const headlineMeta = await sharp(headlineSvg).metadata();
+  const bandHeight = headlineMeta.height || Math.round(height * 0.18);
+  overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
+
+  // Service bullets between the headline band and the footer.
+  const bulletGap = 28;
+  const bulletTop = bandTop + bandHeight + bulletGap;
+  const bulletMaxWidth = width - 64;
+  const maxBulletCount = hints.fewerServices || hints.cleaner ? 2 : 4;
+  let bulletsToRender = bullets.slice(0, maxBulletCount);
+  let bulletHeight = 0;
+
+  while (bulletsToRender.length > 0) {
+    const bulletSvg = buildServicesGridSvg(bulletMaxWidth, bulletsToRender, palette, hints);
+    const bulletMeta = await sharp(bulletSvg).metadata();
+    bulletHeight = bulletMeta.height || 260;
+    if (bulletTop + bulletHeight <= height - 24) {
+      overlays.push({ input: bulletSvg, top: bulletTop, left: 32 });
+      break;
+    }
+    bulletsToRender = bulletsToRender.slice(0, -1);
+  }
+
+  const contentBottom = bulletsToRender.length > 0 ? bulletTop + bulletHeight : bandTop + bandHeight;
+
+  // Footer + CTA (dynamic height). Keep it close to content so it is not pushed too far down.
   const contactLines: string[] = [];
   if (business?.whatsappNumber) contactLines.push(`WhatsApp: ${sanitize(business.whatsappNumber)}`);
   if (business?.location) contactLines.push(`Location: ${sanitize(business.location)}`);
@@ -750,34 +790,11 @@ export async function generateFallbackLeafletImage(spec: BrandOverlaySpec): Prom
   const footerSvg = buildFooterSvg(width, 0, contactLines.slice(0, 3), ctaText, palette);
   const footerMeta = await sharp(footerSvg).metadata();
   const footerHeight = footerMeta.height || Math.round(height * 0.18);
-  const footerTop = height - footerHeight;
+  const footerGap = 36;
+  const maxBottomOffset = 80;
+  const footerTop = Math.max(height - footerHeight - maxBottomOffset, contentBottom + footerGap);
   overlays.push({ input: footerSvg, top: footerTop, left: 0 });
 
-  // Single headline/offer block just below the header.
-  const bodyTop = headerHeight + 28;
-  const bandTop = bodyTop;
-  const headlineSvg = buildOfferBadgeSvg(width, headlineText, subheadlineText, palette, hints);
-  const headlineMeta = await sharp(headlineSvg).metadata();
-  const bandHeight = headlineMeta.height || Math.round(height * 0.18);
-  overlays.push({ input: headlineSvg, top: bandTop, left: 0 });
-
-  // Service bullets between the headline band and the reserved footer area.
-  const bulletGap = 28;
-  const bulletTop = bandTop + bandHeight + bulletGap;
-  const bulletMaxWidth = width - 64;
-  const maxBulletCount = hints.fewerServices || hints.cleaner ? 2 : 4;
-  let bulletsToRender = bullets.slice(0, maxBulletCount);
-
-  while (bulletsToRender.length > 0) {
-    const bulletSvg = buildServicesGridSvg(bulletMaxWidth, bulletsToRender, palette, hints);
-    const bulletMeta = await sharp(bulletSvg).metadata();
-    const bulletHeight = bulletMeta.height || 260;
-    if (bulletTop + bulletHeight <= footerTop - 24) {
-      overlays.push({ input: bulletSvg, top: bulletTop, left: 32 });
-      break;
-    }
-    bulletsToRender = bulletsToRender.slice(0, -1);
-  }
-
-  return canvas.composite(overlays).png().toBuffer();
+  const buffer = await canvas.composite(overlays).png().toBuffer();
+  return { buffer, footerTop, footerHeight };
 }

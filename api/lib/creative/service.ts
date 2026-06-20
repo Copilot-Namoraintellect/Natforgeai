@@ -300,6 +300,8 @@ export async function generateMasterImage({
       passed: boolean;
       storedUrl?: string;
       storedLocalPath?: string;
+      footerTop?: number;
+      footerHeight?: number;
     }
 
     async function runOpenAiAttempt(prompt: string, stronger: boolean, attemptNumber: number): Promise<AttemptRecord | null> {
@@ -375,9 +377,9 @@ export async function generateMasterImage({
       };
     }
 
-    async function createFallbackAttempt(extraHints = ""): Promise<AttemptRecord> {
+    async function createFallbackAttempt(extraHints = ""): Promise<AttemptRecord & { footerTop?: number; footerHeight?: number }> {
       const fallbackPrompt = buildPrompt(true);
-      const buffer = await generateFallbackLeafletImage({
+      const { buffer, footerTop, footerHeight } = await generateFallbackLeafletImage({
         business,
         campaign,
         post,
@@ -400,6 +402,8 @@ export async function generateMasterImage({
         criticalFailures: [],
         warnings: ["Fallback template used because OpenAI attempts did not meet acceptance criteria."],
         passed: true,
+        footerTop,
+        footerHeight,
       };
     }
 
@@ -501,7 +505,7 @@ export async function generateMasterImage({
     const MIN_QUALITY_SCORE = 60;
     const STRONGER_LAYOUT_HINTS = "cleaner, fewer services, more spacing, no service boxes, larger text";
 
-    async function composeFinalAttempt(extraHints = ""): Promise<{ buffer: Buffer; logoApplied: boolean }> {
+    async function composeFinalAttempt(extraHints = ""): Promise<{ buffer: Buffer; logoApplied: boolean; footerTop?: number; footerHeight?: number }> {
       if (finalAttempt.source === "openai") {
         const composed = await composeBrandedLeafletImage(rawBuffer, {
           business,
@@ -519,25 +523,53 @@ export async function generateMasterImage({
         return composed;
       }
       // Fallback renderer is already branded; re-render with stronger hints if needed.
-      const buffer = await createFallbackAttempt(extraHints).then((a) => a.buffer);
-      return { buffer, logoApplied: !!business?.logo };
+      const attempt = await createFallbackAttempt(extraHints);
+      finalAttempt = attempt;
+      finalPrompt = attempt.prompt;
+      finalResult = attempt.result;
+      return {
+        buffer: attempt.buffer,
+        logoApplied: !!business?.logo,
+        footerTop: attempt.footerTop,
+        footerHeight: attempt.footerHeight,
+      };
+    }
+
+    // Run the same image-quality heuristics on the final rendered buffer.
+    // This stops fallback templates from getting a free high score.
+    async function assessVisualQuality(buffer: Buffer) {
+      if (finalAttempt.source !== "fallback") return;
+      const visualQuality = await validateLeafletQuality(buffer, business, campaign, finalPrompt);
+      finalAttempt.score = visualQuality.score;
+      finalAttempt.criticalFailures = [...finalAttempt.criticalFailures, ...visualQuality.criticalFailures];
+      finalAttempt.warnings = [...new Set([...finalAttempt.warnings, ...visualQuality.warnings])];
+      console.log(`[CreativeService] Visual quality assessment (fallback) | userId=${userId} | contentPostId=${contentPostId} | score=${visualQuality.score} | issues=${JSON.stringify(visualQuality.warnings)}`);
     }
 
     let composedBuffer = rawBuffer;
     let logoOverlayApplied = false;
+    let footerTop: number | undefined;
+    let footerHeight: number | undefined;
+
+    const firstComposition = await composeFinalAttempt();
+    composedBuffer = firstComposition.buffer;
+    logoOverlayApplied = firstComposition.logoApplied;
+    footerTop = firstComposition.footerTop;
+    footerHeight = firstComposition.footerHeight;
+
+    await assessVisualQuality(composedBuffer);
 
     // Remember the pre-overlay score so retries are evaluated from the same baseline.
     let baseScore = finalAttempt.score;
     let baseWarnings = [...finalAttempt.warnings];
 
-    const firstComposition = await composeFinalAttempt();
-    composedBuffer = firstComposition.buffer;
-    logoOverlayApplied = firstComposition.logoApplied;
-
     // ─── Final overlay quality checks (text + composition) ───
     async function runOverlayQualityChecks(buffer: Buffer) {
       const imageMeta = await sharp(buffer).metadata();
       const imageHeight = imageMeta.height || 1536;
+      const headerHeight = Math.round(imageHeight * 0.085);
+      const estimatedFooterHeight = footerHeight ?? Math.round(imageHeight * 0.18);
+      const estimatedFooterTop = footerTop ?? imageHeight - estimatedFooterHeight;
 
       const marketingTextCheck = validateMarketingText({
         headline: leafletHeadline,
@@ -550,8 +582,9 @@ export async function generateMasterImage({
         headline: leafletHeadline,
         cta: leafletCta,
         serviceBullets: defaultServiceBullets(business, campaign),
-        headerHeight: Math.round(imageHeight * 0.085),
-        footerHeight: Math.round(imageHeight * 0.18),
+        headerHeight,
+        footerHeight: estimatedFooterHeight,
+        footerTop: estimatedFooterTop,
         imageHeight,
       });
 
@@ -584,6 +617,11 @@ export async function generateMasterImage({
       const retryComposition = await composeFinalAttempt(STRONGER_LAYOUT_HINTS);
       composedBuffer = retryComposition.buffer;
       logoOverlayApplied = retryComposition.logoApplied;
+      footerTop = retryComposition.footerTop;
+      footerHeight = retryComposition.footerHeight;
+      await assessVisualQuality(composedBuffer);
+      baseScore = finalAttempt.score;
+      baseWarnings = [...finalAttempt.warnings];
       await runOverlayQualityChecks(composedBuffer);
     }
 
@@ -658,7 +696,10 @@ export async function generateMasterImage({
         finalResult = finalAttempt.result;
         rawBuffer = finalAttempt.buffer;
         composedBuffer = rawBuffer;
+        footerTop = finalAttempt.footerTop;
+        footerHeight = finalAttempt.footerHeight;
         logoOverlayApplied = !!business?.logo;
+        await assessVisualQuality(composedBuffer);
         baseScore = finalAttempt.score;
         baseWarnings = [...finalAttempt.warnings];
         await runOverlayQualityChecks(composedBuffer);
