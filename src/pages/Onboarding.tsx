@@ -70,6 +70,22 @@ const tonePresets = [
   { label: "Educational", value: "authoritative" },
 ];
 
+function looksLikeDomain(value: string): boolean {
+  return /\.[a-z]{2,}(\.[a-z]{2})?$/i.test(value.trim()) && value.includes(".");
+}
+
+function cleanBusinessNameFromDomain(value: string): string {
+  return value
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .replace(/\.[a-z]{2,}.*$/i, "")
+    .replace(/[-_]/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 const industries = [
   "Technology",
   "E-commerce",
@@ -450,7 +466,10 @@ export default function Onboarding() {
     onSuccess: (data) => {
       setAiAnalyzing(false);
       if (!data.success || !data.suggestions) {
-        toast.error(data.message || "We could not analyse this website. You can continue manually.");
+        const message =
+          data.message ||
+          "We could not analyse this website automatically. You can complete your profile manually.";
+        toast(message, { icon: "ℹ️" });
         return;
       }
       const sug = data.suggestions as AiSuggestions;
@@ -565,7 +584,7 @@ export default function Onboarding() {
     },
     onError: (err) => {
       setAiAnalyzing(false);
-      toast.error(err.message || "We could not analyse this website. You can continue manually.");
+      toast(err.message || "We could not analyse this website automatically. You can complete your profile manually.", { icon: "ℹ️" });
     },
   });
 
@@ -1140,6 +1159,12 @@ export default function Onboarding() {
                 className={`bg-[#0F172A] border-[#334155] text-white ${fieldErrors.name ? "border-red-500" : ""}`}
               />
               {fieldErrors.name && <p className="text-xs text-red-400">{fieldErrors.name}</p>}
+              {looksLikeDomain(businessForm.name) && (
+                <p className="text-xs text-amber-300">
+                  That looks like a website address. Did you mean{" "}
+                  <strong>"{cleanBusinessNameFromDomain(businessForm.name)}"</strong>? Update the field above if so.
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">

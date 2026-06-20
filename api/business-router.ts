@@ -9,7 +9,6 @@ import { defaultModel } from "./lib/agents/openai";
 import { storeUploadedAsset } from "./lib/creative/storage";
 import {
   crawlWebsitePages,
-  extractBusinessEvidence,
   buildWebsiteAnalysisPrompt,
 } from "./lib/website-analyser";
 
@@ -37,6 +36,25 @@ const SENSITIVE_INPUT_KEYS = new Set([
   "credentials",
   "privateKey",
 ]);
+
+function mapAnalysisErrorToUserMessage(code: string, reason: string): string {
+  switch (code) {
+    case "INVALID_URL":
+      return "That doesn't look like a valid website URL. Please check it and try again, or continue manually.";
+    case "UNREACHABLE":
+      return "We could not reach this website. It may be offline or the domain may not exist. You can continue manually.";
+    case "TIMEOUT":
+      return "The website took too long to respond. You can continue manually.";
+    case "BLOCKED":
+      return "This website blocked our analysis request. You can continue manually.";
+    case "SERVER_ERROR":
+      return "This website returned a server error. You can continue manually.";
+    case "NO_CONTENT":
+      return "We could not find enough useful content on this website. You can continue manually.";
+    default:
+      return `${reason}. You can complete your profile manually.`;
+  }
+}
 
 function getSafeInputKeys(input: unknown): string[] {
   if (!input || typeof input !== "object") return [];
@@ -201,10 +219,12 @@ export const businessRouter = createRouter({
         let websiteEvidence: unknown = null;
         if (input.website) {
           try {
-            const pages = await crawlWebsitePages(input.website, { maxPages: 8, timeoutMs: 5000 });
-            const homepage = pages[0];
-            if (homepage?.fetched) {
-              websiteEvidence = extractBusinessEvidence(pages);
+            const analysis = await crawlWebsitePages(input.website, { maxPages: 8, timeoutMs: 5000 });
+            if (analysis.log.normalizedUrl) {
+              console.log(`[businessRouter.create] Website analysis | userId=${ctx.user.id} | rawInput="${analysis.log.rawWebsiteInput}" | normalizedUrl=${analysis.log.normalizedUrl} | fetched=${analysis.log.pagesFetched}/${analysis.log.pagesCrawled} | confidence=${analysis.log.confidence} | failureReason=${analysis.log.failureReason || "none"}`);
+            }
+            if (analysis.pages[0]?.fetched) {
+              websiteEvidence = analysis.evidence;
             }
           } catch (analyseErr: any) {
             console.warn(`[businessRouter.create] Website analysis failed: ${analyseErr.message}`);
@@ -302,9 +322,12 @@ export const businessRouter = createRouter({
               .where(and(eq(businesses.id, id), eq(businesses.userId, ctx.user.id)))
               .limit(1);
             if (current?.website !== data.website) {
-              const pages = await crawlWebsitePages(data.website, { maxPages: 8, timeoutMs: 5000 });
-              if (pages[0]?.fetched) {
-                (data as any).websiteEvidence = extractBusinessEvidence(pages);
+              const analysis = await crawlWebsitePages(data.website, { maxPages: 8, timeoutMs: 5000 });
+              if (analysis.log.normalizedUrl) {
+                console.log(`[businessRouter.update] Website re-analysis | userId=${ctx.user.id} | rawInput="${analysis.log.rawWebsiteInput}" | normalizedUrl=${analysis.log.normalizedUrl} | fetched=${analysis.log.pagesFetched}/${analysis.log.pagesCrawled} | confidence=${analysis.log.confidence} | failureReason=${analysis.log.failureReason || "none"}`);
+              }
+              if (analysis.pages[0]?.fetched) {
+                (data as any).websiteEvidence = analysis.evidence;
               }
             }
           } catch (analyseErr: any) {
@@ -393,7 +416,7 @@ export const businessRouter = createRouter({
   analyseWebsite: aiActionQuery
     .input(
       z.object({
-        websiteUrl: z.string().url(),
+        websiteUrl: z.string(),
         businessName: z.string().optional(),
         industry: z.string().optional(),
         location: z.string().optional(),
@@ -401,32 +424,33 @@ export const businessRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const logPrefix = `[businessRouter.analyseWebsite] userId=${ctx.user.id}`;
       try {
-        let url = input.websiteUrl.trim();
-        if (!/^https?:\/\//i.test(url)) {
-          url = "https://" + url;
-        }
-
-        const pages = await crawlWebsitePages(url, { maxPages: 10, timeoutMs: 6000 });
+        const analysis = await crawlWebsitePages(input.websiteUrl, { maxPages: 10, timeoutMs: 6000 });
+        const { pages, evidence, log } = analysis;
         const homepage = pages[0];
 
+        console.log(`${logPrefix} | rawInput="${log.rawWebsiteInput}" | normalizedUrl=${log.normalizedUrl} | attemptedUrls=[${log.fetchAttemptedUrls.join(", ")}] | statusCode=${log.statusCode || "n/a"} | redirectUrl=${log.redirectUrl || "n/a"} | contentLength=${log.contentLength || "n/a"} | fetched=${log.pagesFetched}/${log.pagesCrawled} | confidence=${log.confidence} | failureReason=${log.failureReason || "none"}`);
+
         if (!homepage || !homepage.fetched) {
+          const reason = log.failureReason || "Could not fetch website";
+          const userMessage = mapAnalysisErrorToUserMessage(log.errorCode || "UNKNOWN", reason);
           return {
             success: false,
-            error: "FETCH_FAILED",
-            message: "We could not reach this website. You can continue manually.",
+            error: log.errorCode || "FETCH_FAILED",
+            message: userMessage,
+            log,
           };
         }
-
-        const evidence = extractBusinessEvidence(pages);
 
         // Low confidence gate: ask the user to confirm instead of guessing.
         if (evidence.confidence < 0.5) {
           return {
             success: false,
             error: "LOW_CONFIDENCE",
-            message: "We could not confidently determine what this business does from the website. Please confirm your products/services manually.",
+            message: "We could not find enough useful information on this website to fill your profile automatically. You can complete the details manually.",
             evidence,
+            log,
           };
         }
 
@@ -483,13 +507,14 @@ export const businessRouter = createRouter({
           success: true,
           suggestions,
           evidence,
+          log,
         };
       } catch (err: any) {
-        console.error("[businessRouter.analyseWebsite] error", err);
+        console.error(`${logPrefix} error`, err);
         return {
           success: false,
           error: "ANALYSIS_FAILED",
-          message: "We could not analyse this website. You can continue manually.",
+          message: "We could not analyse this website automatically. You can complete your profile manually.",
         };
       }
     }),

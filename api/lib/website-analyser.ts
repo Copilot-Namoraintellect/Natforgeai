@@ -24,6 +24,30 @@ export interface CrawledPage {
   fetched: boolean;
   status?: number;
   error?: string;
+  errorCode?: WebsiteAnalysisErrorCode;
+  redirectUrl?: string;
+  contentLength?: number;
+}
+
+export interface WebsiteAnalysisLog {
+  rawWebsiteInput: string;
+  normalizedUrl: string;
+  normalizationError?: string;
+  fetchAttemptedUrls: string[];
+  statusCode?: number;
+  redirectUrl?: string;
+  contentLength?: number;
+  pagesCrawled: number;
+  pagesFetched: number;
+  confidence: number;
+  failureReason?: string;
+  errorCode?: string;
+}
+
+export interface WebsiteAnalysisResult {
+  pages: CrawledPage[];
+  evidence: BusinessEvidence;
+  log: WebsiteAnalysisLog;
 }
 
 export interface RepeatedKeyword {
@@ -74,14 +98,41 @@ const KEY_INTERNAL_PATHS = [
   "/faq", "/frequently-asked-questions",
 ];
 
-function normalizeUrl(input: string): string {
-  let url = input.trim();
-  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+export type WebsiteAnalysisErrorCode =
+  | "INVALID_URL"
+  | "UNREACHABLE"
+  | "TIMEOUT"
+  | "BLOCKED"
+  | "SERVER_ERROR"
+  | "NO_CONTENT"
+  | "UNKNOWN";
+
+export interface NormalizedUrl {
+  url: string;
+  rawInput: string;
+  error?: WebsiteAnalysisErrorCode;
+}
+
+function normalizeUrl(input: string): NormalizedUrl {
+  const rawInput = input.trim();
+  if (!rawInput) {
+    return { url: "", rawInput, error: "INVALID_URL" };
+  }
+
+  let url = rawInput;
+  // Add protocol if missing. Accept inputs like zutohub.co.za, www.zutohub.co.za,
+  // https://zutohub.co.za, https://www.zutohub.co.za, ZutoHub.co.za.
+  if (!/^https?:\/\//i.test(url)) {
+    url = "https://" + url;
+  }
+
   try {
     const parsed = new URL(url);
-    return parsed.origin;
+    // Hostnames are case-insensitive; lowercase avoids fetch issues and keeps logs clean.
+    parsed.hostname = parsed.hostname.toLowerCase();
+    return { url: parsed.origin, rawInput };
   } catch {
-    return url;
+    return { url, rawInput, error: "INVALID_URL" };
   }
 }
 
@@ -172,8 +223,62 @@ function extractStructuredData(html: string): string[] {
   return matches;
 }
 
+function classifyFetchError(err: any, status?: number): { error: string; code: WebsiteAnalysisErrorCode } {
+  if (status !== undefined) {
+    if (status >= 500) return { error: `Server error (HTTP ${status})`, code: "SERVER_ERROR" };
+    if (status === 403 || status === 401 || status === 407) return { error: `Access blocked (HTTP ${status})`, code: "BLOCKED" };
+    if (status === 404 || status === 410) return { error: `Page not found (HTTP ${status})`, code: "UNREACHABLE" };
+    if (status >= 400) return { error: `Client error (HTTP ${status})`, code: "BLOCKED" };
+  }
+
+  const message = err?.message || String(err) || "";
+  const name = err?.name || "";
+
+  if (name === "AbortError" || message.includes("abort") || message.includes("timeout") || message.includes("Timeout")) {
+    return { error: "Request timed out", code: "TIMEOUT" };
+  }
+  if (message.includes("ENOTFOUND") || message.includes("getaddrinfo") || message.includes("ECONNREFUSED") || message.includes("ECONNRESET")) {
+    return { error: `Website unreachable (${message})`, code: "UNREACHABLE" };
+  }
+  if (message.includes("certificate") || message.includes("SSL") || message.includes("TLS")) {
+    return { error: `SSL/TLS error (${message})`, code: "UNREACHABLE" };
+  }
+  if (message.includes("blocked") || message.includes("forbidden") || message.includes("denied")) {
+    return { error: `Access blocked (${message})`, code: "BLOCKED" };
+  }
+
+  return { error: message || "Unknown fetch error", code: "UNKNOWN" };
+}
+
+function emptyCrawledPage(url: string, path: string): CrawledPage {
+  return {
+    url,
+    path,
+    title: "",
+    metaDescription: "",
+    ogTitle: "",
+    ogDescription: "",
+    h1: [],
+    h2: [],
+    h3: [],
+    text: "",
+    links: [],
+    emails: [],
+    phones: [],
+    socialLinks: [],
+    structuredData: [],
+    fetched: false,
+  };
+}
+
 async function fetchPage(url: string, timeoutMs = 6000): Promise<CrawledPage> {
-  const path = new URL(url).pathname || "/";
+  let path = "/";
+  try {
+    path = new URL(url).pathname || "/";
+  } catch {
+    // If the URL is so malformed we can't parse it, still return a failed page object.
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -184,35 +289,42 @@ async function fetchPage(url: string, timeoutMs = 6000): Promise<CrawledPage> {
         Accept: "text/html",
       },
       signal: controller.signal,
+      redirect: "follow",
     });
     clearTimeout(timer);
 
+    const redirectUrl = res.url !== url ? res.url : undefined;
+    const contentLength = res.headers.get("content-length")
+      ? parseInt(res.headers.get("content-length") || "0", 10)
+      : undefined;
+
     if (!res.ok) {
+      const { error, code } = classifyFetchError(undefined, res.status);
       return {
-        url,
-        path,
-        title: "",
-        metaDescription: "",
-        ogTitle: "",
-        ogDescription: "",
-        h1: [],
-        h2: [],
-        h3: [],
-        text: "",
-        links: [],
-        emails: [],
-        phones: [],
-        socialLinks: [],
-        structuredData: [],
+        ...emptyCrawledPage(url, path),
         fetched: false,
         status: res.status,
-        error: `HTTP ${res.status}`,
+        error,
+        errorCode: code,
+        redirectUrl,
+        contentLength,
       };
     }
 
     const html = await res.text();
     const links = extractLinks(html, url);
     const text = stripHtml(html);
+
+    if (!text.trim()) {
+      return {
+        ...emptyCrawledPage(url, path),
+        fetched: false,
+        status: res.status,
+        error: "No usable text content found",
+        redirectUrl,
+        contentLength,
+      };
+    }
 
     return {
       url,
@@ -232,45 +344,77 @@ async function fetchPage(url: string, timeoutMs = 6000): Promise<CrawledPage> {
       structuredData: extractStructuredData(html),
       fetched: true,
       status: res.status,
+      redirectUrl,
+      contentLength,
     };
   } catch (err: any) {
     clearTimeout(timer);
+    const { error, code } = classifyFetchError(err);
     return {
-      url,
-      path,
-      title: "",
-      metaDescription: "",
-      ogTitle: "",
-      ogDescription: "",
-      h1: [],
-      h2: [],
-      h3: [],
-      text: "",
-      links: [],
-      emails: [],
-      phones: [],
-      socialLinks: [],
-      structuredData: [],
+      ...emptyCrawledPage(url, path),
       fetched: false,
-      error: err.name === "AbortError" ? "Timeout" : err.message,
+      error,
+      errorCode: code,
     };
   }
 }
 
-export async function crawlWebsitePages(baseUrl: string, opts?: { maxPages?: number; timeoutMs?: number }): Promise<CrawledPage[]> {
-  const normalized = normalizeUrl(baseUrl);
+export async function crawlWebsitePages(
+  baseUrl: string,
+  opts?: { maxPages?: number; timeoutMs?: number }
+): Promise<WebsiteAnalysisResult> {
+  const { url: normalized, rawInput, error: normalizationError } = normalizeUrl(baseUrl);
   const maxPages = opts?.maxPages ?? 10;
   const timeoutMs = opts?.timeoutMs ?? 6000;
+
+  const log: WebsiteAnalysisLog = {
+    rawWebsiteInput: rawInput,
+    normalizedUrl: normalized,
+    normalizationError,
+    fetchAttemptedUrls: [],
+    pagesCrawled: 0,
+    pagesFetched: 0,
+    confidence: 0,
+  };
+
+  if (normalizationError || !normalized) {
+    log.failureReason = normalizationError === "INVALID_URL" ? "Invalid website URL" : "Could not normalise URL";
+    log.errorCode = normalizationError || "INVALID_URL";
+    return { pages: [], evidence: emptyEvidence(), log };
+  }
 
   const pages: CrawledPage[] = [];
   const seen = new Set<string>();
 
-  const homepage = await fetchPage(normalized, timeoutMs);
+  // Try HTTPS first, then fall back to HTTP if the HTTPS fetch fails at the network level.
+  let homepage = await fetchPage(normalized, timeoutMs);
+  log.fetchAttemptedUrls.push(normalized);
+
+  if (!homepage.fetched && normalized.startsWith("https://")) {
+    const httpUrl = normalized.replace(/^https:\/\//, "http://");
+    log.fetchAttemptedUrls.push(httpUrl);
+    homepage = await fetchPage(httpUrl, timeoutMs);
+    if (homepage.fetched) {
+      // Continue crawling using the working URL as the base.
+      homepage.url = normalized;
+    }
+  }
+
   pages.push(homepage);
   seen.add(normalized);
 
+  log.statusCode = homepage.status;
+  log.redirectUrl = homepage.redirectUrl;
+  log.contentLength = homepage.contentLength;
+
   if (!homepage.fetched) {
-    return pages;
+    log.errorCode = homepage.errorCode || "UNKNOWN";
+    log.failureReason = homepage.error || "Could not fetch website homepage";
+    const evidence = emptyEvidence();
+    log.pagesCrawled = pages.length;
+    log.pagesFetched = 0;
+    log.confidence = evidence.confidence;
+    return { pages, evidence, log };
   }
 
   const candidatePaths = [...KEY_INTERNAL_PATHS];
@@ -290,11 +434,36 @@ export async function crawlWebsitePages(baseUrl: string, opts?: { maxPages?: num
     const resolved = resolveLink(path, normalized);
     if (!resolved || seen.has(resolved)) continue;
     seen.add(resolved);
+    log.fetchAttemptedUrls.push(resolved);
     const page = await fetchPage(resolved, timeoutMs);
     pages.push(page);
   }
 
-  return pages;
+  const evidence = extractBusinessEvidence(pages);
+  log.pagesCrawled = pages.length;
+  log.pagesFetched = pages.filter((p) => p.fetched).length;
+  log.confidence = evidence.confidence;
+
+  if (evidence.confidence < 0.5) {
+    log.failureReason = "No useful business content found";
+    log.errorCode = "NO_CONTENT";
+  }
+
+  return { pages, evidence, log };
+}
+
+function emptyEvidence(): BusinessEvidence {
+  return {
+    businessCategory: "",
+    productsServices: [],
+    targetCustomers: [],
+    contactDetails: {},
+    location: "",
+    repeatedKeywords: [],
+    evidenceSnippets: [],
+    confidence: 0,
+    assumptions: ["Could not extract website evidence."],
+  };
 }
 
 function normaliseWord(word: string): string {
@@ -346,21 +515,30 @@ function detectBusinessCategory(keywords: RepeatedKeyword[], combinedText: strin
   const text = combinedText.toLowerCase();
   const assumptions: string[] = [];
 
+  // Financial services — checked before loose art/print keywords to avoid misclassification.
   if (
-    /\b(canvas art|canvas print|framed poster|wall art|wall decor|home decor|office decor|afrocentric art|custom print|art print|fine art|gallery wall|interior decor)\b/.test(text) ||
-    keywords.some((k) => /canvas|poster|wallart|framed|print|decor|art/.test(k.keyword))
+    /\b(financial inclusion|financial services|fintech|payroll|disbursement|wages|earned wage|microfinance|lending|credit|debit|payments|wallet|money transfer|remittance|insurance|investment|wealth management|accounting|bookkeeping|tax services)\b/.test(text)
   ) {
+    return { category: "Financial Services / Fintech", assumptions: [] };
+  }
+
+  // Art & décor — require explicit multi-word phrases or strong keyword clusters.
+  const artDecorPhrases = /\b(canvas art|canvas print|framed poster|wall art|wall decor|home decor|office decor|afrocentric art|custom print|art print|fine art|gallery wall|interior decor|art gallery|canvas printing|poster printing)\b/;
+  const artDecorKeywords = ["canvas", "wallart", "framed", "artprint", "fineart", "gallerywall", "interiordecor", "afrocentric"];
+  const hasArtDecorPhrase = artDecorPhrases.test(text);
+  const hasArtDecorKeywordCluster = artDecorKeywords.filter((w) => keywords.some((k) => k.keyword === w)).length >= 2;
+  if (hasArtDecorPhrase || hasArtDecorKeywordCluster) {
     return { category: "Art & Décor / Canvas & Framed Prints", assumptions: [] };
   }
 
   if (
     /\b(printing|copy|courier|business card|flyer|poster|banner|stationery|laminating|binding)\b/.test(text) ||
-    keywords.some((k) => /print|copy|courier|flyer|banner|card/.test(k.keyword))
+    keywords.some((k) => /^(print|copy|courier|flyer|banner|businesscard)$/.test(k.keyword))
   ) {
     return { category: "Print, Copy & Courier Services", assumptions: [] };
   }
 
-  if (/\b(restaurant|cafe|menu|food|takeaway|delivery|coffee|burger|pizza|sushi)\b/.test(text)) {
+  if (/\b(restaurant|cafe|menu|food|takeaway|delivery|coffee|burger|pizza|sushi|catering|bakery)\b/.test(text)) {
     return { category: "Food & Beverage / Restaurant", assumptions: [] };
   }
 
