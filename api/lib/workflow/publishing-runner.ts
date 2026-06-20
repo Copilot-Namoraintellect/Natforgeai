@@ -162,6 +162,24 @@ export async function publishSinglePost(queueItemId: number) {
       error: "No integration connected",
     };
 
+    if (!integration) {
+      await db
+        .update(publishingQueue)
+        .set({
+          status: "failed",
+          lastError: `Admin setup required: no connected ${post.platform} account. Connect the platform in Settings > Integrations first.`,
+          retryCount: (post.retryCount || 0) + 1,
+          nextRetryAt: null,
+        })
+        .where(eq(publishingQueue.id, post.id));
+      return {
+        id: post.id,
+        status: "failed",
+        platform: post.platform,
+        error: `Admin setup required: no connected ${post.platform} account. Connect the platform in Settings > Integrations first.`,
+      };
+    }
+
     // Deduct publishing credit before attempting publish
     // Skip deduction on retries — credits were already deducted on first attempt
     if (post.status !== "retrying") {
@@ -181,9 +199,15 @@ export async function publishSinglePost(queueItemId: number) {
       }
     }
 
-    if (integration && contentPost && !publishResult.error) {
+    if (contentPost && !publishResult.error) {
+      const postMeta = (contentPost.metadata || {}) as any;
+      const imageUrl: string | undefined =
+        postMeta?.imageUrl || (contentPost as any).imageUrl || undefined;
+
       const payload = {
         text: `${contentPost.hook || ""}\n\n${contentPost.caption || ""}\n\n${contentPost.cta || ""}`.trim(),
+        mediaUrls: imageUrl ? [imageUrl] : undefined,
+        mediaType: imageUrl ? ("image" as const) : undefined,
       };
 
       const accessToken = decryptToken(integration.accessTokenEncrypted || "");

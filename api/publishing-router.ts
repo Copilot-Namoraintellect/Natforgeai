@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { publishingQueue } from "@db/schema";
+import { publishingQueue, contentPosts, socialIntegrations } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { publishDuePosts } from "./lib/workflow/publishing-runner";
+import { publishDuePosts, publishSinglePost } from "./lib/workflow/publishing-runner";
 import { schedulePublishingJob, isBullMQAvailable } from "./lib/queue/bullmq";
+import { env } from "./lib/env";
 
 export const publishingRouter = createRouter({
   createPublishingQueue: authedQuery
@@ -101,9 +102,157 @@ export const publishingRouter = createRouter({
 
   publishPost: authedQuery
     .input(z.object({ queueId: z.number() }))
-    .mutation(async () => {
-      // Stub for Phase 4 (requires social integrations)
-      return { success: false, message: "Publishing requires social integrations (Phase 4)" };
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+
+      const [item] = await db
+        .select()
+        .from(publishingQueue)
+        .where(
+          and(
+            eq(publishingQueue.id, input.queueId),
+            eq(publishingQueue.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!item) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Queue item not found" });
+      }
+
+      if (item.status !== "approved" && item.status !== "retrying") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Post cannot be published because it is ${item.status}. Approve it first.`,
+        });
+      }
+
+      const result = await publishSinglePost(item.id);
+      return {
+        success: result.status === "published",
+        status: result.status,
+        platform: result.platform,
+        postId: result.postId,
+        error: result.error,
+      };
+    }),
+
+  previewPost: authedQuery
+    .input(z.object({ queueId: z.number().optional(), contentPostId: z.number().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+
+      let contentPost: any = null;
+      let queueItem: any = null;
+
+      if (input.queueId) {
+        const [item] = await db
+          .select()
+          .from(publishingQueue)
+          .where(
+            and(
+              eq(publishingQueue.id, input.queueId),
+              eq(publishingQueue.userId, ctx.user.id)
+            )
+          )
+          .limit(1);
+        if (!item) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Queue item not found" });
+        }
+        queueItem = item;
+        if (item.contentPostId) {
+          const [post] = await db
+            .select()
+            .from(contentPosts)
+            .where(eq(contentPosts.id, item.contentPostId))
+            .limit(1);
+          contentPost = post;
+        }
+      } else if (input.contentPostId) {
+        const [post] = await db
+          .select()
+          .from(contentPosts)
+          .where(
+            and(
+              eq(contentPosts.id, input.contentPostId),
+              eq(contentPosts.userId, ctx.user.id)
+            )
+          )
+          .limit(1);
+        if (!post) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Content post not found" });
+        }
+        contentPost = post;
+      } else {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Provide queueId or contentPostId" });
+      }
+
+      if (!contentPost) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Content post not found" });
+      }
+
+      const postMeta = (contentPost.metadata || {}) as any;
+      const imageUrl = postMeta?.imageUrl || (contentPost as any).imageUrl || null;
+
+      return {
+        platform: queueItem?.platform || contentPost.platform || null,
+        text: `${contentPost.hook || ""}\n\n${contentPost.caption || ""}\n\n${contentPost.cta || ""}`.trim(),
+        imageUrl,
+        caption: contentPost.caption || "",
+        hook: contentPost.hook || "",
+        cta: contentPost.cta || "",
+        hashtags: contentPost.hashtags || [],
+      };
+    }),
+
+  getPublishingReadiness: authedQuery
+    .input(z.object({ platform: z.enum(["facebook", "instagram", "linkedin", "twitter", "tiktok"]) }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+
+      // Check whether the platform is configured at the app/admin level.
+      let adminConfigured = false;
+      switch (input.platform) {
+        case "facebook":
+        case "instagram":
+          adminConfigured = !!(env.metaAppId && env.metaAppSecret && env.metaRedirectUri);
+          break;
+        case "linkedin":
+          adminConfigured = !!(env.linkedinClientId && env.linkedinClientSecret && env.linkedinRedirectUri);
+          break;
+        case "twitter":
+          adminConfigured = !!(process.env.TWITTER_CLIENT_ID && process.env.TWITTER_CLIENT_SECRET);
+          break;
+        case "tiktok":
+          adminConfigured = !!(process.env.TIKTOK_CLIENT_KEY && process.env.TIKTOK_CLIENT_SECRET);
+          break;
+      }
+
+      // Check whether this user has a connected account for the platform.
+      const [integration] = await db
+        .select()
+        .from(socialIntegrations)
+        .where(
+          and(
+            eq(socialIntegrations.userId, ctx.user.id),
+            eq(socialIntegrations.platform, input.platform),
+            eq(socialIntegrations.status, "connected")
+          )
+        )
+        .limit(1);
+
+      return {
+        platform: input.platform,
+        adminConfigured,
+        connected: !!integration,
+        accountName: integration?.accountName || null,
+        ready: adminConfigured && !!integration,
+        message: !adminConfigured
+          ? `Admin setup required: ${input.platform} OAuth credentials are not configured.`
+          : !integration
+          ? `Connect your ${input.platform} account in Settings > Integrations before publishing.`
+          : "Ready to publish.",
+      };
     }),
 
   publishDuePosts: authedQuery.mutation(async () => {

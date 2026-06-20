@@ -205,6 +205,9 @@ export const imageRouter = createRouter({
         provider: result.provider,
         jobId: result.jobId,
         creditsCharged: result.creditsCharged,
+        qualityTier: result.qualityTier,
+        qualityLabel: result.qualityLabel,
+        isDraft: result.isDraft,
       };
     }),
 

@@ -68,11 +68,16 @@ export async function publishToFacebook(
   payload: PublishPayload
 ): Promise<PublishResult> {
   try {
-    const url = `https://graph.facebook.com/v18.0/${pageId}/feed`;
+    const hasMedia = payload.mediaUrls && payload.mediaUrls.length > 0 && payload.mediaUrls[0];
+    const url = `https://graph.facebook.com/v18.0/${pageId}/${hasMedia ? "photos" : "feed"}`;
     const params = new URLSearchParams({
       access_token: accessToken,
       message: payload.text,
     });
+
+    if (hasMedia) {
+      params.append("url", payload.mediaUrls![0]);
+    }
 
     const response = await fetch(`${url}?${params.toString()}`, {
       method: "POST",
@@ -156,6 +161,7 @@ export async function publishToLinkedIn(
   payload: PublishPayload
 ): Promise<PublishResult> {
   try {
+    const hasMedia = payload.mediaUrls && payload.mediaUrls.length > 0 && payload.mediaUrls[0];
     const response = await fetch("https://api.linkedin.com/v2/ugcPosts", {
       method: "POST",
       headers: {
@@ -171,7 +177,16 @@ export async function publishToLinkedIn(
             shareCommentary: {
               text: payload.text,
             },
-            shareMediaCategory: "NONE",
+            shareMediaCategory: hasMedia ? "IMAGE" : "NONE",
+            media: hasMedia
+              ? [
+                  {
+                    status: "READY",
+                    originalUrl: payload.mediaUrls![0],
+                    title: { text: payload.text.slice(0, 100) },
+                  },
+                ]
+              : undefined,
           },
         },
         visibility: {

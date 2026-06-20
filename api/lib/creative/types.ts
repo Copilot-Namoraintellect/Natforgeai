@@ -8,6 +8,8 @@ export type ProviderStatus =
   | "failed"
   | "cancelled";
 
+export type ImageQualityTier = "premium" | "acceptable" | "draft" | "failed";
+
 export interface ImageResult {
   jobId: string;
   status: ProviderStatus;
@@ -18,6 +20,11 @@ export interface ImageResult {
   provider?: string;
   providerJobId?: string;
   rawResponse?: any;
+  qualityTier?: ImageQualityTier;
+  qualityLabel?: string;
+  isDraft?: boolean;
+  creditsCharged?: number;
+  usingFallback?: boolean;
 }
 
 export interface VideoResult {

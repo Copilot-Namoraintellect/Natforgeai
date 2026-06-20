@@ -21,11 +21,40 @@ const GENERIC_ICON_MARKERS = [
   "scattered icons", "flat icon set",
 ];
 
+export type QualityTier = "premium" | "acceptable" | "draft" | "failed";
+
 export interface LeafletQualityResult {
   score: number;
   criticalFailures: string[];
   warnings: string[];
   passed: boolean;
+  qualityTier?: QualityTier;
+}
+
+/**
+ * Map a numerical score and generation source to a customer-facing quality tier.
+ * Fallback / internal deterministic templates are capped as draft/basic leaflets
+ * regardless of score, so they are never marketed as premium.
+ */
+export function computeQualityTier(score: number, isFallback: boolean): QualityTier {
+  if (isFallback) return "draft";
+  if (score >= 80) return "premium";
+  if (score >= 60) return "acceptable";
+  if (score > 0) return "draft";
+  return "failed";
+}
+
+export function qualityTierLabel(tier: QualityTier): string {
+  switch (tier) {
+    case "premium":
+      return "Premium";
+    case "acceptable":
+      return "Good";
+    case "draft":
+      return "Basic Draft";
+    case "failed":
+      return "Failed";
+  }
 }
 
 function businessCategoryFrom(business: any): string {
@@ -338,9 +367,9 @@ async function isImageCorrupt(buffer: Buffer): Promise<boolean> {
  * Score a generated image.
  *
  * Acceptance rules:
- * - 80–100: accept OpenAI image.
- * - 60–79: accept OpenAI image but store warnings.
- * - below 60: retry once with stronger prompt.
+ * - 80–100: premium OpenAI image.
+ * - 60–79: acceptable OpenAI image but store warnings.
+ * - below 60: draft / basic quality; should not be charged as premium.
  * - any critical failure: reject and retry.
  * - after retry, fallback only if both attempts have critical failures or score < 60.
  *
@@ -351,7 +380,8 @@ export async function validateLeafletQuality(
   imageBuffer: Buffer,
   business: any,
   _campaign: any,
-  prompt: string
+  prompt: string,
+  isFallback = false
 ): Promise<LeafletQualityResult> {
   const category = businessCategoryFrom(business);
 
@@ -362,6 +392,7 @@ export async function validateLeafletQuality(
       criticalFailures: ["Generated image is corrupt or cannot be decoded."],
       warnings: [],
       passed: false,
+      qualityTier: "failed",
     };
   }
 
@@ -382,9 +413,11 @@ export async function validateLeafletQuality(
       // Product collages and print-shop mockups are acceptable for busy categories.
       score -= busy ? 5 : 15;
     } else if (warning.includes("flat or blocky")) {
-      score -= 20;
+      // Stronger penalty: flat/blocky layouts are a hallmark of basic fallback templates.
+      score -= isFallback ? 35 : 25;
     } else if (warning.includes("Large empty central area")) {
-      score -= 25;
+      // Stronger penalty: empty centres make leaflets look unfinished.
+      score -= isFallback ? 35 : 25;
     } else {
       score -= 10;
     }
@@ -397,11 +430,23 @@ export async function validateLeafletQuality(
 
   score = Math.max(0, score);
 
+  // Fallback / internal deterministic templates are capped so they can never be
+  // scored or marketed as premium. They are explicitly a basic draft path.
+  if (isFallback) {
+    score = Math.min(score, 55);
+    if (score > 0 && !warnings.some((w) => w.includes("fallback") || w.includes("draft"))) {
+      warnings.push("Internal fallback template — output is a basic draft, not a premium leaflet.");
+    }
+  }
+
+  const qualityTier = computeQualityTier(score, isFallback);
+
   return {
     score,
     criticalFailures,
     warnings,
     passed: criticalFailures.length === 0 && score >= 60,
+    qualityTier,
   };
 }
 

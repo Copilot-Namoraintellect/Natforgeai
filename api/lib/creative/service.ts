@@ -10,7 +10,7 @@ import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider } from
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
 import { composeBrandedLeafletImage, generateFallbackLeafletImage, defaultServiceBullets, selectTemplate, type TemplateId } from "./composition";
 import sharp from "sharp";
-import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable, validateLeafletComposition, validateBrandFidelity, detectFakeBranding } from "./quality";
+import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable, validateLeafletComposition, validateBrandFidelity, detectFakeBranding, computeQualityTier, qualityTierLabel } from "./quality";
 import { renderOffer, offerToHeadline, normalizeCta, validateMarketingText } from "./text-formatter";
 import { resolveBrandPalette } from "./brand-palette";
 import {
@@ -154,7 +154,7 @@ export async function generateMasterImage({
   creativeGuidance?: string;
   refinementInstruction?: string;
   allowNoLogo?: boolean;
-}): Promise<ImageResult & { imageUrl?: string; creditsCharged?: number }> {
+}): Promise<ImageResult> {
   const db = getDb();
 
   const [post] = await db
@@ -406,7 +406,7 @@ export async function generateMasterImage({
         buffer,
         score: 100,
         criticalFailures: [],
-        warnings: ["Fallback template used because OpenAI attempts did not meet acceptance criteria."],
+        warnings: ["Fallback template used because OpenAI attempts did not meet acceptance criteria. Output is a basic draft, not a premium leaflet."],
         passed: true,
         footerTop,
         footerHeight,
@@ -544,14 +544,15 @@ export async function generateMasterImage({
     }
 
     // Run the same image-quality heuristics on the final rendered buffer.
-    // This stops fallback templates from getting a free high score.
+    // Fallback templates are explicitly scored as draft/basic so they cannot be
+    // marketed or charged as premium.
     async function assessVisualQuality(buffer: Buffer) {
-      if (finalAttempt.source !== "fallback") return;
-      const visualQuality = await validateLeafletQuality(buffer, business, campaign, finalPrompt);
+      const isFallback = finalAttempt.source === "fallback";
+      const visualQuality = await validateLeafletQuality(buffer, business, campaign, finalPrompt, isFallback);
       finalAttempt.score = visualQuality.score;
       finalAttempt.criticalFailures = [...finalAttempt.criticalFailures, ...visualQuality.criticalFailures];
       finalAttempt.warnings = [...new Set([...finalAttempt.warnings, ...visualQuality.warnings])];
-      console.log(`[CreativeService] Visual quality assessment (fallback) | userId=${userId} | contentPostId=${contentPostId} | score=${visualQuality.score} | issues=${JSON.stringify(visualQuality.warnings)}`);
+      console.log(`[CreativeService] Visual quality assessment | userId=${userId} | contentPostId=${contentPostId} | source=${finalAttempt.source} | score=${visualQuality.score} | tier=${visualQuality.qualityTier} | issues=${JSON.stringify(visualQuality.warnings)}`);
     }
 
     let composedBuffer = rawBuffer;
@@ -733,23 +734,31 @@ export async function generateMasterImage({
       }
     }
 
-    // ─── Deduct credits only on success ───
-    const deduction = await deductCredits({
-      userId,
-      amount: cost,
-      type: "image_generation",
-      description: usingFallback
-        ? "Premium Master Campaign Post image generation (fallback template)"
-        : "Premium Master Campaign Post image generation",
-      metadata: {
-        provider: provider.name,
-        providerJobId: finalResult?.providerJobId || "fallback",
-        contentPostId: post.id,
-        campaignId: post.campaignId,
-        cost,
-        usingFallback,
-      },
-    });
+    // ─── Credit protection: internal fallback templates are basic drafts and
+    // must not consume premium credits. Only genuine OpenAI-generated visuals
+    // are charged the premium rate.
+    const finalCost = usingFallback ? 0 : cost;
+    let deduction: { transactionId?: number; newBalance: number } | undefined;
+    if (finalCost > 0) {
+      deduction = await deductCredits({
+        userId,
+        amount: finalCost,
+        type: "image_generation",
+        description: "Premium Master Campaign Post image generation",
+        metadata: {
+          provider: provider.name,
+          providerJobId: finalResult?.providerJobId || "fallback",
+          contentPostId: post.id,
+          campaignId: post.campaignId,
+          cost: finalCost,
+          usingFallback,
+        },
+      });
+    } else {
+      const wallet = await checkCredits(userId, 0);
+      deduction = { newBalance: wallet.balance };
+      console.log(`[CreativeService] Fallback draft generated at no charge | userId=${userId} | contentPostId=${contentPostId}`);
+    }
 
     // ─── Record AI usage / provider cost ───
     const openAiSize = mapAspectRatioToOpenAiSize(aspectRatio);
@@ -763,7 +772,7 @@ export async function generateMasterImage({
       completionTokens: 100,
       actualCostUsdMicro: usdToMicroCents(actualCostUsd),
       estimatedCostUsdMicro: usdToMicroCents(actualCostUsd),
-      creditsDeducted: cost,
+      creditsDeducted: finalCost,
       metadata: {
         provider: provider.name,
         providerJobId: finalResult?.providerJobId || "fallback",
@@ -787,6 +796,11 @@ export async function generateMasterImage({
       strongerBrandFitUsed: a.strongerBrandFit,
     }));
 
+    // ─── Quality tier / label ───
+    const qualityTier = computeQualityTier(finalAttempt.score, usingFallback);
+    const qualityLabel = qualityTierLabel(qualityTier);
+    const isDraft = qualityTier === "draft" || qualityTier === "failed";
+
     // ─── Version history ───
     const previousVersions = Array.isArray(currentMeta?.imageVersions) ? currentMeta.imageVersions : [];
     const newVersion = {
@@ -794,6 +808,8 @@ export async function generateMasterImage({
       url: stored.publicUrl,
       source: usingFallback ? "fallback" : "openai",
       score: finalAttempt.score,
+      qualityTier,
+      qualityLabel,
       promptUsed: finalPrompt,
       strongerBrandFitUsed: finalAttempt.strongerBrandFit,
       creativeGuidance,
@@ -819,7 +835,7 @@ export async function generateMasterImage({
       aspectRatio,
       style: campaign.contentStyle || business.visualStyle,
       status: "completed",
-      creditsCharged: cost,
+      creditsCharged: finalCost,
       providerCostUsd: usdToMicroCents(actualCostUsd),
       metadata: {
         originalUrl: finalResult?.imageUrl,
@@ -828,6 +844,9 @@ export async function generateMasterImage({
         usingFallback,
         source: usingFallback ? "fallback" : "openai",
         qualityScore: finalAttempt.score,
+        qualityTier,
+        qualityLabel,
+        isDraft,
         validationIssues: finalAttempt.warnings,
         criticalFailures: finalAttempt.criticalFailures,
         qualityWarnings: finalAttempt.warnings,
@@ -867,7 +886,7 @@ export async function generateMasterImage({
           imageStatus: "ready",
           imageGeneratedAt: new Date().toISOString(),
           imageError: null,
-          imageCreditsCharged: cost,
+          imageCreditsCharged: finalCost,
           imageExtension: finalResult?.extension || "png",
           imageSource: usingFallback ? "fallback" : "openai",
           source: usingFallback ? "fallback" : "openai",
@@ -875,6 +894,12 @@ export async function generateMasterImage({
           templateId: selectedTemplate,
           imageQualityScore: finalAttempt.score,
           qualityScore: finalAttempt.score,
+          imageQualityTier: qualityTier,
+          qualityTier,
+          imageQualityLabel: qualityLabel,
+          qualityLabel,
+          imageIsDraft: isDraft,
+          isDraft,
           imageQualityWarnings: finalAttempt.warnings,
           validationIssues: finalAttempt.warnings,
           imageQualityCriticalFailures: finalAttempt.criticalFailures,
@@ -912,7 +937,11 @@ export async function generateMasterImage({
       imageUrl: stored.publicUrl,
       imageBase64: finalResult?.imageBase64,
       extension: finalResult?.extension || "png",
-      creditsCharged: cost,
+      creditsCharged: finalCost,
+      qualityTier,
+      qualityLabel,
+      isDraft,
+      usingFallback,
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

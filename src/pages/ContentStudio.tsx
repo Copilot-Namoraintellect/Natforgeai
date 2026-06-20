@@ -658,7 +658,13 @@ Include:
       setLoadingImageIds((prev) => new Set(prev).add(variables.contentPostId));
     },
     onSuccess: (data) => {
-      toast.success(`Premium leaflet generated (${data.creditsCharged ?? premiumImageCost} credits). Review the leaflet and caption pack, then approve or regenerate.`);
+      const isDraft = data.isDraft || data.qualityTier === "draft" || data.qualityTier === "failed";
+      const costText = (data.creditsCharged ?? premiumImageCost) === 0 ? "no charge" : `${data.creditsCharged ?? premiumImageCost} credits`;
+      toast.success(
+        isDraft
+          ? `Basic draft leaflet generated (${costText}). Upgrade to a premium template for a polished result.`
+          : `Premium leaflet generated (${costText}). Review the leaflet and caption pack, then approve or regenerate.`
+      );
       utils.content.list.invalidate();
       utils.image.list.invalidate({ campaignId: Number(urlCampaignId) });
       utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
@@ -1053,13 +1059,19 @@ Include:
             {isReady && (
               <Badge
                 variant="outline"
-                className={`text-[10px] h-6 ${metadata?.imageFallbackUsed ? "border-amber-300 text-amber-700 bg-amber-50" : "border-emerald-200 text-emerald-700 bg-emerald-50"}`}
+                className={`text-[10px] h-6 ${
+                  metadata?.imageQualityTier === "draft" || metadata?.imageQualityTier === "failed"
+                    ? "border-amber-300 text-amber-700 bg-amber-50"
+                    : metadata?.imageQualityTier === "premium"
+                    ? "border-emerald-200 text-emerald-700 bg-emerald-50"
+                    : "border-blue-200 text-blue-700 bg-blue-50"
+                }`}
               >
-                {metadata?.imageFallbackUsed ? "Fallback template used" : metadata?.imageSource === "openai" ? "Generated using OpenAI" : "Generated"}
+                {metadata?.imageQualityLabel || (metadata?.imageFallbackUsed ? "Basic Draft" : metadata?.imageSource === "openai" ? "Premium" : "Generated")}
               </Badge>
             )}
             <Badge variant="outline" className="text-[10px] h-6">
-              {premiumImageCost} credits
+              {(metadata?.imageCreditsCharged ?? premiumImageCost) === 0 ? "Free draft" : `${metadata?.imageCreditsCharged ?? premiumImageCost} credits`}
             </Badge>
           </div>
         </div>
@@ -1293,15 +1305,21 @@ Include:
                 </div>
                 <div className="flex justify-between gap-2">
                   <span className="text-slate-500">Source</span>
-                  <span className={`font-medium text-right ${metadata?.imageFallbackUsed ? "text-amber-700" : "text-emerald-700"}`}>
-                    {metadata?.imageFallbackUsed ? "Fallback template used" : metadata?.imageSource === "openai" ? "Generated using OpenAI" : "Generated"}
+                  <span className={`font-medium text-right ${metadata?.imageQualityTier === "draft" || metadata?.imageQualityTier === "failed" ? "text-amber-700" : "text-emerald-700"}`}>
+                    {metadata?.imageQualityLabel || (metadata?.imageFallbackUsed ? "Basic Draft" : metadata?.imageSource === "openai" ? "Premium" : "Generated")}
                   </span>
                 </div>
                 {typeof metadata?.imageQualityScore === "number" && (
                   <div className="flex justify-between gap-2">
                     <span className="text-slate-500">Quality score</span>
-                    <span className={`font-medium text-right ${metadata.imageQualityScore >= 80 ? "text-emerald-700" : metadata.imageQualityScore >= 60 ? "text-amber-700" : "text-red-700"}`}>
-                      {metadata.imageQualityScore}/100
+                    <span className={`font-medium text-right ${
+                      metadata.imageQualityTier === "premium"
+                        ? "text-emerald-700"
+                        : metadata.imageQualityTier === "acceptable"
+                        ? "text-blue-700"
+                        : "text-amber-700"
+                    }`}>
+                      {metadata.imageQualityScore}/100 — {metadata.imageQualityLabel || "Draft"}
                     </span>
                   </div>
                 )}
