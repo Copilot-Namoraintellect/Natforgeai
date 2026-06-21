@@ -5,8 +5,10 @@ import { generatedImages, contentPosts } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { checkCredits, deductCredits, recordAiUsage, adminAdjustCredits } from "./lib/billing/credit-engine";
 import { calculateFixedCost } from "./lib/billing/cost-tracker";
-import { generateMasterImage, generateCaptionPack } from "./lib/creative/service";
+import { generateBasicDraftLeaflet, generatePremiumLeaflet, generateCaptionPack } from "./lib/creative/service";
 import { getPremiumImageCredits } from "./lib/creative/costs";
+import { getTemplateRendererProvider } from "./lib/creative/registry";
+import { listPremiumTemplates } from "./lib/creative/template-catalogue";
 import { TRPCError } from "@trpc/server";
 
 export const imageRouter = createRouter({
@@ -153,6 +155,15 @@ export const imageRouter = createRouter({
       return { success: true };
     }),
 
+  premiumTemplateStatus: authedQuery.query(async () => {
+    const provider = getTemplateRendererProvider();
+    return {
+      configured: provider.configured,
+      provider: provider.name,
+      templates: listPremiumTemplates(),
+    };
+  }),
+
   generateForPost: aiActionQuery
     .input(
       z.object({
@@ -167,7 +178,68 @@ export const imageRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const result = await generateMasterImage({
+      // generateForPost now explicitly generates a Basic Draft using the
+      // internal deterministic template engine. It never charges premium
+      // credits. Use generatePremiumLeaflet for the provider-backed premium
+      // output.
+      const result = await generateBasicDraftLeaflet({
+        userId: ctx.user.id,
+        contentPostId: input.contentPostId,
+        brandColors: input.brandColors,
+        creativeType: input.creativeType,
+        templateId: input.templateId,
+        creativeGuidance: input.creativeGuidance,
+        refinementInstruction: input.refinementInstruction,
+        allowNoLogo: input.allowNoLogo,
+      });
+
+      if (result.status === "failed") {
+        const errorMessage = result.errorMessage || "Premium image generation failed";
+        console.error(`[image.generateForPost] failed | userId=${ctx.user.id} | contentPostId=${input.contentPostId} | error="${errorMessage}"`);
+
+        // Map provider/config failures to meaningful codes instead of always returning 500
+        let code: "INTERNAL_SERVER_ERROR" | "PAYMENT_REQUIRED" | "NOT_IMPLEMENTED" | "BAD_REQUEST" = "INTERNAL_SERVER_ERROR";
+        if (errorMessage.includes("not configured")) {
+          code = "NOT_IMPLEMENTED";
+        } else if (errorMessage.includes("Insufficient credits") || errorMessage.includes("spend limit")) {
+          code = "PAYMENT_REQUIRED";
+        } else if (errorMessage.includes("content policy") || errorMessage.includes("safety") || errorMessage.includes("400")) {
+          code = "BAD_REQUEST";
+        }
+
+        throw new TRPCError({
+          code,
+          message: errorMessage,
+        });
+      }
+
+      return {
+        success: true,
+        imageUrl: result.imageUrl,
+        provider: result.provider,
+        jobId: result.jobId,
+        creditsCharged: result.creditsCharged,
+        qualityTier: result.qualityTier,
+        qualityLabel: result.qualityLabel,
+        isDraft: result.isDraft,
+      };
+    }),
+
+  generatePremiumLeaflet: aiActionQuery
+    .input(
+      z.object({
+        contentPostId: z.number(),
+        brandColors: z.array(z.string()).optional(),
+        creativeType: z.enum(["leaflet", "poster", "service_menu", "offer_advert", "event_announcement"]).default("leaflet"),
+        templateId: z.enum(["service_business_promo", "retail_product_promo", "offer_discount_campaign"]).optional(),
+        strongerBrandFit: z.boolean().default(false),
+        creativeGuidance: z.string().optional(),
+        refinementInstruction: z.string().optional(),
+        allowNoLogo: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await generatePremiumLeaflet({
         userId: ctx.user.id,
         contentPostId: input.contentPostId,
         brandColors: input.brandColors,
@@ -180,10 +252,9 @@ export const imageRouter = createRouter({
       });
 
       if (result.status === "failed") {
-        const errorMessage = result.errorMessage || "Premium image generation failed";
-        console.error(`[image.generateForPost] failed | userId=${ctx.user.id} | contentPostId=${input.contentPostId} | error="${errorMessage}"`);
+        const errorMessage = result.errorMessage || "Premium leaflet generation failed";
+        console.error(`[image.generatePremiumLeaflet] failed | userId=${ctx.user.id} | contentPostId=${input.contentPostId} | error="${errorMessage}"`);
 
-        // Map provider/config failures to meaningful codes instead of always returning 500
         let code: "INTERNAL_SERVER_ERROR" | "PAYMENT_REQUIRED" | "NOT_IMPLEMENTED" | "BAD_REQUEST" = "INTERNAL_SERVER_ERROR";
         if (errorMessage.includes("not configured")) {
           code = "NOT_IMPLEMENTED";

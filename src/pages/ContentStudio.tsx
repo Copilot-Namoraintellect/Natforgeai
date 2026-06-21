@@ -66,6 +66,7 @@ import { toast } from "sonner";
 
 const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
 const ENABLE_BASIC_DRAFT_VIDEO = import.meta.env.VITE_ENABLE_BASIC_DRAFT_VIDEO === "true";
+const ENABLE_PREMIUM_TEMPLATE_PROVIDER = import.meta.env.VITE_ENABLE_PREMIUM_TEMPLATE_PROVIDER === "true";
 
 const platforms = [
   { value: "instagram", label: "Instagram", icon: Instagram },
@@ -146,7 +147,14 @@ function LeafletVersionHistory({ contentPostId, metadata }: { contentPostId: num
                     </p>
                   </div>
                   <Badge variant="outline" className="text-[10px] h-5 shrink-0">
-                    {version.source || "openai"} · {typeof version.score === "number" ? `${version.score}/100` : "—"}
+                    {(version.source === "draft" || version.source === "fallback"
+                      ? "Basic Draft"
+                      : version.source === "premium"
+                      ? "Premium"
+                      : version.source === "openai"
+                      ? "Premium"
+                      : version.source) || "Generated"}{" "}
+                    · {typeof version.score === "number" ? `${version.score}/100` : "—"}
                   </Badge>
                 </div>
                 {(version.creativeGuidance || version.refinementInstruction) && (
@@ -294,6 +302,7 @@ export default function ContentStudio() {
   const { data: videoConfig } = trpc.video.getConfigStatus.useQuery();
   const { data: premiumImageCostData } = trpc.image.premiumImageCost.useQuery();
   const premiumImageCost = premiumImageCostData?.cost ?? 10;
+  const { data: premiumTemplateStatus } = trpc.image.premiumTemplateStatus.useQuery();
 
   // Fetch campaigns and approvals to show contextual empty-state guidance
   const { data: campaigns } = trpc.campaign.list.useQuery();
@@ -657,14 +666,8 @@ Include:
       });
       setLoadingImageIds((prev) => new Set(prev).add(variables.contentPostId));
     },
-    onSuccess: (data) => {
-      const isDraft = data.isDraft || data.qualityTier === "draft" || data.qualityTier === "failed";
-      const costText = (data.creditsCharged ?? premiumImageCost) === 0 ? "no charge" : `${data.creditsCharged ?? premiumImageCost} credits`;
-      toast.success(
-        isDraft
-          ? `Basic draft leaflet generated (${costText}). Upgrade to a premium template for a polished result.`
-          : `Premium leaflet generated (${costText}). Review the leaflet and caption pack, then approve or regenerate.`
-      );
+    onSuccess: () => {
+      toast.success("Basic draft leaflet generated (0 credits). Upgrade to Premium for a polished, customer-ready result.");
       utils.content.list.invalidate();
       utils.image.list.invalidate({ campaignId: Number(urlCampaignId) });
       utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
@@ -673,15 +676,46 @@ Include:
       const message = err.message || "";
       const code = (err as { data?: { code?: string } } | undefined)?.data?.code;
       if (code === "PAYMENT_REQUIRED" || message.includes("Insufficient credits") || message.includes("credits.")) {
-        toast.error(message || "You don't have enough credits to generate a premium leaflet.");
+        toast.error(message || "Credit check failed for draft generation.");
       } else if (code === "NOT_IMPLEMENTED" || message.includes("not configured")) {
-        toast.error("Premium leaflet generation is not configured. Please contact admin.");
+        toast.error("Draft leaflet generation is not configured. Please contact admin.");
+      } else if (message.includes("System AI generation limit")) {
+        toast.error("System AI generation limit reached. Please contact admin or try again later.");
+      } else {
+        toast.error(message || "We could not generate the basic draft. Please try again.");
+      }
+    },
+  });
+
+  const generatePremiumLeafletMutation = trpc.image.generatePremiumLeaflet.useMutation({
+    onMutate: (variables) => {
+      setBrokenImageIds((prev) => {
+        const next = new Set(prev);
+        next.delete(variables.contentPostId);
+        return next;
+      });
+      setLoadingImageIds((prev) => new Set(prev).add(variables.contentPostId));
+    },
+    onSuccess: (data) => {
+      const costText = (data.creditsCharged ?? premiumImageCost) === 0 ? "no charge" : `${data.creditsCharged ?? premiumImageCost} credits`;
+      toast.success(`Premium Marketing Leaflet generated (${costText}). Review the leaflet and caption pack, then approve or regenerate.`);
+      utils.content.list.invalidate();
+      utils.image.list.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
+    },
+    onError: (err) => {
+      const message = err.message || "";
+      const code = (err as { data?: { code?: string } } | undefined)?.data?.code;
+      if (code === "PAYMENT_REQUIRED" || message.includes("Insufficient credits") || message.includes("credits.")) {
+        toast.error(message || "You don't have enough credits to generate a Premium Marketing Leaflet.");
+      } else if (code === "NOT_IMPLEMENTED" || message.includes("not configured")) {
+        toast.error("Premium leaflet generation is not configured. Generate a Basic Draft (0 credits) instead, or contact admin.");
       } else if (message.includes("System AI generation limit")) {
         toast.error("System AI generation limit reached. Please contact admin or try again later.");
       } else if (code === "BAD_REQUEST" || message.includes("400") || message.includes("content policy") || message.includes("safety")) {
-        toast.error("We could not generate the premium leaflet. No credits were deducted. Please try again or contact support if the issue continues.");
+        toast.error("We could not generate the Premium Marketing Leaflet. No credits were deducted. Please try again or contact support if the issue continues.");
       } else {
-        toast.error(message || "We could not generate the premium leaflet. No credits were deducted. Please try again.");
+        toast.error(message || "We could not generate the Premium Marketing Leaflet. No credits were deducted. Try a Basic Draft instead.");
       }
     },
   });
@@ -993,7 +1027,8 @@ Include:
     const metadata = (content.metadata || {}) as any;
     const imageUrl = metadata?.imageUrl;
     const imageStatus = metadata?.imageStatus;
-    const isGenerating = imageStatus === "generating" || generateImageMutation.isPending;
+    const isGenerating = imageStatus === "generating" || generateImageMutation.isPending || generatePremiumLeafletMutation.isPending;
+    const isPremiumConfigured = premiumTemplateStatus?.configured ?? ENABLE_PREMIUM_TEMPLATE_PROVIDER;
     const isFailed = imageStatus === "failed";
     const isReady = imageStatus === "ready" && !!imageUrl;
     const imageLoading = loadingImageIds.has(content.id);
@@ -1005,8 +1040,17 @@ Include:
     const refinementInstruction = refinementById[content.id] || "";
     const allowNoLogo = !!allowNoLogoById[content.id];
 
-    const generate = (strongerBrandFit = false) =>
+    const generateBasicDraft = () =>
       generateImageMutation.mutate({
+        contentPostId: content.id,
+        templateId: imageTemplateId === "auto" ? undefined : imageTemplateId,
+        creativeGuidance: creativeGuidance.trim() || undefined,
+        refinementInstruction: refinementInstruction.trim() || undefined,
+        allowNoLogo,
+      });
+
+    const generatePremium = (strongerBrandFit = false) =>
+      generatePremiumLeafletMutation.mutate({
         contentPostId: content.id,
         templateId: imageTemplateId === "auto" ? undefined : imageTemplateId,
         strongerBrandFit,
@@ -1052,7 +1096,7 @@ Include:
         <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50">
           <div className="flex items-center gap-2">
             <Image className="w-5 h-5 text-[#00D4FF]" />
-            <h3 className="text-sm font-semibold text-slate-900">Premium Marketing Leaflet</h3>
+            <h3 className="text-sm font-semibold text-slate-900">Marketing Leaflet</h3>
             {statusBadge()}
           </div>
           <div className="flex items-center gap-2">
@@ -1067,7 +1111,14 @@ Include:
                     : "border-blue-200 text-blue-700 bg-blue-50"
                 }`}
               >
-                {metadata?.imageQualityLabel || (metadata?.imageFallbackUsed ? "Basic Draft" : metadata?.imageSource === "openai" ? "Premium" : "Generated")}
+                {metadata?.imageQualityLabel ||
+                  (metadata?.imageSource === "draft" || metadata?.imageFallbackUsed
+                    ? "Basic Draft"
+                    : metadata?.imageSource === "premium"
+                    ? "Premium Marketing Leaflet"
+                    : metadata?.imageSource === "openai"
+                    ? "Premium"
+                    : "Generated")}
               </Badge>
             )}
             <Badge variant="outline" className="text-[10px] h-6">
@@ -1097,10 +1148,18 @@ Include:
                     {metadata.imageError}
                   </p>
                 )}
-                <Button size="sm" className="mt-4 bg-red-600 hover:bg-red-700 text-white" onClick={() => generate(false)}>
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                  Retry Generation
-                </Button>
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
+                  <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white" onClick={() => generateBasicDraft()}>
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Retry Basic Draft
+                  </Button>
+                  {isPremiumConfigured && (
+                    <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremium(false)}>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Retry Premium
+                    </Button>
+                  )}
+                </div>
               </div>
             ) : isReady ? (
               <div className="relative group overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
@@ -1152,9 +1211,9 @@ Include:
               <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 flex flex-col items-center min-h-[320px] px-6 py-8">
                 <div className="text-center">
                   <Image className="w-12 h-12 text-slate-300 mb-3 mx-auto" />
-                  <p className="text-base font-medium text-slate-800">Premium marketing leaflet not created yet</p>
+                  <p className="text-base font-medium text-slate-800">Marketing leaflet not created yet</p>
                   <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                    Generate a ready-to-post marketing leaflet using your approved campaign strategy, brand style and caption pack.
+                    Generate a Basic Draft (0 credits) for a quick preview, or a Premium Marketing Leaflet ({premiumImageCost} credits) for a polished, customer-ready result.
                   </p>
                 </div>
 
@@ -1235,23 +1294,29 @@ Include:
                   <div className="flex flex-wrap items-center justify-center gap-3">
                     <Button
                       size="sm"
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                      onClick={() => generate(false)}
+                      variant="outline"
+                      className="border-slate-300 text-slate-700 hover:bg-slate-50"
+                      onClick={() => generateBasicDraft()}
                       disabled={!businessForLeaflet?.logo && !allowNoLogo}
                     >
                       <Image className="w-4 h-4 mr-2" />
-                      Generate Leaflet — {premiumImageCost} credits
+                      Generate Basic Draft — 0 credits
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="border-purple-300 text-purple-700 hover:bg-purple-50"
-                      onClick={() => generate(true)}
-                      disabled={!businessForLeaflet?.logo && !allowNoLogo}
-                    >
-                      <Sparkles className="w-4 h-4 mr-2" />
-                      Stronger Brand Fit — {premiumImageCost} credits
-                    </Button>
+                    {isPremiumConfigured ? (
+                      <Button
+                        size="sm"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                        onClick={() => generatePremium(false)}
+                        disabled={!businessForLeaflet?.logo && !allowNoLogo}
+                      >
+                        <Sparkles className="w-4 h-4 mr-2" />
+                        Generate Premium Leaflet — {premiumImageCost} credits
+                      </Button>
+                    ) : (
+                      <div className="text-[11px] text-slate-500 px-2">
+                        Premium leaflet coming soon. Use Basic Draft for now.
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1301,12 +1366,27 @@ Include:
                 </div>
                 <div className="flex justify-between gap-2">
                   <span className="text-slate-500">Credits charged</span>
-                  <span className="font-medium text-right">{metadata?.imageCreditsCharged ?? "—"}</span>
+                  <span className="font-medium text-right">
+                    {(metadata?.imageCreditsCharged ?? 0) === 0 ? "0 (Basic Draft)" : `${metadata?.imageCreditsCharged} credits`}
+                  </span>
                 </div>
                 <div className="flex justify-between gap-2">
                   <span className="text-slate-500">Source</span>
-                  <span className={`font-medium text-right ${metadata?.imageQualityTier === "draft" || metadata?.imageQualityTier === "failed" ? "text-amber-700" : "text-emerald-700"}`}>
-                    {metadata?.imageQualityLabel || (metadata?.imageFallbackUsed ? "Basic Draft" : metadata?.imageSource === "openai" ? "Premium" : "Generated")}
+                  <span className={`font-medium text-right ${
+                    metadata?.imageQualityTier === "draft" || metadata?.imageQualityTier === "failed"
+                      ? "text-amber-700"
+                      : metadata?.imageSource === "premium"
+                      ? "text-emerald-700"
+                      : "text-slate-700"
+                  }`}>
+                    {metadata?.imageQualityLabel ||
+                      (metadata?.imageSource === "draft" || metadata?.imageFallbackUsed
+                        ? "Basic Draft"
+                        : metadata?.imageSource === "premium"
+                        ? "Premium Marketing Leaflet"
+                        : metadata?.imageSource === "openai"
+                        ? "Premium"
+                        : "Generated")}
                   </span>
                 </div>
                 {typeof metadata?.imageQualityScore === "number" && (
@@ -1398,7 +1478,7 @@ Include:
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-semibold text-purple-900 flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                    AI Refinement
+                    Premium Refinement
                   </h4>
                   <Badge variant="outline" className="text-[10px] h-5">
                     {premiumImageCost} credits
@@ -1432,22 +1512,22 @@ Include:
                 <div className="flex gap-2">
                   <Button
                     size="sm"
-                    className="flex-1 h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
-                    onClick={() => generate(false)}
+                    variant="outline"
+                    className="flex-1 h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                    onClick={() => generateBasicDraft()}
                     disabled={isGenerating || !refinementInstruction.trim()}
                   >
                     {isGenerating ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
-                    Refine & Regenerate
+                    Refine Basic Draft
                   </Button>
                   <Button
                     size="sm"
-                    variant="outline"
-                    className="flex-1 h-8 text-[11px] border-purple-300 text-purple-700 hover:bg-purple-50"
-                    onClick={() => generate(true)}
-                    disabled={isGenerating || !refinementInstruction.trim()}
+                    className="flex-1 h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
+                    onClick={() => generatePremium(true)}
+                    disabled={isGenerating || !refinementInstruction.trim() || !isPremiumConfigured}
                   >
                     <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                    Stronger Brand Fit
+                    Premium + Stronger Brand Fit
                   </Button>
                 </div>
               </div>
@@ -1471,14 +1551,16 @@ Include:
               )}
               {(isReady || isFailed) && !isGenerating && (
                 <>
-                  <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generate(false)} disabled={isGenerating}>
+                  <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generateBasicDraft()} disabled={isGenerating}>
                     <Image className="w-3.5 h-3.5 mr-1.5" />
-                    Regenerate Leaflet
+                    Regenerate Basic Draft
                   </Button>
-                  <Button size="sm" variant="outline" className="w-full h-8 text-[12px] border-purple-300 text-purple-700 hover:bg-purple-50" onClick={() => generate(true)} disabled={isGenerating}>
-                    <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                    Regenerate with Stronger Brand Fit
-                  </Button>
+                  {isPremiumConfigured && (
+                    <Button size="sm" className="w-full h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generatePremium(false)} disabled={isGenerating}>
+                      <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                      Regenerate Premium Leaflet
+                    </Button>
+                  )}
                 </>
               )}
               {!captionPack && !isGenerating && (
@@ -1513,7 +1595,7 @@ Include:
             )}
             {businessForLeaflet?.logo && (
               <p className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md p-2.5">
-                Your uploaded logo will be applied deterministically in the header and footer. OpenAI only generates the background scene.
+                Your uploaded logo and brand colours are used for the final layout. Basic Draft uses the internal template engine; Premium uses provider templates.
               </p>
             )}
           </div>

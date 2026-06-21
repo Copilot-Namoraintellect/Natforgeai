@@ -48,6 +48,20 @@ export const env = {
   enablePremiumVideo: process.env.ENABLE_PREMIUM_VIDEO === "true",
   enableBasicDraftVideo: process.env.ENABLE_BASIC_DRAFT_VIDEO === "true",
 
+  // Premium template provider feature flags (Phase 2)
+  enablePremiumTemplateProvider: process.env.ENABLE_PREMIUM_TEMPLATE_PROVIDER === "true",
+  premiumTemplateProvider: process.env.PREMIUM_TEMPLATE_PROVIDER ?? "bannerbear",
+
+  bannerbearApiKey: process.env.BANNERBEAR_API_KEY ?? "",
+  bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
+  bannerbearTemplateServiceBusinessPromo: process.env.BANNERBEAR_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",
+  bannerbearTemplateOfferDiscountCampaign: process.env.BANNERBEAR_TEMPLATE_OFFER_DISCOUNT_CAMPAIGN ?? "",
+
+  templatedIoApiKey: process.env.TEMPLATED_IO_API_KEY ?? "",
+  templatedIoTemplateRetailProductPromo: process.env.TEMPLATED_IO_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
+  templatedIoTemplateServiceBusinessPromo: process.env.TEMPLATED_IO_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",
+  templatedIoTemplateOfferDiscountCampaign: process.env.TEMPLATED_IO_TEMPLATE_OFFER_DISCOUNT_CAMPAIGN ?? "",
+
   // Creative generation providers
   creatifyApiBaseUrl: process.env.CREATIFY_API_BASE_URL ?? "https://api.creatify.ai",
   creatifyApiId: process.env.CREATIFY_API_ID ?? "",

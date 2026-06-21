@@ -1,17 +1,14 @@
 import { TRPCError } from "@trpc/server";
 import { eq, and, desc } from "drizzle-orm";
-import fs from "fs";
 import { env } from "../env";
 import { getDb } from "../../queries/connection";
 import { contentPosts, campaigns, businesses, generatedImages, videoRenderJobs, campaignAssets } from "@db/schema";
 import { checkCredits, deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
-import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider } from "./registry";
+import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider, getTemplateRendererProvider } from "./registry";
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
-import { composeBrandedLeafletImage, generateFallbackLeafletImage, defaultServiceBullets, selectTemplate, type TemplateId } from "./composition";
-import sharp from "sharp";
-import { validateLeafletPrompt, validateLeafletQuality, sanitizePromptForValidator, isPublicImageLoadable, validateLeafletComposition, validateBrandFidelity, detectFakeBranding, computeQualityTier, qualityTierLabel } from "./quality";
-import { renderOffer, offerToHeadline, normalizeCta, validateMarketingText } from "./text-formatter";
+import { generateFallbackLeafletImage, defaultServiceBullets, selectTemplate, type TemplateId } from "./composition";
+import { renderOffer, offerToHeadline, normalizeCta } from "./text-formatter";
 import { resolveBrandPalette } from "./brand-palette";
 import {
   getPremiumImageCredits,
@@ -19,16 +16,19 @@ import {
   creatifyCreditsToUsd,
   usdToMicroCents,
 } from "./costs";
-import { buildPremiumImagePrompt, getImageAspectRatio } from "./prompts/image-prompt";
+import { getImageAspectRatio } from "./prompts/image-prompt";
 import type { CreativeType } from "./prompts/image-prompt";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
 import type {
   ImageResult,
+  ImageQualityTier,
   VideoResult,
   VideoRequest,
   ProviderStatus,
 } from "./types";
+import type { TemplateRendererRequest } from "./providers/template-renderer";
+import { resolveProviderTemplateId, type PremiumTemplateId } from "./template-catalogue";
 
 function toJobStatus(status: ProviderStatus): "queued" | "rendering" | "completed" | "failed" | "cancelled" {
   switch (status) {
@@ -53,27 +53,6 @@ function toJobStatus(status: ProviderStatus): "queued" | "rendering" | "complete
   }
 }
 
-// ─── OpenAI DALL-E 3 actual cost (USD) by size ───
-function openAiImageActualCostUsd(size: string): number {
-  if (size === "1024x1024") return 0.04;
-  return 0.08; // 1024x1792 or 1792x1024
-}
-
-function mapAspectRatioToOpenAiSize(ratio?: string): "1024x1024" | "1024x1792" | "1792x1024" {
-  switch (ratio) {
-    case "16:9":
-    case "3:2":
-    case "4:3":
-      return "1792x1024";
-    case "9:16":
-    case "2:3":
-    case "4:5":
-      return "1024x1792";
-    case "1:1":
-    default:
-      return "1024x1024";
-  }
-}
 
 function buildVideoRequest(opts: {
   business: any;
@@ -133,7 +112,756 @@ async function assertCanAfford(userId: number, cost: number, feature: string) {
   }
 }
 
+// ─── Shared campaign/business loader ───
+async function loadPostCampaignBusiness({
+  userId,
+  contentPostId,
+}: {
+  userId: number;
+  contentPostId: number;
+}) {
+  const db = getDb();
+
+  const [post] = await db
+    .select()
+    .from(contentPosts)
+    .where(and(eq(contentPosts.id, contentPostId), eq(contentPosts.userId, userId)))
+    .limit(1);
+
+  if (!post) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Content post not found" });
+  }
+
+  let campaign: any = null;
+  let business: any = null;
+
+  if (post.campaignId) {
+    [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, post.campaignId)).limit(1);
+    if (campaign?.businessId) {
+      [business] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
+    }
+  }
+
+  if (!business) {
+    const [latestBiz] = await db
+      .select()
+      .from(businesses)
+      .where(eq(businesses.userId, userId))
+      .orderBy(desc(businesses.createdAt))
+      .limit(1);
+    if (latestBiz) {
+      business = latestBiz;
+    } else {
+      business = { name: campaign?.name || post.title || "Your Business" };
+    }
+  }
+
+  if (!campaign) {
+    campaign = {};
+  }
+
+  return { post, campaign, business };
+}
+
+interface NormalizedLeafletInputs {
+  formattedOffer: string;
+  leafletHeadline: string;
+  leafletCta: string;
+  selectedTemplate: TemplateId;
+  brandPalette: any;
+  hasLogo: boolean;
+  aspectRatio: string;
+}
+
+async function normalizeLeafletInputs({
+  business,
+  campaign,
+  post,
+  brandColors,
+  creativeType,
+  templateId,
+  creativeGuidance,
+  refinementInstruction,
+}: {
+  business: any;
+  campaign: any;
+  post: any;
+  brandColors?: string[];
+  creativeType: CreativeType;
+  templateId?: TemplateId;
+  creativeGuidance?: string;
+  refinementInstruction?: string;
+}): Promise<NormalizedLeafletInputs> {
+  const brandPalette = resolveBrandPalette({ ...business, brandColors });
+  const hasLogo = !!business?.logo;
+  const formattedOffer = renderOffer(campaign.offerDetails, business.name);
+  const leafletHeadline = offerToHeadline(campaign.offerDetails);
+  const selectedTemplate = selectTemplate({ business, campaign, creativeType, templateId, creativeGuidance, refinementInstruction });
+  const businessCategory = (
+    business?.websiteEvidence?.businessCategory ||
+    business?.industry ||
+    business?.productOrService ||
+    ""
+  ).toString();
+  const leafletCta = normalizeCta(campaign.preferredCta || post.cta, businessCategory);
+  const aspectRatio = getImageAspectRatio(creativeType, post.platform || "Instagram");
+
+  return {
+    formattedOffer,
+    leafletHeadline,
+    leafletCta,
+    selectedTemplate,
+    brandPalette,
+    hasLogo,
+    aspectRatio,
+  };
+}
+
+async function setPostImageStatus(
+  contentPostId: number,
+  patch: { imageStatus: string; imageError?: string | null; [key: string]: any }
+) {
+  const db = getDb();
+  const [post] = await db.select().from(contentPosts).where(eq(contentPosts.id, contentPostId)).limit(1);
+  if (!post) return;
+  const currentMeta = (post.metadata || {}) as any;
+  await db
+    .update(contentPosts)
+    .set({
+      metadata: {
+        ...currentMeta,
+        ...patch,
+      },
+    })
+    .where(eq(contentPosts.id, contentPostId));
+}
+
+// ─── Basic Draft Leaflet generation ───
+// Uses the internal deterministic template engine. Always 0 credits. Explicitly
+// labelled as a draft/preview so it is never marketed or charged as premium.
+export async function generateBasicDraftLeaflet({
+  userId,
+  contentPostId,
+  brandColors,
+  creativeType = "leaflet",
+  templateId,
+  creativeGuidance,
+  refinementInstruction,
+  allowNoLogo = false,
+}: {
+  userId: number;
+  contentPostId: number;
+  brandColors?: string[];
+  creativeType?: CreativeType;
+  templateId?: TemplateId;
+  creativeGuidance?: string;
+  refinementInstruction?: string;
+  allowNoLogo?: boolean;
+}): Promise<ImageResult> {
+  const { post, campaign, business } = await loadPostCampaignBusiness({ userId, contentPostId });
+
+  await setPostImageStatus(contentPostId, { imageStatus: "generating", imageError: null });
+
+  try {
+    const hasLogo = !!business?.logo;
+    if (!hasLogo && !allowNoLogo) {
+      const message = "Please upload your business logo in Settings before generating a leaflet, or generate a Basic Draft without a logo.";
+      await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+      return { status: "failed", jobId: "", errorMessage: message };
+    }
+
+    const {
+      formattedOffer,
+      leafletHeadline,
+      leafletCta,
+      selectedTemplate,
+      brandPalette,
+      aspectRatio,
+    } = await normalizeLeafletInputs({ business, campaign, post, brandColors, creativeType, templateId, creativeGuidance, refinementInstruction });
+
+    console.log(`[BasicDraftLeaflet] Generating draft | userId=${userId} | contentPostId=${contentPostId} | template=${selectedTemplate}`);
+
+    const { buffer } = await generateFallbackLeafletImage({
+      business,
+      campaign,
+      post,
+      creativeType,
+      templateId: selectedTemplate,
+      aspectRatio,
+      offer: formattedOffer,
+      cta: leafletCta,
+      headline: formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
+      subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
+      palette: brandPalette,
+      creativeGuidance,
+      refinementInstruction,
+    });
+
+    const stored = await storeImageBuffer(buffer, {
+      campaignId: post.campaignId ?? undefined,
+      prefix: "basic-draft",
+      extension: "png",
+    });
+
+    if (!stored.publicUrl || !stored.localPath) {
+      throw new Error("Failed to store basic draft leaflet");
+    }
+
+    const qualityTier: ImageQualityTier = "draft";
+    const qualityLabel = "Basic Draft";
+    const score = 55;
+    const warnings = ["Basic draft generated using the internal template engine. This is a preview only, not a premium leaflet."];
+
+    const db = getDb();
+    const currentMeta = (post.metadata || {}) as any;
+    const previousVersions = Array.isArray(currentMeta?.imageVersions) ? currentMeta.imageVersions : [];
+    const newVersion = {
+      version: previousVersions.length + 1,
+      url: stored.publicUrl,
+      source: "draft",
+      score,
+      qualityTier,
+      qualityLabel,
+      promptUsed: "",
+      strongerBrandFitUsed: false,
+      creativeGuidance,
+      refinementInstruction,
+      brandPalette,
+      hasLogo,
+      templateId: selectedTemplate,
+      generatedAt: new Date().toISOString(),
+      approved: false,
+    };
+    const imageVersions = [...previousVersions, newVersion];
+
+    await db.insert(generatedImages).values({
+      userId,
+      campaignId: post.campaignId,
+      businessId: business.id,
+      contentPostId: post.id,
+      provider: "draft",
+      providerJobId: "basic-draft",
+      prompt: "",
+      url: stored.publicUrl,
+      aspectRatio,
+      style: campaign.contentStyle || business.visualStyle,
+      status: "completed",
+      creditsCharged: 0,
+      providerCostUsd: 0,
+      metadata: {
+        localPath: stored.localPath,
+        source: "draft",
+        qualityScore: score,
+        qualityTier,
+        qualityLabel,
+        isDraft: true,
+        validationIssues: warnings,
+        warnings,
+        templateId: selectedTemplate,
+        versions: imageVersions,
+      },
+    });
+
+    const [latestGenerated] = await db
+      .select({ id: generatedImages.id })
+      .from(generatedImages)
+      .where(eq(generatedImages.contentPostId, post.id))
+      .orderBy(desc(generatedImages.createdAt))
+      .limit(1);
+    const currentVersionId = latestGenerated?.id ?? null;
+
+    await db
+      .update(contentPosts)
+      .set({
+        metadata: {
+          ...currentMeta,
+          currentVersionId,
+          imageCurrentVersionId: currentVersionId,
+          imageUrl: stored.publicUrl,
+          imageProvider: "draft",
+          imageJobId: "basic-draft",
+          imageStatus: "ready",
+          imageGeneratedAt: new Date().toISOString(),
+          imageError: null,
+          imageCreditsCharged: 0,
+          imageExtension: "png",
+          imageSource: "draft",
+          source: "draft",
+          imageTemplateId: selectedTemplate,
+          templateId: selectedTemplate,
+          imageQualityScore: score,
+          qualityScore: score,
+          imageQualityTier: qualityTier,
+          qualityTier,
+          imageQualityLabel: qualityLabel,
+          qualityLabel,
+          imageIsDraft: true,
+          isDraft: true,
+          imageQualityWarnings: warnings,
+          validationIssues: warnings,
+          imageVersions,
+          imageBrandPalette: brandPalette,
+          imageHasLogo: hasLogo,
+          imageCreativeGuidance: creativeGuidance,
+          imageRefinementInstruction: refinementInstruction,
+        },
+      })
+      .where(eq(contentPosts.id, post.id));
+
+    console.log(`[BasicDraftLeaflet] Ready | userId=${userId} | contentPostId=${contentPostId} | url=${stored.publicUrl}`);
+
+    return {
+      jobId: "basic-draft",
+      provider: "draft",
+      status: "completed",
+      imageUrl: stored.publicUrl,
+      extension: "png",
+      creditsCharged: 0,
+      qualityTier,
+      qualityLabel,
+      isDraft: true,
+      usingFallback: true,
+    };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error(`[BasicDraftLeaflet] Failed | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`, err);
+    await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: errorMessage });
+    return { status: "failed", jobId: "", errorMessage };
+  }
+}
+
+// ─── Premium Marketing Leaflet generation ───
+// Uses a provider-backed template renderer (Bannerbear first, Templated.io
+// backup). Charges premium credits only after a successful provider render.
+// OpenAI may generate an optional hero/background image or refine copy, but it
+// must never control the final layout.
+export async function generatePremiumLeaflet({
+  userId,
+  contentPostId,
+  brandColors,
+  creativeType = "leaflet",
+  templateId,
+  strongerBrandFit = false,
+  creativeGuidance,
+  refinementInstruction,
+  allowNoLogo = false,
+}: {
+  userId: number;
+  contentPostId: number;
+  brandColors?: string[];
+  creativeType?: CreativeType;
+  templateId?: TemplateId;
+  strongerBrandFit?: boolean;
+  creativeGuidance?: string;
+  refinementInstruction?: string;
+  allowNoLogo?: boolean;
+}): Promise<ImageResult> {
+  const { post, campaign, business } = await loadPostCampaignBusiness({ userId, contentPostId });
+  const db = getDb();
+  const currentMeta = (post.metadata || {}) as any;
+
+  const templateRenderer = getTemplateRendererProvider();
+  if (!templateRenderer.configured) {
+    const message = "Premium leaflet provider is not configured. Generate a Basic Draft instead, or contact admin to enable premium templates.";
+    await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+    return { status: "failed", jobId: "", errorMessage: message };
+  }
+
+  const cost = getPremiumImageCredits();
+  await assertCanAfford(userId, cost, "Premium Marketing Leaflet");
+
+  await setPostImageStatus(contentPostId, { imageStatus: "generating", imageError: null });
+
+  try {
+    const hasLogo = !!business?.logo;
+    if (!hasLogo && !allowNoLogo) {
+      const message = "Please upload your business logo in Settings before generating a Premium Marketing Leaflet. Premium leaflets require your logo and brand colours.";
+      await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+      return { status: "failed", jobId: "", errorMessage: message };
+    }
+
+    const {
+      formattedOffer,
+      leafletHeadline,
+      leafletCta,
+      selectedTemplate,
+      brandPalette,
+      aspectRatio,
+    } = await normalizeLeafletInputs({ business, campaign, post, brandColors, creativeType, templateId, creativeGuidance, refinementInstruction });
+
+    const premiumTemplateId: PremiumTemplateId = selectedTemplate as PremiumTemplateId;
+    const providerTemplateId = resolveProviderTemplateId(templateRenderer.name, premiumTemplateId);
+
+    if (!providerTemplateId) {
+      const message = `Premium template "${premiumTemplateId}" is not configured for provider "${templateRenderer.name}". Contact admin to set the provider template ID.`;
+      await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+      return { status: "failed", jobId: "", errorMessage: message };
+    }
+
+    console.log(`[PremiumLeaflet] Rendering | userId=${userId} | contentPostId=${contentPostId} | provider=${templateRenderer.name} | template=${providerTemplateId}`);
+
+    // Optional OpenAI hero/background generation. This is strictly an asset,
+    // not the final layout. Failure here is non-blocking.
+    let backgroundImageUrl: string | undefined;
+    if (env.openaiApiKey && creativeGuidance?.toLowerCase().includes("background")) {
+      try {
+        const bgPrompt = `Professional marketing background for ${business.name}. ${creativeGuidance}. No text, no logos, no readable words, no brand marks. Clean, premium, photographic or illustrated background only.`;
+        const imageProvider = getImageProvider();
+        if (imageProvider.configured) {
+          const bgResult = await imageProvider.generate({
+            userId,
+            campaignId: post.campaignId ?? undefined,
+            businessId: business.id,
+            contentPostId: post.id,
+            prompt: bgPrompt,
+            aspectRatio,
+            style: campaign.contentStyle || business.visualStyle,
+          });
+          if (bgResult.status !== "failed" && (bgResult.imageUrl || bgResult.imageBase64)) {
+            backgroundImageUrl = bgResult.imageUrl;
+            if (!backgroundImageUrl && bgResult.imageBase64) {
+              // Store base64 background locally so the provider can fetch it.
+              const bgBuffer = Buffer.from(bgResult.imageBase64, "base64");
+              const bgStored = await storeImageBuffer(bgBuffer, {
+                campaignId: post.campaignId ?? undefined,
+                prefix: "premium-bg",
+                extension: bgResult.extension || "png",
+              });
+              backgroundImageUrl = bgStored.publicUrl;
+            }
+          }
+        }
+      } catch (bgErr: any) {
+        console.warn(`[PremiumLeaflet] Optional background generation failed, continuing without it | error="${bgErr.message}"`);
+      }
+    }
+
+    // Optional OpenAI copy refinement when stronger brand fit is requested.
+    let headline = formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name;
+    let offer = formattedOffer;
+    let cta = leafletCta;
+    let services = defaultServiceBullets(business, campaign);
+    if (strongerBrandFit && env.openaiApiKey) {
+      try {
+        const refined = await refineLeafletCopy({
+          business,
+          campaign,
+          headline,
+          offer,
+          cta,
+          services,
+          creativeGuidance,
+          refinementInstruction,
+        });
+        headline = refined.headline;
+        offer = refined.offer;
+        cta = refined.cta;
+        services = refined.services;
+      } catch (refineErr: any) {
+        console.warn(`[PremiumLeaflet] Copy refinement failed, using original copy | error="${refineErr.message}"`);
+      }
+    }
+
+    const renderReq: TemplateRendererRequest = {
+      providerTemplateId,
+      format: "leaflet",
+      outputFormat: "png",
+      aspectRatio,
+      businessName: business.name,
+      logoUrl: business.logo,
+      brandColors: [
+        brandPalette.primary,
+        brandPalette.secondary,
+        brandPalette.accent,
+        ...(brandColors || []),
+      ].filter(Boolean),
+      headline,
+      offer,
+      cta,
+      services,
+      contact: {
+        phone: business.phone || undefined,
+        whatsapp: business.whatsapp || undefined,
+        website: business.website || undefined,
+        email: business.email || undefined,
+        location: business.address || business.location || undefined,
+      },
+      campaignObjective: campaign.primaryOutcome || campaign.goal || undefined,
+      creativeGuidance,
+      backgroundImageUrl,
+    };
+
+    const renderResult = await templateRenderer.render(renderReq);
+
+    if (!renderResult.success || !renderResult.imageUrl) {
+      const errorMessage = renderResult.error || "Premium template provider failed to render the leaflet.";
+      console.error(`[PremiumLeaflet] Provider render failed | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`);
+      await setPostImageStatus(contentPostId, {
+        imageStatus: "failed",
+        imageError: `${errorMessage} You can generate a Basic Draft (0 credits) instead.`,
+      });
+      return {
+        status: "failed",
+        jobId: renderResult.providerJobId || "",
+        errorMessage: `${errorMessage} You can generate a Basic Draft (0 credits) instead.`,
+        provider: templateRenderer.name,
+        providerJobId: renderResult.providerJobId,
+      };
+    }
+
+    // Download provider image and store locally so we own the asset.
+    let buffer: Buffer;
+    try {
+      const imgResponse = await fetch(renderResult.imageUrl);
+      if (!imgResponse.ok) throw new Error(`Failed to download rendered image: ${imgResponse.status}`);
+      buffer = Buffer.from(await imgResponse.arrayBuffer());
+    } catch (downloadErr: any) {
+      console.error(`[PremiumLeaflet] Failed to download provider image | url=${renderResult.imageUrl} | error="${downloadErr.message}"`);
+      await setPostImageStatus(contentPostId, {
+        imageStatus: "failed",
+        imageError: `Downloaded rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
+      });
+      return {
+        status: "failed",
+        jobId: renderResult.providerJobId || "",
+        errorMessage: `Downloaded rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
+        provider: templateRenderer.name,
+        providerJobId: renderResult.providerJobId,
+      };
+    }
+
+    const stored = await storeImageBuffer(buffer, {
+      campaignId: post.campaignId ?? undefined,
+      prefix: "premium-leaflet",
+      extension: renderResult.extension || "png",
+    });
+
+    if (!stored.publicUrl || !stored.localPath) {
+      throw new Error("Failed to store premium leaflet");
+    }
+
+    // ─── Charge credits only after successful render + storage ───
+    const deduction = await deductCredits({
+      userId,
+      amount: cost,
+      type: "image_generation",
+      description: `Premium Marketing Leaflet (${templateRenderer.name})`,
+      metadata: {
+        provider: templateRenderer.name,
+        providerJobId: renderResult.providerJobId,
+        providerTemplateId,
+        contentPostId: post.id,
+        campaignId: post.campaignId,
+        cost,
+        source: "premium",
+      },
+    });
+
+    await recordAiUsage({
+      userId,
+      campaignId: post.campaignId ?? undefined,
+      agentType: "image_generation",
+      model: `${templateRenderer.name}-template`,
+      promptTokens: 500,
+      completionTokens: 100,
+      actualCostUsdMicro: usdToMicroCents(renderResult.costUsd || 0),
+      estimatedCostUsdMicro: usdToMicroCents(renderResult.costUsd || 0),
+      creditsDeducted: cost,
+      metadata: {
+        provider: templateRenderer.name,
+        providerJobId: renderResult.providerJobId,
+        providerTemplateId,
+        contentPostId: post.id,
+        aspectRatio,
+        outputUrl: stored.publicUrl,
+        source: "premium",
+      },
+    });
+
+    const qualityTier: ImageQualityTier = "premium";
+    const qualityLabel = "Premium Marketing Leaflet";
+    const score = 90;
+    const warnings: string[] = [];
+
+    const previousVersions = Array.isArray(currentMeta?.imageVersions) ? currentMeta.imageVersions : [];
+    const newVersion = {
+      version: previousVersions.length + 1,
+      url: stored.publicUrl,
+      source: templateRenderer.name,
+      score,
+      qualityTier,
+      qualityLabel,
+      promptUsed: renderReq.headline,
+      strongerBrandFitUsed: strongerBrandFit,
+      creativeGuidance,
+      refinementInstruction,
+      brandPalette,
+      hasLogo,
+      templateId: selectedTemplate,
+      generatedAt: new Date().toISOString(),
+      approved: false,
+    };
+    const imageVersions = [...previousVersions, newVersion];
+
+    await db.insert(generatedImages).values({
+      userId,
+      campaignId: post.campaignId,
+      businessId: business.id,
+      contentPostId: post.id,
+      provider: templateRenderer.name,
+      providerJobId: renderResult.providerJobId,
+      prompt: renderReq.headline,
+      url: stored.publicUrl,
+      aspectRatio,
+      style: campaign.contentStyle || business.visualStyle,
+      status: "completed",
+      creditsCharged: cost,
+      providerCostUsd: usdToMicroCents(renderResult.costUsd || 0),
+      metadata: {
+        originalUrl: renderResult.imageUrl,
+        localPath: stored.localPath,
+        balanceAfter: deduction.newBalance,
+        source: "premium",
+        providerTemplateId,
+        qualityScore: score,
+        qualityTier,
+        qualityLabel,
+        isDraft: false,
+        templateId: selectedTemplate,
+        versions: imageVersions,
+        renderRequest: renderReq,
+      },
+    });
+
+    const [latestGenerated] = await db
+      .select({ id: generatedImages.id })
+      .from(generatedImages)
+      .where(eq(generatedImages.contentPostId, post.id))
+      .orderBy(desc(generatedImages.createdAt))
+      .limit(1);
+    const currentVersionId = latestGenerated?.id ?? null;
+
+    await db
+      .update(contentPosts)
+      .set({
+        metadata: {
+          ...currentMeta,
+          currentVersionId,
+          imageCurrentVersionId: currentVersionId,
+          imageUrl: stored.publicUrl,
+          imageProvider: templateRenderer.name,
+          imageJobId: renderResult.providerJobId,
+          imageStatus: "ready",
+          imageGeneratedAt: new Date().toISOString(),
+          imageError: null,
+          imageCreditsCharged: cost,
+          imageExtension: renderResult.extension || "png",
+          imageSource: "premium",
+          source: "premium",
+          imageTemplateId: selectedTemplate,
+          templateId: selectedTemplate,
+          imageQualityScore: score,
+          qualityScore: score,
+          imageQualityTier: qualityTier,
+          qualityTier,
+          imageQualityLabel: qualityLabel,
+          qualityLabel,
+          imageIsDraft: false,
+          isDraft: false,
+          imageQualityWarnings: warnings,
+          validationIssues: warnings,
+          imageVersions,
+          imageBrandPalette: brandPalette,
+          imageHasLogo: hasLogo,
+          imageCreativeGuidance: creativeGuidance,
+          imageRefinementInstruction: refinementInstruction,
+        },
+      })
+      .where(eq(contentPosts.id, post.id));
+
+    // Caption pack is included with premium leaflet.
+    generateCaptionPack({ userId, contentPostId: post.id }).catch((err) => {
+      console.error(`[PremiumLeaflet] Caption pack async error | userId=${userId} | contentPostId=${post.id} | error="${err.message}"`);
+    });
+
+    console.log(`[PremiumLeaflet] Ready | userId=${userId} | contentPostId=${contentPostId} | url=${stored.publicUrl} | credits=${cost}`);
+
+    return {
+      jobId: renderResult.providerJobId || "premium",
+      provider: templateRenderer.name,
+      status: "completed",
+      imageUrl: stored.publicUrl,
+      extension: renderResult.extension || "png",
+      creditsCharged: cost,
+      qualityTier,
+      qualityLabel,
+      isDraft: false,
+      usingFallback: false,
+    };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error(`[PremiumLeaflet] Unexpected error | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`, err);
+    await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: errorMessage });
+    return { status: "failed", jobId: "", errorMessage };
+  }
+}
+
+async function refineLeafletCopy({
+  business,
+  campaign,
+  headline,
+  offer,
+  cta,
+  services,
+  creativeGuidance,
+  refinementInstruction,
+}: {
+  business: any;
+  campaign: any;
+  headline: string;
+  offer: string;
+  cta: string;
+  services: string[];
+  creativeGuidance?: string;
+  refinementInstruction?: string;
+}): Promise<{ headline: string; offer: string; cta: string; services: string[] }> {
+  const system = "You are a senior copywriter refining marketing leaflet copy. Return concise, punchy copy suitable for a small-business promotional leaflet.";
+  const prompt = `Refine the following leaflet copy for ${business.name} (${business.productOrService || campaign.productOrService || "local business"}).
+
+Headline: ${headline}
+Offer: ${offer}
+CTA: ${cta}
+Services/products: ${services.join(", ")}
+${creativeGuidance ? `Creative direction: ${creativeGuidance}` : ""}
+${refinementInstruction ? `Refinement request: ${refinementInstruction}` : ""}
+
+Return a JSON object with keys: headline, offer, cta, services (array of up to 4 short strings). Keep each field short and customer-facing.`;
+
+  const result = await generateText({
+    model: openai("gpt-4o-mini"),
+    system,
+    prompt,
+  });
+
+  try {
+    const parsed = JSON.parse(result.text);
+    return {
+      headline: parsed.headline || headline,
+      offer: parsed.offer || offer,
+      cta: parsed.cta || cta,
+      services: Array.isArray(parsed.services) && parsed.services.length > 0 ? parsed.services.slice(0, 6) : services,
+    };
+  } catch {
+    // If parsing fails, return original copy.
+    return { headline, offer, cta, services };
+  }
+}
+
 // ─── Master Campaign Post image generation ───
+// Backwards-compatible wrapper. New code should call generateBasicDraftLeaflet
+// or generatePremiumLeaflet directly. When the premium template provider flag
+// is enabled, this routes to the provider-based premium path; otherwise it
+// generates a free Basic Draft.
 export async function generateMasterImage({
   userId,
   contentPostId,
@@ -155,814 +883,30 @@ export async function generateMasterImage({
   refinementInstruction?: string;
   allowNoLogo?: boolean;
 }): Promise<ImageResult> {
-  const db = getDb();
-
-  const [post] = await db
-    .select()
-    .from(contentPosts)
-    .where(and(eq(contentPosts.id, contentPostId), eq(contentPosts.userId, userId)))
-    .limit(1);
-
-  if (!post) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Content post not found" });
-  }
-
-  const provider = getImageProvider();
-  if (!provider.configured) {
-    throw new TRPCError({
-      code: "NOT_IMPLEMENTED",
-      message: "Premium image generation is not configured. Add OPENAI_API_KEY to enable it.",
-    });
-  }
-
-  const cost = getPremiumImageCredits();
-  await assertCanAfford(userId, cost, "Premium image generation");
-
-  const currentMeta = (post.metadata || {}) as any;
-  await db
-    .update(contentPosts)
-    .set({
-      metadata: {
-        ...currentMeta,
-        imageStatus: "generating",
-        imageError: null,
-      },
-    })
-    .where(eq(contentPosts.id, post.id));
-
-  try {
-    let campaign: any = null;
-    let business: any = null;
-
-    if (post.campaignId) {
-      [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, post.campaignId)).limit(1);
-      if (campaign?.businessId) {
-        [business] = await db
-          .select()
-          .from(businesses)
-          .where(eq(businesses.id, campaign.businessId))
-          .limit(1);
-      }
-    }
-
-    // Fallback to the user's most recent business if the campaign is not
-    // linked, so a logo/brand identity is still available.
-    if (!business) {
-      const [latestBiz] = await db
-        .select()
-        .from(businesses)
-        .where(eq(businesses.userId, userId))
-        .orderBy(desc(businesses.createdAt))
-        .limit(1);
-      if (latestBiz) {
-        business = latestBiz;
-      } else {
-        business = { name: campaign?.name || post.title || "Your Business" };
-      }
-    }
-    if (!campaign) {
-      campaign = {};
-    }
-
-    console.log(`[CreativeService] Resolved business for generation | contentPostId=${contentPostId} | businessId=${business?.id ?? "none"} | name=${business?.name ?? "none"} | logo=${business?.logo ?? "none"}`);
-
-    // ─── Brand palette resolution ───
-    const brandPalette = await resolveBrandPalette({ ...business, brandColors });
-    const hasLogo = !!business?.logo;
-    if (!hasLogo && !allowNoLogo) {
-      console.warn(`[CreativeService] Premium leaflet blocked: no business logo | userId=${userId} | contentPostId=${contentPostId}`);
-      await db
-        .update(contentPosts)
-        .set({
-          metadata: {
-            ...currentMeta,
-            imageStatus: "failed",
-            imageError: "Please upload your business logo in Settings before generating a premium leaflet. Premium leaflets use your logo and brand colours for best results.",
-          },
-        })
-        .where(eq(contentPosts.id, post.id));
-      return {
-        status: "failed",
-        jobId: "",
-        errorMessage: "Please upload your business logo in Settings before generating a premium leaflet. Premium leaflets use your logo and brand colours for best results.",
-      };
-    }
-
-    // ─── Normalised customer-facing text ───
-    const formattedOffer = renderOffer(campaign.offerDetails, business.name);
-    const leafletHeadline = offerToHeadline(campaign.offerDetails);
-    const selectedTemplate = selectTemplate({ business, campaign, creativeType, templateId, creativeGuidance, refinementInstruction });
-    console.log(`[LeafletCopy] rawOffer="${campaign.offerDetails ?? ""}" | formattedOffer="${formattedOffer}" | headline="${leafletHeadline}" | template=${selectedTemplate}`);
-    const businessCategory = (
-      business?.websiteEvidence?.businessCategory ||
-      business?.industry ||
-      business?.productOrService ||
-      ""
-    ).toString();
-    const leafletCta = normalizeCta(campaign.preferredCta || post.cta, businessCategory);
-
-    const aspectRatio = getImageAspectRatio(creativeType, post.platform || "Instagram");
-
-    // ─── Prompt helpers ───
-    const buildPrompt = (stronger: boolean) =>
-      buildPremiumImagePrompt({
-        business,
-        campaign,
-        post,
-        brandColors,
-        creativeType,
-        strongerBrandFit: stronger,
-        palette: brandPalette,
-        creativeGuidance,
-        refinementInstruction,
-        templateId: selectedTemplate,
-      });
-
-    const preparePrompt = (rawPrompt: string) => {
-      const firstCheck = validateLeafletPrompt(rawPrompt, business);
-      if (firstCheck.passed) return { prompt: rawPrompt, valid: true, reasons: [] as string[] };
-      const sanitized = sanitizePromptForValidator(rawPrompt);
-      const secondCheck = validateLeafletPrompt(sanitized, business);
-      if (secondCheck.passed) {
-        console.log(`[CreativeService] Prompt sanitized before generation | userId=${userId} | contentPostId=${contentPostId} | originalFailures=${JSON.stringify(firstCheck.criticalFailures)} | originalWarnings=${JSON.stringify(firstCheck.warnings)}`);
-        return { prompt: sanitized, valid: true, reasons: [] as string[] };
-      }
-      return { prompt: sanitized, valid: false, reasons: [...secondCheck.criticalFailures, ...secondCheck.warnings] };
-    };
-
-    // ─── Single OpenAI attempt: generate + decode + score + store raw attempt ───
-    interface AttemptRecord {
-      number: number;
-      source: "openai" | "fallback";
-      prompt: string;
-      strongerBrandFit: boolean;
-      buffer: Buffer;
-      result?: ImageResult;
-      score: number;
-      criticalFailures: string[];
-      warnings: string[];
-      passed: boolean;
-      storedUrl?: string;
-      storedLocalPath?: string;
-      footerTop?: number;
-      footerHeight?: number;
-    }
-
-    async function runOpenAiAttempt(prompt: string, stronger: boolean, attemptNumber: number): Promise<AttemptRecord | null> {
-      console.log(`[CreativeService] Requesting OpenAI image | userId=${userId} | contentPostId=${contentPostId} | attempt=${attemptNumber} | model=${env.openaiImageModel || "gpt-image-1"} | aspectRatio=${aspectRatio}`);
-
-      const generationResult = await provider.generate({
-        userId,
-        campaignId: post.campaignId ?? undefined,
-        businessId: business.id,
-        contentPostId: post.id,
-        prompt,
-        aspectRatio,
-        style: campaign.contentStyle || business.visualStyle,
-        negativePrompt: campaign.excludedOffers || undefined,
-      });
-
-      if (generationResult.status === "failed" || (!generationResult.imageUrl && !generationResult.imageBase64)) {
-        const errorMessage = generationResult.errorMessage || "Image generation failed";
-        console.error(`[CreativeService] Image generation failed | userId=${userId} | contentPostId=${contentPostId} | attempt=${attemptNumber} | error="${errorMessage}"`);
-        return null;
-      }
-
-      let buffer: Buffer;
-      try {
-        if (generationResult.imageBase64) {
-          buffer = Buffer.from(generationResult.imageBase64, "base64");
-        } else if (generationResult.imageUrl) {
-          const imgResponse = await fetch(generationResult.imageUrl);
-          if (!imgResponse.ok) throw new Error(`Failed to download generated image: ${imgResponse.status}`);
-          buffer = Buffer.from(await imgResponse.arrayBuffer());
-        } else {
-          throw new Error("No image URL or base64 data received");
-        }
-      } catch (decodeErr) {
-        const message = decodeErr instanceof Error ? decodeErr.message : String(decodeErr);
-        console.error(`[CreativeService] Failed to decode generated image | userId=${userId} | attempt=${attemptNumber} | error="${message}"`);
-        return null;
-      }
-
-      const quality = await validateLeafletQuality(buffer, business, campaign, prompt);
-      console.log(`[CreativeService] Quality score | userId=${userId} | contentPostId=${contentPostId} | attempt=${attemptNumber} | score=${quality.score} | critical=${JSON.stringify(quality.criticalFailures)} | warnings=${JSON.stringify(quality.warnings)}`);
-
-      // Store the raw OpenAI attempt so admin/testing can inspect it even if not selected.
-      let storedUrl: string | undefined;
-      let storedLocalPath: string | undefined;
-      try {
-        const stored = await storeImageBuffer(buffer, {
-          campaignId: post.campaignId ?? undefined,
-          prefix: `master-post-attempt-${attemptNumber}`,
-          extension: generationResult.extension || "png",
-        });
-        storedUrl = stored.publicUrl;
-        storedLocalPath = stored.localPath;
-        console.log(`[CreativeService] Stored attempt ${attemptNumber} | url=${stored.publicUrl}`);
-      } catch (storeErr) {
-        const message = storeErr instanceof Error ? storeErr.message : String(storeErr);
-        console.warn(`[CreativeService] Failed to store attempt ${attemptNumber} | error="${message}"`);
-      }
-
-      return {
-        number: attemptNumber,
-        source: "openai",
-        prompt,
-        strongerBrandFit: stronger,
-        buffer,
-        result: generationResult,
-        score: quality.score,
-        criticalFailures: quality.criticalFailures,
-        warnings: quality.warnings,
-        passed: quality.passed,
-        storedUrl,
-        storedLocalPath,
-      };
-    }
-
-    async function createFallbackAttempt(extraHints = ""): Promise<AttemptRecord & { footerTop?: number; footerHeight?: number }> {
-      const fallbackPrompt = buildPrompt(true);
-      const { buffer, footerTop, footerHeight } = await generateFallbackLeafletImage({
-        business,
-        campaign,
-        post,
-        creativeType,
-        templateId: selectedTemplate,
-        aspectRatio,
-        offer: formattedOffer,
-        cta: leafletCta,
-        headline: formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
-        subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
-        palette: brandPalette,
-        creativeGuidance: [creativeGuidance, extraHints].filter(Boolean).join(". "),
-        refinementInstruction,
-      });
-      return {
-        number: 0,
-        source: "fallback",
-        prompt: fallbackPrompt,
-        strongerBrandFit: true,
-        buffer,
-        score: 100,
-        criticalFailures: [],
-        warnings: ["Fallback template used because OpenAI attempts did not meet acceptance criteria. Output is a basic draft, not a premium leaflet."],
-        passed: true,
-        footerTop,
-        footerHeight,
-      };
-    }
-
-    function isAcceptable(attempt: AttemptRecord | null): boolean {
-      return !!attempt && attempt.criticalFailures.length === 0 && attempt.score >= 60;
-    }
-
-    function shouldRetry(attempt: AttemptRecord | null): boolean {
-      // Retry if the attempt is missing, has a critical failure, or scores below
-      // the usable threshold. Score 60–79 is accepted with warnings; 80+ is ideal.
-      if (!attempt) return true;
-      return attempt.criticalFailures.length > 0 || attempt.score < 60;
-    }
-
-    function pickBestAttempt(a: AttemptRecord | null, b: AttemptRecord | null): AttemptRecord | null {
-      if (!a) return b;
-      if (!b) return a;
-      // Prefer an attempt with no critical failures.
-      if (a.criticalFailures.length === 0 && b.criticalFailures.length > 0) return a;
-      if (b.criticalFailures.length === 0 && a.criticalFailures.length > 0) return b;
-      return a.score >= b.score ? a : b;
-    }
-
-    const allAttempts: AttemptRecord[] = [];
-
-    // ─── Attempt 1 ───
-    const promptPrep = preparePrompt(buildPrompt(strongerBrandFit));
-    let bestAttempt: AttemptRecord | null = null;
-
-    if (promptPrep.valid) {
-      const firstAttempt = await runOpenAiAttempt(promptPrep.prompt, strongerBrandFit, 1);
-      if (firstAttempt) {
-        allAttempts.push(firstAttempt);
-        bestAttempt = firstAttempt;
-      }
-    } else {
-      console.warn(`[CreativeService] Prompt invalid even after sanitisation; skipping first OpenAI call | userId=${userId} | contentPostId=${contentPostId} | reasons=${JSON.stringify(promptPrep.reasons)}`);
-    }
-
-    // ─── Attempt 2 if first attempt needs improvement ───
-    if (shouldRetry(bestAttempt)) {
-      const retryPrep = preparePrompt(buildPrompt(true));
-      if (retryPrep.valid) {
-        console.log(`[CreativeService] Retrying with stronger prompt | userId=${userId} | contentPostId=${contentPostId} | firstScore=${bestAttempt?.score ?? "null"} | firstCritical=${JSON.stringify(bestAttempt?.criticalFailures ?? [])}`);
-        const retryAttempt = await runOpenAiAttempt(retryPrep.prompt, true, 2);
-        if (retryAttempt) {
-          allAttempts.push(retryAttempt);
-          bestAttempt = pickBestAttempt(bestAttempt, retryAttempt);
-        }
-      } else {
-        console.warn(`[CreativeService] Retry prompt invalid after sanitisation | userId=${userId} | contentPostId=${contentPostId} | reasons=${JSON.stringify(retryPrep.reasons)}`);
-      }
-    }
-
-    // ─── Fallback only if no acceptable OpenAI attempt ───
-    let usingFallback = false;
-    if (!isAcceptable(bestAttempt)) {
-      usingFallback = true;
-      bestAttempt = await createFallbackAttempt();
-      allAttempts.push(bestAttempt);
-      console.log(`[CreativeService] Fallback leaflet rendered | userId=${userId} | contentPostId=${contentPostId} | size=${bestAttempt.buffer.length}`);
-    }
-
-    let finalAttempt = bestAttempt!;
-    let finalPrompt = finalAttempt.prompt;
-    let finalResult: ImageResult | undefined = finalAttempt.result;
-    let rawBuffer: Buffer = finalAttempt.buffer;
-
-    // ─── Vision-based fake-branding check for OpenAI images ───
-    if (finalAttempt.source === "openai") {
-      try {
-        const fakeCheck = await detectFakeBranding(rawBuffer, business);
-        console.log(`[CreativeService] Fake-branding vision check | userId=${userId} | contentPostId=${contentPostId} | hasText=${fakeCheck.hasText} | hasLogo=${fakeCheck.hasLogo} | hasBusinessName=${fakeCheck.hasBusinessName} | details="${fakeCheck.details}"`);
-        const preCriticalCount = finalAttempt.criticalFailures.length;
-        if (fakeCheck.hasText || fakeCheck.hasLogo || fakeCheck.hasBusinessName) {
-          if (fakeCheck.hasLogo) {
-            finalAttempt.criticalFailures.push("AI-generated image contains a fake logo or brand mark.");
-          }
-          if (fakeCheck.hasBusinessName) {
-            finalAttempt.criticalFailures.push(`AI-generated image contains the business name "${business.name}" instead of leaving text for the overlay.`);
-          }
-          if (fakeCheck.hasText && !fakeCheck.hasBusinessName) {
-            finalAttempt.warnings.push(`AI-generated image contains readable text: ${fakeCheck.details}`);
-          }
-        }
-        const newCriticals = finalAttempt.criticalFailures.length - preCriticalCount;
-        if (newCriticals > 0) {
-          finalAttempt.score = Math.max(0, finalAttempt.score - newCriticals * 50);
-        } else if (fakeCheck.hasText) {
-          finalAttempt.score = Math.max(0, finalAttempt.score - 20);
-        }
-      } catch (visionErr) {
-        const message = visionErr instanceof Error ? visionErr.message : String(visionErr);
-        console.warn(`[CreativeService] Fake-branding check failed, continuing | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
-      }
-    }
-
-    // ─── Brand overlay for OpenAI images (fallback is already branded) ───
-    // Fallback templates must look genuinely premium; hold them to a higher bar.
-    const getMinQualityScore = () => (finalAttempt.source === "fallback" ? 70 : 60);
-    const STRONGER_LAYOUT_HINTS = "cleaner, fewer services, more spacing, no service boxes, larger text";
-
-    async function composeFinalAttempt(extraHints = ""): Promise<{ buffer: Buffer; logoApplied: boolean; footerTop?: number; footerHeight?: number }> {
-      if (finalAttempt.source === "openai") {
-        const composed = await composeBrandedLeafletImage(rawBuffer, {
-          business,
-          campaign,
-          post,
-          creativeType,
-          templateId: selectedTemplate,
-          offer: formattedOffer,
-          cta: leafletCta,
-          headline: leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
-          subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
-          palette: brandPalette,
-          creativeGuidance: [creativeGuidance, extraHints].filter(Boolean).join(". "),
-          refinementInstruction,
-        });
-        return composed;
-      }
-      // Fallback renderer is already branded; re-render with stronger hints if needed.
-      const attempt = await createFallbackAttempt(extraHints);
-      finalAttempt = attempt;
-      finalPrompt = attempt.prompt;
-      finalResult = attempt.result;
-      return {
-        buffer: attempt.buffer,
-        logoApplied: !!business?.logo,
-        footerTop: attempt.footerTop,
-        footerHeight: attempt.footerHeight,
-      };
-    }
-
-    // Run the same image-quality heuristics on the final rendered buffer.
-    // Fallback templates are explicitly scored as draft/basic so they cannot be
-    // marketed or charged as premium.
-    async function assessVisualQuality(buffer: Buffer) {
-      const isFallback = finalAttempt.source === "fallback";
-      const visualQuality = await validateLeafletQuality(buffer, business, campaign, finalPrompt, isFallback);
-      finalAttempt.score = visualQuality.score;
-      finalAttempt.criticalFailures = [...finalAttempt.criticalFailures, ...visualQuality.criticalFailures];
-      finalAttempt.warnings = [...new Set([...finalAttempt.warnings, ...visualQuality.warnings])];
-      console.log(`[CreativeService] Visual quality assessment | userId=${userId} | contentPostId=${contentPostId} | source=${finalAttempt.source} | score=${visualQuality.score} | tier=${visualQuality.qualityTier} | issues=${JSON.stringify(visualQuality.warnings)}`);
-    }
-
-    let composedBuffer = rawBuffer;
-    let logoOverlayApplied = false;
-    let footerTop: number | undefined;
-    let footerHeight: number | undefined;
-
-    const firstComposition = await composeFinalAttempt();
-    composedBuffer = firstComposition.buffer;
-    logoOverlayApplied = firstComposition.logoApplied;
-    footerTop = firstComposition.footerTop;
-    footerHeight = firstComposition.footerHeight;
-
-    await assessVisualQuality(composedBuffer);
-
-    // Remember the pre-overlay score so retries are evaluated from the same baseline.
-    let baseScore = finalAttempt.score;
-    let baseWarnings = [...finalAttempt.warnings];
-
-    // ─── Final overlay quality checks (text + composition) ───
-    async function runOverlayQualityChecks(buffer: Buffer) {
-      const imageMeta = await sharp(buffer).metadata();
-      const imageHeight = imageMeta.height || 1536;
-      const headerHeight = Math.round(imageHeight * 0.085);
-      const estimatedFooterHeight = footerHeight ?? Math.round(imageHeight * 0.18);
-      const estimatedFooterTop = footerTop ?? imageHeight - estimatedFooterHeight;
-
-      const marketingTextCheck = validateMarketingText({
-        headline: leafletHeadline,
-        offer: formattedOffer,
-        cta: leafletCta,
-        businessName: business.name,
-      });
-      const compositionCheck = validateLeafletComposition({
-        hasLogo: !!business?.logo,
-        headline: leafletHeadline,
-        cta: leafletCta,
-        serviceBullets: defaultServiceBullets(business, campaign),
-        headerHeight,
-        footerHeight: estimatedFooterHeight,
-        footerTop: estimatedFooterTop,
-        imageHeight,
-      });
-
-      // Brand fidelity check.
-      const brandFidelityCheck = validateBrandFidelity({
-        hasLogo,
-        logoOverlayApplied: hasLogo ? logoOverlayApplied : undefined,
-        palette: brandPalette,
-        businessName: business.name,
-        headline: leafletHeadline,
-      });
-
-      const totalPenalty = marketingTextCheck.scorePenalty + compositionCheck.scorePenalty + brandFidelityCheck.scorePenalty;
-      const allTextIssues = [...marketingTextCheck.issues, ...compositionCheck.issues, ...brandFidelityCheck.issues];
-      if (allTextIssues.length > 0) {
-        finalAttempt.score = Math.max(0, baseScore - totalPenalty);
-        finalAttempt.warnings = [...baseWarnings, ...allTextIssues];
-        console.log(`[CreativeService] Overlay quality penalty | userId=${userId} | contentPostId=${contentPostId} | penalty=${totalPenalty} | newScore=${finalAttempt.score} | issues=${JSON.stringify(allTextIssues)}`);
-      } else {
-        finalAttempt.score = baseScore;
-        finalAttempt.warnings = baseWarnings;
-      }
-    }
-
-    await runOverlayQualityChecks(composedBuffer);
-
-    // Retry with stronger layout constraints if the first composition does not meet the threshold.
-    if (finalAttempt.score < getMinQualityScore()) {
-      console.log(`[CreativeService] First composition below quality threshold, retrying with stronger layout constraints | userId=${userId} | contentPostId=${contentPostId} | score=${finalAttempt.score}`);
-      const retryComposition = await composeFinalAttempt(STRONGER_LAYOUT_HINTS);
-      composedBuffer = retryComposition.buffer;
-      logoOverlayApplied = retryComposition.logoApplied;
-      footerTop = retryComposition.footerTop;
-      footerHeight = retryComposition.footerHeight;
-      await assessVisualQuality(composedBuffer);
-      baseScore = finalAttempt.score;
-      baseWarnings = [...finalAttempt.warnings];
-      await runOverlayQualityChecks(composedBuffer);
-    }
-
-    if (hasLogo && !logoOverlayApplied) {
-      throw new Error(`Business logo exists but could not be applied to the leaflet: ${business.logo}`);
-    }
-
-    if (finalAttempt.score < getMinQualityScore() || finalAttempt.criticalFailures.length > 0) {
-      const failureReason = `Leaflet quality score ${finalAttempt.score}/100 is below the acceptable threshold of ${getMinQualityScore()}. ${finalAttempt.criticalFailures.join(" ")} ${finalAttempt.warnings.slice(-5).join(" ")}`.trim();
-      console.error(`[CreativeService] Quality validation failed | userId=${userId} | contentPostId=${contentPostId} | score=${finalAttempt.score} | reason="${failureReason}"`);
-      await db
-        .update(contentPosts)
-        .set({
-          metadata: {
-            ...currentMeta,
-            imageStatus: "failed",
-            imageError: failureReason,
-            imageQualityScore: finalAttempt.score,
-            qualityScore: finalAttempt.score,
-            imageQualityWarnings: finalAttempt.warnings,
-            validationIssues: finalAttempt.warnings,
-            imageQualityCriticalFailures: finalAttempt.criticalFailures,
-            criticalFailures: finalAttempt.criticalFailures,
-            imageFallbackUsed: usingFallback,
-            fallbackUsed: usingFallback,
-          },
-        })
-        .where(eq(contentPosts.id, post.id));
-      return { status: "failed", jobId: finalResult?.providerJobId || "fallback", errorMessage: failureReason };
-    }
-
-    // ─── Store locally with fallback on storage/URL failure ───
-    async function validateStoredImage(stored: { publicUrl: string; localPath: string }) {
-      if (!stored.publicUrl || typeof stored.publicUrl !== "string") {
-        throw new Error("Stored image returned an invalid public URL");
-      }
-      if (!stored.publicUrl.startsWith("/") && !stored.publicUrl.startsWith("http")) {
-        throw new Error(`Stored image returned a malformed public URL: ${stored.publicUrl}`);
-      }
-      const stats = fs.statSync(stored.localPath);
-      if (!stats.isFile() || stats.size === 0) {
-        throw new Error(`Stored image file is missing or empty: ${stored.localPath}`);
-      }
-      // For absolute public URLs, confirm they are actually reachable.
-      if (stored.publicUrl.startsWith("http") && !(await isPublicImageLoadable(stored.publicUrl))) {
-        throw new Error(`Stored image public URL is not loadable: ${stored.publicUrl}`);
-      }
-    }
-
-    let stored;
-    try {
-      stored = await storeImageBuffer(composedBuffer, {
-        campaignId: post.campaignId ?? undefined,
-        prefix: usingFallback ? "master-post-fallback" : "master-post",
-        extension: finalResult?.extension || "png",
-      });
-      await validateStoredImage(stored);
-      console.log(`[CreativeService] Image stored and validated | userId=${userId} | contentPostId=${contentPostId} | publicUrl=${stored.publicUrl} | localPath=${stored.localPath} | size=${composedBuffer.length}`);
-    } catch (storeOrValidateErr) {
-      const message = storeOrValidateErr instanceof Error ? storeOrValidateErr.message : String(storeOrValidateErr);
-      console.error(`[CreativeService] Failed to store or validate image | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
-
-      // If the OpenAI image cannot be stored or served, render the deterministic
-      // fallback instead of returning a hard failure.
-      if (finalAttempt.source === "openai") {
-        console.log(`[CreativeService] Rendering fallback because OpenAI image could not be stored/served | userId=${userId} | contentPostId=${contentPostId}`);
-        usingFallback = true;
-        bestAttempt = await createFallbackAttempt();
-        allAttempts.push(bestAttempt);
-        finalAttempt = bestAttempt;
-        finalPrompt = finalAttempt.prompt;
-        finalResult = finalAttempt.result;
-        rawBuffer = finalAttempt.buffer;
-        composedBuffer = rawBuffer;
-        footerTop = finalAttempt.footerTop;
-        footerHeight = finalAttempt.footerHeight;
-        logoOverlayApplied = !!business?.logo;
-        await assessVisualQuality(composedBuffer);
-        baseScore = finalAttempt.score;
-        baseWarnings = [...finalAttempt.warnings];
-        await runOverlayQualityChecks(composedBuffer);
-        stored = await storeImageBuffer(composedBuffer, {
-          campaignId: post.campaignId ?? undefined,
-          prefix: "master-post-fallback",
-          extension: "png",
-        });
-        await validateStoredImage(stored);
-        console.log(`[CreativeService] Fallback image stored and validated | userId=${userId} | contentPostId=${contentPostId} | publicUrl=${stored.publicUrl}`);
-      } else {
-        await db
-          .update(contentPosts)
-          .set({
-            metadata: {
-              ...currentMeta,
-              imageStatus: "failed",
-              imageError: `Generated image could not be stored or validated: ${message}`,
-            },
-          })
-          .where(eq(contentPosts.id, post.id));
-        return { status: "failed", jobId: finalResult?.providerJobId || "fallback", errorMessage: `Generated image could not be stored or validated: ${message}` };
-      }
-    }
-
-    // ─── Credit protection: internal fallback templates are basic drafts and
-    // must not consume premium credits. Only genuine OpenAI-generated visuals
-    // are charged the premium rate.
-    const finalCost = usingFallback ? 0 : cost;
-    let deduction: { transactionId?: number; newBalance: number } | undefined;
-    if (finalCost > 0) {
-      deduction = await deductCredits({
-        userId,
-        amount: finalCost,
-        type: "image_generation",
-        description: "Premium Master Campaign Post image generation",
-        metadata: {
-          provider: provider.name,
-          providerJobId: finalResult?.providerJobId || "fallback",
-          contentPostId: post.id,
-          campaignId: post.campaignId,
-          cost: finalCost,
-          usingFallback,
-        },
-      });
-    } else {
-      const wallet = await checkCredits(userId, 0);
-      deduction = { newBalance: wallet.balance };
-      console.log(`[CreativeService] Fallback draft generated at no charge | userId=${userId} | contentPostId=${contentPostId}`);
-    }
-
-    // ─── Record AI usage / provider cost ───
-    const openAiSize = mapAspectRatioToOpenAiSize(aspectRatio);
-    const actualCostUsd = usingFallback ? 0 : openAiImageActualCostUsd(openAiSize);
-    await recordAiUsage({
+  if (env.enablePremiumTemplateProvider) {
+    return generatePremiumLeaflet({
       userId,
-      campaignId: post.campaignId ?? undefined,
-      agentType: "image_generation",
-      model: env.openaiImageModel || "gpt-image-1",
-      promptTokens: 500,
-      completionTokens: 100,
-      actualCostUsdMicro: usdToMicroCents(actualCostUsd),
-      estimatedCostUsdMicro: usdToMicroCents(actualCostUsd),
-      creditsDeducted: finalCost,
-      metadata: {
-        provider: provider.name,
-        providerJobId: finalResult?.providerJobId || "fallback",
-        contentPostId: post.id,
-        aspectRatio,
-        outputUrl: stored.publicUrl,
-        usingFallback,
-      },
-    });
-
-    const attemptsSummary = allAttempts.map((a) => ({
-      number: a.number,
-      source: a.source,
-      score: a.score,
-      passed: a.passed,
-      criticalFailures: a.criticalFailures,
-      warnings: a.warnings,
-      validationIssues: a.warnings,
-      storedUrl: a.storedUrl,
-      promptUsed: a.prompt,
-      strongerBrandFitUsed: a.strongerBrandFit,
-    }));
-
-    // ─── Quality tier / label ───
-    const qualityTier = computeQualityTier(finalAttempt.score, usingFallback);
-    const qualityLabel = qualityTierLabel(qualityTier);
-    const isDraft = qualityTier === "draft" || qualityTier === "failed";
-
-    // ─── Version history ───
-    const previousVersions = Array.isArray(currentMeta?.imageVersions) ? currentMeta.imageVersions : [];
-    const newVersion = {
-      version: previousVersions.length + 1,
-      url: stored.publicUrl,
-      source: usingFallback ? "fallback" : "openai",
-      score: finalAttempt.score,
-      qualityTier,
-      qualityLabel,
-      promptUsed: finalPrompt,
-      strongerBrandFitUsed: finalAttempt.strongerBrandFit,
+      contentPostId,
+      brandColors,
+      creativeType,
+      templateId,
+      strongerBrandFit,
       creativeGuidance,
       refinementInstruction,
-      brandPalette,
-      hasLogo,
-      templateId: selectedTemplate,
-      generatedAt: new Date().toISOString(),
-      approved: false,
-    };
-    const imageVersions = [...previousVersions, newVersion];
-
-    // ─── Persist audit row ───
-    await db.insert(generatedImages).values({
-      userId,
-      campaignId: post.campaignId,
-      businessId: business.id,
-      contentPostId: post.id,
-      provider: provider.name,
-      providerJobId: finalResult?.providerJobId || "fallback",
-      prompt: finalPrompt,
-      url: stored.publicUrl,
-      aspectRatio,
-      style: campaign.contentStyle || business.visualStyle,
-      status: "completed",
-      creditsCharged: finalCost,
-      providerCostUsd: usdToMicroCents(actualCostUsd),
-      metadata: {
-        originalUrl: finalResult?.imageUrl,
-        localPath: stored.localPath,
-        balanceAfter: deduction.newBalance,
-        usingFallback,
-        source: usingFallback ? "fallback" : "openai",
-        qualityScore: finalAttempt.score,
-        qualityTier,
-        qualityLabel,
-        isDraft,
-        validationIssues: finalAttempt.warnings,
-        criticalFailures: finalAttempt.criticalFailures,
-        qualityWarnings: finalAttempt.warnings,
-        qualityCriticalFailures: finalAttempt.criticalFailures,
-        fallbackUsed: usingFallback,
-        promptUsed: finalPrompt,
-        strongerBrandFitUsed: finalAttempt.strongerBrandFit,
-        creativeGuidance,
-        refinementInstruction,
-        brandPalette,
-        hasLogo,
-        templateId: selectedTemplate,
-        attempts: attemptsSummary,
-        versions: imageVersions,
-      },
+      allowNoLogo,
     });
-
-    // ─── Update master post metadata ───
-    const [latestGenerated] = await db
-      .select({ id: generatedImages.id })
-      .from(generatedImages)
-      .where(eq(generatedImages.contentPostId, post.id))
-      .orderBy(desc(generatedImages.createdAt))
-      .limit(1);
-    const currentVersionId = latestGenerated?.id ?? null;
-
-    await db
-      .update(contentPosts)
-      .set({
-        metadata: {
-          ...currentMeta,
-          currentVersionId,
-          imageCurrentVersionId: currentVersionId,
-          imageUrl: stored.publicUrl,
-          imageProvider: provider.name,
-          imageJobId: finalResult?.providerJobId || "fallback",
-          imageStatus: "ready",
-          imageGeneratedAt: new Date().toISOString(),
-          imageError: null,
-          imageCreditsCharged: finalCost,
-          imageExtension: finalResult?.extension || "png",
-          imageSource: usingFallback ? "fallback" : "openai",
-          source: usingFallback ? "fallback" : "openai",
-          imageTemplateId: selectedTemplate,
-          templateId: selectedTemplate,
-          imageQualityScore: finalAttempt.score,
-          qualityScore: finalAttempt.score,
-          imageQualityTier: qualityTier,
-          qualityTier,
-          imageQualityLabel: qualityLabel,
-          qualityLabel,
-          imageIsDraft: isDraft,
-          isDraft,
-          imageQualityWarnings: finalAttempt.warnings,
-          validationIssues: finalAttempt.warnings,
-          imageQualityCriticalFailures: finalAttempt.criticalFailures,
-          criticalFailures: finalAttempt.criticalFailures,
-          imageFallbackUsed: usingFallback,
-          fallbackUsed: usingFallback,
-          imagePromptUsed: finalPrompt,
-          promptUsed: finalPrompt,
-          imageStrongerBrandFitUsed: finalAttempt.strongerBrandFit,
-          strongerBrandFitUsed: finalAttempt.strongerBrandFit,
-          imageAttempts: attemptsSummary,
-          imageVersions,
-          imageBrandPalette: brandPalette,
-          imageHasLogo: hasLogo,
-          imageLogoOverlayApplied: logoOverlayApplied,
-          imageCreativeGuidance: creativeGuidance,
-          imageRefinementInstruction: refinementInstruction,
-          imageApprovedVersion: currentMeta?.imageApprovedVersion,
-        },
-      })
-      .where(eq(contentPosts.id, post.id));
-
-    // ─── Generate included Caption Pack (non-blocking) ───
-    generateCaptionPack({ userId, contentPostId: post.id }).catch((err) => {
-      console.error(`[CreativeService] Caption pack async error | userId=${userId} | contentPostId=${post.id} | error="${err.message}"`);
-    });
-
-    console.log(`[CreativeService] Premium image ready | userId=${userId} | contentPostId=${contentPostId} | url=${stored.publicUrl} | credits=${cost} | fallback=${usingFallback}`);
-
-    return {
-      jobId: finalResult?.providerJobId || "fallback",
-      providerJobId: finalResult?.providerJobId || "fallback",
-      provider: provider.name,
-      status: "completed",
-      imageUrl: stored.publicUrl,
-      imageBase64: finalResult?.imageBase64,
-      extension: finalResult?.extension || "png",
-      creditsCharged: finalCost,
-      qualityTier,
-      qualityLabel,
-      isDraft,
-      usingFallback,
-    };
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error(`[CreativeService] Unexpected error generating premium image | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`, err);
-    try {
-      await db
-        .update(contentPosts)
-        .set({
-          metadata: {
-            ...currentMeta,
-            imageStatus: "failed",
-            imageError: errorMessage,
-          },
-        })
-        .where(eq(contentPosts.id, post.id));
-    } catch (metadataErr) {
-      const metadataErrorMessage = metadataErr instanceof Error ? metadataErr.message : String(metadataErr);
-      console.error(`[CreativeService] Failed to update failure metadata | error="${metadataErrorMessage}"`);
-    }
-    return { status: "failed", jobId: "", errorMessage };
   }
+
+  return generateBasicDraftLeaflet({
+    userId,
+    contentPostId,
+    brandColors,
+    creativeType,
+    templateId,
+    creativeGuidance,
+    refinementInstruction,
+    allowNoLogo,
+  });
 }
 
 export interface CaptionPack {
