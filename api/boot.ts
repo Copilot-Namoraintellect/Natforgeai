@@ -232,6 +232,7 @@ app.use("/api/trpc/*", async (c) => {
     req: c.req.raw,
     router: appRouter,
     createContext,
+    allowMethodOverride: true,
   });
 });
 
