@@ -7,9 +7,11 @@ import { businesses, users } from "@db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { defaultModel } from "./lib/agents/openai";
 import { storeUploadedAsset } from "./lib/creative/storage";
+import { createAlert } from "./lib/alerts";
 import {
   crawlWebsitePages,
   buildWebsiteAnalysisPrompt,
+  type BusinessEvidence,
 } from "./lib/website-analyser";
 
 type OperationName =
@@ -51,8 +53,93 @@ function mapAnalysisErrorToUserMessage(code: string, reason: string): string {
       return "This website returned a server error. You can continue manually.";
     case "NO_CONTENT":
       return "We could not find enough useful content on this website. You can continue manually.";
+    case "INSUFFICIENT_QUOTA":
+      return "AI analysis is temporarily unavailable due to provider quota/billing. You can continue manually.";
     default:
       return `${reason}. You can complete your profile manually.`;
+  }
+}
+
+function isInsufficientQuotaError(err: any): boolean {
+  if (!err) return false;
+  const statusCode = err.statusCode ?? err.status ?? err.response?.status;
+  const code = err.code ?? err.error?.code ?? err.response?.data?.error?.code;
+  const message = err.message || err.error?.message || "";
+  return (
+    statusCode === 429 ||
+    code === "insufficient_quota" ||
+    message.toLowerCase().includes("insufficient_quota") ||
+    message.toLowerCase().includes("exceeded your current quota") ||
+    message.toLowerCase().includes("billing")
+  );
+}
+
+function buildDeterministicProfileSuggestions(
+  evidence: BusinessEvidence,
+  input: { businessName?: string; industry?: string; location?: string }
+) {
+  const category = evidence.businessCategory || input.industry || "Business";
+  const products = evidence.productsServices.length
+    ? evidence.productsServices
+    : ["Products/services not listed on website"];
+  const customers = evidence.targetCustomers.length
+    ? evidence.targetCustomers
+    : ["Customers not explicitly stated"];
+
+  const firstProduct = products[0] || "";
+  const productDescription = evidence.evidenceSnippets.slice(0, 3).join(" ").trim() || firstProduct;
+
+  const platformMap: Record<string, string[]> = {
+    "Food & Beverage / Restaurant": ["instagram", "facebook", "tiktok"],
+    "Beauty & Personal Care": ["instagram", "facebook", "tiktok"],
+    "Art & Décor / Canvas & Framed Prints": ["instagram", "facebook", "pinterest"],
+    "Print, Copy & Courier Services": ["facebook", "linkedin", "whatsapp"],
+    "Financial Services / Fintech": ["linkedin", "facebook", "whatsapp"],
+    "Professional Services / Consulting": ["linkedin", "facebook"],
+    "Marketing / Digital Agency": ["linkedin", "instagram", "facebook"],
+    "Real Estate": ["facebook", "instagram", "linkedin"],
+  };
+
+  const preferredPlatforms = platformMap[category] || ["facebook", "instagram", "linkedin"];
+
+  return {
+    businessCategory: category,
+    productOrService: firstProduct,
+    targetCustomer: customers.join(", "),
+    productDescription,
+    uniqueSellingPoint: evidence.evidenceSnippets[0] || firstProduct,
+    pricePointOffer: null,
+    primaryGoal: "Build brand awareness",
+    secondaryGoal: "Generate more leads",
+    successMetric: "Engagement rate",
+    targetRevenue: null,
+    brandTone: "professional",
+    visualStyle: "modern",
+    colorPalette: "neutral",
+    brandVoiceNotes: `Clear, trustworthy ${category.toLowerCase()} voice.`,
+    wordsToAvoid: "",
+    preferredPlatforms,
+    recommendedAssetTypes: ["logo", "product_images"],
+    confidence: evidence.confidence,
+    assumptions: evidence.assumptions,
+  };
+}
+
+async function maybeCreateQuotaAlert(err: any) {
+  if (!isInsufficientQuotaError(err)) return;
+  try {
+    await createAlert({
+      severity: "critical",
+      category: "openai",
+      message: "OpenAI quota exhausted or billing issue. AI features including website analysis may fail.",
+      details: {
+        errorCode: err.code,
+        statusCode: err.statusCode ?? err.status,
+        message: err.message,
+      },
+    });
+  } catch (alertErr: any) {
+    console.error("[businessRouter] Failed to create quota alert:", alertErr.message);
   }
 }
 
@@ -478,18 +565,33 @@ export const businessRouter = createRouter({
           assumptions: z.array(z.string()).describe("List any assumptions made"),
         });
 
-        const result = await generateObject({
-          model: defaultModel,
-          system:
-            "You are an expert marketing analyst. Analyse the structured website evidence and return actionable marketing insights. " +
-            "CRITICAL: Do not classify the business as SEO, digital marketing, social media management, data analytics, restaurant, salon, or consulting " +
-            "unless the evidence explicitly and repeatedly supports that classification. Only list products/services actually mentioned in the evidence. " +
-            "Always use USD for prices. Be concise.",
-          prompt,
-          schema: analysisSchema,
-        });
+        let suggestions;
+        try {
+          const result = await generateObject({
+            model: defaultModel,
+            system:
+              "You are an expert marketing analyst. Analyse the structured website evidence and return actionable marketing insights. " +
+              "CRITICAL: Do not classify the business as SEO, digital marketing, social media management, data analytics, restaurant, salon, or consulting " +
+              "unless the evidence explicitly and repeatedly supports that classification. Only list products/services actually mentioned in the evidence. " +
+              "Always use USD for prices. Be concise.",
+            prompt,
+            schema: analysisSchema,
+          });
+          suggestions = result.object;
+        } catch (openAiErr: any) {
+          await maybeCreateQuotaAlert(openAiErr);
 
-        const suggestions = result.object;
+          if (isInsufficientQuotaError(openAiErr)) {
+            console.warn(`${logPrefix} OpenAI quota exceeded; using deterministic fallback`);
+            suggestions = buildDeterministicProfileSuggestions(evidence, {
+              businessName: input.businessName,
+              industry: input.industry,
+              location: input.location,
+            });
+          } else {
+            throw openAiErr;
+          }
+        }
 
         // Persist structured evidence on the business row for downstream gates.
         const db = getDb();

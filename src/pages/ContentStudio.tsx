@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useSearchParams, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -48,7 +48,6 @@ import {
   AlertCircle,
   Loader2,
   Megaphone,
-  Hash,
   MessageCircle,
   Image,
   ChevronDown,
@@ -87,8 +86,133 @@ const CAPTION_PACK_PLATFORM_KEYS: Record<string, keyof { linkedinCaption: string
 
 type PendingActionKey = string;
 
+type ContentIteration = {
+  id: string;
+  runId: string;
+  iterationNumber: number;
+  createdAt: Date;
+  tier: "premium" | "basic" | "standard";
+  leaflet?: any;
+  captionPack?: any;
+  videoConcept?: any;
+  supporting: any[];
+  isLegacy?: boolean;
+};
+
 function actionKey(contentId: number, action: string): PendingActionKey {
   return `${contentId}:${action}`;
+}
+
+function getContentMeta(c: any) {
+  return (c?.metadata || {}) as any;
+}
+
+function getGenerationRunId(c: any) {
+  return getContentMeta(c).generationRunId || "legacy-group";
+}
+
+function getIterationNumber(c: any) {
+  return getContentMeta(c).iterationNumber ?? 0;
+}
+
+function getAssetTier(c: any): "premium" | "basic" | "standard" {
+  const tier = getContentMeta(c).assetTier;
+  if (tier === "premium" || tier === "basic" || tier === "standard") return tier;
+  const source = getContentMeta(c).imageSource || getContentMeta(c).source;
+  const credits = getContentMeta(c).imageCreditsCharged;
+  if (source === "premium" || (typeof credits === "number" && credits > 0)) return "premium";
+  if (source === "draft" || credits === 0 || getContentMeta(c).isDraft) return "basic";
+  return "standard";
+}
+
+function getAssetType(c: any) {
+  return getContentMeta(c).assetType || getContentMeta(c).assetKind || c?.type || c?.assetType || "unknown";
+}
+
+function isMasterLeaflet(c: any) {
+  return getAssetType(c) === "leaflet" || getContentMeta(c).assetKind === "master_campaign_post";
+}
+
+function isVideoConcept(c: any) {
+  return (
+    getAssetType(c) === "video_concept" ||
+    getContentMeta(c).assetKind === "master_video_ad" ||
+    c?.type === "video_concept"
+  );
+}
+
+function isCaptionPackAsset(a: any) {
+  return a?.assetType === "caption_pack" || getContentMeta(a).assetType === "caption_pack";
+}
+
+function formatIterationDate(date: Date | string | undefined) {
+  if (!date) return "";
+  return new Date(date).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function computeCampaignIterations(contents: any[], assets: any[]): ContentIteration[] {
+  const records: any[] = [
+    ...(contents || []).map((c) => ({ ...c, _recordKind: "content" })),
+    ...(assets || []).map((a) => ({ ...a, _recordKind: "asset" })),
+  ];
+
+  // Records that have a real generationRunId are grouped by run.
+  // Records without one are grouped together as a single legacy iteration.
+  const byRun = new Map<string, any[]>();
+  for (const record of records) {
+    const runId = getGenerationRunId(record);
+    if (!byRun.has(runId)) byRun.set(runId, []);
+    byRun.get(runId)!.push(record);
+  }
+
+  const iterations: ContentIteration[] = [];
+  for (const [runId, items] of byRun.entries()) {
+    const createdAt = new Date(
+      Math.max(...items.map((i) => new Date(i.createdAt || 0).getTime()))
+    );
+    const explicitNumber = Math.max(...items.map((i) => getIterationNumber(i) || 0));
+    const isLegacy = runId === "legacy-group";
+    const leaflet = items.find(isMasterLeaflet);
+    const videoConcept = items.find(isVideoConcept);
+    const captionPack = items.find(isCaptionPackAsset);
+    const supporting = items.filter(
+      (i) => !isMasterLeaflet(i) && !isVideoConcept(i) && !isCaptionPackAsset(i)
+    );
+    const tier: "premium" | "basic" | "standard" =
+      (leaflet && getAssetTier(leaflet)) ||
+      (captionPack && getAssetTier(captionPack)) ||
+      (videoConcept && getAssetTier(videoConcept)) ||
+      (isLegacy ? "standard" : "standard");
+
+    iterations.push({
+      id: runId,
+      runId,
+      iterationNumber: explicitNumber || 0,
+      createdAt,
+      tier,
+      leaflet,
+      captionPack,
+      videoConcept,
+      supporting,
+      isLegacy,
+    } as ContentIteration);
+  }
+
+  // Assign fallback iteration numbers for records that lack them, newest first gets highest number.
+  const sorted = iterations.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  let fallbackNumber = sorted.filter((i) => i.iterationNumber > 0).length;
+  for (const iteration of sorted) {
+    if (iteration.iterationNumber === 0) {
+      fallbackNumber = Math.max(fallbackNumber + 1, 1);
+      iteration.iterationNumber = fallbackNumber;
+    }
+  }
+
+  return sorted;
 }
 
 function LeafletVersionHistory({ contentPostId, metadata }: { contentPostId: number; metadata: any }) {
@@ -241,6 +365,8 @@ export default function ContentStudio() {
   const [pendingActions, setPendingActions] = useState<Set<PendingActionKey>>(new Set());
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["masterVisual", "masterVideo"]));
+  const [selectedIterationId, setSelectedIterationId] = useState<string | null>(null);
+  const [captionPackTab, setCaptionPackTab] = useState<string>("master");
   type LeafletTemplateId = "auto" | "service_business_promo" | "retail_product_promo" | "offer_discount_campaign";
   const [imageTemplateId, setImageTemplateId] = useState<LeafletTemplateId>("auto");
   const [loadingImageIds, setLoadingImageIds] = useState<Set<number>>(new Set());
@@ -304,6 +430,15 @@ export default function ContentStudio() {
     { campaignId: numericCampaignId },
     { enabled: hasCampaignId }
   );
+  const campaignIterations = useMemo(
+    () => computeCampaignIterations(contents || [], campaignAssets || []),
+    [contents, campaignAssets]
+  );
+  useEffect(() => {
+    if (campaignIterations.length > 0 && !campaignIterations.some((i) => i.id === selectedIterationId)) {
+      setSelectedIterationId(campaignIterations[0].id);
+    }
+  }, [campaignIterations, selectedIterationId]);
   const { data: videoJobs } = trpc.video.listForCampaign.useQuery(
     { campaignId: numericCampaignId },
     { enabled: hasCampaignId }
@@ -1963,60 +2098,77 @@ Include:
     const copyText = sections.map((s) => `**${s.label}**\n${s.text}`).join("\n\n");
 
     return (
-      <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <h4 className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
-            <MessageCircle className="w-4 h-4 text-emerald-600" />
-            Caption Pack
-          </h4>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-[11px]"
-              onClick={() => {
-                navigator.clipboard.writeText(copyText);
-                toast.success("Caption pack copied.");
-              }}
-            >
-              <Copy className="w-3 h-3 mr-1" />
-              Copy All
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-[11px]"
-              onClick={() => generateCaptionPackMutation.mutate({ contentPostId })}
-              disabled={generateCaptionPackMutation.isPending}
-            >
-              {generateCaptionPackMutation.isPending ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Sparkles className="w-3 h-3 mr-1" />}
-              Regenerate
-            </Button>
-          </div>
-        </div>
-        <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
-          {sections.map((s) => (
-            <div key={s.key} className="rounded-lg border border-slate-100 bg-slate-50 p-3.5">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">{s.label}</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 text-[10px] px-1.5 text-slate-500 hover:text-slate-800"
-                  onClick={() => {
-                    navigator.clipboard.writeText(s.text);
-                    toast.success(`${s.label} copied.`);
-                  }}
-                >
-                  <Copy className="w-3 h-3 mr-1" />
-                  Copy
-                </Button>
-              </div>
-              <p className="text-xs text-slate-700 whitespace-pre-wrap">{s.text}</p>
+      <Card className="overflow-hidden">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
+              <MessageCircle className="w-5 h-5 text-purple-600" />
+              Caption Pack
+            </CardTitle>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                onClick={() => {
+                  navigator.clipboard.writeText(copyText);
+                  toast.success("Caption pack copied.");
+                }}
+              >
+                <Copy className="w-3.5 h-3.5 mr-1.5" />
+                Copy All
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                onClick={() => generateCaptionPackMutation.mutate({ contentPostId })}
+                disabled={generateCaptionPackMutation.isPending}
+              >
+                {generateCaptionPackMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
+                Regenerate
+              </Button>
             </div>
-          ))}
-        </div>
-      </div>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <Tabs value={captionPackTab} onValueChange={setCaptionPackTab} className="w-full">
+            <TabsList className="w-full justify-start flex-wrap h-auto gap-1 bg-slate-50 p-1 rounded-lg mb-4">
+              {sections.map((s) => (
+                <TabsTrigger
+                  key={s.key}
+                  value={s.key}
+                  className="text-xs px-3 py-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm"
+                >
+                  {s.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {sections.map((s) => (
+              <TabsContent key={s.key} value={s.key} className="mt-0">
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">{s.label}</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs px-2 text-slate-500 hover:text-slate-800"
+                      onClick={() => {
+                        navigator.clipboard.writeText(s.text);
+                        toast.success(`${s.label} copied.`);
+                      }}
+                    >
+                      <Copy className="w-3.5 h-3.5 mr-1.5" />
+                      Copy
+                    </Button>
+                  </div>
+                  <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{s.text}</p>
+                </div>
+              </TabsContent>
+            ))}
+          </Tabs>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -2671,48 +2823,57 @@ Include:
   function renderCampaignPack() {
     if (!urlCampaignId || !filtered) return null;
 
-    // Primary assets: one marketing leaflet/draft; video is gated by feature flags
-    const masterVisual =
-      filtered.find((c) => ((c.metadata as any)?.assetKind === "master_campaign_post")) ||
-      filtered.find((c) => c.type === "social_post");
-    const video =
-      filtered.find((c) => ((c.metadata as any)?.assetKind === "master_video_ad")) ||
-      filtered.find((c) => c.type === "video_concept" || c.type === "reel_script");
     const basicConfigured = videoConfig?.basicConfigured ?? true;
     const premiumConfigured = videoConfig?.premiumConfigured ?? false;
     const videoEnabled = (ENABLE_PREMIUM_VIDEO && premiumConfigured) || (ENABLE_BASIC_DRAFT_VIDEO && basicConfigured);
-    const masterMeta = (masterVisual?.metadata || {}) as any;
-    const isDraftMaster = masterMeta?.imageSource === "draft" || masterMeta?.isDraft || (masterMeta?.imageCreditsCharged ?? null) === 0;
-
-    // Supporting assets live in campaignAssets, not as primary content cards
-    const adaptations = campaignAssets?.filter((a) => a.assetType === "caption_adaptation") || [];
-    const hashtagSet = campaignAssets?.find((a) => a.assetType === "hashtag_set");
-    const carousel = campaignAssets?.find((a) => a.assetType === "carousel_ad" || a.assetType === "carousel");
-    const ads = campaignAssets?.filter((a) => a.assetType === "ad_copy" || a.assetType === "lead_gen_ad") || [];
-    const whatsapp = campaignAssets?.find((a) => a.assetType === "whatsapp_promo" || a.assetType === "whatsapp_copy");
-    const emailItem = campaignAssets?.find((a) => a.assetType === "email_copy");
-    const launch = campaignAssets?.find((a) => a.assetType === "launch_pack");
-    const hookBank = campaignAssets?.find((a) => a.assetType === "cta_variant" && a.title === "Hook Bank");
-    const ctaBank = campaignAssets?.find((a) => a.assetType === "cta_variant" && a.title === "CTA Variation Bank");
-    const otherAssets =
-      campaignAssets?.filter(
-        (a) =>
-          ![
-            "caption_adaptation",
-            "hashtag_set",
-            "carousel_ad",
-            "carousel",
-            "ad_copy",
-            "lead_gen_ad",
-            "whatsapp_promo",
-            "whatsapp_copy",
-            "email_copy",
-            "launch_pack",
-            "cta_variant",
-          ].includes(a.assetType)
-      ) || [];
     const allApproved = filtered.every((c) => getApprovalState(c));
     const anyDraft = filtered.some((c) => c.status === "draft");
+
+    const iterations = campaignIterations;
+    const selectedIteration = iterations.find((i) => i.id === selectedIterationId) || iterations[0];
+    const previousIterations = iterations.filter((i) => i.id !== selectedIteration?.id);
+
+    const tierLabel: Record<string, string> = {
+      premium: "Premium",
+      basic: "Basic Draft",
+      standard: "Standard Pack",
+    };
+
+    const tierBadgeClasses: Record<string, string> = {
+      premium: "bg-purple-50 text-purple-700 border-purple-200",
+      basic: "bg-slate-50 text-slate-700 border-slate-200",
+      standard: "bg-blue-50 text-blue-700 border-blue-200",
+    };
+
+    const iterationLabel = (iteration: ContentIteration) =>
+      iteration.isLegacy ? "Legacy" : tierLabel[iteration.tier];
+
+    const iterationBadgeClasses = (iteration: ContentIteration) =>
+      iteration.isLegacy ? "bg-slate-100 text-slate-600 border-slate-200" : tierBadgeClasses[iteration.tier];
+
+    const statusBadgeFor = (content?: any) => {
+      if (!content) return null;
+      const meta = getContentMeta(content);
+      if (meta.imageStatus === "failed" || meta.videoStatus === "failed") {
+        return (
+          <Badge variant="outline" className="border-red-200 text-red-700 bg-red-50">
+            Failed
+          </Badge>
+        );
+      }
+      if (meta.imageStatus === "generating" || meta.videoStatus === "generating" || meta.videoStatus === "rendering") {
+        return (
+          <Badge variant="outline" className="border-blue-200 text-blue-700 bg-blue-50">
+            Generating
+          </Badge>
+        );
+      }
+      return (
+        <Badge variant="outline" className="border-emerald-200 text-emerald-700 bg-emerald-50">
+          Ready
+        </Badge>
+      );
+    };
 
     return (
       <div className="space-y-6">
@@ -2726,7 +2887,10 @@ Include:
                   Campaign Pack
                 </h2>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  {campaignForContext?.name} — {videoEnabled && video ? 2 : 1} primary asset{videoEnabled && video ? "s" : ""}
+                  {campaignForContext?.name}
+                  {iterations.length > 0 && (
+                    <span> · Iteration {selectedIteration?.iterationNumber ?? 1} of {iterations.length}</span>
+                  )}
                   {campaignAssets && campaignAssets.length > 0 && (
                     <span> · {campaignAssets.length} supporting asset{campaignAssets.length === 1 ? "" : "s"}</span>
                   )}
@@ -2781,231 +2945,170 @@ Include:
 
         {renderWorkflowGuidance()}
 
-        {/* Marketing Leaflet — always expanded, adaptations nested inside */}
-        {masterVisual && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <Image className="w-4 h-4 text-[#00D4FF]" />
-              {isDraftMaster ? "Marketing Draft" : "Premium Marketing Leaflet"}
-            </h3>
-            {renderContentCard(masterVisual)}
-
-            {adaptations.length > 0 && (
-              <Collapsible
-                open={expandedSections.has("adaptations")}
-                onOpenChange={() => toggleSection("adaptations")}
-              >
-                <div className="mt-2 space-y-2">
-                  <SectionHeader
-                    title="Platform Adaptations"
-                    icon={MessageCircle}
-                    color="text-purple-600"
-                    sectionKey="adaptations"
-                    count={adaptations.length}
-                  />
-                  <CollapsibleContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {adaptations.map((adaptation) => {
-                        const meta = (adaptation.metadata || {}) as any;
-                        return (
-                          <Card key={adaptation.id} className="hover:shadow-md transition-all">
-                            <CardContent className="p-4">
-                              <Badge variant="secondary" className="mb-2 capitalize">
-                                {meta.platform || adaptation.assetType}
-                              </Badge>
-                              <p className="text-sm text-slate-900 font-medium">{adaptation.title}</p>
-                              {meta.adaptedCaption && (
-                                <p className="text-xs text-muted-foreground mt-1 line-clamp-3">{meta.adaptedCaption}</p>
-                              )}
-                              {meta.adaptedCta && (
-                                <p className="text-xs font-medium text-[#00D4FF] mt-1">CTA: {meta.adaptedCta}</p>
-                              )}
-                              {meta.adaptedHashtags && Array.isArray(meta.adaptedHashtags) && (
-                                <p className="text-[10px] text-muted-foreground mt-1">{meta.adaptedHashtags.join(" ")}</p>
-                              )}
-                              {meta.formatNotes && (
-                                <p className="text-[10px] text-slate-500 mt-1">{meta.formatNotes}</p>
-                              )}
-                            </CardContent>
-                          </Card>
-                        );
-                      })}
+        {/* Iteration selector */}
+        {iterations.length > 1 && selectedIteration && (
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-slate-700">Generation iteration</span>
+            <Select value={selectedIteration.id} onValueChange={setSelectedIterationId}>
+              <SelectTrigger className="w-[260px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {iterations.map((iteration) => (
+                  <SelectItem key={iteration.id} value={iteration.id}>
+                    <div className="flex items-center gap-2">
+                      <span>Iteration {iteration.iterationNumber}</span>
+                      <span className="text-xs text-muted-foreground">· {iterationLabel(iteration)}</span>
+                      <span className="text-xs text-muted-foreground">{formatIterationDate(iteration.createdAt)}</span>
                     </div>
-                  </CollapsibleContent>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {/* Main Output Area */}
+        {selectedIteration && (
+          <div className="space-y-6">
+            {/* Marketing Leaflet */}
+            {selectedIteration.leaflet && (
+              <section className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
+                    <Image className="w-5 h-5 text-[#00D4FF]" />
+                    Marketing Leaflet
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    {statusBadgeFor(selectedIteration.leaflet)}
+                    <Badge variant="outline" className={iterationBadgeClasses(selectedIteration)}>
+                      {iterationLabel(selectedIteration)}
+                    </Badge>
+                  </div>
                 </div>
-              </Collapsible>
+                {renderContentCard(selectedIteration.leaflet)}
+              </section>
+            )}
+
+            {/* Caption Pack */}
+            {selectedIteration.captionPack && (
+              <section className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
+                    <MessageCircle className="w-5 h-5 text-purple-600" />
+                    Caption Pack
+                  </h3>
+                  <Badge variant="outline" className={tierBadgeClasses[selectedIteration.tier]}>
+                    {iterationLabel(selectedIteration)}
+                  </Badge>
+                </div>
+                {renderCaptionPack(
+                  selectedIteration.captionPack,
+                  selectedIteration.captionPack?.metadata?.contentPostId ?? selectedIteration.leaflet?.id ?? 0
+                )}
+              </section>
+            )}
+
+            {/* Master Video Ad */}
+            {videoEnabled && selectedIteration.videoConcept && (
+              <section className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
+                    <Video className="w-5 h-5 text-rose-500" />
+                    Video Concept
+                  </h3>
+                  {statusBadgeFor(selectedIteration.videoConcept)}
+                </div>
+                {renderContentCard(selectedIteration.videoConcept)}
+              </section>
             )}
           </div>
         )}
 
-        {/* Master Video Ad — only when video features are enabled */}
-        {videoEnabled && video && (
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <Video className="w-4 h-4 text-rose-500" />
-              Master Video Ad
-            </h3>
-            {renderContentCard(video)}
-          </div>
-        )}
-
-        {/* Supporting Assets — collapsed by default */}
-        <Collapsible
-          open={expandedSections.has("supporting")}
-          onOpenChange={() => toggleSection("supporting")}
-        >
-          <div className="space-y-4 pt-2 border-t border-slate-200">
-            <SectionHeader
-              title="Supporting Assets"
-              icon={FileText}
-              color="text-slate-700"
-              sectionKey="supporting"
-              count={campaignAssets?.length || 0}
-            />
-
-            <CollapsibleContent>
-              <div className="space-y-4">
-                {/* Carousel */}
-                {carousel && (
-                  <Collapsible open={expandedSections.has("carousel")} onOpenChange={() => toggleSection("carousel")}>
-                    <div className="space-y-2">
-                      <SectionHeader title="Carousel" icon={FileText} color="text-orange-600" sectionKey="carousel" />
-                      <CollapsibleContent>{renderCampaignAssetCard(carousel)}</CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                )}
-
-                {/* Ad Variations */}
-                {ads.length > 0 && (
-                  <Collapsible open={expandedSections.has("ads")} onOpenChange={() => toggleSection("ads")}>
-                    <div className="space-y-2">
-                      <SectionHeader title="Ad Variations" icon={Megaphone} color="text-cyan-600" sectionKey="ads" count={ads.length} />
-                      <CollapsibleContent>
-                        <div className="grid grid-cols-1 gap-4">
-                          {ads.map((asset) => renderCampaignAssetCard(asset))}
-                        </div>
-                      </CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                )}
-
-                {/* Hashtag Pack */}
-                {hashtagSet && (
-                  <Collapsible open={expandedSections.has("hashtags")} onOpenChange={() => toggleSection("hashtags")}>
-                    <div className="space-y-2">
-                      <SectionHeader title="Hashtag Pack" icon={Hash} color="text-pink-600" sectionKey="hashtags" />
-                      <CollapsibleContent>
-                        <Card className="hover:shadow-md transition-all">
-                          <CardContent className="p-4">
-                            {(() => {
-                              const meta = (hashtagSet.metadata || {}) as any;
-                              return (
-                                <div className="space-y-2">
-                                  {meta.core && Array.isArray(meta.core) && meta.core.length > 0 && (
-                                    <div>
-                                      <span className="text-[10px] font-medium text-slate-500 uppercase">Core</span>
-                                      <p className="text-xs text-slate-700">{meta.core.join(" ")}</p>
-                                    </div>
-                                  )}
-                                  {meta.trending && Array.isArray(meta.trending) && meta.trending.length > 0 && (
-                                    <div>
-                                      <span className="text-[10px] font-medium text-slate-500 uppercase">Trending</span>
-                                      <p className="text-xs text-slate-700">{meta.trending.join(" ")}</p>
-                                    </div>
-                                  )}
-                                  {meta.niche && Array.isArray(meta.niche) && meta.niche.length > 0 && (
-                                    <div>
-                                      <span className="text-[10px] font-medium text-slate-500 uppercase">Niche</span>
-                                      <p className="text-xs text-slate-700">{meta.niche.join(" ")}</p>
-                                    </div>
-                                  )}
-                                  {meta.platformSpecific && Array.isArray(meta.platformSpecific) && (
-                                    <div className="space-y-1">
-                                      {meta.platformSpecific.map((ps: any, i: number) => (
-                                        <div key={i}>
-                                          <span className="text-[10px] font-medium text-slate-500 uppercase">{ps.platform}</span>
-                                          <p className="text-xs text-slate-700">{ps.hashtags?.join(" ")}</p>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })()}
-                          </CardContent>
-                        </Card>
-                      </CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                )}
-
-                {/* WhatsApp */}
-                {whatsapp && (
-                  <Collapsible open={expandedSections.has("whatsapp")} onOpenChange={() => toggleSection("whatsapp")}>
-                    <div className="space-y-2">
-                      <SectionHeader title="WhatsApp Version" icon={MessageCircle} color="text-green-600" sectionKey="whatsapp" />
-                      <CollapsibleContent>{renderCampaignAssetCard(whatsapp)}</CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                )}
-
-                {/* Email */}
-                {emailItem && (
-                  <Collapsible open={expandedSections.has("email")} onOpenChange={() => toggleSection("email")}>
-                    <div className="space-y-2">
-                      <SectionHeader title="Email Version" icon={Mail} color="text-emerald-600" sectionKey="email" />
-                      <CollapsibleContent>{renderCampaignAssetCard(emailItem)}</CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                )}
-
-                {/* Launch Sequence */}
-                {launch && (
-                  <Collapsible open={expandedSections.has("launch")} onOpenChange={() => toggleSection("launch")}>
-                    <div className="space-y-2">
-                      <SectionHeader title="Launch Sequence" icon={Sparkles} color="text-violet-600" sectionKey="launch" />
-                      <CollapsibleContent>{renderCampaignAssetCard(launch)}</CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                )}
-
-                {/* Hook Bank */}
-                {hookBank && (
-                  <Collapsible open={expandedSections.has("hooks")} onOpenChange={() => toggleSection("hooks")}>
-                    <div className="space-y-2">
-                      <SectionHeader title="Hook Bank" icon={Hash} color="text-amber-600" sectionKey="hooks" />
-                      <CollapsibleContent>{renderCampaignAssetCard(hookBank)}</CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                )}
-
-                {/* CTA Variation Bank */}
-                {ctaBank && (
-                  <Collapsible open={expandedSections.has("ctas")} onOpenChange={() => toggleSection("ctas")}>
-                    <div className="space-y-2">
-                      <SectionHeader title="CTA Variation Bank" icon={Megaphone} color="text-blue-600" sectionKey="ctas" />
-                      <CollapsibleContent>{renderCampaignAssetCard(ctaBank)}</CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                )}
-
-                {/* Other supporting assets */}
-                {otherAssets.length > 0 && (
-                  <Collapsible open={expandedSections.has("others")} onOpenChange={() => toggleSection("others")}>
-                    <div className="space-y-2">
-                      <SectionHeader title="Other Assets" icon={FileText} color="text-slate-600" sectionKey="others" count={otherAssets.length} />
-                      <CollapsibleContent>
-                        <div className="grid grid-cols-1 gap-4">
-                          {otherAssets.map((asset) => renderCampaignAssetCard(asset))}
-                        </div>
-                      </CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                )}
+        {/* Supporting Assets — campaign-wide (caption pack is shown in its own section above) */}
+        {(() => {
+          const supportingAssets = (campaignAssets || []).filter((a) => !isCaptionPackAsset(a));
+          if (supportingAssets.length === 0) return null;
+          return (
+            <Collapsible open={expandedSections.has("supporting")} onOpenChange={() => toggleSection("supporting")}>
+              <div className="space-y-4 pt-2 border-t border-slate-200">
+                <SectionHeader
+                  title="Supporting Assets"
+                  icon={FileText}
+                  color="text-slate-700"
+                  sectionKey="supporting"
+                  count={supportingAssets.length}
+                />
+                <CollapsibleContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {supportingAssets.map((asset) => (
+                      <div key={asset.id}>{renderCampaignAssetCard(asset)}</div>
+                    ))}
+                  </div>
+                </CollapsibleContent>
               </div>
-            </CollapsibleContent>
-          </div>
-        </Collapsible>
+            </Collapsible>
+          );
+        })()}
+
+        {/* Previous Iterations */}
+        {previousIterations.length > 0 && (
+          <Collapsible defaultOpen={false}>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden">
+              <CollapsibleTrigger asChild>
+                <button className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-100 transition-colors">
+                  <span className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                    <History className="w-4 h-4 text-slate-500" />
+                    Previous Iterations
+                  </span>
+                  <Badge variant="outline">{previousIterations.length}</Badge>
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {previousIterations.map((iteration) => {
+                    const leafletMeta = getContentMeta(iteration.leaflet);
+                    const thumbnailUrl = leafletMeta?.imageUrl;
+                    return (
+                      <button
+                        key={iteration.id}
+                        type="button"
+                        onClick={() => setSelectedIterationId(iteration.id)}
+                        className="text-left rounded-lg border border-slate-200 bg-white p-3 hover:shadow-md transition-all"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">Iteration {iteration.iterationNumber}</p>
+                            <p className="text-xs text-muted-foreground">{formatIterationDate(iteration.createdAt)}</p>
+                          </div>
+                          <Badge variant="outline" className={iterationBadgeClasses(iteration)}>
+                            {iterationLabel(iteration)}
+                          </Badge>
+                        </div>
+                        {thumbnailUrl ? (
+                          <div className="mt-3 aspect-[4/3] rounded-md overflow-hidden bg-slate-100">
+                            <img
+                              src={thumbnailUrl}
+                              alt={`Iteration ${iteration.iterationNumber} leaflet`}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).style.display = "none";
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <div className="mt-3 aspect-[4/3] rounded-md bg-slate-100 flex items-center justify-center">
+                            <Image className="w-6 h-6 text-slate-300" />
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </CollapsibleContent>
+            </div>
+          </Collapsible>
+        )}
 
         {/* Publish Dialog */}
         <Dialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
@@ -3068,7 +3171,7 @@ Include:
                             </Badge>
                           ))}
                         </div>
-                        <p className="text-xs text-muted-foreground mt-1">These will be approved and marked as "manually posted". Copy the content and post on each platform.</p>
+                        <p className="text-xs text-muted-foreground mt-1">These will be approved and marked as &quot;manually posted&quot;. Copy the content and post on each platform.</p>
                       </div>
                     )}
                     {groups.not_supported.length > 0 && (

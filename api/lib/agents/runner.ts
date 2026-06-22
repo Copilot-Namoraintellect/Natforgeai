@@ -10,6 +10,20 @@ import { enforceCostControl } from "../billing/cost-control";
 import { createAlert } from "../alerts";
 import { TRPCError } from "@trpc/server";
 
+function isInsufficientQuotaError(err: any): boolean {
+  if (!err) return false;
+  const statusCode = err.statusCode ?? err.status ?? err.response?.status;
+  const code = err.code ?? err.error?.code ?? err.response?.data?.error?.code;
+  const message = err.message || err.error?.message || "";
+  return (
+    statusCode === 429 ||
+    code === "insufficient_quota" ||
+    message.toLowerCase().includes("insufficient_quota") ||
+    message.toLowerCase().includes("exceeded your current quota") ||
+    message.toLowerCase().includes("billing")
+  );
+}
+
 export type AgentType =
   | "strategy"
   | "creative"
@@ -162,13 +176,15 @@ export async function runAgent<TOutput>({
       error.message?.includes("ECONNREFUSED") ||
       error.statusCode >= 500;
 
+    const isQuotaError = isInsufficientQuotaError(error);
+
     if ((isSchemaError || isProviderError) && creditsDeducted > 0 && !skipBilling) {
       // Refund credits for internal failures
       try {
         await adminAdjustCredits({
           userId,
           amount: creditsDeducted,
-          description: `Refund for failed ${agentType} agent run (#${runId}) due to ${isSchemaError ? "schema error" : "provider error"}`,
+          description: `Refund for failed ${agentType} agent run (#${runId}) due to ${isSchemaError ? "schema error" : isQuotaError ? "OpenAI quota/billing error" : "provider error"}`,
           adminUserId: 0, // system refund
         });
         console.log(`[AgentRunner] Refunded ${creditsDeducted} credits to user ${userId} for failed ${agentType} run ${runId}`);
@@ -177,7 +193,14 @@ export async function runAgent<TOutput>({
       }
     }
 
-    if (isProviderError) {
+    if (isQuotaError) {
+      await createAlert({
+        severity: "critical",
+        category: "openai",
+        message: `OpenAI quota/billing exhausted: ${error.message}`,
+        details: { agentType, runId, userId, errorCode: error.code, statusCode: error.statusCode ?? error.status },
+      }).catch(() => {});
+    } else if (isProviderError) {
       await createAlert({
         severity: "critical",
         category: "openai",

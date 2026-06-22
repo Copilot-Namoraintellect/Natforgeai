@@ -895,6 +895,21 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
 
   console.log(`[CreativeAgent] Saving pack summary | campaignId=${campaignId} | runId=${packResult.runId}`);
 
+  // Determine the next campaign iteration number before any deletions occur.
+  const existingPostsForIteration = await db
+    .select({ metadata: contentPosts.metadata })
+    .from(contentPosts)
+    .where(eq(contentPosts.campaignId, campaignId));
+  const existingAssetsForIteration = await db
+    .select({ metadata: campaignAssets.metadata })
+    .from(campaignAssets)
+    .where(eq(campaignAssets.campaignId, campaignId));
+  const allExistingIterations = [
+    ...existingPostsForIteration.map((r) => (r.metadata as any)?.iterationNumber),
+    ...existingAssetsForIteration.map((r) => (r.metadata as any)?.iterationNumber),
+  ].filter((n) => typeof n === "number") as number[];
+  const nextIterationNumber = allExistingIterations.length > 0 ? Math.max(...allExistingIterations) + 1 : 1;
+
   // Prevent duplicate content posts on retry (skip when caller will manage old content itself)
   if (deleteExistingDrafts) {
     const existingDrafts = await db
@@ -931,7 +946,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     cta: string,
     hashtags: string[],
     visualPrompt: string,
-    metadata: any
+    metadata: any,
+    assetType: string
   ) {
     try {
       await db.insert(contentPosts).values({
@@ -947,7 +963,13 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         visualPrompt,
         status: "draft",
         aiGenerated: true,
-        metadata,
+        metadata: {
+          ...metadata,
+          generationRunId: `pack-${packResult!.runId}`,
+          iterationNumber: nextIterationNumber,
+          assetType,
+          assetTier: "standard",
+        },
       });
       savedPosts++;
     } catch (err: any) {
@@ -981,7 +1003,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         voiceoverScript: video.voiceoverScript,
         thumbnailPrompt: video.thumbnailPrompt,
         message: "Master Video Ad — Render to generate a playable MP4.",
-      }
+      },
+      "video_concept"
     );
   }
 
@@ -1006,7 +1029,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         urgency: post.urgency,
         bestTimeToPost: post.bestTimeToPost,
         assetKind: "master_campaign_post",
-      }
+      },
+      "leaflet"
     );
   }
 
@@ -1019,7 +1043,13 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         assetType: assetType as any,
         title,
         status: "ready",
-        metadata: metadata as any,
+        metadata: {
+          ...metadata,
+          generationRunId: `pack-${packResult!.runId}`,
+          iterationNumber: nextIterationNumber,
+          assetType,
+          assetTier: "standard",
+        } as any,
       });
       savedAssets++;
     } catch (err: any) {

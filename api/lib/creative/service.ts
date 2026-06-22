@@ -30,6 +30,19 @@ import type {
 import type { TemplateRendererRequest } from "./providers/template-renderer";
 import { resolveProviderTemplateId, getPremiumTemplateStatus, type PremiumTemplateId } from "./template-catalogue";
 
+function newGenerationRunId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getNextIterationNumber(postMeta: any, existingImages: any[]): number {
+  const fromPost = typeof postMeta?.iterationNumber === "number" ? postMeta.iterationNumber : 0;
+  const fromImages = existingImages
+    .map((img) => (img.metadata as any)?.iterationNumber)
+    .filter((n) => typeof n === "number");
+  const maxExisting = Math.max(fromPost, ...fromImages, 0);
+  return maxExisting + 1;
+}
+
 function toJobStatus(status: ProviderStatus): "queued" | "rendering" | "completed" | "failed" | "cancelled" {
   switch (status) {
     case "done":
@@ -315,6 +328,12 @@ export async function generateBasicDraftLeaflet({
     const db = getDb();
     const currentMeta = (post.metadata || {}) as any;
     const previousVersions = Array.isArray(currentMeta?.imageVersions) ? currentMeta.imageVersions : [];
+    const allPreviousImages = await db
+      .select({ id: generatedImages.id, metadata: generatedImages.metadata })
+      .from(generatedImages)
+      .where(eq(generatedImages.contentPostId, post.id));
+    const generationRunId = newGenerationRunId("basic");
+    const iterationNumber = getNextIterationNumber(currentMeta, allPreviousImages);
     const newVersion = {
       version: previousVersions.length + 1,
       url: stored.publicUrl,
@@ -359,6 +378,10 @@ export async function generateBasicDraftLeaflet({
         warnings,
         templateId: selectedTemplate,
         versions: imageVersions,
+        generationRunId,
+        iterationNumber,
+        assetType: "leaflet",
+        assetTier: "basic",
       },
     });
 
@@ -404,6 +427,10 @@ export async function generateBasicDraftLeaflet({
           imageHasLogo: hasLogo,
           imageCreativeGuidance: creativeGuidance,
           imageRefinementInstruction: refinementInstruction,
+          generationRunId,
+          iterationNumber,
+          assetType: "leaflet",
+          assetTier: "basic",
         },
       })
       .where(eq(contentPosts.id, post.id));
@@ -459,6 +486,12 @@ export async function generatePremiumLeaflet({
   const { post, campaign, business } = await loadPostCampaignBusiness({ userId, contentPostId });
   const db = getDb();
   const currentMeta = (post.metadata || {}) as any;
+  const allPreviousImages = await db
+    .select({ id: generatedImages.id, metadata: generatedImages.metadata })
+    .from(generatedImages)
+    .where(eq(generatedImages.contentPostId, post.id));
+  const generationRunId = newGenerationRunId("premium");
+  const iterationNumber = getNextIterationNumber(currentMeta, allPreviousImages);
 
   const status = getPremiumTemplateStatus();
   if (!status.ready) {
@@ -732,6 +765,10 @@ export async function generatePremiumLeaflet({
         templateId: selectedTemplate,
         versions: imageVersions,
         renderRequest: renderReq,
+        generationRunId,
+        iterationNumber,
+        assetType: "leaflet",
+        assetTier: "premium",
       },
     });
 
@@ -777,12 +814,22 @@ export async function generatePremiumLeaflet({
           imageHasLogo: hasLogo,
           imageCreativeGuidance: creativeGuidance,
           imageRefinementInstruction: refinementInstruction,
+          generationRunId,
+          iterationNumber,
+          assetType: "leaflet",
+          assetTier: "premium",
         },
       })
       .where(eq(contentPosts.id, post.id));
 
     // Caption pack is included with premium leaflet.
-    generateCaptionPack({ userId, contentPostId: post.id }).catch((err) => {
+    generateCaptionPack({
+      userId,
+      contentPostId: post.id,
+      generationRunId,
+      iterationNumber,
+      assetTier: "premium",
+    }).catch((err) => {
       console.error(`[PremiumLeaflet] Caption pack async error | userId=${userId} | contentPostId=${post.id} | error="${err.message}"`);
     });
 
@@ -928,9 +975,15 @@ export interface CaptionPack {
 export async function generateCaptionPack({
   userId,
   contentPostId,
+  generationRunId,
+  iterationNumber,
+  assetTier,
 }: {
   userId: number;
   contentPostId: number;
+  generationRunId?: string;
+  iterationNumber?: number;
+  assetTier?: "premium" | "basic" | "standard";
 }): Promise<CaptionPack | null> {
   const db = getDb();
 
@@ -967,6 +1020,9 @@ export async function generateCaptionPack({
   const imageCreditsCharged = typeof postMeta?.imageCreditsCharged === "number" ? postMeta.imageCreditsCharged : null;
   const isDraftAsset = imageSource === "draft" || imageCreditsCharged === 0 || imageQualityTier === "draft";
   const assetTierLabel = isDraftAsset ? "Basic Draft" : "Premium Marketing Leaflet";
+  const resolvedAssetTier = assetTier || postMeta?.assetTier || (isDraftAsset ? "basic" : "premium");
+  const resolvedGenerationRunId = generationRunId || postMeta?.generationRunId;
+  const resolvedIterationNumber = iterationNumber ?? postMeta?.iterationNumber ?? 1;
 
   const formattedOffer = renderOffer(campaign.offerDetails, business.name);
   const leafletHeadline = offerToHeadline(campaign.offerDetails);
@@ -1175,6 +1231,10 @@ OUTPUT FORMAT — return ONLY a single JSON object with these exact keys:
         imageCreditsCharged,
         isDraft: isDraftAsset,
         assetTierLabel,
+        generationRunId: resolvedGenerationRunId,
+        iterationNumber: resolvedIterationNumber,
+        assetType: "caption_pack",
+        assetTier: resolvedAssetTier,
       },
     });
 
