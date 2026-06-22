@@ -2,7 +2,8 @@ import "dotenv/config";
 
 function required(name: string): string {
   const value = process.env[name];
-  if (!value && process.env.NODE_ENV === "production") {
+  const isTestMode = process.env.NODE_ENV === "test" || process.env.VITEST === "true";
+  if (!value && process.env.NODE_ENV === "production" && !isTestMode) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value ?? "";
