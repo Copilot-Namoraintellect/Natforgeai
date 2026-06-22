@@ -49,6 +49,7 @@ const agentTypeConfig: Record<string, { icon: any; color: string; label: string 
 const statusConfig: Record<string, { color: string; icon: any }> = {
   pending: { color: "bg-amber-500/10 text-amber-600", icon: Clock },
   running: { color: "bg-blue-500/10 text-blue-600", icon: Loader2 },
+  waiting: { color: "bg-amber-500/10 text-amber-600", icon: Clock },
   completed: { color: "bg-emerald-500/10 text-emerald-600", icon: CheckCircle },
   failed: { color: "bg-red-500/10 text-red-600", icon: XCircle },
 };
@@ -336,6 +337,23 @@ export default function AgentActivity() {
     }
   }
 
+  function getExpectedNextAgent(workflowState: string): string | null {
+    switch (workflowState) {
+      case "strategy_approved":
+      case "creatives_generating":
+        return "creative";
+      case "creatives_ready":
+      case "audience_generating":
+        return "audience";
+      case "audience_ready":
+      case "schedule_generated":
+      case "launch_approval_required":
+        return "distribution";
+      default:
+        return null;
+    }
+  }
+
   function friendlyErrorMessage(error: string | null): string {
     if (!error) return "Something went wrong. Please try again.";
     const lower = error.toLowerCase();
@@ -401,6 +419,56 @@ export default function AgentActivity() {
           </SelectContent>
         </Select>
       </div>
+
+      {/* Waiting transitions */}
+      {(() => {
+        const campaignsWithRuns = new Set(agentRuns?.map((r) => r.campaignId) ?? []);
+        const waiting = (allCampaigns ?? []).filter((c) => {
+          if (!campaignsWithRuns.has(c.id)) return false;
+          const nextAgent = getExpectedNextAgent(c.workflowState);
+          if (!nextAgent) return false;
+          const runForNext = agentRuns?.find((r) => r.campaignId === c.id && r.agentType === nextAgent);
+          return !runForNext || (runForNext.status !== "running" && runForNext.status !== "pending");
+        });
+        if (waiting.length === 0) return null;
+        return (
+          <div className="space-y-3">
+            <h3 className="text-sm font-medium text-gray-400">Up next</h3>
+            {waiting.map((campaign) => {
+              const nextAgent = getExpectedNextAgent(campaign.workflowState)!;
+              const agentConfig = agentTypeConfig[nextAgent] || { icon: Activity, color: "text-gray-400", label: nextAgent };
+              const AgentIcon = agentConfig.icon;
+              const StatusIcon = statusConfig.waiting.icon;
+              return (
+                <Card key={`waiting-${campaign.id}-${nextAgent}`} className="bg-[#1E293B] border-[#334155] border-dashed">
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-4">
+                      <div className={`p-2.5 rounded-xl bg-[#0F172A] ${agentConfig.color}`}>
+                        <AgentIcon className="w-5 h-5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-semibold text-white">{agentConfig.label}</span>
+                          <Badge className={statusConfig.waiting.color}>
+                            <StatusIcon className="w-3 h-3 mr-1" />
+                            waiting
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-gray-400">
+                          Campaign #{campaign.id} • waiting to start
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          The previous agent finished. {agentConfig.label} will run automatically once the workflow advances.
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* Activity Timeline */}
       <div className="space-y-3">

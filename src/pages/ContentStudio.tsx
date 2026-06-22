@@ -631,6 +631,24 @@ Include:
     return pendingActions.has(actionKey(contentId, action));
   }
 
+  function startAction(contentId: number, action: string) {
+    setPendingActions((prev) => new Set(prev).add(actionKey(contentId, action)));
+  }
+
+  function stopAction(contentId: number, action: string) {
+    setPendingActions((prev) => {
+      const next = new Set(prev);
+      next.delete(actionKey(contentId, action));
+      return next;
+    });
+  }
+
+  function stopAllDraftActions(contentPostId: number) {
+    ["generate-draft", "regenerate-draft", "refine-draft", "retry-draft"].forEach((action) =>
+      stopAction(contentPostId, action)
+    );
+  }
+
   function handleApprove(contentId: number) {
     setPendingActions((prev) => new Set(prev).add(actionKey(contentId, "approve")));
     approveMutation.mutate({ id: contentId });
@@ -681,6 +699,7 @@ Include:
 
   const generateImageMutation = trpc.image.generateForPost.useMutation({
     onMutate: (variables) => {
+      startAction(variables.contentPostId, "basic");
       setBrokenImageIds((prev) => {
         const next = new Set(prev);
         next.delete(variables.contentPostId);
@@ -688,13 +707,17 @@ Include:
       });
       setLoadingImageIds((prev) => new Set(prev).add(variables.contentPostId));
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      stopAction(variables.contentPostId, "basic");
+      stopAllDraftActions(variables.contentPostId);
       toast.success("Basic draft leaflet generated (0 credits). Upgrade to Premium for a polished, customer-ready result.");
       utils.content.list.invalidate();
       utils.image.list.invalidate({ campaignId: numericCampaignId });
       utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
     },
-    onError: (err) => {
+    onError: (err, variables) => {
+      stopAction(variables.contentPostId, "basic");
+      stopAllDraftActions(variables.contentPostId);
       const message = err.message || "";
       const code = (err as { data?: { code?: string } } | undefined)?.data?.code;
       if (code === "PAYMENT_REQUIRED" || message.includes("Insufficient credits") || message.includes("credits.")) {
@@ -711,6 +734,7 @@ Include:
 
   const generatePremiumLeafletMutation = trpc.image.generatePremiumLeaflet.useMutation({
     onMutate: (variables) => {
+      startAction(variables.contentPostId, "premium");
       setBrokenImageIds((prev) => {
         const next = new Set(prev);
         next.delete(variables.contentPostId);
@@ -718,14 +742,16 @@ Include:
       });
       setLoadingImageIds((prev) => new Set(prev).add(variables.contentPostId));
     },
-    onSuccess: (data) => {
+    onSuccess: (data, variables) => {
+      stopAction(variables.contentPostId, "premium");
       const costText = (data.creditsCharged ?? premiumImageCost) === 0 ? "no charge" : `${data.creditsCharged ?? premiumImageCost} credits`;
       toast.success(`Premium Marketing Leaflet generated (${costText}). Review the leaflet and caption pack, then approve or regenerate.`);
       utils.content.list.invalidate();
       utils.image.list.invalidate({ campaignId: numericCampaignId });
       utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
     },
-    onError: (err) => {
+    onError: (err, variables) => {
+      stopAction(variables.contentPostId, "premium");
       const message = err.message || "";
       const code = (err as { data?: { code?: string } } | undefined)?.data?.code;
       if (code === "PAYMENT_REQUIRED" || message.includes("Insufficient credits") || message.includes("credits.")) {
@@ -743,12 +769,17 @@ Include:
   });
 
   const generateCaptionPackMutation = trpc.image.generateCaptionPack.useMutation({
-    onSuccess: () => {
+    onMutate: (variables) => {
+      startAction(variables.contentPostId, "caption-pack");
+    },
+    onSuccess: (_data, variables) => {
+      stopAction(variables.contentPostId, "caption-pack");
       toast.success("Caption pack generated. You can now copy platform-ready captions.");
       utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
       utils.content.list.invalidate();
     },
-    onError: (err) => {
+    onError: (err, variables) => {
+      stopAction(variables.contentPostId, "caption-pack");
       toast.error(err.message || "Failed to generate caption pack");
     },
   });
@@ -1050,7 +1081,9 @@ Include:
     const metadata = (content.metadata || {}) as any;
     const imageUrl = metadata?.imageUrl;
     const imageStatus = metadata?.imageStatus;
-    const isGenerating = imageStatus === "generating" || generateImageMutation.isPending || generatePremiumLeafletMutation.isPending;
+    const isGeneratingBasic = isPending(content.id, "basic");
+    const isGeneratingPremium = isPending(content.id, "premium");
+    const isGenerating = imageStatus === "generating" || isGeneratingBasic || isGeneratingPremium;
     const isPremiumReady = premiumTemplateStatus?.ready === true;
     const isBasicDraftAsset = metadata?.imageSource === "draft" || (metadata?.imageCreditsCharged ?? 0) === 0;
     const isFailed = imageStatus === "failed";
@@ -1173,13 +1206,13 @@ Include:
                   </p>
                 )}
                 <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
-                  <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white" onClick={() => generateBasicDraft()}>
-                    <RefreshCw className="w-4 h-4 mr-2" />
+                  <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white" onClick={() => generateBasicDraft()} disabled={isGenerating}>
+                    {isGeneratingBasic ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                     Retry Basic Draft
                   </Button>
                   {isPremiumReady && (
-                    <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremium(false)}>
-                      <Sparkles className="w-4 h-4 mr-2" />
+                    <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremium(false)} disabled={isGenerating}>
+                      {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
                       Retry Premium
                     </Button>
                   )}
@@ -1323,9 +1356,9 @@ Include:
                       variant="outline"
                       className="border-slate-300 text-slate-700 hover:bg-slate-50"
                       onClick={() => generateBasicDraft()}
-                      disabled={!businessForLeaflet?.logo && !allowNoLogo}
+                      disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
                     >
-                      <Image className="w-4 h-4 mr-2" />
+                      {isGeneratingBasic ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Image className="w-4 h-4 mr-2" />}
                       Generate Basic Draft — 0 credits
                     </Button>
                     {isPremiumReady ? (
@@ -1333,9 +1366,9 @@ Include:
                         size="sm"
                         className="bg-emerald-600 hover:bg-emerald-700 text-white"
                         onClick={() => generatePremium(false)}
-                        disabled={!businessForLeaflet?.logo && !allowNoLogo}
+                        disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
                       >
-                        <Sparkles className="w-4 h-4 mr-2" />
+                        {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
                         Generate Premium Leaflet — {premiumImageCost} credits
                       </Button>
                     ) : (
@@ -1545,7 +1578,7 @@ Include:
                     onClick={() => generateBasicDraft()}
                     disabled={isGenerating || !refinementInstruction.trim()}
                   >
-                    {isGenerating ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
+                    {isGeneratingBasic ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
                     Refine Basic Draft
                   </Button>
                   {isPremiumReady && (
@@ -1555,7 +1588,7 @@ Include:
                       onClick={() => generatePremium(true)}
                       disabled={isGenerating || !refinementInstruction.trim()}
                     >
-                      <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                      {isGeneratingPremium ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
                       Premium + Stronger Brand Fit
                     </Button>
                   )}
@@ -1582,12 +1615,12 @@ Include:
               {(isReady || isFailed) && !isGenerating && (
                 <>
                   <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generateBasicDraft()} disabled={isGenerating}>
-                    <Image className="w-3.5 h-3.5 mr-1.5" />
+                    {isGeneratingBasic ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Image className="w-3.5 h-3.5 mr-1.5" />}
                     Regenerate Basic Draft
                   </Button>
                   {isPremiumReady && (
                     <Button size="sm" className="w-full h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generatePremium(false)} disabled={isGenerating}>
-                      <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                      {isGeneratingPremium ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
                       Regenerate Premium Leaflet
                     </Button>
                   )}
@@ -1708,7 +1741,7 @@ Include:
               onClick={() => generateCaptionPackMutation.mutate({ contentPostId })}
               disabled={generateCaptionPackMutation.isPending}
             >
-              <Sparkles className="w-3 h-3 mr-1" />
+              {generateCaptionPackMutation.isPending ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Sparkles className="w-3 h-3 mr-1" />}
               Regenerate
             </Button>
           </div>
