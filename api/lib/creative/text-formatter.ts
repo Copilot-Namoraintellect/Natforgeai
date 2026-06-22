@@ -1,3 +1,5 @@
+import { safeText } from "./brand-palette";
+
 /**
  * Marketing text formatting helpers for leaflets.
  *
@@ -5,9 +7,8 @@
  * always reads professionally and uses South African conventions.
  */
 
-function sanitize(str?: string | null): string {
-  if (!str) return "";
-  return str.replace(/\n+/g, " ").trim();
+function sanitize(value: unknown): string {
+  return safeText(value);
 }
 
 /**

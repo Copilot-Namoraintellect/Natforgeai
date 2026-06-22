@@ -961,6 +961,17 @@ export async function generateCaptionPack({
 
   const brandColors = (business.brandColors as string[] | undefined) || [];
 
+  const postMeta = (post.metadata || {}) as any;
+  const imageSource = postMeta?.imageSource || "draft";
+  const imageQualityTier = postMeta?.imageQualityTier || "draft";
+  const imageCreditsCharged = typeof postMeta?.imageCreditsCharged === "number" ? postMeta.imageCreditsCharged : null;
+  const isDraftAsset = imageSource === "draft" || imageCreditsCharged === 0 || imageQualityTier === "draft";
+  const assetTierLabel = isDraftAsset ? "Basic Draft" : "Premium Marketing Leaflet";
+
+  const formattedOffer = renderOffer(campaign.offerDetails, business.name);
+  const leafletHeadline = offerToHeadline(campaign.offerDetails);
+  const normalizedCta = normalizeCta(campaign.preferredCta || post.cta);
+
   const evidence = (business.websiteEvidence || {}) as {
     businessCategory?: string;
     productsServices?: string[];
@@ -981,7 +992,9 @@ export async function generateCaptionPack({
   const serviceCallouts = isPrintShop
     ? "Printing & Copying, Business Cards & Flyers, Posters & Banners, Courier Services, Graduation Gifts, Document Support, Photo Prints, Branding & Stationery"
     : isArtDecor
-    ? "Bespoke Afrocentric Canvas Art, Custom Canvas Prints, Framed Posters, Premium Wall Art, Home & Office Décor, Turn Photos into Art"
+    ? isDraftAsset
+      ? "Custom Canvas Art, Custom Canvas Prints, Framed Posters, Wall Art, Home & Office Décor, Turn Photos into Art"
+      : "Bespoke Afrocentric Canvas Art, Custom Canvas Prints, Framed Posters, Premium Wall Art, Home & Office Décor, Turn Photos into Art"
     : (campaign.productOrService || business.productOrService || "your core service");
 
   const selectedPlatforms = (campaign.platforms || "Instagram, Facebook")
@@ -989,7 +1002,7 @@ export async function generateCaptionPack({
     .map((p: string) => p.trim())
     .filter(Boolean);
 
-  const prompt = `You are a senior conversion copywriter for a local marketing agency. Write a commercially specific, ready-to-post "Caption Pack" that matches the premium leaflet/poster image just generated for this campaign. The copy must support the same message as the image and sound like it was written for THIS exact business.
+  const prompt = `You are a senior conversion copywriter for a local marketing agency. Write a commercially specific, ready-to-post "Caption Pack" that matches the ${assetTierLabel} image just generated for this campaign. The copy must support the same message as the image and sound like it was written for THIS exact business.
 
 BUSINESS (from validated website evidence):
 - Name: ${business.name || "N/A"}
@@ -1007,13 +1020,19 @@ BUSINESS (from validated website evidence):
 - Brand voice notes: ${business.brandVoiceNotes || "not specified"}
 - Words to avoid: ${business.avoidWords || "None specified"}
 
+GENERATED ASSET CONTEXT:
+- Asset tier: ${assetTierLabel}
+- Image source: ${imageSource}
+${isDraftAsset ? "- This is a draft/preview image, NOT a premium provider-rendered leaflet. Do NOT use words like premium, luxury, high-end, exclusive, bespoke, or elite. Keep the copy practical and grounded." : "- This is a premium provider-rendered leaflet. The copy can reflect a polished, customer-ready presentation."}
+
 CAMPAIGN BRIEF:
 - Primary outcome: ${campaign.primaryOutcome || "N/A"}
 - Target buyer: ${campaign.targetBuyer || campaign.targetAudience || "N/A"}
 - Main pain point: ${campaign.mainPainPoint || "N/A"}
 - Product/service being promoted: ${campaign.productOrService || business.productOrService || "N/A"}
-- Offer: ${campaign.offerDetails || "None — do not invent offers or discounts"}
-- Preferred CTA: ${campaign.preferredCta || post.cta || "Request a Quote Today"}
+- Offer (use EXACTLY this wording and formatting): ${formattedOffer || campaign.offerDetails || "None — do not invent offers or discounts"}
+- Headline (use EXACTLY this wording): ${leafletHeadline || post.title || "N/A"}
+- Preferred CTA: ${normalizedCta || "Request a Quote Today"}
 - Exclusions (NEVER use): ${campaign.excludedOffers || business.avoidWords || "None specified"}
 - Reference style: ${campaign.referenceStyle || "N/A"}
 - Content style: ${campaign.contentStyle || "N/A"}
@@ -1033,14 +1052,15 @@ COPY RULES:
 2. Ground every caption in the validated business products/services above. Do NOT mention SEO, social media management, data analytics, digital marketing, restaurant services, salon services, or consulting unless they are explicitly listed in the business evidence.
 3. Lead with a concrete business outcome: what the buyer gets, how they save time, what they avoid, or what the offer gives them.
 4. Mention specific products/services from the website evidence where relevant.
-5. If an offer is provided, state it exactly as given (e.g. "10% off orders above R1000"). If no offer is provided, do NOT invent discounts, free trials, limited spots, free e-books, loyalty programmes or fake promotions.
+5. If an offer is provided, state it EXACTLY as formatted above (e.g. "Enjoy 10% off orders above R3,000"). Do not reformat numbers (e.g. do not change "R3,000" to "R3000" or "R3 000"). If no offer is provided, do NOT invent discounts, free trials, limited spots, free e-books, loyalty programmes or fake promotions.
 6. CTA must be clear and action-based: "Order on WhatsApp", "Request a quote", "Shop online", "Book a demo", "Speak to us" or similar. Match it to the preferred CTA if one is supplied.
 7. Each caption must match the platform's tone and format and be usable straight away.
 8. Hashtags should be a focused mix of core, local and niche tags (8–12 total). Include location-based tags if a location is provided.
 9. CTA variations must be distinct and platform-appropriate.
 10. Outreach DM should be short, warm and direct — one sentence of context plus a clear ask.
 11. The caption pack must NOT contradict the image offer/CTA or invent a different promotion.
-12. Generate captions for ALL of the selected platforms listed above.
+12. The caption pack must NOT describe the image as a premium provider-rendered leaflet when the asset tier is Basic Draft.
+13. Generate captions for ALL of the selected platforms listed above.
 
 OUTPUT FORMAT — return ONLY a single JSON object with these exact keys:
 {
@@ -1150,6 +1170,11 @@ OUTPUT FORMAT — return ONLY a single JSON object with these exact keys:
         generatedAt: new Date().toISOString(),
         businessCategory: evidence.businessCategory,
         evidenceVersion: (business.websiteEvidence as any)?.updatedAt || new Date().toISOString(),
+        imageSource,
+        imageQualityTier,
+        imageCreditsCharged,
+        isDraft: isDraftAsset,
+        assetTierLabel,
       },
     });
 

@@ -1788,8 +1788,8 @@ Include:
           </Badge>
         )}
         {metadata.assetKind === "master_campaign_post" && metadata.imageStatus === "ready" && metadata.imageUrl && (
-          <Badge variant="outline" className="text-[10px] h-5 border-emerald-200 text-emerald-600 bg-emerald-50">
-            Premium Marketing Leaflet
+          <Badge variant="outline" className={`text-[10px] h-5 ${metadata?.imageSource === "draft" || metadata?.isDraft ? "border-amber-200 text-amber-600 bg-amber-50" : "border-emerald-200 text-emerald-600 bg-emerald-50"}`}>
+            {metadata?.imageSource === "draft" || metadata?.isDraft ? "Marketing Draft" : "Premium Marketing Leaflet"}
           </Badge>
         )}
       </div>
@@ -2272,12 +2272,12 @@ Include:
       },
       audience_ready: {
         title: "Audience refinements ready.",
-        description: "Review the audience recommendations, then generate your premium marketing leaflet.",
+        description: "Review the audience recommendations, then generate your marketing leaflet.",
         tone: "success",
       },
       schedule_generated: {
-        title: "Your campaign pack is ready. Next step: generate your premium marketing leaflet.",
-        description: "Click Generate Premium Leaflet below to create a ready-to-post marketing leaflet.",
+        title: "Your campaign pack is ready. Next step: generate your marketing leaflet.",
+        description: "Click Generate below to create a ready-to-post marketing leaflet. Start with a free Basic Draft, or choose Premium if it is configured.",
         tone: "warning",
       },
       launch_approval_required: {
@@ -2353,7 +2353,7 @@ Include:
   function renderCampaignPack() {
     if (!urlCampaignId || !filtered) return null;
 
-    // Primary assets: one premium marketing leaflet; video is gated by feature flags
+    // Primary assets: one marketing leaflet/draft; video is gated by feature flags
     const masterVisual =
       filtered.find((c) => ((c.metadata as any)?.assetKind === "master_campaign_post")) ||
       filtered.find((c) => c.type === "social_post");
@@ -2363,6 +2363,8 @@ Include:
     const basicConfigured = videoConfig?.basicConfigured ?? true;
     const premiumConfigured = videoConfig?.premiumConfigured ?? false;
     const videoEnabled = (ENABLE_PREMIUM_VIDEO && premiumConfigured) || (ENABLE_BASIC_DRAFT_VIDEO && basicConfigured);
+    const masterMeta = (masterVisual?.metadata || {}) as any;
+    const isDraftMaster = masterMeta?.imageSource === "draft" || masterMeta?.isDraft || (masterMeta?.imageCreditsCharged ?? null) === 0;
 
     // Supporting assets live in campaignAssets, not as primary content cards
     const adaptations = campaignAssets?.filter((a) => a.assetType === "caption_adaptation") || [];
@@ -2461,12 +2463,12 @@ Include:
 
         {renderWorkflowGuidance()}
 
-        {/* Premium Marketing Leaflet — always expanded, adaptations nested inside */}
+        {/* Marketing Leaflet — always expanded, adaptations nested inside */}
         {masterVisual && (
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
               <Image className="w-4 h-4 text-[#00D4FF]" />
-              Premium Marketing Leaflet
+              {isDraftMaster ? "Marketing Draft" : "Premium Marketing Leaflet"}
             </h3>
             {renderContentCard(masterVisual)}
 
