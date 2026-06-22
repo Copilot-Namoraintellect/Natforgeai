@@ -1077,9 +1077,9 @@ Include:
     );
   }
 
-  function hasLeafletMetadata(content: any): boolean {
+  function isMasterVisualAsset(content: any): boolean {
     const meta = (content.metadata || {}) as any;
-    return meta?.assetKind === "master_campaign_post" || !!meta?.imageUrl || !!meta?.imageStatus;
+    return meta?.assetKind === "master_campaign_post";
   }
 
   function renderMasterImageSection(content: any, compact = false) {
@@ -2120,7 +2120,7 @@ Include:
     );
   }
 
-  function renderContentCard(content: any, forceCompact = false) {
+  function renderContentCard(content: any) {
     const approved = getApprovalState(content);
     const showConnectGuard = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform) && !isPlatformConnected(content.platform);
     const isMasterCampaignPost = (content.metadata as any)?.assetKind === "master_campaign_post";
@@ -2213,8 +2213,6 @@ Include:
           )}
 
           {renderPremiumBadges(content)}
-
-          {content.type === "social_post" && !isMasterCampaignPost && renderMasterImageSection(content, forceCompact || hasLeafletMetadata(content))}
 
           {content.type === "video_concept" && renderVideoBlueprint(content)}
           {content.type === "reel_script" && renderVideoBlueprint(content)}
@@ -3543,13 +3541,30 @@ Include:
       ) : urlCampaignId ? (
         renderCampaignPack()
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {(filtered ?? []).map((content) => (
-            <div key={content.id} className={hasLeafletMetadata(content) ? "md:col-span-2" : ""}>
-              {renderContentCard(content)}
+        (() => {
+          const libraryContent = filtered ?? [];
+          const simpleContent = libraryContent.filter((c) => !isMasterVisualAsset(c));
+          const visualAssets = libraryContent.filter((c) => isMasterVisualAsset(c));
+
+          return (
+            <div className="space-y-6">
+              {simpleContent.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {simpleContent.map((content) => (
+                    <div key={content.id}>{renderContentCard(content)}</div>
+                  ))}
+                </div>
+              )}
+              {visualAssets.length > 0 && (
+                <div className="space-y-4">
+                  {visualAssets.map((content) => (
+                    <div key={content.id}>{renderContentCard(content)}</div>
+                  ))}
+                </div>
+              )}
             </div>
-          ))}
-        </div>
+          );
+        })()
       )}
     </div>
   );
