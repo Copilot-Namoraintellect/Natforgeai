@@ -66,7 +66,6 @@ import { toast } from "sonner";
 
 const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
 const ENABLE_BASIC_DRAFT_VIDEO = import.meta.env.VITE_ENABLE_BASIC_DRAFT_VIDEO === "true";
-const ENABLE_PREMIUM_TEMPLATE_PROVIDER = import.meta.env.VITE_ENABLE_PREMIUM_TEMPLATE_PROVIDER === "true";
 
 const platforms = [
   { value: "instagram", label: "Instagram", icon: Instagram },
@@ -1028,7 +1027,8 @@ Include:
     const imageUrl = metadata?.imageUrl;
     const imageStatus = metadata?.imageStatus;
     const isGenerating = imageStatus === "generating" || generateImageMutation.isPending || generatePremiumLeafletMutation.isPending;
-    const isPremiumConfigured = premiumTemplateStatus?.configured ?? ENABLE_PREMIUM_TEMPLATE_PROVIDER;
+    const isPremiumReady = premiumTemplateStatus?.ready === true;
+    const isBasicDraftAsset = metadata?.imageSource === "draft" || (metadata?.imageCreditsCharged ?? 0) === 0;
     const isFailed = imageStatus === "failed";
     const isReady = imageStatus === "ready" && !!imageUrl;
     const imageLoading = loadingImageIds.has(content.id);
@@ -1153,7 +1153,7 @@ Include:
                     <RefreshCw className="w-4 h-4 mr-2" />
                     Retry Basic Draft
                   </Button>
-                  {isPremiumConfigured && (
+                  {isPremiumReady && (
                     <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremium(false)}>
                       <Sparkles className="w-4 h-4 mr-2" />
                       Retry Premium
@@ -1213,7 +1213,9 @@ Include:
                   <Image className="w-12 h-12 text-slate-300 mb-3 mx-auto" />
                   <p className="text-base font-medium text-slate-800">Marketing leaflet not created yet</p>
                   <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                    Generate a Basic Draft (0 credits) for a quick preview, or a Premium Marketing Leaflet ({premiumImageCost} credits) for a polished, customer-ready result.
+                    {isPremiumReady
+                      ? `Generate a Basic Draft (0 credits) for a quick preview, or a Premium Marketing Leaflet (${premiumImageCost} credits) for a polished, customer-ready result.`
+                      : "Premium templates are not configured yet. You can generate a Basic Draft for free."}
                   </p>
                 </div>
 
@@ -1302,7 +1304,7 @@ Include:
                       <Image className="w-4 h-4 mr-2" />
                       Generate Basic Draft — 0 credits
                     </Button>
-                    {isPremiumConfigured ? (
+                    {isPremiumReady ? (
                       <Button
                         size="sm"
                         className="bg-emerald-600 hover:bg-emerald-700 text-white"
@@ -1314,7 +1316,7 @@ Include:
                       </Button>
                     ) : (
                       <div className="text-[11px] text-slate-500 px-2">
-                        Premium leaflet coming soon. Use Basic Draft for now.
+                        Premium templates are not configured yet. You can generate a Basic Draft for free.
                       </div>
                     )}
                   </div>
@@ -1478,11 +1480,13 @@ Include:
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-semibold text-purple-900 flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                    Premium Refinement
+                    {isBasicDraftAsset ? "Draft Refinement" : "Premium Refinement"}
                   </h4>
-                  <Badge variant="outline" className="text-[10px] h-5">
-                    {premiumImageCost} credits
-                  </Badge>
+                  {isPremiumReady && (
+                    <Badge variant="outline" className="text-[10px] h-5">
+                      {premiumImageCost} credits
+                    </Badge>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {TEMPLATE_REFINEMENT_CHIPS[imageTemplateId].map((chip) => (
@@ -1520,15 +1524,17 @@ Include:
                     {isGenerating ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
                     Refine Basic Draft
                   </Button>
-                  <Button
-                    size="sm"
-                    className="flex-1 h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
-                    onClick={() => generatePremium(true)}
-                    disabled={isGenerating || !refinementInstruction.trim() || !isPremiumConfigured}
-                  >
-                    <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                    Premium + Stronger Brand Fit
-                  </Button>
+                  {isPremiumReady && (
+                    <Button
+                      size="sm"
+                      className="flex-1 h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
+                      onClick={() => generatePremium(true)}
+                      disabled={isGenerating || !refinementInstruction.trim()}
+                    >
+                      <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                      Premium + Stronger Brand Fit
+                    </Button>
+                  )}
                 </div>
               </div>
             )}
@@ -1555,7 +1561,7 @@ Include:
                     <Image className="w-3.5 h-3.5 mr-1.5" />
                     Regenerate Basic Draft
                   </Button>
-                  {isPremiumConfigured && (
+                  {isPremiumReady && (
                     <Button size="sm" className="w-full h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generatePremium(false)} disabled={isGenerating}>
                       <Sparkles className="w-3.5 h-3.5 mr-1.5" />
                       Regenerate Premium Leaflet

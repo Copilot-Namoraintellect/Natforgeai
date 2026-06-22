@@ -28,7 +28,7 @@ import type {
   ProviderStatus,
 } from "./types";
 import type { TemplateRendererRequest } from "./providers/template-renderer";
-import { resolveProviderTemplateId, type PremiumTemplateId } from "./template-catalogue";
+import { resolveProviderTemplateId, getPremiumTemplateStatus, type PremiumTemplateId } from "./template-catalogue";
 
 function toJobStatus(status: ProviderStatus): "queued" | "rendering" | "completed" | "failed" | "cancelled" {
   switch (status) {
@@ -192,7 +192,7 @@ async function normalizeLeafletInputs({
   creativeGuidance?: string;
   refinementInstruction?: string;
 }): Promise<NormalizedLeafletInputs> {
-  const brandPalette = resolveBrandPalette({ ...business, brandColors });
+  const brandPalette = await resolveBrandPalette({ ...business, brandColors });
   const hasLogo = !!business?.logo;
   const formattedOffer = renderOffer(campaign.offerDetails, business.name);
   const leafletHeadline = offerToHeadline(campaign.offerDetails);
@@ -460,13 +460,15 @@ export async function generatePremiumLeaflet({
   const db = getDb();
   const currentMeta = (post.metadata || {}) as any;
 
-  const templateRenderer = getTemplateRendererProvider();
-  if (!templateRenderer.configured) {
-    const message = "Premium leaflet provider is not configured. Generate a Basic Draft instead, or contact admin to enable premium templates.";
+  const status = getPremiumTemplateStatus();
+  if (!status.ready) {
+    const message = "Premium templates are not configured yet. You can generate a Basic Draft for free.";
+    console.warn(`[PremiumLeaflet] Blocked | userId=${userId} | contentPostId=${contentPostId} | missing=${status.missing?.join(",") || "feature flag/provider"}`);
     await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
     return { status: "failed", jobId: "", errorMessage: message };
   }
 
+  const templateRenderer = getTemplateRendererProvider();
   const cost = getPremiumImageCredits();
   await assertCanAfford(userId, cost, "Premium Marketing Leaflet");
 

@@ -7,8 +7,7 @@ import { checkCredits, deductCredits, recordAiUsage, adminAdjustCredits } from "
 import { calculateFixedCost } from "./lib/billing/cost-tracker";
 import { generateBasicDraftLeaflet, generatePremiumLeaflet, generateCaptionPack } from "./lib/creative/service";
 import { getPremiumImageCredits } from "./lib/creative/costs";
-import { getTemplateRendererProvider } from "./lib/creative/registry";
-import { listPremiumTemplates } from "./lib/creative/template-catalogue";
+import { getPremiumTemplateStatus } from "./lib/creative/template-catalogue";
 import { TRPCError } from "@trpc/server";
 
 export const imageRouter = createRouter({
@@ -156,12 +155,7 @@ export const imageRouter = createRouter({
     }),
 
   premiumTemplateStatus: authedQuery.query(async () => {
-    const provider = getTemplateRendererProvider();
-    return {
-      configured: provider.configured,
-      provider: provider.name,
-      templates: listPremiumTemplates(),
-    };
+    return getPremiumTemplateStatus();
   }),
 
   generateForPost: aiActionQuery

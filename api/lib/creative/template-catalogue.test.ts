@@ -67,4 +67,75 @@ describe("template-catalogue", () => {
     expect(resolveAspectRatio("service_business_promo", "social_square")).toBe("1:1");
     expect(resolveAspectRatio("offer_discount_campaign", "social_story")).toBe("9:16");
   });
+
+  describe("getPremiumTemplateStatus", () => {
+    it("returns ready=false when the feature flag is off", async () => {
+      setEnv({});
+      const { getPremiumTemplateStatus } = await import("./template-catalogue");
+      const status = getPremiumTemplateStatus();
+      expect(status.ready).toBe(false);
+      expect(status.missing).toContain("ENABLE_PREMIUM_TEMPLATE_PROVIDER");
+    });
+
+    it("returns ready=false when provider is missing", async () => {
+      setEnv({ ENABLE_PREMIUM_TEMPLATE_PROVIDER: "true" });
+      const { getPremiumTemplateStatus } = await import("./template-catalogue");
+      const status = getPremiumTemplateStatus();
+      expect(status.ready).toBe(false);
+      expect(status.missing).toContain("PREMIUM_TEMPLATE_PROVIDER");
+    });
+
+    it("returns ready=false when Bannerbear API key is missing", async () => {
+      setEnv({
+        ENABLE_PREMIUM_TEMPLATE_PROVIDER: "true",
+        PREMIUM_TEMPLATE_PROVIDER: "bannerbear",
+      });
+      const { getPremiumTemplateStatus } = await import("./template-catalogue");
+      const status = getPremiumTemplateStatus();
+      expect(status.ready).toBe(false);
+      expect(status.missing).toContain("BANNERBEAR_API_KEY");
+    });
+
+    it("returns ready=false when Bannerbear template IDs are missing", async () => {
+      setEnv({
+        ENABLE_PREMIUM_TEMPLATE_PROVIDER: "true",
+        PREMIUM_TEMPLATE_PROVIDER: "bannerbear",
+        BANNERBEAR_API_KEY: "bb-key",
+      });
+      const { getPremiumTemplateStatus } = await import("./template-catalogue");
+      const status = getPremiumTemplateStatus();
+      expect(status.ready).toBe(false);
+      expect(status.missing?.length).toBeGreaterThan(0);
+    });
+
+    it("returns ready=true when Bannerbear is fully configured", async () => {
+      setEnv({
+        ENABLE_PREMIUM_TEMPLATE_PROVIDER: "true",
+        PREMIUM_TEMPLATE_PROVIDER: "bannerbear",
+        BANNERBEAR_API_KEY: "bb-key",
+        BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO: "bb-retail",
+        BANNERBEAR_TEMPLATE_SERVICE_BUSINESS_PROMO: "bb-service",
+        BANNERBEAR_TEMPLATE_OFFER_DISCOUNT_CAMPAIGN: "bb-offer",
+      });
+      const { getPremiumTemplateStatus } = await import("./template-catalogue");
+      const status = getPremiumTemplateStatus();
+      expect(status.ready).toBe(true);
+      expect(status.provider).toBe("bannerbear");
+    });
+
+    it("returns ready=true when Templated.io is fully configured", async () => {
+      setEnv({
+        ENABLE_PREMIUM_TEMPLATE_PROVIDER: "true",
+        PREMIUM_TEMPLATE_PROVIDER: "templated.io",
+        TEMPLATED_IO_API_KEY: "tio-key",
+        TEMPLATED_IO_TEMPLATE_RETAIL_PRODUCT_PROMO: "tio-retail",
+        TEMPLATED_IO_TEMPLATE_SERVICE_BUSINESS_PROMO: "tio-service",
+        TEMPLATED_IO_TEMPLATE_OFFER_DISCOUNT_CAMPAIGN: "tio-offer",
+      });
+      const { getPremiumTemplateStatus } = await import("./template-catalogue");
+      const status = getPremiumTemplateStatus();
+      expect(status.ready).toBe(true);
+      expect(status.provider).toBe("templated.io");
+    });
+  });
 });

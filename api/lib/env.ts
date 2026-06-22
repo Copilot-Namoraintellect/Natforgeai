@@ -51,7 +51,7 @@ export const env = {
 
   // Premium template provider feature flags (Phase 2)
   enablePremiumTemplateProvider: process.env.ENABLE_PREMIUM_TEMPLATE_PROVIDER === "true",
-  premiumTemplateProvider: process.env.PREMIUM_TEMPLATE_PROVIDER ?? "bannerbear",
+  premiumTemplateProvider: process.env.PREMIUM_TEMPLATE_PROVIDER ?? "",
 
   bannerbearApiKey: process.env.BANNERBEAR_API_KEY ?? "",
   bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",

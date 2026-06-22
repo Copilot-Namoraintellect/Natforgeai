@@ -105,3 +105,60 @@ export function resolveAspectRatio(templateId: PremiumTemplateId, format: Templa
   const template = getPremiumTemplate(templateId);
   return template?.aspectRatios[format] || "4:5";
 }
+
+export interface PremiumTemplateStatus {
+  ready: boolean;
+  provider?: string;
+  missing?: string[];
+  templates: PremiumTemplate[];
+}
+
+/**
+ * A premium template provider is only considered ready when:
+ * - the feature flag is enabled,
+ * - a provider is explicitly chosen,
+ * - the provider API key is present, and
+ * - every NatForgeAI template is mapped to a provider template UID.
+ */
+export function getPremiumTemplateStatus(): PremiumTemplateStatus {
+  const templates = listPremiumTemplates();
+  const provider = env.premiumTemplateProvider || undefined;
+
+  if (!env.enablePremiumTemplateProvider) {
+    return { ready: false, provider, missing: ["ENABLE_PREMIUM_TEMPLATE_PROVIDER"], templates };
+  }
+
+  if (!provider) {
+    return { ready: false, provider, missing: ["PREMIUM_TEMPLATE_PROVIDER"], templates };
+  }
+
+  const key = provider.toLowerCase();
+
+  if (key === "bannerbear") {
+    if (!env.bannerbearApiKey) {
+      return { ready: false, provider, missing: ["BANNERBEAR_API_KEY"], templates };
+    }
+    const missingTemplates = templates
+      .map((t) => t.id)
+      .filter((id) => !resolveProviderTemplateId(provider, id));
+    if (missingTemplates.length > 0) {
+      return { ready: false, provider, missing: missingTemplates.map((id) => `BANNERBEAR_TEMPLATE_${id.toUpperCase()}`), templates };
+    }
+    return { ready: true, provider, templates };
+  }
+
+  if (key === "templatedio" || key === "templated.io") {
+    if (!env.templatedIoApiKey) {
+      return { ready: false, provider, missing: ["TEMPLATED_IO_API_KEY"], templates };
+    }
+    const missingTemplates = templates
+      .map((t) => t.id)
+      .filter((id) => !resolveProviderTemplateId(provider, id));
+    if (missingTemplates.length > 0) {
+      return { ready: false, provider, missing: missingTemplates.map((id) => `TEMPLATED_IO_TEMPLATE_${id.toUpperCase()}`), templates };
+    }
+    return { ready: true, provider, templates };
+  }
+
+  return { ready: false, provider, missing: ["PREMIUM_TEMPLATE_PROVIDER"], templates };
+}
