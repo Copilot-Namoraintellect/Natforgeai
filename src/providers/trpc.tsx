@@ -13,6 +13,8 @@ const trpcClient = trpc.createClient({
     httpBatchLink({
       url: "/api/trpc",
       transformer: superjson,
+      // Send all requests as POST so IIS/ARR never rejects long batched GET URLs.
+      methodOverride: "POST",
       headers() {
         const token = localStorage.getItem("auth_token");
         return {
