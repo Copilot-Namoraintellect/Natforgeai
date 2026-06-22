@@ -16,19 +16,24 @@ export interface BrandPalette {
   source: "logo" | "brandColors" | "default";
 }
 
-function sanitizeHex(hex: string): string | null {
-  const clean = hex.trim().replace("#", "");
+export function safeText(value: unknown): string {
+  return String(value ?? "").replace(/\n+/g, " ").trim();
+}
+
+export function normaliseHex(value: unknown): string | undefined {
+  const clean = safeText(value).replace("#", "");
+  if (!clean) return undefined;
   if (/^[0-9A-Fa-f]{3}$/.test(clean)) {
-    return `#${clean.split("").map((c) => c + c).join("")}`;
+    return `#${clean.split("").map((c) => c + c).join("").toUpperCase()}`;
   }
   if (/^[0-9A-Fa-f]{6}$/.test(clean)) {
     return `#${clean.toUpperCase()}`;
   }
-  return null;
+  return undefined;
 }
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const normalized = sanitizeHex(hex);
+  const normalized = normaliseHex(hex);
   if (!normalized) return null;
   const num = parseInt(normalized.replace("#", ""), 16);
   return {
@@ -280,8 +285,12 @@ export async function extractLogoPalette(logoUrl: string): Promise<BrandPalette 
 export async function resolveBrandPalette(business: any): Promise<BrandPalette> {
   // Explicit saved brand colours take precedence so users can correct or
   // override automatic logo extraction.
-  const colors = (business?.brandColors as string[] | undefined) || [];
-  const validColors = colors.map(sanitizeHex).filter(Boolean) as string[];
+  const rawColors = Array.isArray(business?.brandColors)
+    ? (business.brandColors as unknown[])
+    : [];
+  const validColors = rawColors
+    .map((c) => normaliseHex(c))
+    .filter((c): c is string => !!c);
   if (validColors.length > 0) {
     console.log(`[BrandPalette] Resolved from saved brand colours | colors=${validColors.join(", ")}`);
     return {
@@ -310,6 +319,21 @@ export async function resolveBrandPalette(business: any): Promise<BrandPalette> 
   };
 }
 
+export function ensureBrandPalette(palette?: Partial<BrandPalette>): BrandPalette {
+  const defaultPalette: BrandPalette = {
+    primary: "#0F172A",
+    secondary: "#334155",
+    accent: "#64748B",
+    source: "default",
+  };
+  return {
+    primary: normaliseHex(palette?.primary) || defaultPalette.primary,
+    secondary: normaliseHex(palette?.secondary) || normaliseHex(palette?.primary) || defaultPalette.secondary,
+    accent: normaliseHex(palette?.accent) || normaliseHex(palette?.primary) || defaultPalette.accent,
+    source: palette?.source || "default",
+  };
+}
+
 export function isLightColor(hex: string): boolean {
   const rgb = hexToRgb(hex);
   if (!rgb) return false;
@@ -322,7 +346,8 @@ export function isLightColor(hex: string): boolean {
  * background colour.
  */
 export function contrastTextColor(hex: string): string {
-  return isLightColor(hex) ? "#0F172A" : "#FFFFFF";
+  const safeHex = normaliseHex(hex) || "#0F172A";
+  return isLightColor(safeHex) ? "#0F172A" : "#FFFFFF";
 }
 
 /**

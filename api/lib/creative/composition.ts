@@ -9,7 +9,7 @@
 import path from "path";
 import fs from "fs";
 import sharp from "sharp";
-import { resolveBrandPalette, contrastTextColor, isLightColor, type BrandPalette } from "./brand-palette";
+import { resolveBrandPalette, contrastTextColor, isLightColor, safeText, ensureBrandPalette, type BrandPalette } from "./brand-palette";
 
 export type TemplateId = "service_business_promo" | "retail_product_promo" | "offer_discount_campaign";
 
@@ -68,13 +68,12 @@ function parseLayoutHints(text?: string): LayoutHints {
   };
 }
 
-function sanitize(str?: string | null): string {
-  if (!str) return "";
-  return str.replace(/\n+/g, " ").trim();
+function sanitize(value: unknown): string {
+  return safeText(value);
 }
 
 function escapeXml(unsafe: string): string {
-  return unsafe
+  return sanitize(unsafe)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -950,7 +949,7 @@ export async function composeBrandedLeafletImage(
   const width = meta.width || 1024;
   const height = meta.height || 1536;
 
-  const palette = spec.palette || await resolveBrandPalette(spec.business);
+  const palette = ensureBrandPalette(spec.palette || await resolveBrandPalette(spec.business));
   const businessName = sanitize(spec.business?.name) || sanitize(spec.post?.title) || "Your Business";
   const ctaText = sanitize(spec.cta || spec.campaign?.preferredCta || spec.post?.cta || "Contact us today");
   const offerText = sanitize(spec.offer || "");

@@ -62,8 +62,8 @@ export function getPremiumTemplate(id: PremiumTemplateId): PremiumTemplate | und
   return TEMPLATES.find((t) => t.id === id);
 }
 
-export function resolveProviderTemplateId(provider: string, templateId: PremiumTemplateId): string | undefined {
-  const key = provider.toLowerCase();
+export function resolveProviderTemplateId(provider: string | undefined, templateId: PremiumTemplateId): string | undefined {
+  const key = String(provider ?? "").toLowerCase();
   switch (key) {
     case "bannerbear":
       return resolveBannerbearTemplateId(templateId);
