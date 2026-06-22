@@ -224,23 +224,28 @@ export const approvalRouter = createRouter({
         .optional()
     )
     .query(async ({ ctx, input }) => {
-      const db = getDb();
+      try {
+        const db = getDb();
 
-      // Repair missing approvals for stuck campaigns before listing
-      await syncPendingApprovals(ctx.user.id);
+        // Repair missing approvals for stuck campaigns before listing
+        await syncPendingApprovals(ctx.user.id);
 
-      const results = await db
-        .select()
-        .from(approvalRequests)
-        .where(eq(approvalRequests.userId, ctx.user.id))
-        .orderBy(desc(approvalRequests.createdAt));
+        const results = await db
+          .select()
+          .from(approvalRequests)
+          .where(eq(approvalRequests.userId, ctx.user.id))
+          .orderBy(desc(approvalRequests.createdAt));
 
-      return results.filter((req) => {
-        if (input?.status && req.status !== input.status) return false;
-        if (input?.campaignId && req.campaignId !== input.campaignId) return false;
-        if (input?.riskLevel && req.riskLevel !== input.riskLevel) return false;
-        return true;
-      });
+        return results.filter((req) => {
+          if (input?.status && req.status !== input.status) return false;
+          if (input?.campaignId && req.campaignId !== input.campaignId) return false;
+          if (input?.riskLevel && req.riskLevel !== input.riskLevel) return false;
+          return true;
+        });
+      } catch (err: any) {
+        console.error("[approval.listApprovals] Query failed:", err.message);
+        return [];
+      }
     }),
 
   approveAction: authedQuery

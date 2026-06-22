@@ -8,7 +8,7 @@ import { enforceCostControl } from "../billing/cost-control";
 import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider, getTemplateRendererProvider } from "./registry";
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
 import { generateFallbackLeafletImage, defaultServiceBullets, selectTemplate, type TemplateId } from "./composition";
-import { renderOffer, offerToHeadline, normalizeCta } from "./text-formatter";
+import { renderOffer, offerToHeadline, normalizeCta, normaliseOfferInText } from "./text-formatter";
 import { resolveBrandPalette } from "./brand-palette";
 import {
   getPremiumImageCredits,
@@ -1121,16 +1121,16 @@ OUTPUT FORMAT — return ONLY a single JSON object with these exact keys:
         : JSON.parse(text);
 
       const safePack: CaptionPack = {
-        linkedinCaption: parsed.linkedinCaption || post.caption || "",
-        facebookCaption: parsed.facebookCaption || post.caption || "",
-        instagramCaption: parsed.instagramCaption || post.caption || "",
-        whatsappCaption: parsed.whatsappCaption || post.cta || "",
-        emailSubject: parsed.emailSubject || post.title || "",
-        emailPreheader: parsed.emailPreheader || post.hook || "",
-        emailBody: parsed.emailBody || post.caption || "",
+        linkedinCaption: normaliseOfferInText(parsed.linkedinCaption || post.caption || "", campaign.offerDetails),
+        facebookCaption: normaliseOfferInText(parsed.facebookCaption || post.caption || "", campaign.offerDetails),
+        instagramCaption: normaliseOfferInText(parsed.instagramCaption || post.caption || "", campaign.offerDetails),
+        whatsappCaption: normaliseOfferInText(parsed.whatsappCaption || post.cta || "", campaign.offerDetails),
+        emailSubject: normaliseOfferInText(parsed.emailSubject || post.title || "", campaign.offerDetails),
+        emailPreheader: normaliseOfferInText(parsed.emailPreheader || post.hook || "", campaign.offerDetails),
+        emailBody: normaliseOfferInText(parsed.emailBody || post.caption || "", campaign.offerDetails),
         hashtags: Array.isArray(parsed.hashtags) ? parsed.hashtags : [],
-        ctaVariations: Array.isArray(parsed.ctaVariations) ? parsed.ctaVariations : [],
-        outreachDm: parsed.outreachDm || "",
+        ctaVariations: Array.isArray(parsed.ctaVariations) ? parsed.ctaVariations.map((c) => normaliseOfferInText(c, campaign.offerDetails)) : [],
+        outreachDm: normaliseOfferInText(parsed.outreachDm || "", campaign.offerDetails),
       };
 
       const validation = validateCaptionPack(safePack);

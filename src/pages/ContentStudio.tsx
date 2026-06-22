@@ -78,6 +78,13 @@ const platforms = [
 
 const tones = ["friendly", "premium", "bold", "professional", "casual", "urgent"];
 
+const CAPTION_PACK_PLATFORM_KEYS: Record<string, keyof { linkedinCaption: string; facebookCaption: string; instagramCaption: string; whatsappCaption: string }> = {
+  instagram: "instagramCaption",
+  facebook: "facebookCaption",
+  linkedin: "linkedinCaption",
+  whatsapp: "whatsappCaption",
+};
+
 type PendingActionKey = string;
 
 function actionKey(contentId: number, action: string): PendingActionKey {
@@ -257,9 +264,12 @@ export default function ContentStudio() {
   };
 
   const utils = trpc.useUtils();
+  const numericCampaignId = urlCampaignId && !Number.isNaN(Number(urlCampaignId)) ? Number(urlCampaignId) : 0;
+  const hasCampaignId = numericCampaignId > 0;
+
   const listInput = (() => {
     const base: any = {};
-    if (urlCampaignId) base.campaignId = Number(urlCampaignId);
+    if (hasCampaignId) base.campaignId = numericCampaignId;
     if (activeTab === "ai_generated") base.aiGenerated = true;
     else if (activeTab !== "all") base.type = activeTab;
     return Object.keys(base).length > 0 ? base : undefined;
@@ -274,8 +284,8 @@ export default function ContentStudio() {
   });
 
   const { data: campaignForContext } = trpc.campaign.get.useQuery(
-    { id: Number(urlCampaignId) },
-    { enabled: !!urlCampaignId }
+    { id: numericCampaignId },
+    { enabled: hasCampaignId }
   );
   const { data: businessForContext } = trpc.business.get.useQuery(
     { id: campaignForContext?.businessId ?? 0 },
@@ -287,16 +297,16 @@ export default function ContentStudio() {
     businessesList?.find((b) => b.id === campaignForContext?.businessId) ??
     businessesList?.[businessesList.length - 1];
   const { data: postCountForCampaign } = trpc.content.countForCampaign.useQuery(
-    { campaignId: Number(urlCampaignId) },
-    { enabled: !!urlCampaignId }
+    { campaignId: numericCampaignId },
+    { enabled: hasCampaignId }
   );
   const { data: campaignAssets } = trpc.content.campaignAssets.useQuery(
-    { campaignId: Number(urlCampaignId) },
-    { enabled: !!urlCampaignId }
+    { campaignId: numericCampaignId },
+    { enabled: hasCampaignId }
   );
   const { data: videoJobs } = trpc.video.listForCampaign.useQuery(
-    { campaignId: Number(urlCampaignId) },
-    { enabled: !!urlCampaignId }
+    { campaignId: numericCampaignId },
+    { enabled: hasCampaignId }
   );
   const { data: videoConfig } = trpc.video.getConfigStatus.useQuery();
   const { data: premiumImageCostData } = trpc.image.premiumImageCost.useQuery();
@@ -315,12 +325,12 @@ export default function ContentStudio() {
 
   // Fetch agent runs so we can detect failed regenerations and avoid showing "completed" creative rows with no content
   const { data: creativeAgentRuns } = trpc.agent.getAgentRuns.useQuery(
-    { campaignId: Number(urlCampaignId), agentType: "creative" },
-    { enabled: !!urlCampaignId, refetchInterval: 10000 }
+    { campaignId: numericCampaignId, agentType: "creative" },
+    { enabled: hasCampaignId, refetchInterval: 10000 }
   );
   const { data: strategyAgentRuns } = trpc.agent.getAgentRuns.useQuery(
-    { campaignId: Number(urlCampaignId), agentType: "strategy" },
-    { enabled: !!urlCampaignId, refetchInterval: 10000 }
+    { campaignId: numericCampaignId, agentType: "strategy" },
+    { enabled: hasCampaignId, refetchInterval: 10000 }
   );
 
   const connectedIntegrations = useMemo(
@@ -340,7 +350,7 @@ export default function ContentStudio() {
   const hasFailedCreativeRun = creativeAgentRuns?.some((r) => r.status === "failed");
   const hasFailedStrategyRun = strategyAgentRuns?.some((r) => r.status === "failed");
 
-  const campaignNeedsRecovery = !!urlCampaignId && campaignForContext &&
+  const campaignNeedsRecovery = hasCampaignId && campaignForContext &&
     ((["creatives_generating", "creatives_ready"].includes(campaignForContext.workflowState) &&
       (postCountForCampaign === 0 || (contents?.length ?? 0) === 0)) ||
       hasFailedCreativeRun ||
@@ -349,16 +359,16 @@ export default function ContentStudio() {
   const generateForCampaignMutation = trpc.content.generateForCampaign.useMutation({
     onSuccess: (data) => {
       utils.content.list.invalidate();
-      utils.content.countForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
-      utils.campaign.get.invalidate({ id: Number(urlCampaignId) });
-      utils.agent.getAgentRuns.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
+      utils.campaign.get.invalidate({ id: numericCampaignId });
+      utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
       toast.success(`Content generated successfully. ${data.postCount} posts created.`);
     },
     onError: (err) => {
       utils.content.list.invalidate();
-      utils.content.countForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
-      utils.campaign.get.invalidate({ id: Number(urlCampaignId) });
-      utils.agent.getAgentRuns.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
+      utils.campaign.get.invalidate({ id: numericCampaignId });
+      utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
       toast.error(err.message || "Failed to generate content for campaign");
     },
   });
@@ -551,14 +561,27 @@ Include:
   }
 
   function getCaptionText(content: any) {
+    const captionPackCaption = getCaptionPackCaption(content);
+    const caption = captionPackCaption || content.caption;
     const parts = [
       content.hook,
-      content.caption,
+      caption,
       content.cta,
       content.body,
       content.hashtags,
     ].filter(Boolean);
     return parts.join("\n\n");
+  }
+
+  function getCaptionPackCaption(content: any): string | undefined {
+    if (!content.platform || content.type !== "social_post") return undefined;
+    const pack = campaignAssets?.find((a) => a.assetType === "caption_pack" && a.campaignId === content.campaignId);
+    if (!pack) return undefined;
+    const meta = (pack.metadata || {}) as any;
+    const key = CAPTION_PACK_PLATFORM_KEYS[content.platform.toLowerCase()];
+    if (!key) return undefined;
+    const value = meta?.[key];
+    return typeof value === "string" && value.trim().length > 0 ? value : undefined;
   }
 
   function handleCreate(e: React.FormEvent<HTMLFormElement>) {
@@ -646,7 +669,7 @@ Include:
         toast.success("Basic draft video rendered.");
       }
       utils.content.list.invalidate();
-      utils.video.listForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.video.listForCampaign.invalidate({ campaignId: numericCampaignId });
       if (data.videoUrl) {
         window.open(data.videoUrl, "_blank");
       }
@@ -668,8 +691,8 @@ Include:
     onSuccess: () => {
       toast.success("Basic draft leaflet generated (0 credits). Upgrade to Premium for a polished, customer-ready result.");
       utils.content.list.invalidate();
-      utils.image.list.invalidate({ campaignId: Number(urlCampaignId) });
-      utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.image.list.invalidate({ campaignId: numericCampaignId });
+      utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
     },
     onError: (err) => {
       const message = err.message || "";
@@ -699,8 +722,8 @@ Include:
       const costText = (data.creditsCharged ?? premiumImageCost) === 0 ? "no charge" : `${data.creditsCharged ?? premiumImageCost} credits`;
       toast.success(`Premium Marketing Leaflet generated (${costText}). Review the leaflet and caption pack, then approve or regenerate.`);
       utils.content.list.invalidate();
-      utils.image.list.invalidate({ campaignId: Number(urlCampaignId) });
-      utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.image.list.invalidate({ campaignId: numericCampaignId });
+      utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
     },
     onError: (err) => {
       const message = err.message || "";
@@ -722,7 +745,8 @@ Include:
   const generateCaptionPackMutation = trpc.image.generateCaptionPack.useMutation({
     onSuccess: () => {
       toast.success("Caption pack generated. You can now copy platform-ready captions.");
-      utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
+      utils.content.list.invalidate();
     },
     onError: (err) => {
       toast.error(err.message || "Failed to generate caption pack");
@@ -743,17 +767,17 @@ Include:
   const regenerateFromProfileMutation = trpc.campaign.regenerateFromProfile.useMutation({
     onSuccess: () => {
       utils.content.list.invalidate();
-      utils.content.campaignAssets.invalidate({ campaignId: Number(urlCampaignId) });
-      utils.content.countForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
-      utils.campaign.get.invalidate({ id: Number(urlCampaignId) });
-      utils.agent.getAgentRuns.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
+      utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
+      utils.campaign.get.invalidate({ id: numericCampaignId });
+      utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
       toast.success("Campaign pack regenerated from the updated business profile.");
     },
     onError: (err) => {
       utils.content.list.invalidate();
-      utils.content.countForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
-      utils.campaign.get.invalidate({ id: Number(urlCampaignId) });
-      utils.agent.getAgentRuns.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
+      utils.campaign.get.invalidate({ id: numericCampaignId });
+      utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
       toast.error(err.message || "Failed to regenerate campaign pack");
     },
   });
@@ -761,7 +785,7 @@ Include:
   const refreshVideoStatusMutation = trpc.video.refreshStatus.useMutation({
     onSuccess: (data) => {
       toast.success(`Video status: ${data.status}`);
-      utils.video.listForCampaign.invalidate({ campaignId: Number(urlCampaignId) });
+      utils.video.listForCampaign.invalidate({ campaignId: numericCampaignId });
     },
     onError: (err) => {
       toast.error(err.message || "Failed to refresh status");
@@ -1971,11 +1995,20 @@ Include:
               {content.hook}
             </p>
           )}
-          {content.caption && (
-            <p className="text-sm text-muted-foreground line-clamp-2 mb-1">
-              {content.caption}
-            </p>
-          )}
+          {(() => {
+            const captionPackCaption = getCaptionPackCaption(content);
+            if (captionPackCaption) {
+              return (
+                <div className="mb-1">
+                  <span className="text-[10px] font-semibold text-emerald-700 uppercase tracking-wide">Caption Pack</span>
+                  <p className="text-sm text-muted-foreground line-clamp-2">{captionPackCaption}</p>
+                </div>
+              );
+            }
+            return content.caption ? (
+              <p className="text-sm text-muted-foreground line-clamp-2 mb-1">{content.caption}</p>
+            ) : null;
+          })()}
           {content.cta && (
             <p className="text-xs font-medium text-[#00D4FF] mt-1">
               CTA: {content.cta}
@@ -2222,7 +2255,7 @@ Include:
 
   function executePublishPack() {
     if (!urlCampaignId) return;
-    publishCampaignPackMutation.mutate({ campaignId: Number(urlCampaignId) });
+    publishCampaignPackMutation.mutate({ campaignId: numericCampaignId });
   }
 
   function renderWorkflowGuidance() {
@@ -2431,7 +2464,7 @@ Include:
                   disabled={regenerateFromProfileMutation.isPending}
                   onClick={() => {
                     if (confirm("This will regenerate strategy, leaflet, captions and platform adaptations from the latest business profile. Existing AI-generated assets will be replaced. Continue?")) {
-                      regenerateFromProfileMutation.mutate({ campaignId: Number(urlCampaignId) });
+                      regenerateFromProfileMutation.mutate({ campaignId: numericCampaignId });
                     }
                   }}
                 >
@@ -2826,7 +2859,7 @@ Include:
               className="border-[#00D4FF]/50 text-[#00D4FF] hover:bg-[#00D4FF]/10"
               onClick={() => {
                 if (campaignForContext.workflowState === "strategy_approved" || campaignForContext.workflowState === "creatives_generating" || campaignForContext.workflowState === "creatives_ready") {
-                  generateForCampaignMutation.mutate({ campaignId: Number(urlCampaignId) });
+                  generateForCampaignMutation.mutate({ campaignId: numericCampaignId });
                 } else {
                   toast.info("Please approve the strategy first before generating content.");
                 }
@@ -3203,7 +3236,7 @@ Include:
               {hasFailedStrategyRun ? (
                 <Button
                   variant="outline"
-                  onClick={() => regenerateFromProfileMutation.mutate({ campaignId: Number(urlCampaignId) })}
+                  onClick={() => regenerateFromProfileMutation.mutate({ campaignId: numericCampaignId })}
                   disabled={regenerateFromProfileMutation.isPending}
                 >
                   {regenerateFromProfileMutation.isPending ? (
@@ -3216,7 +3249,7 @@ Include:
               ) : (
                 <Button
                   variant="outline"
-                  onClick={() => generateForCampaignMutation.mutate({ campaignId: Number(urlCampaignId) })}
+                  onClick={() => generateForCampaignMutation.mutate({ campaignId: numericCampaignId })}
                   disabled={generateForCampaignMutation.isPending}
                 >
                   {generateForCampaignMutation.isPending ? (

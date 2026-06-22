@@ -92,6 +92,51 @@ export function renderOffer(offer: string, businessName?: string): string {
 }
 
 /**
+ * Deterministically normalise any offer mention inside a longer caption/text
+ * back to the canonical formatted offer. Handles the common LLM rewrites:
+ *   - "R 3 000", "R3000" → "R3,000"
+ *   - "any orders" → "orders"
+ *   - "over" / "or more" / "and above" → "above"
+ *   - missing "Enjoy" prefix on percent-off offers
+ */
+export function normaliseOfferInText(text: string, rawOffer?: string): string {
+  if (!text) return "";
+  let clean = text;
+
+  // Fix currency formatting everywhere first.
+  clean = formatRandCurrency(clean);
+
+  // Remove "any" before orders/spend.
+  clean = clean.replace(/\bany\s+(orders?|spend|purchase)\b/gi, "$1");
+
+  // Normalise threshold phrasing to "orders above R3,000".
+  clean = clean.replace(/\b(orders?)\s+over\s+(R[\d,]+)\b/gi, "$1 above $2");
+  clean = clean.replace(/\b(orders?)\s+of\s+(R[\d,]+)\s+or\s+more\b/gi, "$1 above $2");
+  clean = clean.replace(/\b(orders?)\s+(R[\d,]+)\s+and\s+above\b/gi, "$1 above $2");
+  clean = clean.replace(/\b(orders?)\s+above\s+(R[\d,]+)\s+and\s+above\b/gi, "$1 above $2");
+
+  // If we know the canonical offer, deterministically replace the whole
+  // offer phrase (including any leading verb) with the canonical wording.
+  if (rawOffer) {
+    const canonical = renderOffer(rawOffer);
+    if (canonical) {
+      const discount = canonical.match(/(\d+)%/i)?.[1];
+      const amount = canonical.match(/(R[\d,]+)/)?.[1];
+      if (discount && amount) {
+        const escapedAmount = amount.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const pattern = new RegExp(
+          `(?:\\b(?:enjoy|get|save|claim|unlock|receive)\\s+)?\\b${discount}%(?:\\s*off)?\\b[\\s\\w]*?${escapedAmount}(?:\\s+(?:and\\s+above|and\\s+up|or\\s+more|minimum\\s+spend))?`,
+          "gi"
+        );
+        clean = clean.replace(pattern, canonical);
+      }
+    }
+  }
+
+  return clean.replace(/\s+/g, " ").trim();
+}
+
+/**
  * Build a clean headline from an offer.
  * Prefers concise, action-oriented phrasing.
  */
