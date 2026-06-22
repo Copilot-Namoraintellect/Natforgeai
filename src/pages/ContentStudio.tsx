@@ -1184,17 +1184,17 @@ Include:
           </div>
         </div>
 
-        <div className="p-4 grid grid-cols-1 lg:grid-cols-3 gap-5">
-          {/* Preview */}
-          <div className="lg:col-span-2">
+        <div className="p-5 grid grid-cols-1 xl:grid-cols-5 gap-6">
+          {/* Main column: visual asset + caption pack */}
+          <div className="xl:col-span-3 space-y-6">
             {isGenerating ? (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center min-h-[320px] text-center px-6">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center min-h-[380px] text-center px-6">
                 <Loader2 className="w-10 h-10 text-[#00D4FF] animate-spin mb-3" />
                 <p className="text-sm font-medium text-slate-800">Generating your premium marketing leaflet</p>
                 <p className="text-xs text-slate-500 mt-1 max-w-sm">No credits are deducted until the leaflet is ready. This usually takes 20–45 seconds.</p>
               </div>
             ) : isFailed || imageBroken ? (
-              <div className="rounded-xl border border-red-200 bg-red-50 flex flex-col items-center justify-center min-h-[320px] text-center px-6">
+              <div className="rounded-2xl border border-red-200 bg-red-50 flex flex-col items-center justify-center min-h-[380px] text-center px-6">
                 <AlertCircle className="w-12 h-12 text-red-400 mb-3" />
                 <p className="text-base font-medium text-red-800">We could not generate the premium leaflet</p>
                 <p className="text-sm text-red-600 mt-1 max-w-md">
@@ -1219,7 +1219,7 @@ Include:
                 </div>
               </div>
             ) : isReady ? (
-              <div className="relative group overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+              <div className="relative group overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-2">
                 {imageLoading && (
                   <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-50">
                     <Loader2 className="w-8 h-8 text-[#00D4FF] animate-spin mb-2" />
@@ -1229,7 +1229,7 @@ Include:
                 <img
                   src={imageUrl}
                   alt="Premium marketing leaflet"
-                  className={`w-full object-contain max-h-[520px] ${imageLoading ? "opacity-0" : "opacity-100"}`}
+                  className={`w-full object-contain rounded-xl max-h-[640px] ${imageLoading ? "opacity-0" : "opacity-100"}`}
                   onLoad={() => {
                     setLoadingImageIds((prev) => {
                       const next = new Set(prev);
@@ -1265,7 +1265,7 @@ Include:
                 </div>
               </div>
             ) : (
-              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 flex flex-col items-center min-h-[320px] px-6 py-8">
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 flex flex-col items-center min-h-[380px] px-6 py-8">
                 <div className="text-center">
                   <Image className="w-12 h-12 text-slate-300 mb-3 mx-auto" />
                   <p className="text-base font-medium text-slate-800">Marketing leaflet not created yet</p>
@@ -1380,15 +1380,16 @@ Include:
                 </div>
               </div>
             )}
+            {captionPack && renderCaptionPack(captionPack, content.id)}
           </div>
 
-          {/* Details / actions */}
-          <div className="space-y-4">
+          {/* Sidebar: leaflet details, attempts, refinement, actions */}
+          <div className="xl:col-span-2 space-y-5">
             <Card className="border-slate-200">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Leaflet Details</CardTitle>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Leaflet Details</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2.5 text-xs">
+              <CardContent className="space-y-3.5 text-sm">
                 <div className="flex justify-between gap-2">
                   <span className="text-slate-500">Headline</span>
                   <span className="font-medium text-right line-clamp-2">{content.title || campaignForContext?.goal || "—"}</span>
@@ -1664,12 +1665,7 @@ Include:
           </div>
         </div>
 
-        {/* Caption pack */}
-        {captionPack && (
-          <div className="border-t border-slate-100 p-4 bg-slate-50/40">
-            {renderCaptionPack(captionPack, content.id)}
-          </div>
-        )}
+
       </div>
     );
   }
@@ -1715,7 +1711,7 @@ Include:
     const copyText = sections.map((s) => `**${s.label}**\n${s.text}`).join("\n\n");
 
     return (
-      <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+      <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
         <div className="flex items-center justify-between">
           <h4 className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
             <MessageCircle className="w-4 h-4 text-emerald-600" />
@@ -1746,11 +1742,11 @@ Include:
             </Button>
           </div>
         </div>
-        <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+        <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
           {sections.map((s) => (
-            <div key={s.key} className="rounded-lg border border-slate-100 bg-slate-50 p-2.5">
+            <div key={s.key} className="rounded-lg border border-slate-100 bg-slate-50 p-3.5">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[11px] font-semibold text-slate-600 uppercase tracking-wide">{s.label}</span>
+                <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">{s.label}</span>
                 <Button
                   size="sm"
                   variant="ghost"
@@ -1962,7 +1958,7 @@ Include:
     const isMasterCampaignPost = (content.metadata as any)?.assetKind === "master_campaign_post";
 
     return (
-      <Card key={content.id} className="group hover:shadow-md transition-all">
+      <Card key={content.id} className="group hover:shadow-lg transition-all">
         <CardContent className="p-5">
           {isMasterCampaignPost && renderMasterImageSection(content)}
 
@@ -3231,7 +3227,7 @@ Include:
 
       {/* Content Grid or Campaign Pack */}
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2].map((i) => (
             <Card key={i} className="animate-pulse">
               <CardContent className="p-6 h-32" />
@@ -3379,7 +3375,7 @@ Include:
       ) : urlCampaignId ? (
         renderCampaignPack()
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {(filtered ?? []).map((content) => renderContentCard(content))}
         </div>
       )}
