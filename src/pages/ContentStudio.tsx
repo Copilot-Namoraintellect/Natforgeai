@@ -1077,11 +1077,6 @@ Include:
     );
   }
 
-  function isMasterVisualAsset(content: any): boolean {
-    const meta = (content.metadata || {}) as any;
-    return meta?.assetKind === "master_campaign_post";
-  }
-
   function getLatestContentByKey(contents: any[], keyFn: (c: any) => string | number | undefined): Map<string | number, any> {
     const map = new Map<string | number, any>();
     for (const c of contents) {
@@ -1095,28 +1090,23 @@ Include:
     return map;
   }
 
-  function classifyContentEra(contents: any[]): { current: any[]; historical: any[] } {
-    const currentIds = new Set<number>();
+  function classifyContentEra(contents: any[]): { currentCopy: any[]; currentVisual: any[]; historical: any[] } {
+    const currentCopyIds = new Set<number>();
+    const currentVisualIds = new Set<number>();
     const meta = (c: any) => (c.metadata || {}) as any;
 
     // --- Leaflet / master campaign post ---
     const leaflets = contents.filter((c) => meta(c).assetKind === "master_campaign_post");
-    const leafletsByCampaign = getLatestContentByKey(leaflets, (c) => c.campaignId ?? 0);
     const successfulLeaflets = leaflets.filter((c) => meta(c).imageStatus === "ready" && meta(c).imageUrl);
     const successfulLeafletsByCampaign = getLatestContentByKey(successfulLeaflets, (c) => c.campaignId ?? 0);
 
-    for (const [_campaignId, successful] of successfulLeafletsByCampaign) {
-      currentIds.add(successful.id);
-      // Any failed leaflet older than the successful one is historical (handled below by not adding to currentIds)
+    for (const successful of successfulLeafletsByCampaign.values()) {
+      currentVisualIds.add(successful.id);
     }
-    for (const [campaignId, latest] of leafletsByCampaign) {
-      if (!successfulLeafletsByCampaign.has(campaignId)) {
-        // No successful leaflet; show the latest (even if failed) as current so user can retry
-        currentIds.add(latest.id);
-      }
-    }
+    // Failed or not-yet-generated leaflets are NOT current visual assets — they go to historical.
 
     // --- Video / master video ad ---
+    // Treat videos as copy/content (they sit in Current Campaign Content grid).
     const videos = contents.filter(
       (c) => meta(c).assetKind === "master_video_ad" || c.type === "video_concept" || c.type === "reel_script"
     );
@@ -1124,27 +1114,26 @@ Include:
     const successfulVideos = videos.filter((c) => meta(c).videoStatus === "ready" && meta(c).videoUrl);
     const successfulVideosByCampaign = getLatestContentByKey(successfulVideos, (c) => c.campaignId ?? 0);
 
-    for (const [_campaignId, successful] of successfulVideosByCampaign) {
-      currentIds.add(successful.id);
+    for (const successful of successfulVideosByCampaign.values()) {
+      currentCopyIds.add(successful.id);
     }
     for (const [campaignId, latest] of videosByCampaign) {
       if (!successfulVideosByCampaign.has(campaignId)) {
-        currentIds.add(latest.id);
+        // No successful video yet; show the latest (even if failed/concept) as current copy so user can retry.
+        currentCopyIds.add(latest.id);
       }
     }
 
     // --- Platform social posts (non-master) ---
-    // Latest per campaign + platform is current
     const platformPosts = contents.filter(
       (c) => c.type === "social_post" && meta(c).assetKind !== "master_campaign_post"
     );
     const latestPostByKey = getLatestContentByKey(platformPosts, (c) => `${c.campaignId ?? 0}:${c.platform || "none"}`);
     for (const c of latestPostByKey.values()) {
-      currentIds.add(c.id);
+      currentCopyIds.add(c.id);
     }
 
     // --- Other content types (email, blog, carousel, script, ad_copy, whatsapp, etc.) ---
-    // Latest per campaign + type is current
     const others = contents.filter((c) => {
       if (meta(c).assetKind === "master_campaign_post" || meta(c).assetKind === "master_video_ad") return false;
       if (c.type === "social_post" || c.type === "video_concept" || c.type === "reel_script") return false;
@@ -1152,19 +1141,20 @@ Include:
     });
     const latestOtherByKey = getLatestContentByKey(others, (c) => `${c.campaignId ?? 0}:${c.type}`);
     for (const c of latestOtherByKey.values()) {
-      currentIds.add(c.id);
+      currentCopyIds.add(c.id);
     }
 
     // --- Explicitly current statuses ---
     for (const c of contents) {
       if (c.status === "published" || c.status === "scheduled" || meta(c).approved) {
-        currentIds.add(c.id);
+        currentCopyIds.add(c.id);
       }
     }
 
-    const current = contents.filter((c) => currentIds.has(c.id));
-    const historical = contents.filter((c) => !currentIds.has(c.id));
-    return { current, historical };
+    const currentCopy = contents.filter((c) => currentCopyIds.has(c.id));
+    const currentVisual = contents.filter((c) => currentVisualIds.has(c.id));
+    const historical = contents.filter((c) => !currentCopyIds.has(c.id) && !currentVisualIds.has(c.id));
+    return { currentCopy, currentVisual, historical };
   }
 
   function isFailedAttempt(content: any): boolean {
@@ -3643,30 +3633,43 @@ Include:
       ) : (
         (() => {
           const libraryContent = filtered ?? [];
-          const { current, historical } = classifyContentEra(libraryContent);
+          const { currentCopy, currentVisual, historical } = classifyContentEra(libraryContent);
 
           return (
             <div className="space-y-6">
-              {/* Current Campaign Content */}
-              {current.length > 0 && (
+              {/* Section 1: Current Campaign Content */}
+              {currentCopy.length > 0 && (
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                     Current Campaign Content
                   </h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {current.map((content) => (
-                      <div key={content.id} className={isMasterVisualAsset(content) ? "md:col-span-2" : ""}>
-                        {renderContentCard(content)}
-                      </div>
+                    {currentCopy.map((content) => (
+                      <div key={content.id}>{renderContentCard(content)}</div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Previous / Historical Attempts */}
+              {/* Section 2: Visual Assets */}
+              {currentVisual.length > 0 && (
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                    <Image className="w-4 h-4 text-[#00D4FF]" />
+                    Visual Assets
+                  </h3>
+                  <div className="space-y-4">
+                    {currentVisual.map((content) => (
+                      <div key={content.id}>{renderContentCard(content)}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Section 3: Previous drafts & generation history */}
               {historical.length > 0 && (
-                <Collapsible>
+                <Collapsible defaultOpen={false}>
                   <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden">
                     <CollapsibleTrigger asChild>
                       <button
@@ -3681,16 +3684,14 @@ Include:
                           <Badge variant="outline" className="text-[10px] h-5">
                             {historical.length}
                           </Badge>
-                          <ChevronDown className="w-4 h-4 text-slate-500" />
+                          <ChevronDown className="w-4 h-4 text-slate-500 transition-transform data-[state=open]:rotate-180" />
                         </div>
                       </button>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
                       <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                         {historical.map((content) => (
-                          <div key={content.id}>
-                            {renderContentCard(content)}
-                          </div>
+                          <div key={content.id}>{renderContentCard(content)}</div>
                         ))}
                       </div>
                     </CollapsibleContent>
