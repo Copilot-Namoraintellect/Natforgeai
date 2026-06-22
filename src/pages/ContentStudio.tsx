@@ -1077,7 +1077,12 @@ Include:
     );
   }
 
-  function renderMasterImageSection(content: any) {
+  function hasLeafletMetadata(content: any): boolean {
+    const meta = (content.metadata || {}) as any;
+    return meta?.assetKind === "master_campaign_post" || !!meta?.imageUrl || !!meta?.imageStatus;
+  }
+
+  function renderMasterImageSection(content: any, compact = false) {
     const metadata = (content.metadata || {}) as any;
     const imageUrl = metadata?.imageUrl;
     const imageStatus = metadata?.imageStatus;
@@ -1184,9 +1189,171 @@ Include:
           </div>
         </div>
 
-        <div className="p-5 grid grid-cols-1 xl:grid-cols-5 gap-6">
+        {compact ? (
+          <>
+            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Compact left: preview/state */}
+              <div>
+                {isGenerating ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center min-h-[220px] text-center px-4">
+                    <Loader2 className="w-8 h-8 text-[#00D4FF] animate-spin mb-2" />
+                    <p className="text-sm font-medium text-slate-800">Generating your premium marketing leaflet</p>
+                    <p className="text-xs text-slate-500 mt-1">No credits are deducted until the leaflet is ready.</p>
+                  </div>
+                ) : isFailed || imageBroken ? (
+                  <div className="rounded-xl border border-red-200 bg-red-50 flex flex-col items-center justify-center min-h-[220px] text-center px-4">
+                    <AlertCircle className="w-10 h-10 text-red-400 mb-2" />
+                    <p className="text-sm font-medium text-red-800">Generation failed</p>
+                    <p className="text-xs text-red-600 mt-1">No credits were deducted.</p>
+                  </div>
+                ) : isReady ? (
+                  <div className="relative group overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-1.5">
+                    {imageLoading && (
+                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-50">
+                        <Loader2 className="w-6 h-6 text-[#00D4FF] animate-spin mb-1" />
+                        <p className="text-[10px] text-slate-500">Loading preview…</p>
+                      </div>
+                    )}
+                    <img
+                      src={imageUrl}
+                      alt="Premium marketing leaflet"
+                      className={`w-full object-contain rounded-lg max-h-[260px] ${imageLoading ? "opacity-0" : "opacity-100"}`}
+                      onLoad={() => {
+                        setLoadingImageIds((prev) => {
+                          const next = new Set(prev);
+                          next.delete(content.id);
+                          return next;
+                        });
+                      }}
+                      onError={() => {
+                        setLoadingImageIds((prev) => {
+                          const next = new Set(prev);
+                          next.delete(content.id);
+                          return next;
+                        });
+                        setBrokenImageIds((prev) => new Set(prev).add(content.id));
+                        console.error(`[PremiumLeaflet] Failed to load image preview | contentPostId=${content.id} | url=${imageUrl}`);
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center min-h-[220px] px-4 py-6 text-center">
+                    <Image className="w-10 h-10 text-slate-300 mb-2" />
+                    <p className="text-sm font-medium text-slate-800">Marketing leaflet not created yet</p>
+                    <p className="text-xs text-slate-500 mt-1">Generate a Basic Draft or Premium leaflet.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Compact right: summary */}
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">Headline</span>
+                  <p className="font-medium text-sm line-clamp-2">{content.title || campaignForContext?.goal || "—"}</p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">CTA</span>
+                  <p className="font-medium text-sm line-clamp-2">{content.cta || campaignForContext?.preferredCta || "—"}</p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">Template</span>
+                  <p className="font-medium text-sm">
+                    {LEAFLET_TEMPLATE_OPTIONS.find((o) => o.value === (metadata?.imageTemplateId || "auto"))?.label || "Auto-detect"}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">Credits charged</span>
+                  <p className="font-medium text-sm">
+                    {(metadata?.imageCreditsCharged ?? 0) === 0 ? "0 (Basic Draft)" : `${metadata?.imageCreditsCharged} credits`}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">Source / Quality</span>
+                  <p className={`font-medium text-sm ${
+                    metadata?.imageQualityTier === "draft" || metadata?.imageQualityTier === "failed"
+                      ? "text-amber-700"
+                      : metadata?.imageSource === "premium"
+                      ? "text-emerald-700"
+                      : "text-slate-700"
+                  }`}>
+                    {metadata?.imageQualityLabel ||
+                      (metadata?.imageSource === "draft" || metadata?.imageFallbackUsed
+                        ? "Basic Draft"
+                        : metadata?.imageSource === "premium"
+                        ? "Premium Marketing Leaflet"
+                        : metadata?.imageSource === "openai"
+                        ? "Premium"
+                        : "Not generated")}
+                    {typeof metadata?.imageQualityScore === "number" && ` · ${metadata.imageQualityScore}/100`}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {isReady && (
+                    <Button
+                      size="sm"
+                      className="h-8 text-[11px]"
+                      onClick={() => {
+                        const a = document.createElement("a");
+                        a.href = imageUrl;
+                        a.download = `${content.title || "campaign"}-image.${metadata?.imageExtension || "png"}`;
+                        a.click();
+                      }}
+                    >
+                      <ExternalLink className="w-3 h-3 mr-1" />
+                      Download
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-[11px]"
+                    onClick={() => generateBasicDraft()}
+                    disabled={isGenerating}
+                  >
+                    {isGeneratingBasic ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Image className="w-3 h-3 mr-1" />}
+                    {isReady || isFailed ? "Regenerate Basic Draft" : "Generate Basic Draft"}
+                  </Button>
+                  {isPremiumReady && (
+                    <Button
+                      size="sm"
+                      className="h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
+                      onClick={() => generatePremium(false)}
+                      disabled={isGenerating}
+                    >
+                      {isGeneratingPremium ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Sparkles className="w-3 h-3 mr-1" />}
+                      Regenerate Premium
+                    </Button>
+                  )}
+                  {!captionPack && !isGenerating && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-[11px]"
+                      onClick={() => generateCaptionPackMutation.mutate({ contentPostId: content.id })}
+                      disabled={generateCaptionPackMutation.isPending}
+                    >
+                      {generateCaptionPackMutation.isPending ? (
+                        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                      ) : (
+                        <MessageCircle className="w-3 h-3 mr-1" />
+                      )}
+                      Generate Caption Pack
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+            {captionPack && (
+              <div className="px-4 pb-4">
+                {renderCaptionPack(captionPack, content.id)}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="p-5 grid grid-cols-1 xl:grid-cols-3 gap-6">
           {/* Main column: visual asset + caption pack */}
-          <div className="xl:col-span-3 space-y-6">
+          <div className="xl:col-span-2 space-y-6">
             {isGenerating ? (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center min-h-[380px] text-center px-6">
                 <Loader2 className="w-10 h-10 text-[#00D4FF] animate-spin mb-3" />
@@ -1384,27 +1551,27 @@ Include:
           </div>
 
           {/* Sidebar: leaflet details, attempts, refinement, actions */}
-          <div className="xl:col-span-2 space-y-5">
+          <div className="xl:col-span-1 space-y-5">
             <Card className="border-slate-200">
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Leaflet Details</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3.5 text-sm">
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">Headline</span>
-                  <span className="font-medium text-right line-clamp-2">{content.title || campaignForContext?.goal || "—"}</span>
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">Headline</span>
+                  <p className="font-medium text-sm line-clamp-2">{content.title || campaignForContext?.goal || "—"}</p>
                 </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">CTA</span>
-                  <span className="font-medium text-right line-clamp-2">{content.cta || campaignForContext?.preferredCta || "—"}</span>
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">CTA</span>
+                  <p className="font-medium text-sm line-clamp-2">{content.cta || campaignForContext?.preferredCta || "—"}</p>
                 </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">Business</span>
-                  <span className="font-medium text-right line-clamp-1">{businessForLeaflet?.name || "—"}</span>
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">Business</span>
+                  <p className="font-medium text-sm line-clamp-1">{businessForLeaflet?.name || "—"}</p>
                 </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">Logo</span>
-                  <span className="font-medium text-right">
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">Logo</span>
+                  <div className="font-medium">
                     {businessForLeaflet?.logo ? (
                       <img
                         src={businessForLeaflet.logo}
@@ -1416,23 +1583,23 @@ Include:
                         Upload logo
                       </Link>
                     )}
-                  </span>
+                  </div>
                 </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">Template</span>
-                  <span className="font-medium text-right">
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">Template</span>
+                  <p className="font-medium text-sm">
                     {LEAFLET_TEMPLATE_OPTIONS.find((o) => o.value === (metadata?.imageTemplateId || "auto"))?.label || "Auto-detect"}
-                  </span>
+                  </p>
                 </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">Credits charged</span>
-                  <span className="font-medium text-right">
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">Credits charged</span>
+                  <p className="font-medium text-sm">
                     {(metadata?.imageCreditsCharged ?? 0) === 0 ? "0 (Basic Draft)" : `${metadata?.imageCreditsCharged} credits`}
-                  </span>
+                  </p>
                 </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">Source</span>
-                  <span className={`font-medium text-right ${
+                <div className="space-y-1">
+                  <span className="text-xs text-slate-500">Source</span>
+                  <p className={`font-medium text-sm ${
                     metadata?.imageQualityTier === "draft" || metadata?.imageQualityTier === "failed"
                       ? "text-amber-700"
                       : metadata?.imageSource === "premium"
@@ -1447,12 +1614,12 @@ Include:
                         : metadata?.imageSource === "openai"
                         ? "Premium"
                         : "Generated")}
-                  </span>
+                  </p>
                 </div>
                 {typeof metadata?.imageQualityScore === "number" && (
-                  <div className="flex justify-between gap-2">
-                    <span className="text-slate-500">Quality score</span>
-                    <span className={`font-medium text-right ${
+                  <div className="space-y-1">
+                    <span className="text-xs text-slate-500">Quality score</span>
+                    <p className={`font-medium text-sm ${
                       metadata.imageQualityTier === "premium"
                         ? "text-emerald-700"
                         : metadata.imageQualityTier === "acceptable"
@@ -1460,15 +1627,15 @@ Include:
                         : "text-amber-700"
                     }`}>
                       {metadata.imageQualityScore}/100 — {metadata.imageQualityLabel || "Draft"}
-                    </span>
+                    </p>
                   </div>
                 )}
                 {metadata?.imageGeneratedAt && (
-                  <div className="flex justify-between gap-2">
-                    <span className="text-slate-500">Generated</span>
-                    <span className="font-medium text-right">
+                  <div className="space-y-1">
+                    <span className="text-xs text-slate-500">Generated</span>
+                    <p className="font-medium text-sm">
                       {new Date(metadata.imageGeneratedAt).toLocaleString()}
-                    </span>
+                    </p>
                   </div>
                 )}
               </CardContent>
@@ -1664,6 +1831,7 @@ Include:
             )}
           </div>
         </div>
+      )}
 
 
       </div>
@@ -1952,7 +2120,7 @@ Include:
     );
   }
 
-  function renderContentCard(content: any) {
+  function renderContentCard(content: any, forceCompact = false) {
     const approved = getApprovalState(content);
     const showConnectGuard = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform) && !isPlatformConnected(content.platform);
     const isMasterCampaignPost = (content.metadata as any)?.assetKind === "master_campaign_post";
@@ -1960,7 +2128,7 @@ Include:
     return (
       <Card key={content.id} className="group hover:shadow-lg transition-all">
         <CardContent className="p-5">
-          {isMasterCampaignPost && renderMasterImageSection(content)}
+          {isMasterCampaignPost && renderMasterImageSection(content, true)}
 
           <div className="flex items-start justify-between mb-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -2046,7 +2214,7 @@ Include:
 
           {renderPremiumBadges(content)}
 
-          {content.type === "social_post" && !isMasterCampaignPost && renderMasterImageSection(content)}
+          {content.type === "social_post" && !isMasterCampaignPost && renderMasterImageSection(content, forceCompact || hasLeafletMetadata(content))}
 
           {content.type === "video_concept" && renderVideoBlueprint(content)}
           {content.type === "reel_script" && renderVideoBlueprint(content)}
@@ -3227,7 +3395,7 @@ Include:
 
       {/* Content Grid or Campaign Pack */}
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {[1, 2].map((i) => (
             <Card key={i} className="animate-pulse">
               <CardContent className="p-6 h-32" />
@@ -3375,8 +3543,12 @@ Include:
       ) : urlCampaignId ? (
         renderCampaignPack()
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {(filtered ?? []).map((content) => renderContentCard(content))}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {(filtered ?? []).map((content) => (
+            <div key={content.id} className={hasLeafletMetadata(content) ? "md:col-span-2" : ""}>
+              {renderContentCard(content)}
+            </div>
+          ))}
         </div>
       )}
     </div>
