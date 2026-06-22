@@ -1,5 +1,5 @@
 import { createTRPCReact } from "@trpc/react-query";
-import { httpBatchLink } from "@trpc/client";
+import { httpLink } from "@trpc/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import superjson from "superjson";
 import type { AppRouter } from "../../api/router";
@@ -10,10 +10,11 @@ export const trpc = createTRPCReact<AppRouter>();
 const queryClient = new QueryClient();
 const trpcClient = trpc.createClient({
   links: [
-    httpBatchLink({
+    httpLink({
       url: "/api/trpc",
       transformer: superjson,
-      // Send all requests as POST so IIS/ARR never rejects long batched GET URLs.
+      // Send all requests as POST and avoid batching so IIS/ARR never rejects
+      // long comma-separated procedure paths like /api/trpc/a,b,c,d,... .
       methodOverride: "POST",
       headers() {
         const token = localStorage.getItem("auth_token");
