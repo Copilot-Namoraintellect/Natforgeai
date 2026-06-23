@@ -21,7 +21,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
@@ -58,6 +57,10 @@ import {
   Briefcase,
   ShoppingBag,
   Tag,
+  LayoutGrid,
+  Eye,
+  TrendingUp,
+  Clock,
   type LucideIcon,
 } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
@@ -143,6 +146,78 @@ function isVideoConcept(c: any) {
 
 function isCaptionPackAsset(a: any) {
   return a?.assetType === "caption_pack" || getContentMeta(a).assetType === "caption_pack";
+}
+
+type CampaignSummaryStatus = "ready" | "approved" | "draft" | "failed" | "generating" | "none";
+
+interface CampaignSummary {
+  campaign: any;
+  businessName: string;
+  latestLeaflet: any | null;
+  thumbnailUrl: string | null;
+  iterationNumber: number;
+  tier: "premium" | "basic" | "none";
+  status: CampaignSummaryStatus;
+  lastGeneratedAt: Date | null;
+  creditsCharged: number;
+}
+
+function getLeafletStatus(leaflet: any): CampaignSummaryStatus {
+  if (!leaflet) return "none";
+  const meta = getContentMeta(leaflet);
+  if (meta.imageStatus === "failed" || meta.videoStatus === "failed") return "failed";
+  if (meta.imageStatus === "generating" || meta.videoStatus === "generating" || meta.videoStatus === "rendering") return "generating";
+  if (meta.approved === true || leaflet.status === "published") return "approved";
+  if (meta.imageStatus === "ready" || meta.videoStatus === "ready") return "ready";
+  return "draft";
+}
+
+function getLeafletTier(leaflet: any): "premium" | "basic" | "none" {
+  if (!leaflet) return "none";
+  const tier = getAssetTier(leaflet);
+  if (tier === "premium") return "premium";
+  if (tier === "basic") return "basic";
+  return "none";
+}
+
+function computeCampaignSummaries(
+  campaigns: any[] | undefined,
+  businesses: any[] | undefined,
+  contents: any[] | undefined
+): CampaignSummary[] {
+  const leaflets = (contents || []).filter((c) => isMasterLeaflet(c));
+  const leafletsByCampaign = new Map<number, any[]>();
+  for (const leaflet of leaflets) {
+    const campaignId = leaflet.campaignId ?? 0;
+    if (!leafletsByCampaign.has(campaignId)) leafletsByCampaign.set(campaignId, []);
+    leafletsByCampaign.get(campaignId)!.push(leaflet);
+  }
+  for (const [, list] of leafletsByCampaign) {
+    list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }
+
+  const businessMap = new Map((businesses || []).map((b) => [b.id, b]));
+
+  return (campaigns || []).map((campaign) => {
+    const campaignLeaflets = leafletsByCampaign.get(campaign.id) || [];
+    const latestLeaflet = campaignLeaflets[0] || null;
+    const meta = getContentMeta(latestLeaflet);
+    const business = businessMap.get(campaign.businessId);
+    const status = getLeafletStatus(latestLeaflet);
+    const tier = getLeafletTier(latestLeaflet);
+
+    return {
+      campaign,
+      businessName: business?.name || "Unknown business",
+      latestLeaflet,
+      thumbnailUrl: meta.imageUrl || null,
+      iterationNumber: meta.iterationNumber || 1,
+      tier,
+      status,
+      lastGeneratedAt: latestLeaflet ? new Date(latestLeaflet.createdAt || 0) : null,
+      creditsCharged: typeof meta.imageCreditsCharged === "number" ? meta.imageCreditsCharged : tier === "basic" ? 0 : 0,
+    };
+  });
 }
 
 function formatIterationDate(date: Date | string | undefined) {
@@ -341,7 +416,6 @@ function LeafletVersionHistory({ contentPostId, metadata }: { contentPostId: num
 export default function ContentStudio() {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlCampaignId = searchParams.get("campaignId");
-  const [activeTab, setActiveTab] = useState("all");
   const [createOpen, setCreateOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
@@ -357,6 +431,7 @@ export default function ContentStudio() {
   const [aiResult, setAiResult] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [search, setSearch] = useState("");
+  const [overviewFilter, setOverviewFilter] = useState<"all" | "ready" | "draft" | "failed" | "premium" | "basic">("all");
   const [scheduleOpen, setScheduleOpen] = useState<{ open: boolean; contentId: number | null }>({
     open: false,
     contentId: null,
@@ -396,8 +471,6 @@ export default function ContentStudio() {
   const listInput = (() => {
     const base: any = {};
     if (hasCampaignId) base.campaignId = numericCampaignId;
-    if (activeTab === "ai_generated") base.aiGenerated = true;
-    else if (activeTab !== "all") base.type = activeTab;
     return Object.keys(base).length > 0 ? base : undefined;
   })();
   const { data: contents, isLoading } = trpc.content.list.useQuery(listInput, {
@@ -1210,86 +1283,6 @@ Include:
         )}
       </div>
     );
-  }
-
-  function getLatestContentByKey(contents: any[], keyFn: (c: any) => string | number | undefined): Map<string | number, any> {
-    const map = new Map<string | number, any>();
-    for (const c of contents) {
-      const key = keyFn(c);
-      if (key === undefined) continue;
-      const existing = map.get(key);
-      if (!existing || new Date(c.createdAt || 0).getTime() > new Date(existing.createdAt || 0).getTime()) {
-        map.set(key, c);
-      }
-    }
-    return map;
-  }
-
-  function classifyContentEra(contents: any[]): { currentCopy: any[]; currentVisual: any[]; historical: any[] } {
-    const currentCopyIds = new Set<number>();
-    const currentVisualIds = new Set<number>();
-    const meta = (c: any) => (c.metadata || {}) as any;
-
-    // --- Leaflet / master campaign post ---
-    const leaflets = contents.filter((c) => meta(c).assetKind === "master_campaign_post");
-    const successfulLeaflets = leaflets.filter((c) => meta(c).imageStatus === "ready" && meta(c).imageUrl);
-    const successfulLeafletsByCampaign = getLatestContentByKey(successfulLeaflets, (c) => c.campaignId ?? 0);
-
-    for (const successful of successfulLeafletsByCampaign.values()) {
-      currentVisualIds.add(successful.id);
-    }
-    // Failed or not-yet-generated leaflets are NOT current visual assets — they go to historical.
-
-    // --- Video / master video ad ---
-    // Treat videos as copy/content (they sit in Current Campaign Content grid).
-    const videos = contents.filter(
-      (c) => meta(c).assetKind === "master_video_ad" || c.type === "video_concept" || c.type === "reel_script"
-    );
-    const videosByCampaign = getLatestContentByKey(videos, (c) => c.campaignId ?? 0);
-    const successfulVideos = videos.filter((c) => meta(c).videoStatus === "ready" && meta(c).videoUrl);
-    const successfulVideosByCampaign = getLatestContentByKey(successfulVideos, (c) => c.campaignId ?? 0);
-
-    for (const successful of successfulVideosByCampaign.values()) {
-      currentCopyIds.add(successful.id);
-    }
-    for (const [campaignId, latest] of videosByCampaign) {
-      if (!successfulVideosByCampaign.has(campaignId)) {
-        // No successful video yet; show the latest (even if failed/concept) as current copy so user can retry.
-        currentCopyIds.add(latest.id);
-      }
-    }
-
-    // --- Platform social posts (non-master) ---
-    const platformPosts = contents.filter(
-      (c) => c.type === "social_post" && meta(c).assetKind !== "master_campaign_post"
-    );
-    const latestPostByKey = getLatestContentByKey(platformPosts, (c) => `${c.campaignId ?? 0}:${c.platform || "none"}`);
-    for (const c of latestPostByKey.values()) {
-      currentCopyIds.add(c.id);
-    }
-
-    // --- Other content types (email, blog, carousel, script, ad_copy, whatsapp, etc.) ---
-    const others = contents.filter((c) => {
-      if (meta(c).assetKind === "master_campaign_post" || meta(c).assetKind === "master_video_ad") return false;
-      if (c.type === "social_post" || c.type === "video_concept" || c.type === "reel_script") return false;
-      return true;
-    });
-    const latestOtherByKey = getLatestContentByKey(others, (c) => `${c.campaignId ?? 0}:${c.type}`);
-    for (const c of latestOtherByKey.values()) {
-      currentCopyIds.add(c.id);
-    }
-
-    // --- Explicitly current statuses ---
-    for (const c of contents) {
-      if (c.status === "published" || c.status === "scheduled" || meta(c).approved) {
-        currentCopyIds.add(c.id);
-      }
-    }
-
-    const currentCopy = contents.filter((c) => currentCopyIds.has(c.id));
-    const currentVisual = contents.filter((c) => currentVisualIds.has(c.id));
-    const historical = contents.filter((c) => !currentCopyIds.has(c.id) && !currentVisualIds.has(c.id));
-    return { currentCopy, currentVisual, historical };
   }
 
   function isFailedAttempt(content: any): boolean {
@@ -3311,8 +3304,639 @@ Include:
     );
   }
 
+  function renderAiContentDialog() {
+    return (
+      <Dialog open={aiOpen} onOpenChange={setAiOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>AI Content Generator</DialogTitle>
+            <DialogDescription>
+              Generate sales-driven marketing content designed to convert.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Business</Label>
+                <Input
+                  value={aiForm.business}
+                  onChange={(e) => setAiForm({ ...aiForm, business: e.target.value })}
+                  placeholder="Your business name"
+                />
+              </div>
+              <div>
+                <Label>Content Type</Label>
+                <Select
+                  value={aiForm.type}
+                  onValueChange={(v: any) => setAiForm({ ...aiForm, type: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="social_post">Social Post</SelectItem>
+                    <SelectItem value="ad_copy">Ad Copy</SelectItem>
+                    <SelectItem value="email">Email</SelectItem>
+                    <SelectItem value="video_concept">Video Concept</SelectItem>
+                    <SelectItem value="carousel_ad">Carousel Ad</SelectItem>
+                    <SelectItem value="whatsapp_promo">WhatsApp Promo</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Platform</Label>
+                <Select
+                  value={aiForm.platform}
+                  onValueChange={(v) => setAiForm({ ...aiForm, platform: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {platforms.map((p) => (
+                      <SelectItem key={p.value} value={p.value}>
+                        {p.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Tone</Label>
+                <Select
+                  value={aiForm.tone}
+                  onValueChange={(v) => setAiForm({ ...aiForm, tone: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {tones.map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {t.charAt(0).toUpperCase() + t.slice(1)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <Label>Target Audience</Label>
+              <Input
+                value={aiForm.audience}
+                onChange={(e) => setAiForm({ ...aiForm, audience: e.target.value })}
+                placeholder="Young professionals aged 25-40 in Johannesburg"
+              />
+            </div>
+            <div>
+              <Label>Goal (optional)</Label>
+              <Input
+                value={aiForm.goal}
+                onChange={(e) => setAiForm({ ...aiForm, goal: e.target.value })}
+                placeholder="Drive sales, increase awareness..."
+              />
+            </div>
+            <Button
+              onClick={generateWithAI}
+              disabled={aiLoading || !aiForm.business}
+              className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
+            >
+              {aiLoading ? (
+                <>
+                  <div className="w-4 h-4 mr-2 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Generate Sales Content
+                </>
+              )}
+            </Button>
+
+            {aiResult && (
+              <div className="mt-4">
+                <Label>Generated Content</Label>
+                <div className="relative mt-1">
+                  <Textarea
+                    value={aiResult}
+                    onChange={(e) => setAiResult(e.target.value)}
+                    className="min-h-[300px] font-mono text-sm"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-2 right-2"
+                    onClick={() => copyToClipboard(aiResult, -1)}
+                  >
+                    {copiedId === -1 ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </Button>
+                </div>
+                <Button
+                  className="w-full mt-3"
+                  variant="outline"
+                  onClick={() => {
+                    createMutation.mutate({
+                      title: `AI Generated - ${aiForm.type}`,
+                      type: aiForm.type,
+                      platform: aiForm.platform,
+                      body: aiResult,
+                      aiGenerated: true,
+                    });
+                    setAiOpen(false);
+                    setAiResult("");
+                  }}
+                >
+                  Save to Library
+                </Button>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  function renderCreateContentDialog() {
+    return (
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add Content</DialogTitle>
+            <DialogDescription>
+              Manually add marketing content to your library.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleCreate} className="space-y-4 mt-4">
+            <div>
+              <Label>Title</Label>
+              <Input name="title" placeholder="Summer sale announcement" required />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Type</Label>
+                <Select name="type" defaultValue="social_post">
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="social_post">Social Post</SelectItem>
+                    <SelectItem value="ad_copy">Ad Copy</SelectItem>
+                    <SelectItem value="email">Email</SelectItem>
+                    <SelectItem value="script">Script</SelectItem>
+                    <SelectItem value="blog">Blog</SelectItem>
+                    <SelectItem value="story">Story</SelectItem>
+                    <SelectItem value="video_concept">Video Concept</SelectItem>
+                    <SelectItem value="carousel_ad">Carousel Ad</SelectItem>
+                    <SelectItem value="whatsapp_promo">WhatsApp Promo</SelectItem>
+                    <SelectItem value="lead_gen_ad">Lead Gen Ad</SelectItem>
+                    <SelectItem value="launch_pack">Launch Pack</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Platform</Label>
+                <Select name="platform">
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {platforms.map((p) => (
+                      <SelectItem key={p.value} value={p.value}>
+                        {p.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <Label>Hook</Label>
+              <Input name="hook" placeholder="Attention-grabbing first line" />
+            </div>
+            <div>
+              <Label>Caption / Body</Label>
+              <Textarea name="caption" placeholder="Main content..." />
+            </div>
+            <div>
+              <Label>CTA</Label>
+              <Input name="cta" placeholder="Shop now!" />
+            </div>
+            <div>
+              <Label>Body / Notes</Label>
+              <Textarea name="body" placeholder="Additional content..." />
+            </div>
+            <Button
+              type="submit"
+              className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
+              disabled={createMutation.isPending}
+            >
+              {createMutation.isPending ? "Saving..." : "Save Content"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  function renderCampaignLibrary() {
+    const summaries = computeCampaignSummaries(campaigns, businessesList, contents);
+    const filteredSummaries = summaries.filter((summary) => {
+      const matchesSearch =
+        summary.campaign.name.toLowerCase().includes(search.toLowerCase()) ||
+        summary.businessName.toLowerCase().includes(search.toLowerCase());
+      if (!matchesSearch) return false;
+
+      switch (overviewFilter) {
+        case "ready":
+          return summary.status === "ready";
+        case "draft":
+          return summary.status === "draft" || summary.status === "generating";
+        case "failed":
+          return summary.status === "failed";
+        case "premium":
+          return summary.tier === "premium";
+        case "basic":
+          return summary.tier === "basic";
+        case "all":
+        default:
+          return true;
+      }
+    });
+
+    const totalCampaigns = summaries.length;
+    const readyCount = summaries.filter((s) => s.status === "ready" || s.status === "approved").length;
+    const pendingCount = summaries.filter((s) => s.status === "draft" || s.status === "generating").length;
+    const scheduledCount = (contents || []).filter((c) => c.status === "scheduled").length;
+
+    const statusBadge = (status: CampaignSummaryStatus) => {
+      switch (status) {
+        case "ready":
+          return (
+            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">
+              Ready
+            </Badge>
+          );
+        case "approved":
+          return (
+            <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+              Approved
+            </Badge>
+          );
+        case "failed":
+          return (
+            <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+              Failed
+            </Badge>
+          );
+        case "generating":
+          return (
+            <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
+              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+              Generating
+            </Badge>
+          );
+        case "draft":
+        default:
+          return (
+            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+              Draft
+            </Badge>
+          );
+      }
+    };
+
+    const tierBadge = (tier: "premium" | "basic" | "none") => {
+      switch (tier) {
+        case "premium":
+          return (
+            <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">
+              Premium Leaflet
+            </Badge>
+          );
+        case "basic":
+          return (
+            <Badge variant="outline" className="bg-slate-50 text-slate-700 border-slate-200">
+              Basic Draft
+            </Badge>
+          );
+        default:
+          return (
+            <Badge variant="outline" className="bg-slate-50 text-slate-500 border-slate-200">
+              No output
+            </Badge>
+          );
+      }
+    };
+
+    const filterChips: { value: typeof overviewFilter; label: string }[] = [
+      { value: "all", label: "All" },
+      { value: "ready", label: "Ready" },
+      { value: "draft", label: "Draft" },
+      { value: "failed", label: "Failed" },
+      { value: "premium", label: "Premium" },
+      { value: "basic", label: "Basic Draft" },
+    ];
+
+    return (
+      <div className="space-y-8">
+        {/* Premium page header */}
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6 sm:p-8 text-white shadow-lg">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-[#00D4FF]/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3" />
+          <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-500/10 rounded-full blur-3xl translate-y-1/3 -translate-x-1/4" />
+          <div className="relative z-10 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-[#00D4FF] text-sm font-medium mb-2">
+                <LayoutGrid className="w-4 h-4" />
+                Campaign Library
+              </div>
+              <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">Content Studio</h1>
+              <p className="text-slate-300 mt-2 max-w-xl">
+                Manage campaign outputs, drafts, approvals, and publishing.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                className="border-white/20 text-white hover:bg-white/10 bg-white/5"
+                onClick={() => setAiOpen(true)}
+              >
+                <Sparkles className="w-4 h-4 mr-2" />
+                Create One-Off Content
+              </Button>
+              <Button className="bg-[#00D4FF] text-slate-900 hover:bg-[#00D4FF]/90" onClick={() => setCreateOpen(true)}>
+                <Plus className="w-4 h-4 mr-2" />
+                Add Content
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {/* Summary metrics */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Card className="border-slate-200 bg-white/50 backdrop-blur-sm">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Campaigns</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">{totalCampaigns}</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
+                  <LayoutGrid className="w-5 h-5 text-blue-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-slate-200 bg-white/50 backdrop-blur-sm">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Ready assets</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">{readyCount}</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-slate-200 bg-white/50 backdrop-blur-sm">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Pending approval</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">{pendingCount}</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center">
+                  <Clock className="w-5 h-5 text-amber-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-slate-200 bg-white/50 backdrop-blur-sm">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Scheduled posts</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">{scheduledCount}</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center">
+                  <CalendarClock className="w-5 h-5 text-purple-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Search and filters */}
+        <div className="flex flex-col sm:flex-row gap-4">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              placeholder="Search campaigns or businesses..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {filterChips.map((chip) => (
+              <button
+                key={chip.value}
+                type="button"
+                onClick={() => setOverviewFilter(chip.value)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                  overviewFilter === chip.value
+                    ? "bg-slate-900 text-white"
+                    : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Campaign outputs grid */}
+        {filteredSummaries.length === 0 ? (
+          <Card className="border-slate-200">
+            <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+              <PenTool className="w-12 h-12 text-slate-300 mb-4" />
+              <p className="text-lg font-medium text-slate-900">No campaigns found</p>
+              <p className="text-sm text-muted-foreground mt-1 max-w-md">
+                {summaries.length === 0
+                  ? "Create a campaign strategy first, then generate marketing content."
+                  : "Try adjusting your search or filters."}
+              </p>
+              {summaries.length === 0 && (
+                <div className="flex gap-2 mt-4">
+                  <Link to="/campaigns">
+                    <Button variant="outline">
+                      <ArrowRight className="w-4 h-4 mr-2" />
+                      Go to Campaigns
+                    </Button>
+                  </Link>
+                  <Button onClick={() => setAiOpen(true)}>
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    Create One-Off Content
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {filteredSummaries.map((summary) => {
+              const canRegenerate = !!summary.latestLeaflet && summary.status !== "generating";
+              const isGenerating = summary.status === "generating";
+
+              return (
+                <Card
+                  key={summary.campaign.id}
+                  className="group border-slate-200 bg-white overflow-hidden hover:shadow-xl hover:border-[#00D4FF]/30 transition-all duration-300"
+                >
+                  {/* Thumbnail */}
+                  <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
+                    {summary.thumbnailUrl ? (
+                      <>
+                        <img
+                          src={summary.thumbnailUrl}
+                          alt={`${summary.campaign.name} latest leaflet`}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </>
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center text-slate-400">
+                        <Image className="w-12 h-12 mb-2" />
+                        <p className="text-xs">No leaflet generated yet</p>
+                      </div>
+                    )}
+                    <div className="absolute top-3 left-3 flex items-center gap-2">
+                      {statusBadge(summary.status)}
+                      {tierBadge(summary.tier)}
+                    </div>
+                    {summary.iterationNumber > 0 && (
+                      <div className="absolute bottom-3 right-3">
+                        <Badge variant="secondary" className="bg-white/90 text-slate-800 text-[10px]">
+                          Iteration {summary.iterationNumber}
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Card body */}
+                  <CardContent className="p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="font-semibold text-slate-900 truncate" title={summary.campaign.name}>
+                          {summary.campaign.name}
+                        </h3>
+                        <p className="text-sm text-slate-500 truncate">{summary.businessName}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5" />
+                        {summary.lastGeneratedAt
+                          ? formatIterationDate(summary.lastGeneratedAt)
+                          : "Not generated"}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <TrendingUp className="w-3.5 h-3.5" />
+                        {summary.creditsCharged === 0 ? "0 credits" : `${summary.creditsCharged} credits`}
+                      </span>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="mt-5 flex flex-wrap items-center gap-2">
+                      <Link to={`/content?campaignId=${summary.campaign.id}`} className="flex-1">
+                        <Button size="sm" className="w-full bg-slate-900 hover:bg-slate-800 text-white">
+                          <Eye className="w-3.5 h-3.5 mr-1.5" />
+                          View Campaign Output
+                        </Button>
+                      </Link>
+                      {canRegenerate && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-slate-600 border-slate-200 hover:bg-slate-50"
+                          onClick={() =>
+                            generateImageMutation.mutate({
+                              contentPostId: summary.latestLeaflet!.id,
+                            })
+                          }
+                          disabled={generateImageMutation.isPending}
+                        >
+                          {generateImageMutation.isPending ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          )}
+                        </Button>
+                      )}
+                      {canRegenerate && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-slate-600 border-slate-200 hover:bg-slate-50"
+                          onClick={() =>
+                            generateCaptionPackMutation.mutate({
+                              contentPostId: summary.latestLeaflet!.id,
+                            })
+                          }
+                          disabled={generateCaptionPackMutation.isPending}
+                        >
+                          {generateCaptionPackMutation.isPending ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <MessageCircle className="w-3.5 h-3.5" />
+                          )}
+                        </Button>
+                      )}
+                      {summary.status === "ready" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                          onClick={() => publishCampaignPackMutation.mutate({ campaignId: summary.campaign.id })}
+                          disabled={publishCampaignPackMutation.isPending}
+                        >
+                          {publishCampaignPackMutation.isPending ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Megaphone className="w-3.5 h-3.5" />
+                          )}
+                        </Button>
+                      )}
+                    </div>
+
+                    {isGenerating && (
+                      <p className="mt-3 text-xs text-purple-600 flex items-center gap-1.5">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Generating new output…
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
+      {urlCampaignId && (
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Content Studio</h1>
@@ -3340,7 +3964,7 @@ Include:
           )}
         </div>
         <div className="flex gap-2">
-          {urlCampaignId && campaignForContext ? (
+          {urlCampaignId && campaignForContext && (
             <Button
               variant="outline"
               className="border-[#00D4FF]/50 text-[#00D4FF] hover:bg-[#00D4FF]/10"
@@ -3360,303 +3984,13 @@ Include:
               )}
               {campaignNeedsRecovery ? "Retry Content Generation" : "Generate from Approved Strategy"}
             </Button>
-          ) : (
-            <Dialog open={aiOpen} onOpenChange={setAiOpen}>
-              <DialogTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="border-[#00D4FF]/50 text-[#00D4FF] hover:bg-[#00D4FF]/10"
-                >
-                  <Sparkles className="w-4 h-4 mr-2" />
-                  Create One-Off Content
-                </Button>
-              </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>AI Content Generator</DialogTitle>
-                <DialogDescription>
-                  Generate sales-driven marketing content designed to convert.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 mt-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label>Business</Label>
-                    <Input
-                      value={aiForm.business}
-                      onChange={(e) =>
-                        setAiForm({ ...aiForm, business: e.target.value })
-                      }
-                      placeholder="Your business name"
-                    />
-                  </div>
-                  <div>
-                    <Label>Content Type</Label>
-                    <Select
-                      value={aiForm.type}
-                      onValueChange={(v: any) =>
-                        setAiForm({ ...aiForm, type: v })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="social_post">Social Post</SelectItem>
-                        <SelectItem value="ad_copy">Ad Copy</SelectItem>
-                        <SelectItem value="email">Email</SelectItem>
-                        <SelectItem value="video_concept">Video Concept</SelectItem>
-                        <SelectItem value="carousel_ad">Carousel Ad</SelectItem>
-                        <SelectItem value="whatsapp_promo">WhatsApp Promo</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label>Platform</Label>
-                    <Select
-                      value={aiForm.platform}
-                      onValueChange={(v) =>
-                        setAiForm({ ...aiForm, platform: v })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {platforms.map((p) => (
-                          <SelectItem key={p.value} value={p.value}>
-                            {p.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Tone</Label>
-                    <Select
-                      value={aiForm.tone}
-                      onValueChange={(v) =>
-                        setAiForm({ ...aiForm, tone: v })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {tones.map((t) => (
-                          <SelectItem key={t} value={t}>
-                            {t.charAt(0).toUpperCase() + t.slice(1)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div>
-                  <Label>Target Audience</Label>
-                  <Input
-                    value={aiForm.audience}
-                    onChange={(e) =>
-                      setAiForm({ ...aiForm, audience: e.target.value })
-                    }
-                    placeholder="Young professionals aged 25-40 in Johannesburg"
-                  />
-                </div>
-                <div>
-                  <Label>Goal (optional)</Label>
-                  <Input
-                    value={aiForm.goal}
-                    onChange={(e) =>
-                      setAiForm({ ...aiForm, goal: e.target.value })
-                    }
-                    placeholder="Drive sales, increase awareness..."
-                  />
-                </div>
-                <Button
-                  onClick={generateWithAI}
-                  disabled={aiLoading || !aiForm.business}
-                  className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
-                >
-                  {aiLoading ? (
-                    <>
-                      <div className="w-4 h-4 mr-2 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                      Generating...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4 mr-2" />
-                      Generate Sales Content
-                    </>
-                  )}
-                </Button>
-
-                {aiResult && (
-                  <div className="mt-4">
-                    <Label>Generated Content</Label>
-                    <div className="relative mt-1">
-                      <Textarea
-                        value={aiResult}
-                        onChange={(e) => setAiResult(e.target.value)}
-                        className="min-h-[300px] font-mono text-sm"
-                      />
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="absolute top-2 right-2"
-                        onClick={() =>
-                          copyToClipboard(aiResult, -1)
-                        }
-                      >
-                        {copiedId === -1 ? (
-                          <Check className="w-4 h-4" />
-                        ) : (
-                          <Copy className="w-4 h-4" />
-                        )}
-                      </Button>
-                    </div>
-                    <Button
-                      className="w-full mt-3"
-                      variant="outline"
-                      onClick={() => {
-                        createMutation.mutate({
-                          title: `AI Generated - ${aiForm.type}`,
-                          type: aiForm.type,
-                          platform: aiForm.platform,
-                          body: aiResult,
-                          aiGenerated: true,
-                        });
-                        setAiOpen(false);
-                        setAiResult("");
-                      }}
-                    >
-                      Save to Library
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </DialogContent>
-          </Dialog>
-        )}
-
-          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-            <DialogTrigger asChild>
-              <Button className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] hover:opacity-90">
-                <Plus className="w-4 h-4 mr-2" />
-                Add Content
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>Add Content</DialogTitle>
-                <DialogDescription>
-                  Manually add marketing content to your library.
-                </DialogDescription>
-              </DialogHeader>
-              <form onSubmit={handleCreate} className="space-y-4 mt-4">
-                <div>
-                  <Label>Title</Label>
-                  <Input name="title" placeholder="Summer sale announcement" required />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label>Type</Label>
-                    <Select name="type" defaultValue="social_post">
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="social_post">Social Post</SelectItem>
-                        <SelectItem value="ad_copy">Ad Copy</SelectItem>
-                        <SelectItem value="email">Email</SelectItem>
-                        <SelectItem value="script">Script</SelectItem>
-                        <SelectItem value="blog">Blog</SelectItem>
-                        <SelectItem value="story">Story</SelectItem>
-                        <SelectItem value="video_concept">Video Concept</SelectItem>
-                        <SelectItem value="carousel_ad">Carousel Ad</SelectItem>
-                        <SelectItem value="whatsapp_promo">WhatsApp Promo</SelectItem>
-                        <SelectItem value="lead_gen_ad">Lead Gen Ad</SelectItem>
-                        <SelectItem value="launch_pack">Launch Pack</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Platform</Label>
-                    <Select name="platform">
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {platforms.map((p) => (
-                          <SelectItem key={p.value} value={p.value}>
-                            {p.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div>
-                  <Label>Hook</Label>
-                  <Input name="hook" placeholder="Attention-grabbing first line" />
-                </div>
-                <div>
-                  <Label>Caption / Body</Label>
-                  <Textarea name="caption" placeholder="Main content..." />
-                </div>
-                <div>
-                  <Label>CTA</Label>
-                  <Input name="cta" placeholder="Shop now!" />
-                </div>
-                <div>
-                  <Label>Body / Notes</Label>
-                  <Textarea name="body" placeholder="Additional content..." />
-                </div>
-                <Button
-                  type="submit"
-                  className="w-full bg-gradient-to-r from-[#00D4FF] to-[#7C3AED]"
-                  disabled={createMutation.isPending}
-                >
-                  {createMutation.isPending ? "Saving..." : "Save Content"}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
+          )}
         </div>
       </div>
-
-      {/* Tabs & Search */}
-      {!urlCampaignId && (
-        <div className="flex flex-col sm:flex-row gap-4">
-          <Tabs
-            value={activeTab}
-            onValueChange={setActiveTab}
-            className="flex-1"
-          >
-            <TabsList className="flex-wrap h-auto">
-              <TabsTrigger value="all">All</TabsTrigger>
-              <TabsTrigger value="ai_generated" className="text-purple-400">AI Generated</TabsTrigger>
-              <TabsTrigger value="social_post">Social</TabsTrigger>
-              <TabsTrigger value="ad_copy">Ads</TabsTrigger>
-              <TabsTrigger value="email">Email</TabsTrigger>
-              <TabsTrigger value="video_concept">Video</TabsTrigger>
-              <TabsTrigger value="carousel_ad">Carousel</TabsTrigger>
-              <TabsTrigger value="script">Script</TabsTrigger>
-              <TabsTrigger value="blog">Blog</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <div className="relative w-full sm:w-64">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              className="pl-9"
-              placeholder="Search content..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-        </div>
       )}
+
+      {renderAiContentDialog()}
+      {renderCreateContentDialog()}
 
       {/* Schedule Dialog */}
       <Dialog open={scheduleOpen.open} onOpenChange={(open) => !open && setScheduleOpen({ open: false, contentId: null })}>
@@ -3756,153 +4090,80 @@ Include:
             </div>
           </CardContent>
         </Card>
-      ) : (filtered ?? []).length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <PenTool className="w-12 h-12 text-muted-foreground mb-4" />
-            <p className="text-lg font-medium text-slate-900">No content yet</p>
-            {strategyPendingApproval ? (
-              <>
-                <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
-                  Your strategy is ready for review. Approve it to start content generation.
-                </p>
-                <div className="flex gap-2 flex-wrap justify-center">
-                  <Link to="/approvals">
-                    <Button variant="outline">
-                      <ArrowRight className="w-4 h-4 mr-2" />
-                      Review Strategy
-                    </Button>
-                  </Link>
-                </div>
-              </>
-            ) : strategyGeneratedCampaign ? (
-              <>
-                <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
-                  Your strategy is ready, but the review item needs to be prepared. Refresh or go to Campaigns.
-                </p>
-                <div className="flex gap-2 flex-wrap justify-center">
-                  <Link to="/campaigns">
-                    <Button variant="outline">
-                      <ArrowRight className="w-4 h-4 mr-2" />
-                      Go to Campaigns
-                    </Button>
-                  </Link>
-                </div>
-              </>
-            ) : strategyPendingCampaign ? (
-              <>
-                <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
-                  NatForgeAI is preparing your strategy. Content will appear here once strategy is approved.
-                </p>
-                <div className="flex gap-2 flex-wrap justify-center">
-                  <Link to="/agent-activity">
-                    <Button variant="outline">
-                      <ArrowRight className="w-4 h-4 mr-2" />
-                      View Progress
-                    </Button>
-                  </Link>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
-                  Your campaign strategy is ready. Next, generate a premium marketing leaflet and social media caption pack.
-                </p>
-                <div className="flex gap-2 flex-wrap justify-center">
-                  <Link to="/campaigns">
-                    <Button variant="outline">
-                      <ArrowRight className="w-4 h-4 mr-2" />
-                      Go to Campaign Strategy
-                    </Button>
-                  </Link>
-                  {!urlCampaignId && (
-                    <Button variant="outline" onClick={() => setAiOpen(true)}>
-                      <Sparkles className="w-4 h-4 mr-2" />
-                      Create One-Off Content
-                    </Button>
-                  )}
-                  <Button onClick={() => setCreateOpen(true)}>
-                    <Plus className="w-4 h-4 mr-2" />
-                    Add Manually
-                  </Button>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
       ) : urlCampaignId ? (
-        renderCampaignPack()
+        (contents ?? []).length === 0 ? (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-16">
+              <PenTool className="w-12 h-12 text-muted-foreground mb-4" />
+              <p className="text-lg font-medium text-slate-900">No content yet</p>
+              {strategyPendingApproval ? (
+                <>
+                  <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+                    Your strategy is ready for review. Approve it to start content generation.
+                  </p>
+                  <div className="flex gap-2 flex-wrap justify-center">
+                    <Link to="/approvals">
+                      <Button variant="outline">
+                        <ArrowRight className="w-4 h-4 mr-2" />
+                        Review Strategy
+                      </Button>
+                    </Link>
+                  </div>
+                </>
+              ) : strategyGeneratedCampaign ? (
+                <>
+                  <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+                    Your strategy is ready, but the review item needs to be prepared. Refresh or go to Campaigns.
+                  </p>
+                  <div className="flex gap-2 flex-wrap justify-center">
+                    <Link to="/campaigns">
+                      <Button variant="outline">
+                        <ArrowRight className="w-4 h-4 mr-2" />
+                        Go to Campaigns
+                      </Button>
+                    </Link>
+                  </div>
+                </>
+              ) : strategyPendingCampaign ? (
+                <>
+                  <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+                    NatForgeAI is preparing your strategy. Content will appear here once strategy is approved.
+                  </p>
+                  <div className="flex gap-2 flex-wrap justify-center">
+                    <Link to="/agent-activity">
+                      <Button variant="outline">
+                        <ArrowRight className="w-4 h-4 mr-2" />
+                        View Progress
+                      </Button>
+                    </Link>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
+                    Your campaign strategy is ready. Next, generate a premium marketing leaflet and social media caption pack.
+                  </p>
+                  <div className="flex gap-2 flex-wrap justify-center">
+                    <Link to="/campaigns">
+                      <Button variant="outline">
+                        <ArrowRight className="w-4 h-4 mr-2" />
+                        Go to Campaign Strategy
+                      </Button>
+                    </Link>
+                    <Button onClick={() => setCreateOpen(true)}>
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add Manually
+                    </Button>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          renderCampaignPack()
+        )
       ) : (
-        (() => {
-          const libraryContent = filtered ?? [];
-          const { currentCopy, currentVisual, historical } = classifyContentEra(libraryContent);
-
-          return (
-            <div className="space-y-6">
-              {/* Section 1: Current Campaign Content */}
-              {currentCopy.length > 0 && (
-                <div className="space-y-4">
-                  <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    Current Campaign Content
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {currentCopy.map((content) => (
-                      <div key={content.id}>{renderContentCard(content)}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Section 2: Visual Assets */}
-              {currentVisual.length > 0 && (
-                <div className="space-y-4">
-                  <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                    <Image className="w-4 h-4 text-[#00D4FF]" />
-                    Visual Assets
-                  </h3>
-                  <div className="space-y-4">
-                    {currentVisual.map((content) => (
-                      <div key={content.id}>{renderContentCard(content)}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Section 3: Previous drafts & generation history */}
-              {historical.length > 0 && (
-                <Collapsible defaultOpen={false}>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden">
-                    <CollapsibleTrigger asChild>
-                      <button
-                        type="button"
-                        className="w-full px-4 py-3 flex items-center justify-between bg-slate-100 hover:bg-slate-200 transition-colors text-left"
-                      >
-                        <span className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                          <History className="w-4 h-4 text-slate-500" />
-                          Previous drafts & generation history
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="text-[10px] h-5">
-                            {historical.length}
-                          </Badge>
-                          <ChevronDown className="w-4 h-4 text-slate-500 transition-transform data-[state=open]:rotate-180" />
-                        </div>
-                      </button>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {historical.map((content) => (
-                          <div key={content.id}>{renderContentCard(content)}</div>
-                        ))}
-                      </div>
-                    </CollapsibleContent>
-                  </div>
-                </Collapsible>
-              )}
-            </div>
-          );
-        })()
+        renderCampaignLibrary()
       )}
     </div>
   );
