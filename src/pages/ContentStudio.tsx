@@ -1297,7 +1297,7 @@ Include:
     return meta?.imageStatus === "failed" || meta?.videoStatus === "failed";
   }
 
-  function renderMasterImageSection(content: any, compact = false) {
+  function renderMasterImageSection(content: any, compact = false, showCaptionPack = true, hero = false) {
     const metadata = (content.metadata || {}) as any;
     const imageUrl = metadata?.imageUrl;
     const imageStatus = metadata?.imageStatus;
@@ -1563,16 +1563,16 @@ Include:
                 </div>
               </div>
             </div>
-            {captionPack && (
+            {showCaptionPack && captionPack && (
               <div className="px-4 pb-4">
                 {renderCaptionPack(captionPack, content.id)}
               </div>
             )}
           </>
         ) : (
-          <div className="p-5 grid grid-cols-1 xl:grid-cols-3 gap-6">
+          <div className={`p-5 grid grid-cols-1 gap-6 ${hero ? "xl:grid-cols-4" : "xl:grid-cols-3"}`}>
           {/* Main column: visual asset + caption pack */}
-          <div className="xl:col-span-2 space-y-6">
+          <div className={hero ? "xl:col-span-3 space-y-6" : "xl:col-span-2 space-y-6"}>
             {isGenerating ? (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center min-h-[380px] text-center px-6">
                 <Loader2 className="w-10 h-10 text-[#00D4FF] animate-spin mb-3" />
@@ -1615,7 +1615,7 @@ Include:
                 <img
                   src={imageUrl}
                   alt="Premium marketing leaflet"
-                  className={`w-full object-contain rounded-xl max-h-[640px] ${imageLoading ? "opacity-0" : "opacity-100"}`}
+                  className={`w-full object-contain rounded-xl ${hero ? "max-h-[800px] min-h-[420px]" : "max-h-[640px]"} ${imageLoading ? "opacity-0" : "opacity-100"}`}
                   onLoad={() => {
                     setLoadingImageIds((prev) => {
                       const next = new Set(prev);
@@ -1766,7 +1766,7 @@ Include:
                 </div>
               </div>
             )}
-            {captionPack && renderCaptionPack(captionPack, content.id)}
+            {showCaptionPack && captionPack && renderCaptionPack(captionPack, content.id)}
           </div>
 
           {/* Sidebar: leaflet details, attempts, refinement, actions */}
@@ -2829,9 +2829,20 @@ Include:
     const allApproved = filtered.every((c) => getApprovalState(c));
     const anyDraft = filtered.some((c) => c.status === "draft");
 
-    const iterations = campaignIterations;
-    const selectedIteration = iterations.find((i) => i.id === selectedIterationId) || iterations[0];
-    const previousIterations = iterations.filter((i) => i.id !== selectedIteration?.id);
+    const legacyIteration = campaignIterations.find((i) => i.isLegacy);
+    const currentIterations = campaignIterations.filter(
+      (i) => !i.isLegacy && (i.leaflet || i.captionPack || i.videoConcept)
+    );
+    const displayIterations = currentIterations.length > 0 ? currentIterations : campaignIterations;
+    const selectedIteration =
+      displayIterations.find((i) => i.id === selectedIterationId) || displayIterations[0];
+    const previousIterations = displayIterations.filter((i) => i.id !== selectedIteration?.id);
+
+    const supportingAssets = selectedIteration?.isLegacy
+      ? []
+      : (campaignAssets || []).filter(
+          (a) => !isCaptionPackAsset(a) && getGenerationRunId(a) === selectedIteration?.runId
+        );
 
     const tierLabel: Record<string, string> = {
       premium: "Premium",
@@ -2875,6 +2886,35 @@ Include:
       );
     };
 
+    const compactAssetRow = (asset: any) => {
+      const meta = (asset.metadata || {}) as any;
+      return (
+        <div
+          key={asset.id}
+          className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3"
+        >
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="text-[10px] h-5 capitalize">
+                {asset.assetType.replace(/_/g, " ")}
+              </Badge>
+              {asset.status && (
+                <Badge variant="outline" className="text-[10px] h-5">
+                  {asset.status}
+                </Badge>
+              )}
+            </div>
+            <p className="text-sm font-medium text-slate-900 mt-1 truncate">{asset.title}</p>
+            {(meta.adaptedCaption || meta.message || meta.body || meta.content) && (
+              <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
+                {meta.adaptedCaption || meta.message || meta.body || meta.content}
+              </p>
+            )}
+          </div>
+        </div>
+      );
+    };
+
     return (
       <div className="space-y-6">
         {/* Campaign Pack Header */}
@@ -2888,11 +2928,12 @@ Include:
                 </h2>
                 <p className="text-sm text-muted-foreground mt-0.5">
                   {campaignForContext?.name}
-                  {iterations.length > 0 && (
-                    <span> · Iteration {selectedIteration?.iterationNumber ?? 1} of {iterations.length}</span>
-                  )}
-                  {campaignAssets && campaignAssets.length > 0 && (
-                    <span> · {campaignAssets.length} supporting asset{campaignAssets.length === 1 ? "" : "s"}</span>
+                  {selectedIteration && (
+                    <span>
+                      {" "}
+                      · Iteration {selectedIteration.iterationNumber}
+                      {selectedIteration.isLegacy ? " (Legacy)" : ""}
+                    </span>
                   )}
                 </p>
               </div>
@@ -2912,7 +2953,11 @@ Include:
                   variant="outline"
                   disabled={regenerateFromProfileMutation.isPending}
                   onClick={() => {
-                    if (confirm("This will regenerate strategy, leaflet, captions and platform adaptations from the latest business profile. Existing AI-generated assets will be replaced. Continue?")) {
+                    if (
+                      confirm(
+                        "This will regenerate strategy, leaflet, captions and platform adaptations from the latest business profile. Existing AI-generated assets will be replaced. Continue?"
+                      )
+                    ) {
                       regenerateFromProfileMutation.mutate({ campaignId: numericCampaignId });
                     }
                   }}
@@ -2937,7 +2982,10 @@ Include:
             </div>
             {campaignForContext?.workflowState && (
               <p className="text-xs text-muted-foreground mt-2">
-                Campaign status: <span className="font-medium">{campaignForContext.workflowState.replace(/_/g, " ")}</span>
+                Campaign status:{" "}
+                <span className="font-medium">
+                  {campaignForContext.workflowState.replace(/_/g, " ")}
+                </span>
               </p>
             )}
           </CardContent>
@@ -2946,15 +2994,15 @@ Include:
         {renderWorkflowGuidance()}
 
         {/* Iteration selector */}
-        {iterations.length > 1 && selectedIteration && (
+        {displayIterations.length > 1 && selectedIteration && (
           <div className="flex items-center gap-3">
             <span className="text-sm font-medium text-slate-700">Generation iteration</span>
             <Select value={selectedIteration.id} onValueChange={setSelectedIterationId}>
-              <SelectTrigger className="w-[260px]">
+              <SelectTrigger className="w-[280px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {iterations.map((iteration) => (
+                {displayIterations.map((iteration) => (
                   <SelectItem key={iteration.id} value={iteration.id}>
                     <div className="flex items-center gap-2">
                       <span>Iteration {iteration.iterationNumber}</span>
@@ -2968,9 +3016,9 @@ Include:
           </div>
         )}
 
-        {/* Main Output Area */}
+        {/* Main Output Area — current iteration only */}
         {selectedIteration && (
-          <div className="space-y-6">
+          <div className="space-y-8">
             {/* Marketing Leaflet */}
             {selectedIteration.leaflet && (
               <section className="space-y-3">
@@ -2986,25 +3034,18 @@ Include:
                     </Badge>
                   </div>
                 </div>
-                {renderContentCard(selectedIteration.leaflet)}
+                {renderMasterImageSection(selectedIteration.leaflet, false, false, true)}
               </section>
             )}
 
             {/* Caption Pack */}
             {selectedIteration.captionPack && (
               <section className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
-                    <MessageCircle className="w-5 h-5 text-purple-600" />
-                    Caption Pack
-                  </h3>
-                  <Badge variant="outline" className={tierBadgeClasses[selectedIteration.tier]}>
-                    {iterationLabel(selectedIteration)}
-                  </Badge>
-                </div>
                 {renderCaptionPack(
                   selectedIteration.captionPack,
-                  selectedIteration.captionPack?.metadata?.contentPostId ?? selectedIteration.leaflet?.id ?? 0
+                  selectedIteration.captionPack?.metadata?.contentPostId ??
+                    selectedIteration.leaflet?.id ??
+                    0
                 )}
               </section>
             )}
@@ -3025,34 +3066,30 @@ Include:
           </div>
         )}
 
-        {/* Supporting Assets — campaign-wide (caption pack is shown in its own section above) */}
-        {(() => {
-          const supportingAssets = (campaignAssets || []).filter((a) => !isCaptionPackAsset(a));
-          if (supportingAssets.length === 0) return null;
-          return (
-            <Collapsible open={expandedSections.has("supporting")} onOpenChange={() => toggleSection("supporting")}>
-              <div className="space-y-4 pt-2 border-t border-slate-200">
-                <SectionHeader
-                  title="Supporting Assets"
-                  icon={FileText}
-                  color="text-slate-700"
-                  sectionKey="supporting"
-                  count={supportingAssets.length}
-                />
-                <CollapsibleContent>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {supportingAssets.map((asset) => (
-                      <div key={asset.id}>{renderCampaignAssetCard(asset)}</div>
-                    ))}
-                  </div>
-                </CollapsibleContent>
-              </div>
-            </Collapsible>
-          );
-        })()}
+        {/* Supporting Assets — scoped to selected iteration, collapsed, compact */}
+        {supportingAssets.length > 0 && (
+          <Collapsible open={expandedSections.has("supporting")} onOpenChange={() => toggleSection("supporting")}>
+            <div className="space-y-3 pt-2 border-t border-slate-200">
+              <SectionHeader
+                title="Supporting Assets"
+                icon={FileText}
+                color="text-slate-700"
+                sectionKey="supporting"
+                count={supportingAssets.length}
+              />
+              <CollapsibleContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {supportingAssets.map((asset) => (
+                    <div key={asset.id}>{renderCampaignAssetCard(asset)}</div>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </div>
+          </Collapsible>
+        )}
 
-        {/* Previous Iterations */}
-        {previousIterations.length > 0 && (
+        {/* Previous Iterations — compact */}
+        {(previousIterations.length > 0 || legacyIteration) && (
           <Collapsible defaultOpen={false}>
             <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden">
               <CollapsibleTrigger asChild>
@@ -3061,49 +3098,106 @@ Include:
                     <History className="w-4 h-4 text-slate-500" />
                     Previous Iterations
                   </span>
-                  <Badge variant="outline">{previousIterations.length}</Badge>
+                  <Badge variant="outline">
+                    {previousIterations.length + (legacyIteration ? 1 : 0)}
+                  </Badge>
                 </button>
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {previousIterations.map((iteration) => {
-                    const leafletMeta = getContentMeta(iteration.leaflet);
-                    const thumbnailUrl = leafletMeta?.imageUrl;
-                    return (
-                      <button
-                        key={iteration.id}
-                        type="button"
-                        onClick={() => setSelectedIterationId(iteration.id)}
-                        className="text-left rounded-lg border border-slate-200 bg-white p-3 hover:shadow-md transition-all"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">Iteration {iteration.iterationNumber}</p>
-                            <p className="text-xs text-muted-foreground">{formatIterationDate(iteration.createdAt)}</p>
-                          </div>
-                          <Badge variant="outline" className={iterationBadgeClasses(iteration)}>
-                            {iterationLabel(iteration)}
-                          </Badge>
-                        </div>
-                        {thumbnailUrl ? (
-                          <div className="mt-3 aspect-[4/3] rounded-md overflow-hidden bg-slate-100">
-                            <img
-                              src={thumbnailUrl}
-                              alt={`Iteration ${iteration.iterationNumber} leaflet`}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                (e.currentTarget as HTMLImageElement).style.display = "none";
-                              }}
-                            />
-                          </div>
-                        ) : (
-                          <div className="mt-3 aspect-[4/3] rounded-md bg-slate-100 flex items-center justify-center">
-                            <Image className="w-6 h-6 text-slate-300" />
-                          </div>
+                <div className="p-4 space-y-4">
+                  {/* Previous current iterations */}
+                  {previousIterations.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {previousIterations.map((iteration) => {
+                        const leafletMeta = getContentMeta(iteration.leaflet);
+                        const thumbnailUrl = leafletMeta?.imageUrl;
+                        return (
+                          <button
+                            key={iteration.id}
+                            type="button"
+                            onClick={() => setSelectedIterationId(iteration.id)}
+                            className="text-left rounded-lg border border-slate-200 bg-white p-3 hover:shadow-md transition-all"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-semibold text-slate-900">
+                                  Iteration {iteration.iterationNumber}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {formatIterationDate(iteration.createdAt)}
+                                </p>
+                              </div>
+                              <Badge variant="outline" className={iterationBadgeClasses(iteration)}>
+                                {iterationLabel(iteration)}
+                              </Badge>
+                            </div>
+                            {thumbnailUrl ? (
+                              <div className="mt-3 aspect-[4/3] rounded-md overflow-hidden bg-slate-100">
+                                <img
+                                  src={thumbnailUrl}
+                                  alt={`Iteration ${iteration.iterationNumber} leaflet`}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    (e.currentTarget as HTMLImageElement).style.display = "none";
+                                  }}
+                                />
+                              </div>
+                            ) : (
+                              <div className="mt-3 aspect-[4/3] rounded-md bg-slate-100 flex items-center justify-center">
+                                <Image className="w-6 h-6 text-slate-300" />
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Legacy records */}
+                  {legacyIteration && (
+                    <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+                      <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                        <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                          <History className="w-3.5 h-3.5 text-slate-500" />
+                          Legacy Records
+                        </span>
+                        <Badge variant="outline" className="text-[10px] h-5">
+                          {legacyIteration.supporting.length +
+                            (legacyIteration.leaflet ? 1 : 0) +
+                            (legacyIteration.captionPack ? 1 : 0) +
+                            (legacyIteration.videoConcept ? 1 : 0)}
+                        </Badge>
+                      </div>
+                      <div className="p-3 space-y-2 max-h-[360px] overflow-y-auto">
+                        {legacyIteration.leaflet && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedIterationId(legacyIteration.id)}
+                            className="w-full text-left rounded-md border border-slate-200 bg-slate-50 p-2.5 hover:bg-slate-100 transition-colors"
+                          >
+                            <p className="text-xs font-semibold text-slate-800">Legacy Marketing Leaflet</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {formatIterationDate(legacyIteration.leaflet.createdAt)}
+                            </p>
+                          </button>
                         )}
-                      </button>
-                    );
-                  })}
+                        {legacyIteration.captionPack && compactAssetRow(legacyIteration.captionPack)}
+                        {legacyIteration.videoConcept && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedIterationId(legacyIteration.id)}
+                            className="w-full text-left rounded-md border border-slate-200 bg-slate-50 p-2.5 hover:bg-slate-100 transition-colors"
+                          >
+                            <p className="text-xs font-semibold text-slate-800">Legacy Video Concept</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {formatIterationDate(legacyIteration.videoConcept.createdAt)}
+                            </p>
+                          </button>
+                        )}
+                        {legacyIteration.supporting.map((asset: any) => compactAssetRow(asset))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </CollapsibleContent>
             </div>
