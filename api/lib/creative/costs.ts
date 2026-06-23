@@ -5,6 +5,16 @@ export function getPremiumImageCredits(): number {
   return Number.isFinite(value) && value > 0 ? value : 10;
 }
 
+export function getPremiumImageInternalCredits(): number {
+  const value = env.premiumImageInternalCredits;
+  return Number.isFinite(value) && value > 0 ? value : 5;
+}
+
+export function getPremiumImageExternalCredits(): number {
+  const value = env.premiumImageExternalCredits;
+  return Number.isFinite(value) && value > 0 ? value : 10;
+}
+
 export function getPremiumVideoCredits(): number {
   const value = env.premiumVideoCredits;
   return Number.isFinite(value) && value > 0 ? value : 100;

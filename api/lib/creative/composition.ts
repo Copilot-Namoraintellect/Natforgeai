@@ -11,7 +11,12 @@ import fs from "fs";
 import sharp from "sharp";
 import { resolveBrandPalette, contrastTextColor, isLightColor, safeText, ensureBrandPalette, type BrandPalette } from "./brand-palette";
 
-export type TemplateId = "service_business_promo" | "retail_product_promo" | "offer_discount_campaign";
+export type TemplateId =
+  | "service_business_promo"
+  | "retail_product_promo"
+  | "offer_discount_campaign"
+  | "corporate_professional"
+  | "local_store_promo";
 
 export interface BrandOverlaySpec {
   business: any;
@@ -501,6 +506,46 @@ function buildOfferCampaignBackground(width: number, height: number, palette: Br
   return Buffer.from(svg, "utf-8");
 }
 
+function buildCorporateBackground(width: number, height: number, palette: BrandPalette): Buffer {
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+  <defs>
+    <linearGradient id="corpGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#F8FAFC;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:${palette.primary};stop-opacity:0.10" />
+    </linearGradient>
+  </defs>
+  <rect width="${width}" height="${height}" fill="url(#corpGrad)"/>
+  <rect x="0" y="0" width="${width}" height="14" fill="${palette.primary}"/>
+  <rect x="${Math.round(width * 0.06)}" y="${Math.round(height * 0.18)}" width="${Math.round(
+    width * 0.88
+  )}" height="${Math.round(height * 0.58)}" rx="20" fill="#FFFFFF" opacity="0.92" stroke="${palette.primary}" stroke-width="2" stroke-opacity="0.12"/>
+  <line x1="${Math.round(width * 0.06)}" y1="${Math.round(height * 0.30)}" x2="${Math.round(
+    width * 0.94
+  )}" y2="${Math.round(height * 0.30)}" stroke="${palette.accent}" stroke-width="3" opacity="0.5"/>
+</svg>`;
+  return Buffer.from(svg, "utf-8");
+}
+
+function buildLocalStoreBackground(width: number, height: number, palette: BrandPalette): Buffer {
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+  <defs>
+    <linearGradient id="localGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:${palette.secondary};stop-opacity:0.18" />
+      <stop offset="40%" style="stop-color:#FFFFFF;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:${palette.primary};stop-opacity:0.14" />
+    </linearGradient>
+  </defs>
+  <rect width="${width}" height="${height}" fill="url(#localGrad)"/>
+  <rect x="0" y="0" width="${width}" height="${Math.round(height * 0.16)}" fill="${palette.primary}" opacity="0.92"/>
+  <rect x="${Math.round(width * 0.06)}" y="${Math.round(height * 0.30)}" width="${Math.round(
+    width * 0.88
+  )}" height="${Math.round(height * 0.42)}" rx="24" fill="#FFFFFF" opacity="0.95" stroke="${palette.accent}" stroke-width="3" stroke-opacity="0.30"/>
+</svg>`;
+  return Buffer.from(svg, "utf-8");
+}
+
 // ─── Template registry ───
 
 interface TemplateLayout {
@@ -593,6 +638,50 @@ const TEMPLATES: Record<TemplateId, TemplateLayout> = {
     footerMaxBottomOffset: 0,
     buildBackground: buildOfferCampaignBackground,
   },
+  corporate_professional: {
+    id: "corporate_professional",
+    label: "Corporate Professional",
+    categoryAffinity: ["tech", "education", "general"],
+    headerVariant: "default",
+    headerHeightRatio: 0.085,
+    logoBackdrop: false,
+    logoMaxWidthRatio: 0.36,
+    showHeaderName: true,
+    offerVariant: "large",
+    offerTopRatio: 0.40,
+    offerWidthRatio: 0.88,
+    offerAlign: "center",
+    servicesEnabled: true,
+    servicesTopRatio: 0.58,
+    servicesWidthRatio: 0.88,
+    servicesMaxBullets: 3,
+    servicesColCount: 1,
+    footerAnchored: true,
+    footerMaxBottomOffset: 0,
+    buildBackground: buildCorporateBackground,
+  },
+  local_store_promo: {
+    id: "local_store_promo",
+    label: "Local Store Promo",
+    categoryAffinity: ["retail", "food", "general"],
+    headerVariant: "centered",
+    headerHeightRatio: 0.090,
+    logoBackdrop: false,
+    logoMaxWidthRatio: 0.45,
+    showHeaderName: true,
+    offerVariant: "large",
+    offerTopRatio: 0.36,
+    offerWidthRatio: 0.88,
+    offerAlign: "center",
+    servicesEnabled: true,
+    servicesTopRatio: 0.56,
+    servicesWidthRatio: 0.88,
+    servicesMaxBullets: 3,
+    servicesColCount: 1,
+    footerAnchored: true,
+    footerMaxBottomOffset: 0,
+    buildBackground: buildLocalStoreBackground,
+  },
 };
 
 export function getTemplateLayout(templateId: TemplateId): TemplateLayout {
@@ -653,9 +742,18 @@ export function selectTemplate(spec: BrandOverlaySpec): TemplateId {
 
   const category = inferServiceCategory(spec.business, spec.campaign);
   const creativeType = (spec.creativeType || "leaflet").toLowerCase();
+  const combined = `${spec.business?.industry || ""} ${spec.business?.productOrService || ""} ${spec.campaign?.primaryOutcome || ""} ${spec.campaign?.goal || ""}`.toLowerCase();
 
   if (creativeType === "offer_advert" || category === "events") {
     return "offer_discount_campaign";
+  }
+
+  if (combined.includes("b2b") || combined.includes("corporate") || combined.includes("consulting") || combined.includes("financial") || combined.includes("professional")) {
+    return "corporate_professional";
+  }
+
+  if (combined.includes("local") || combined.includes("community") || combined.includes("neighbourhood") || combined.includes("store") || combined.includes("shop")) {
+    return "local_store_promo";
   }
 
   if (TEMPLATES.retail_product_promo.categoryAffinity.includes(category)) {

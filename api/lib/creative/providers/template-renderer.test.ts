@@ -25,7 +25,7 @@ function setEnv(patch: Record<string, string>) {
   Object.assign(process.env, originalEnv, patch);
 }
 
-async function importRenderer(name: "bannerbear" | "templatedio" | "placeholder") {
+async function importRenderer(name: "bannerbear" | "templatedio" | "internal" | "placeholder") {
   if (name === "bannerbear") {
     const { BannerbearTemplateRenderer } = await import("./bannerbear-template-renderer");
     return new BannerbearTemplateRenderer();
@@ -33,6 +33,10 @@ async function importRenderer(name: "bannerbear" | "templatedio" | "placeholder"
   if (name === "templatedio") {
     const { TemplatedIoTemplateRenderer } = await import("./templatedio-template-renderer");
     return new TemplatedIoTemplateRenderer();
+  }
+  if (name === "internal") {
+    const { InternalTemplateRenderer } = await import("./internal-template-renderer");
+    return new InternalTemplateRenderer();
   }
   const { PlaceholderTemplateRenderer } = await import("./placeholder-template-renderer");
   return new PlaceholderTemplateRenderer("bannerbear");
@@ -218,5 +222,71 @@ describe("TemplatedIoTemplateRenderer", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Invalid template");
+  });
+});
+
+describe("InternalTemplateRenderer", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    setEnv({});
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("is always configured", async () => {
+    const renderer = await importRenderer("internal");
+    expect(renderer.configured).toBe(true);
+    expect(renderer.name).toBe("internal-template");
+  });
+
+  it("returns success with a base64 PNG buffer", async () => {
+    const renderer = await importRenderer("internal");
+    const request: TemplateRendererRequest = {
+      ...baseRequest,
+      logoUrl: "",
+      providerTemplateId: "service_business_promo",
+    };
+    const result = await renderer.render(request);
+
+    expect(result.success).toBe(true);
+    expect(result.imageBase64).toBeTruthy();
+    expect(result.extension).toBe("png");
+    expect(result.providerJobId).toMatch(/^nf-internal-/);
+  });
+
+  it("renders with a fetched logo", async () => {
+    // 1x1 transparent PNG
+    const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const logoBuf = Buffer.from(pngBase64, "base64");
+    vi.mocked(global.fetch).mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => logoBuf.buffer.slice(logoBuf.byteOffset, logoBuf.byteOffset + logoBuf.byteLength),
+    } as any);
+
+    const renderer = await importRenderer("internal");
+    const request: TemplateRendererRequest = {
+      ...baseRequest,
+      providerTemplateId: "retail_product_promo",
+    };
+    const result = await renderer.render(request);
+
+    expect(result.success).toBe(true);
+    expect(result.imageBase64).toBeTruthy();
+  });
+
+  it("returns failure for an unknown template", async () => {
+    const renderer = await importRenderer("internal");
+    const request: TemplateRendererRequest = {
+      ...baseRequest,
+      providerTemplateId: "unknown_template",
+    };
+    const result = await renderer.render(request);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Unknown internal template");
   });
 });

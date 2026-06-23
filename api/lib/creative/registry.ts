@@ -6,6 +6,7 @@ import { PlaceholderImageProvider, PlaceholderVideoProvider } from "./providers/
 import { BannerbearTemplateRenderer } from "./providers/bannerbear-template-renderer";
 import { TemplatedIoTemplateRenderer } from "./providers/templatedio-template-renderer";
 import { PlaceholderTemplateRenderer } from "./providers/placeholder-template-renderer";
+import { InternalTemplateRenderer } from "./providers/internal-template-renderer";
 import type { ImageProvider, VideoProvider } from "./types";
 import type { TemplateRendererProvider } from "./providers/template-renderer";
 
@@ -14,6 +15,7 @@ const creatifyVideo = new CreatifyVideoProvider();
 const localVideo = new LocalVideoProvider();
 const bannerbearTemplate = new BannerbearTemplateRenderer();
 const templatedIoTemplate = new TemplatedIoTemplateRenderer();
+const internalTemplate = new InternalTemplateRenderer();
 
 export function getImageProvider(): ImageProvider {
   if (env.openaiApiKey) return openaiImage;
@@ -52,7 +54,7 @@ export function isVideoRenderingConfigured(): boolean {
 
 export function getTemplateRendererProvider(): TemplateRendererProvider {
   if (!env.enablePremiumTemplateProvider) {
-    return new PlaceholderTemplateRenderer(env.premiumTemplateProvider);
+    return internalTemplate;
   }
   const provider = env.premiumTemplateProvider.toLowerCase();
   if (provider === "templatedio" || provider === "templated.io") {
@@ -63,7 +65,11 @@ export function getTemplateRendererProvider(): TemplateRendererProvider {
     if (bannerbearTemplate.configured) return bannerbearTemplate;
     return new PlaceholderTemplateRenderer("bannerbear");
   }
-  return new PlaceholderTemplateRenderer(env.premiumTemplateProvider);
+  return internalTemplate;
+}
+
+export function getInternalTemplateRenderer(): TemplateRendererProvider {
+  return internalTemplate;
 }
 
 export function isPremiumTemplateProviderConfigured(): boolean {

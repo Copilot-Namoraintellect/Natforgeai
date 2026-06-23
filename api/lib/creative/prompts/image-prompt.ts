@@ -176,6 +176,10 @@ export function buildPremiumImagePrompt(opts: BuildPromptOpts): string {
       "- Use the upper-middle area for the product/hero visual. Keep the lower-middle offer zone and bottom footer band as clean solid colour or soft texture so the overlaid offer and CTA remain perfectly readable.",
     offer_discount_campaign:
       "- Keep a large clean central rectangle and the bottom footer band as solid colour or soft texture so the bold offer block and CTA remain perfectly readable. Use brand-colour accents around the edges.",
+    corporate_professional:
+      "- Keep a clean left-aligned content area and bottom footer band as solid colour or soft texture so the formal headline, offer and contact details remain perfectly readable.",
+    local_store_promo:
+      "- Keep a clean central offer area and bottom footer band as solid colour or soft texture so the headline, offer and location details remain perfectly readable.",
   };
 
   const safeZoneLines = opts.templateId

@@ -5,13 +5,20 @@ import { getDb } from "../../queries/connection";
 import { contentPosts, campaigns, businesses, generatedImages, videoRenderJobs, campaignAssets } from "@db/schema";
 import { checkCredits, deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
-import { getImageProvider, getPremiumVideoProvider, getBasicVideoProvider, getTemplateRendererProvider } from "./registry";
+import {
+  getImageProvider,
+  getPremiumVideoProvider,
+  getBasicVideoProvider,
+  getTemplateRendererProvider,
+  getInternalTemplateRenderer,
+} from "./registry";
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
 import { generateFallbackLeafletImage, defaultServiceBullets, selectTemplate, type TemplateId } from "./composition";
 import { renderOffer, offerToHeadline, normalizeCta, normaliseOfferInText } from "./text-formatter";
 import { resolveBrandPalette } from "./brand-palette";
 import {
-  getPremiumImageCredits,
+  getPremiumImageInternalCredits,
+  getPremiumImageExternalCredits,
   getPremiumVideoCredits,
   creatifyCreditsToUsd,
   usdToMicroCents,
@@ -28,7 +35,11 @@ import type {
   ProviderStatus,
 } from "./types";
 import type { TemplateRendererRequest } from "./providers/template-renderer";
-import { resolveProviderTemplateId, getPremiumTemplateStatus, type PremiumTemplateId } from "./template-catalogue";
+import {
+  resolveProviderTemplateId,
+  getPremiumTemplateStatus,
+  type PremiumTemplateId,
+} from "./template-catalogue";
 
 function newGenerationRunId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -468,6 +479,7 @@ export async function generatePremiumLeaflet({
   brandColors,
   creativeType = "leaflet",
   templateId,
+  provider = "internal",
   strongerBrandFit = false,
   creativeGuidance,
   refinementInstruction,
@@ -478,6 +490,7 @@ export async function generatePremiumLeaflet({
   brandColors?: string[];
   creativeType?: CreativeType;
   templateId?: TemplateId;
+  provider?: "internal" | "external";
   strongerBrandFit?: boolean;
   creativeGuidance?: string;
   refinementInstruction?: string;
@@ -493,16 +506,20 @@ export async function generatePremiumLeaflet({
   const generationRunId = newGenerationRunId("premium");
   const iterationNumber = getNextIterationNumber(currentMeta, allPreviousImages);
 
-  const status = getPremiumTemplateStatus();
-  if (!status.ready) {
-    const message = "Premium templates are not configured yet. You can generate a Basic Draft for free.";
-    console.warn(`[PremiumLeaflet] Blocked | userId=${userId} | contentPostId=${contentPostId} | missing=${status.missing?.join(",") || "feature flag/provider"}`);
-    await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
-    return { status: "failed", jobId: "", errorMessage: message };
+  const useExternalProvider = provider === "external";
+
+  if (useExternalProvider) {
+    const status = getPremiumTemplateStatus();
+    if (!status.ready) {
+      const message = "External premium template provider is not configured yet. You can generate an Internal Premium Leaflet or Basic Draft instead.";
+      console.warn(`[PremiumLeaflet] Blocked external | userId=${userId} | contentPostId=${contentPostId} | missing=${status.missing?.join(",") || "feature flag/provider"}`);
+      await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+      return { status: "failed", jobId: "", errorMessage: message };
+    }
   }
 
-  const templateRenderer = getTemplateRendererProvider();
-  const cost = getPremiumImageCredits();
+  const templateRenderer = useExternalProvider ? getTemplateRendererProvider() : getInternalTemplateRenderer();
+  const cost = useExternalProvider ? getPremiumImageExternalCredits() : getPremiumImageInternalCredits();
   await assertCanAfford(userId, cost, "Premium Marketing Leaflet");
 
   await setPostImageStatus(contentPostId, { imageStatus: "generating", imageError: null });
@@ -525,15 +542,19 @@ export async function generatePremiumLeaflet({
     } = await normalizeLeafletInputs({ business, campaign, post, brandColors, creativeType, templateId, creativeGuidance, refinementInstruction });
 
     const premiumTemplateId: PremiumTemplateId = selectedTemplate as PremiumTemplateId;
-    const providerTemplateId = resolveProviderTemplateId(templateRenderer.name, premiumTemplateId);
+    const providerTemplateId = useExternalProvider
+      ? resolveProviderTemplateId(templateRenderer.name, premiumTemplateId)
+      : premiumTemplateId;
 
-    if (!providerTemplateId) {
+    if (useExternalProvider && !providerTemplateId) {
       const message = `Premium template "${premiumTemplateId}" is not configured for provider "${templateRenderer.name}". Contact admin to set the provider template ID.`;
       await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
       return { status: "failed", jobId: "", errorMessage: message };
     }
 
-    console.log(`[PremiumLeaflet] Rendering | userId=${userId} | contentPostId=${contentPostId} | provider=${templateRenderer.name} | template=${providerTemplateId}`);
+    const resolvedProviderTemplateId = providerTemplateId as string;
+
+    console.log(`[PremiumLeaflet] Rendering | userId=${userId} | contentPostId=${contentPostId} | provider=${templateRenderer.name} | template=${resolvedProviderTemplateId}`);
 
     // Optional OpenAI hero/background generation. This is strictly an asset,
     // not the final layout. Failure here is non-blocking.
@@ -599,7 +620,7 @@ export async function generatePremiumLeaflet({
     }
 
     const renderReq: TemplateRendererRequest = {
-      providerTemplateId,
+      providerTemplateId: resolvedProviderTemplateId,
       format: "leaflet",
       outputFormat: "png",
       aspectRatio,
@@ -630,7 +651,7 @@ export async function generatePremiumLeaflet({
 
     const renderResult = await templateRenderer.render(renderReq);
 
-    if (!renderResult.success || !renderResult.imageUrl) {
+    if (!renderResult.success || (!renderResult.imageUrl && !renderResult.imageBase64)) {
       const errorMessage = renderResult.error || "Premium template provider failed to render the leaflet.";
       console.error(`[PremiumLeaflet] Provider render failed | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`);
       await setPostImageStatus(contentPostId, {
@@ -646,22 +667,29 @@ export async function generatePremiumLeaflet({
       };
     }
 
-    // Download provider image and store locally so we own the asset.
+    // Obtain the rendered buffer. External providers return a URL to download;
+    // internal providers return a base64 buffer directly.
     let buffer: Buffer;
     try {
-      const imgResponse = await fetch(renderResult.imageUrl);
-      if (!imgResponse.ok) throw new Error(`Failed to download rendered image: ${imgResponse.status}`);
-      buffer = Buffer.from(await imgResponse.arrayBuffer());
+      if (renderResult.imageBase64) {
+        buffer = Buffer.from(renderResult.imageBase64, "base64");
+      } else if (renderResult.imageUrl) {
+        const imgResponse = await fetch(renderResult.imageUrl);
+        if (!imgResponse.ok) throw new Error(`Failed to download rendered image: ${imgResponse.status}`);
+        buffer = Buffer.from(await imgResponse.arrayBuffer());
+      } else {
+        throw new Error("No image data returned from provider");
+      }
     } catch (downloadErr: any) {
-      console.error(`[PremiumLeaflet] Failed to download provider image | url=${renderResult.imageUrl} | error="${downloadErr.message}"`);
+      console.error(`[PremiumLeaflet] Failed to obtain rendered image | url=${renderResult.imageUrl} | error="${downloadErr.message}"`);
       await setPostImageStatus(contentPostId, {
         imageStatus: "failed",
-        imageError: `Downloaded rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
+        imageError: `Obtaining rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
       });
       return {
         status: "failed",
         jobId: renderResult.providerJobId || "",
-        errorMessage: `Downloaded rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
+        errorMessage: `Obtaining rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
         provider: templateRenderer.name,
         providerJobId: renderResult.providerJobId,
       };
@@ -669,7 +697,7 @@ export async function generatePremiumLeaflet({
 
     const stored = await storeImageBuffer(buffer, {
       campaignId: post.campaignId ?? undefined,
-      prefix: "premium-leaflet",
+      prefix: useExternalProvider ? "premium-leaflet" : "premium-leaflet-internal",
       extension: renderResult.extension || "png",
     });
 
@@ -686,7 +714,7 @@ export async function generatePremiumLeaflet({
       metadata: {
         provider: templateRenderer.name,
         providerJobId: renderResult.providerJobId,
-        providerTemplateId,
+        providerTemplateId: resolvedProviderTemplateId,
         contentPostId: post.id,
         campaignId: post.campaignId,
         cost,
@@ -707,7 +735,7 @@ export async function generatePremiumLeaflet({
       metadata: {
         provider: templateRenderer.name,
         providerJobId: renderResult.providerJobId,
-        providerTemplateId,
+        providerTemplateId: resolvedProviderTemplateId,
         contentPostId: post.id,
         aspectRatio,
         outputUrl: stored.publicUrl,
@@ -835,7 +863,7 @@ export async function generatePremiumLeaflet({
       console.error(`[PremiumLeaflet] Caption pack async error | userId=${userId} | contentPostId=${post.id} | error="${err.message}"`);
     });
 
-    console.log(`[PremiumLeaflet] Ready | userId=${userId} | contentPostId=${contentPostId} | url=${stored.publicUrl} | credits=${cost}`);
+    console.log(`[PremiumLeaflet] Ready | userId=${userId} | contentPostId=${contentPostId} | provider=${templateRenderer.name} | url=${stored.publicUrl} | credits=${cost}`);
 
     return {
       jobId: renderResult.providerJobId || "premium",

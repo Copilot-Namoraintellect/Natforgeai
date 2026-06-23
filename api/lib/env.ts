@@ -57,11 +57,15 @@ export const env = {
   bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
   bannerbearTemplateServiceBusinessPromo: process.env.BANNERBEAR_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",
   bannerbearTemplateOfferDiscountCampaign: process.env.BANNERBEAR_TEMPLATE_OFFER_DISCOUNT_CAMPAIGN ?? "",
+  bannerbearTemplateCorporateProfessional: process.env.BANNERBEAR_TEMPLATE_CORPORATE_PROFESSIONAL ?? "",
+  bannerbearTemplateLocalStorePromo: process.env.BANNERBEAR_TEMPLATE_LOCAL_STORE_PROMO ?? "",
 
   templatedIoApiKey: process.env.TEMPLATED_IO_API_KEY ?? "",
   templatedIoTemplateRetailProductPromo: process.env.TEMPLATED_IO_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
   templatedIoTemplateServiceBusinessPromo: process.env.TEMPLATED_IO_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",
   templatedIoTemplateOfferDiscountCampaign: process.env.TEMPLATED_IO_TEMPLATE_OFFER_DISCOUNT_CAMPAIGN ?? "",
+  templatedIoTemplateCorporateProfessional: process.env.TEMPLATED_IO_TEMPLATE_CORPORATE_PROFESSIONAL ?? "",
+  templatedIoTemplateLocalStorePromo: process.env.TEMPLATED_IO_TEMPLATE_LOCAL_STORE_PROMO ?? "",
 
   // Creative generation providers
   creatifyApiBaseUrl: process.env.CREATIFY_API_BASE_URL ?? "https://api.creatify.ai",
@@ -73,6 +77,8 @@ export const env = {
 
   // Creative generation credit pricing (NatForgeAI internal credits)
   premiumImageCredits: parseInt(process.env.PREMIUM_IMAGE_CREDITS || "10", 10),
+  premiumImageInternalCredits: parseInt(process.env.PREMIUM_IMAGE_INTERNAL_CREDITS || "5", 10),
+  premiumImageExternalCredits: parseInt(process.env.PREMIUM_IMAGE_EXTERNAL_CREDITS || "10", 10),
   premiumVideoCredits: parseInt(process.env.PREMIUM_VIDEO_CREDITS || "100", 10),
   premiumHeroPackCredits: parseInt(process.env.PREMIUM_HERO_PACK_CREDITS || "120", 10),
 

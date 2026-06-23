@@ -1,19 +1,73 @@
 import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { generatedImages, contentPosts } from "@db/schema";
+import { generatedImages, contentPosts, businesses, campaigns } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { checkCredits, deductCredits, recordAiUsage, adminAdjustCredits } from "./lib/billing/credit-engine";
 import { calculateFixedCost } from "./lib/billing/cost-tracker";
 import { generateBasicDraftLeaflet, generatePremiumLeaflet, generateCaptionPack } from "./lib/creative/service";
-import { getPremiumImageCredits } from "./lib/creative/costs";
-import { getPremiumTemplateStatus } from "./lib/creative/template-catalogue";
+import {
+  getPremiumImageCredits,
+  getPremiumImageInternalCredits,
+  getPremiumImageExternalCredits,
+} from "./lib/creative/costs";
+import {
+  getPremiumTemplateStatus,
+  listPremiumTemplates,
+  getBestTemplateForCampaign,
+} from "./lib/creative/template-catalogue";
 import { TRPCError } from "@trpc/server";
+
+const ALL_TEMPLATE_IDS = [
+  "service_business_promo",
+  "retail_product_promo",
+  "offer_discount_campaign",
+  "corporate_professional",
+  "local_store_promo",
+] as const;
 
 export const imageRouter = createRouter({
   premiumImageCost: authedQuery.query(async () => {
     return { cost: getPremiumImageCredits() };
   }),
+
+  premiumImageCosts: authedQuery.query(async () => {
+    return {
+      internal: getPremiumImageInternalCredits(),
+      external: getPremiumImageExternalCredits(),
+    };
+  }),
+
+  listInternalTemplates: authedQuery
+    .input(
+      z.object({
+        businessId: z.number().optional(),
+        campaignId: z.number().optional(),
+      }).optional()
+    )
+    .query(async ({ input }) => {
+      const db = getDb();
+      const templates = listPremiumTemplates();
+
+      let business: any;
+      let campaign: any;
+
+      if (input?.businessId) {
+        const [b] = await db.select().from(businesses).where(eq(businesses.id, input.businessId)).limit(1);
+        business = b;
+      }
+      if (input?.campaignId) {
+        const [c] = await db.select().from(campaigns).where(eq(campaigns.id, input.campaignId)).limit(1);
+        campaign = c;
+      }
+
+      const autoSelectedId = getBestTemplateForCampaign(business, campaign);
+
+      return templates.map((t) => ({
+        ...t,
+        autoSelected: t.id === autoSelectedId,
+      }));
+    }),
 
   list: authedQuery
     .input(
@@ -164,7 +218,7 @@ export const imageRouter = createRouter({
         contentPostId: z.number(),
         brandColors: z.array(z.string()).optional(),
         creativeType: z.enum(["leaflet", "poster", "service_menu", "offer_advert", "event_announcement"]).default("leaflet"),
-        templateId: z.enum(["service_business_promo", "retail_product_promo", "offer_discount_campaign"]).optional(),
+        templateId: z.enum(ALL_TEMPLATE_IDS).optional(),
         strongerBrandFit: z.boolean().default(false),
         creativeGuidance: z.string().optional(),
         refinementInstruction: z.string().optional(),
@@ -225,7 +279,8 @@ export const imageRouter = createRouter({
         contentPostId: z.number(),
         brandColors: z.array(z.string()).optional(),
         creativeType: z.enum(["leaflet", "poster", "service_menu", "offer_advert", "event_announcement"]).default("leaflet"),
-        templateId: z.enum(["service_business_promo", "retail_product_promo", "offer_discount_campaign"]).optional(),
+        templateId: z.enum(ALL_TEMPLATE_IDS).optional(),
+        provider: z.enum(["internal", "external"]).default("internal"),
         strongerBrandFit: z.boolean().default(false),
         creativeGuidance: z.string().optional(),
         refinementInstruction: z.string().optional(),
@@ -239,6 +294,7 @@ export const imageRouter = createRouter({
         brandColors: input.brandColors,
         creativeType: input.creativeType,
         templateId: input.templateId,
+        provider: input.provider,
         strongerBrandFit: input.strongerBrandFit,
         creativeGuidance: input.creativeGuidance,
         refinementInstruction: input.refinementInstruction,

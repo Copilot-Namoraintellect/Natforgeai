@@ -64,6 +64,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
+import { PremiumTemplateGallery } from "@/components/content/PremiumTemplateGallery";
+import type { GalleryTemplate } from "@/components/content/PremiumTemplateGallery";
 import { toast } from "sonner";
 
 const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
@@ -442,8 +444,15 @@ export default function ContentStudio() {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["masterVisual", "masterVideo"]));
   const [selectedIterationId, setSelectedIterationId] = useState<string | null>(null);
   const [captionPackTab, setCaptionPackTab] = useState<string>("master");
-  type LeafletTemplateId = "auto" | "service_business_promo" | "retail_product_promo" | "offer_discount_campaign";
+  type LeafletTemplateId =
+    | "auto"
+    | "service_business_promo"
+    | "retail_product_promo"
+    | "offer_discount_campaign"
+    | "corporate_professional"
+    | "local_store_promo";
   const [imageTemplateId, setImageTemplateId] = useState<LeafletTemplateId>("auto");
+  const [galleryOpen, setGalleryOpen] = useState(false);
   const [loadingImageIds, setLoadingImageIds] = useState<Set<number>>(new Set());
   const [brokenImageIds, setBrokenImageIds] = useState<Set<number>>(new Set());
   const [creativeGuidanceById, setCreativeGuidanceById] = useState<Record<number, string>>({});
@@ -455,6 +464,8 @@ export default function ContentStudio() {
     { value: "service_business_promo", label: "Service Business", description: "Header, service grid & anchored CTA", icon: Briefcase },
     { value: "retail_product_promo", label: "Retail / Product", description: "Hero visual, centred offer & product cues", icon: ShoppingBag },
     { value: "offer_discount_campaign", label: "Offer / Discount", description: "Bold centred offer sticker & simple CTA", icon: Tag },
+    { value: "corporate_professional", label: "Corporate", description: "Clean B2B layout with formal typography", icon: LayoutGrid },
+    { value: "local_store_promo", label: "Local Store", description: "Friendly neighbourhood shop promo", icon: LayoutGrid },
   ];
 
   const TEMPLATE_REFINEMENT_CHIPS: Record<LeafletTemplateId, string[]> = {
@@ -462,6 +473,8 @@ export default function ContentStudio() {
     service_business_promo: ["Cleaner service grid", "Larger text", "More spacing", "Hide business name in header", "Darker background"],
     retail_product_promo: ["Brighter colours", "Center offer", "Simpler background", "More spacing", "Larger text"],
     offer_discount_campaign: ["Center offer", "More whitespace", "Darker background", "Remove sub-headline", "Larger text"],
+    corporate_professional: ["Larger text", "More spacing", "Cleaner layout", "Darker background"],
+    local_store_promo: ["Larger text", "More spacing", "Brighter colours", "Center offer"],
   };
 
   const utils = trpc.useUtils();
@@ -517,9 +530,27 @@ export default function ContentStudio() {
     { enabled: hasCampaignId }
   );
   const { data: videoConfig } = trpc.video.getConfigStatus.useQuery();
-  const { data: premiumImageCostData } = trpc.image.premiumImageCost.useQuery();
-  const premiumImageCost = premiumImageCostData?.cost ?? 10;
+  const { data: premiumImageCosts } = trpc.image.premiumImageCosts.useQuery();
+  const internalCost = premiumImageCosts?.internal ?? 5;
+  const externalCost = premiumImageCosts?.external ?? 10;
   const { data: premiumTemplateStatus } = trpc.image.premiumTemplateStatus.useQuery();
+  const { data: internalTemplatesData } = trpc.image.listInternalTemplates.useQuery(
+    hasCampaignId && campaignForContext?.businessId
+      ? { businessId: campaignForContext.businessId, campaignId: numericCampaignId }
+      : undefined,
+    { enabled: hasCampaignId }
+  );
+  const internalTemplates: GalleryTemplate[] = (internalTemplatesData || []).map((t) => ({
+    id: t.id,
+    name: t.name,
+    label: t.label,
+    description: t.description,
+    category: t.category,
+    previewImageUrl: t.previewImageUrl,
+    autoSelected: t.autoSelected,
+    supportedBusinessTypes: t.supportedBusinessTypes,
+    supportedCampaignIntents: t.supportedCampaignIntents,
+  }));
 
   // Fetch campaigns and approvals to show contextual empty-state guidance
   const { data: campaigns } = trpc.campaign.list.useQuery();
@@ -952,7 +983,7 @@ Include:
     },
     onSuccess: (data, variables) => {
       stopAction(variables.contentPostId, "premium");
-      const costText = (data.creditsCharged ?? premiumImageCost) === 0 ? "no charge" : `${data.creditsCharged ?? premiumImageCost} credits`;
+      const costText = (data.creditsCharged ?? internalCost) === 0 ? "no charge" : `${data.creditsCharged ?? internalCost} credits`;
       toast.success(`Premium Marketing Leaflet generated (${costText}). Review the leaflet and caption pack, then approve or regenerate.`);
       utils.content.list.invalidate();
       utils.image.list.invalidate({ campaignId: numericCampaignId });
@@ -1319,10 +1350,22 @@ Include:
         allowNoLogo,
       });
 
-    const generatePremium = (strongerBrandFit = false) =>
+    const generatePremiumInternal = (strongerBrandFit = false) =>
       generatePremiumLeafletMutation.mutate({
         contentPostId: content.id,
         templateId: imageTemplateId === "auto" ? undefined : imageTemplateId,
+        provider: "internal",
+        strongerBrandFit,
+        creativeGuidance: creativeGuidance.trim() || undefined,
+        refinementInstruction: refinementInstruction.trim() || undefined,
+        allowNoLogo,
+      });
+
+    const generatePremiumExternal = (strongerBrandFit = false) =>
+      generatePremiumLeafletMutation.mutate({
+        contentPostId: content.id,
+        templateId: imageTemplateId === "auto" ? undefined : imageTemplateId,
+        provider: "external",
         strongerBrandFit,
         creativeGuidance: creativeGuidance.trim() || undefined,
         refinementInstruction: refinementInstruction.trim() || undefined,
@@ -1526,15 +1569,25 @@ Include:
                     {isGeneratingBasic ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Image className="w-3 h-3 mr-1" />}
                     {isReady || isFailed ? "Regenerate Basic Draft" : "Generate Basic Draft"}
                   </Button>
+                  <Button
+                    size="sm"
+                    className="h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
+                    onClick={() => generatePremiumInternal(false)}
+                    disabled={isGenerating}
+                  >
+                    {isGeneratingPremium ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Sparkles className="w-3 h-3 mr-1" />}
+                    Regenerate Premium
+                  </Button>
                   {isPremiumReady && (
                     <Button
                       size="sm"
-                      className="h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
-                      onClick={() => generatePremium(false)}
+                      variant="outline"
+                      className="h-8 text-[11px]"
+                      onClick={() => generatePremiumExternal(false)}
                       disabled={isGenerating}
                     >
-                      {isGeneratingPremium ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Sparkles className="w-3 h-3 mr-1" />}
-                      Regenerate Premium
+                      <Sparkles className="w-3 h-3 mr-1" />
+                      External Premium
                     </Button>
                   )}
                   {!captionPack && !isGenerating && (
@@ -1589,10 +1642,14 @@ Include:
                     {isGeneratingBasic ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                     Retry Basic Draft
                   </Button>
+                  <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremiumInternal(false)} disabled={isGenerating}>
+                    {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                    Retry Premium
+                  </Button>
                   {isPremiumReady && (
-                    <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremium(false)} disabled={isGenerating}>
-                      {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                      Retry Premium
+                    <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremiumExternal(false)} disabled={isGenerating}>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Retry External
                     </Button>
                   )}
                 </div>
@@ -1649,9 +1706,8 @@ Include:
                   <Image className="w-12 h-12 text-slate-300 mb-3 mx-auto" />
                   <p className="text-base font-medium text-slate-800">Marketing leaflet not created yet</p>
                   <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                    {isPremiumReady
-                      ? `Generate a Basic Draft (0 credits) for a quick preview, or a Premium Marketing Leaflet (${premiumImageCost} credits) for a polished, customer-ready result.`
-                      : "Premium templates are not configured yet. You can generate a Basic Draft for free."}
+                    Generate a Basic Draft (0 credits) for a quick preview, or a Premium Leaflet ({internalCost} credits) for a polished, customer-ready result.
+                    {isPremiumReady && ` External provider premium is also available (${externalCost} credits).`}
                   </p>
                 </div>
 
@@ -1682,6 +1738,16 @@ Include:
                         );
                       })}
                     </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="mt-2 text-[#00D4FF] hover:text-[#00D4FF]/80 hover:bg-[#00D4FF]/5"
+                      onClick={() => setGalleryOpen(true)}
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5 mr-1.5" />
+                      Browse Template Gallery
+                    </Button>
                   </div>
 
                   {!businessForLeaflet?.logo && (
@@ -1740,20 +1806,25 @@ Include:
                       {isGeneratingBasic ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Image className="w-4 h-4 mr-2" />}
                       Generate Basic Draft — 0 credits
                     </Button>
-                    {isPremiumReady ? (
+                    <Button
+                      size="sm"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                      onClick={() => generatePremiumInternal(false)}
+                      disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
+                    >
+                      {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                      Generate Premium Leaflet — {internalCost} credits
+                    </Button>
+                    {isPremiumReady && (
                       <Button
                         size="sm"
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                        onClick={() => generatePremium(false)}
+                        variant="secondary"
+                        onClick={() => generatePremiumExternal(false)}
                         disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
                       >
-                        {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                        Generate Premium Leaflet — {premiumImageCost} credits
+                        <Sparkles className="w-4 h-4 mr-2" />
+                        External Provider — {externalCost} credits
                       </Button>
-                    ) : (
-                      <div className="text-[11px] text-slate-500 px-2">
-                        Premium templates are not configured yet. You can generate a Basic Draft for free.
-                      </div>
                     )}
                   </div>
                 </div>
@@ -1919,11 +1990,9 @@ Include:
                     <Sparkles className="w-3.5 h-3.5 text-purple-600" />
                     {isBasicDraftAsset ? "Draft Refinement" : "Premium Refinement"}
                   </h4>
-                  {isPremiumReady && (
-                    <Badge variant="outline" className="text-[10px] h-5">
-                      {premiumImageCost} credits
-                    </Badge>
-                  )}
+                  <Badge variant="outline" className="text-[10px] h-5">
+                    {internalCost} credits
+                  </Badge>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {TEMPLATE_REFINEMENT_CHIPS[imageTemplateId].map((chip) => (
@@ -1961,17 +2030,15 @@ Include:
                     {isGeneratingBasic ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
                     Refine Basic Draft
                   </Button>
-                  {isPremiumReady && (
-                    <Button
-                      size="sm"
-                      className="flex-1 h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
-                      onClick={() => generatePremium(true)}
-                      disabled={isGenerating || !refinementInstruction.trim()}
-                    >
-                      {isGeneratingPremium ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
-                      Premium + Stronger Brand Fit
-                    </Button>
-                  )}
+                  <Button
+                    size="sm"
+                    className="flex-1 h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
+                    onClick={() => generatePremiumInternal(true)}
+                    disabled={isGenerating || !refinementInstruction.trim()}
+                  >
+                    {isGeneratingPremium ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
+                    Premium + Stronger Brand Fit
+                  </Button>
                 </div>
               </div>
             )}
@@ -1998,10 +2065,14 @@ Include:
                     {isGeneratingBasic ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Image className="w-3.5 h-3.5 mr-1.5" />}
                     Regenerate Basic Draft
                   </Button>
+                  <Button size="sm" className="w-full h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generatePremiumInternal(false)} disabled={isGenerating}>
+                    {isGeneratingPremium ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
+                    Regenerate Premium Leaflet
+                  </Button>
                   {isPremiumReady && (
-                    <Button size="sm" className="w-full h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generatePremium(false)} disabled={isGenerating}>
-                      {isGeneratingPremium ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
-                      Regenerate Premium Leaflet
+                    <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generatePremiumExternal(false)} disabled={isGenerating}>
+                      <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                      Regenerate External Premium
                     </Button>
                   )}
                 </>
@@ -2038,7 +2109,7 @@ Include:
             )}
             {businessForLeaflet?.logo && (
               <p className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md p-2.5">
-                Your uploaded logo and brand colours are used for the final layout. Basic Draft uses the internal template engine; Premium uses provider templates.
+                Your uploaded logo and brand colours are used for the final layout. Basic Draft uses the internal template engine; Premium uses NatForgeAI internal templates (or an external provider if configured).
               </p>
             )}
           </div>
@@ -2046,6 +2117,29 @@ Include:
       )}
 
 
+      <PremiumTemplateGallery
+        open={galleryOpen}
+        onOpenChange={setGalleryOpen}
+        templates={internalTemplates}
+        selectedId={imageTemplateId === "auto" ? internalTemplates.find((t) => t.autoSelected)?.id || "service_business_promo" : imageTemplateId}
+        onSelect={(id) => setImageTemplateId(id as LeafletTemplateId)}
+        internalCost={internalCost}
+        externalCost={externalCost}
+        externalReady={isPremiumReady}
+        onGenerateInternal={() => {
+          setGalleryOpen(false);
+          generatePremiumInternal(false);
+        }}
+        onGenerateExternal={
+          isPremiumReady
+            ? () => {
+                setGalleryOpen(false);
+                generatePremiumExternal(false);
+              }
+            : undefined
+        }
+        isGenerating={isGenerating}
+      />
       </div>
     );
   }
