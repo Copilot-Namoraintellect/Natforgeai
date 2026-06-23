@@ -574,6 +574,7 @@ export async function generatePremiumLeaflet({
     // Optional OpenAI copy refinement when stronger brand fit is requested.
     let headline = formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name;
     let offer = formattedOffer;
+    const subheadline = campaign.mainPainPoint || campaign.coreMessage || post?.hook || "";
     let cta = leafletCta;
     let services = defaultServiceBullets(business, campaign);
     if (strongerBrandFit && env.openaiApiKey) {
@@ -612,6 +613,7 @@ export async function generatePremiumLeaflet({
       ].filter(Boolean),
       headline,
       offer,
+      subheadline,
       cta,
       services,
       contact: {

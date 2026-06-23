@@ -8,12 +8,14 @@ const baseRequest: TemplateRendererRequest = {
   aspectRatio: "4:5",
   businessName: "Test Business",
   logoUrl: "https://example.com/logo.png",
-  brandColors: ["#FF0000", "#00FF00"],
+  brandColors: ["#FF0000", "#00FF00", "#0000FF"],
   headline: "Big Sale",
   offer: "50% off",
+  subheadline: "This weekend only",
   cta: "Shop now",
-  services: ["Delivery", "Quality"],
-  contact: { website: "https://test.com", phone: "123" },
+  services: ["Delivery", "Quality", "Support", "Returns", "Extra"],
+  contact: { website: "https://test.com", whatsapp: "123456", email: "hi@test.com", location: "Cape Town" },
+  backgroundImageUrl: "https://example.com/bg.png",
 };
 
 const originalEnv = { ...process.env };
@@ -96,6 +98,44 @@ describe("BannerbearTemplateRenderer", () => {
         headers: expect.objectContaining({ Authorization: "Bearer bb-test-key" }),
       })
     );
+  });
+
+  it("maps NatForgeAI fields to the fixed Bannerbear layer names", async () => {
+    const fetchMock = vi.mocked(global.fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ uid: "bb-job-2", image_url_png: "https://cdn.bannerbear.com/output.png" }),
+    } as any);
+
+    const renderer = await importRenderer("bannerbear");
+    await renderer.render(baseRequest);
+
+    const call = fetchMock.mock.calls[0];
+    const body = JSON.parse((call[1] as any).body);
+    const modifications = body.modifications;
+    const names = modifications.map((m: any) => m.name);
+
+    expect(names).toContain("logo");
+    expect(names).toContain("businessName");
+    expect(names).toContain("headline");
+    expect(names).toContain("offer");
+    expect(names).toContain("subheadline");
+    expect(names).toContain("cta");
+    expect(names).toContain("service1");
+    expect(names).toContain("service2");
+    expect(names).toContain("service3");
+    expect(names).toContain("service4");
+    expect(names).not.toContain("service5");
+    expect(names).toContain("website");
+    expect(names).toContain("whatsapp");
+    expect(names).toContain("email");
+    expect(names).toContain("location");
+    expect(names).toContain("primaryColor");
+    expect(names).toContain("secondaryColor");
+    expect(names).toContain("accentColor");
+    expect(names).toContain("backgroundImage");
+
+    const logoLayer = modifications.find((m: any) => m.name === "logo");
+    expect(logoLayer.image_url).toBe(baseRequest.logoUrl);
   });
 
   it("returns failure without charging on provider error", async () => {

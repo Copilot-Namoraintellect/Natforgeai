@@ -36,6 +36,8 @@ export interface TemplateRendererRequest {
   headline: string;
   /** Offer text. */
   offer: string;
+  /** Supporting subheadline (e.g. pain point, core message, or hook). */
+  subheadline?: string;
   /** Call to action text. */
   cta: string;
   /** List of services or products. */

@@ -2779,10 +2779,15 @@ Include:
       warning: "border-amber-200 bg-amber-50 text-amber-800",
     };
 
+    const isPremiumLeafletAsset =
+      (masterVisual?.metadata as any)?.assetTier === "premium" ||
+      (masterVisual?.metadata as any)?.imageSource === "premium";
+    const leafletStatusLabel = isPremiumLeafletAsset ? "Premium Leaflet ready" : "Basic Draft ready";
+
     const items = [
       { label: "Campaign strategy approved", done: !["business_onboarding", "strategy_pending", "strategy_generated"].includes(state) },
       { label: "Caption pack created", done: hasCaptionPack },
-      { label: "Premium leaflet ready", done: hasImage, loading: isImageGenerating, failed: isImageFailed },
+      { label: leafletStatusLabel, done: hasImage, loading: isImageGenerating, failed: isImageFailed },
       { label: "Approval pending", done: approvalsPending === 0 && allApproved, attention: approvalsPending > 0 },
       { label: "Publishing pending", done: campaignForContext.status === "active" || campaignForContext.status === "completed", attention: !allApproved },
     ];
