@@ -50,6 +50,8 @@ export interface TemplateRendererRequest {
   creativeGuidance?: string;
   /** Optional OpenAI-generated background/hero image URL. */
   backgroundImageUrl?: string;
+  /** Hint that this is a retry attempt (provider-specific). */
+  isRetry?: boolean;
 }
 
 export interface TemplateRendererResult {

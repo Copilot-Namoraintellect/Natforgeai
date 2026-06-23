@@ -6,11 +6,12 @@ import { contentPosts, campaigns, businesses, generatedImages, videoRenderJobs, 
 import { checkCredits, deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
 import {
-  getImageProvider,
   getPremiumVideoProvider,
   getBasicVideoProvider,
   getTemplateRendererProvider,
   getInternalTemplateRenderer,
+  getOpenAiLeafletRenderer,
+  isOpenAiLeafletConfigured,
 } from "./registry";
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
 import { generateFallbackLeafletImage, defaultServiceBullets, selectTemplate, type TemplateId } from "./composition";
@@ -19,6 +20,7 @@ import { resolveBrandPalette } from "./brand-palette";
 import {
   getPremiumImageInternalCredits,
   getPremiumImageExternalCredits,
+  getPremiumImageAiCredits,
   getPremiumVideoCredits,
   creatifyCreditsToUsd,
   usdToMicroCents,
@@ -34,7 +36,8 @@ import type {
   VideoRequest,
   ProviderStatus,
 } from "./types";
-import type { TemplateRendererRequest } from "./providers/template-renderer";
+import { validateAiLeafletQuality, qualityTierLabel, type LeafletQualityResult } from "./quality";
+import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendererResult } from "./providers/template-renderer";
 import {
   resolveProviderTemplateId,
   getPremiumTemplateStatus,
@@ -469,10 +472,11 @@ export async function generateBasicDraftLeaflet({
 }
 
 // ─── Premium Marketing Leaflet generation ───
-// Uses a provider-backed template renderer (Bannerbear first, Templated.io
-// backup). Charges premium credits only after a successful provider render.
-// OpenAI may generate an optional hero/background image or refine copy, but it
-// must never control the final layout.
+// Provider-backed premium leaflet renderer. Supports:
+//   - "ai": OpenAI generates the visual background, NatForgeAI overlays logo/text.
+//   - "internal": deterministic internal premium templates (fallback).
+//   - "external": Bannerbear / Templated.io (admin-configured).
+// Credits are deducted only after successful render, storage and quality validation.
 export async function generatePremiumLeaflet({
   userId,
   contentPostId,
@@ -490,7 +494,7 @@ export async function generatePremiumLeaflet({
   brandColors?: string[];
   creativeType?: CreativeType;
   templateId?: TemplateId;
-  provider?: "internal" | "external";
+  provider?: "internal" | "external" | "ai";
   strongerBrandFit?: boolean;
   creativeGuidance?: string;
   refinementInstruction?: string;
@@ -506,20 +510,38 @@ export async function generatePremiumLeaflet({
   const generationRunId = newGenerationRunId("premium");
   const iterationNumber = getNextIterationNumber(currentMeta, allPreviousImages);
 
-  const useExternalProvider = provider === "external";
+  const isAiProvider = provider === "ai";
+  const isExternalProvider = provider === "external";
 
-  if (useExternalProvider) {
+  if (isAiProvider) {
+    if (!isOpenAiLeafletConfigured()) {
+      const message = "Premium AI leaflet generation is not configured. Add an OpenAI API key or generate a Basic Draft / Internal Premium Leaflet instead.";
+      console.warn(`[PremiumLeaflet] Blocked AI | userId=${userId} | contentPostId=${contentPostId} | missing=OPENAI_API_KEY`);
+      await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+      return { status: "failed", jobId: "", errorMessage: message };
+    }
+  }
+
+  if (isExternalProvider) {
     const status = getPremiumTemplateStatus();
     if (!status.ready) {
-      const message = "External premium template provider is not configured yet. You can generate an Internal Premium Leaflet or Basic Draft instead.";
+      const message = "External premium template provider is not configured yet. You can generate a Premium AI Leaflet, Internal Premium Leaflet or Basic Draft instead.";
       console.warn(`[PremiumLeaflet] Blocked external | userId=${userId} | contentPostId=${contentPostId} | missing=${status.missing?.join(",") || "feature flag/provider"}`);
       await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
       return { status: "failed", jobId: "", errorMessage: message };
     }
   }
 
-  const templateRenderer = useExternalProvider ? getTemplateRendererProvider() : getInternalTemplateRenderer();
-  const cost = useExternalProvider ? getPremiumImageExternalCredits() : getPremiumImageInternalCredits();
+  const templateRenderer = isAiProvider
+    ? getOpenAiLeafletRenderer()
+    : isExternalProvider
+    ? getTemplateRendererProvider()
+    : getInternalTemplateRenderer();
+  const cost = isAiProvider
+    ? getPremiumImageAiCredits()
+    : isExternalProvider
+    ? getPremiumImageExternalCredits()
+    : getPremiumImageInternalCredits();
   await assertCanAfford(userId, cost, "Premium Marketing Leaflet");
 
   await setPostImageStatus(contentPostId, { imageStatus: "generating", imageError: null });
@@ -542,11 +564,13 @@ export async function generatePremiumLeaflet({
     } = await normalizeLeafletInputs({ business, campaign, post, brandColors, creativeType, templateId, creativeGuidance, refinementInstruction });
 
     const premiumTemplateId: PremiumTemplateId = selectedTemplate as PremiumTemplateId;
-    const providerTemplateId = useExternalProvider
+    const providerTemplateId = isExternalProvider
       ? resolveProviderTemplateId(templateRenderer.name, premiumTemplateId)
+      : isAiProvider
+      ? `openai-hybrid-${premiumTemplateId}`
       : premiumTemplateId;
 
-    if (useExternalProvider && !providerTemplateId) {
+    if (isExternalProvider && !providerTemplateId) {
       const message = `Premium template "${premiumTemplateId}" is not configured for provider "${templateRenderer.name}". Contact admin to set the provider template ID.`;
       await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
       return { status: "failed", jobId: "", errorMessage: message };
@@ -555,42 +579,6 @@ export async function generatePremiumLeaflet({
     const resolvedProviderTemplateId = providerTemplateId as string;
 
     console.log(`[PremiumLeaflet] Rendering | userId=${userId} | contentPostId=${contentPostId} | provider=${templateRenderer.name} | template=${resolvedProviderTemplateId}`);
-
-    // Optional OpenAI hero/background generation. This is strictly an asset,
-    // not the final layout. Failure here is non-blocking.
-    let backgroundImageUrl: string | undefined;
-    if (env.openaiApiKey && creativeGuidance?.toLowerCase().includes("background")) {
-      try {
-        const bgPrompt = `Professional marketing background for ${business.name}. ${creativeGuidance}. No text, no logos, no readable words, no brand marks. Clean, premium, photographic or illustrated background only.`;
-        const imageProvider = getImageProvider();
-        if (imageProvider.configured) {
-          const bgResult = await imageProvider.generate({
-            userId,
-            campaignId: post.campaignId ?? undefined,
-            businessId: business.id,
-            contentPostId: post.id,
-            prompt: bgPrompt,
-            aspectRatio,
-            style: campaign.contentStyle || business.visualStyle,
-          });
-          if (bgResult.status !== "failed" && (bgResult.imageUrl || bgResult.imageBase64)) {
-            backgroundImageUrl = bgResult.imageUrl;
-            if (!backgroundImageUrl && bgResult.imageBase64) {
-              // Store base64 background locally so the provider can fetch it.
-              const bgBuffer = Buffer.from(bgResult.imageBase64, "base64");
-              const bgStored = await storeImageBuffer(bgBuffer, {
-                campaignId: post.campaignId ?? undefined,
-                prefix: "premium-bg",
-                extension: bgResult.extension || "png",
-              });
-              backgroundImageUrl = bgStored.publicUrl;
-            }
-          }
-        }
-      } catch (bgErr: any) {
-        console.warn(`[PremiumLeaflet] Optional background generation failed, continuing without it | error="${bgErr.message}"`);
-      }
-    }
 
     // Optional OpenAI copy refinement when stronger brand fit is requested.
     let headline = formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name;
@@ -646,58 +634,92 @@ export async function generatePremiumLeaflet({
       },
       campaignObjective: campaign.primaryOutcome || campaign.goal || undefined,
       creativeGuidance,
-      backgroundImageUrl,
     };
 
-    const renderResult = await templateRenderer.render(renderReq);
-
-    if (!renderResult.success || (!renderResult.imageUrl && !renderResult.imageBase64)) {
-      const errorMessage = renderResult.error || "Premium template provider failed to render the leaflet.";
-      console.error(`[PremiumLeaflet] Provider render failed | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`);
-      await setPostImageStatus(contentPostId, {
-        imageStatus: "failed",
-        imageError: `${errorMessage} You can generate a Basic Draft (0 credits) instead.`,
-      });
-      return {
-        status: "failed",
-        jobId: renderResult.providerJobId || "",
-        errorMessage: `${errorMessage} You can generate a Basic Draft (0 credits) instead.`,
-        provider: templateRenderer.name,
-        providerJobId: renderResult.providerJobId,
-      };
-    }
-
-    // Obtain the rendered buffer. External providers return a URL to download;
-    // internal providers return a base64 buffer directly.
+    let renderResult: TemplateRendererResult;
     let buffer: Buffer;
-    try {
-      if (renderResult.imageBase64) {
-        buffer = Buffer.from(renderResult.imageBase64, "base64");
-      } else if (renderResult.imageUrl) {
-        const imgResponse = await fetch(renderResult.imageUrl);
-        if (!imgResponse.ok) throw new Error(`Failed to download rendered image: ${imgResponse.status}`);
-        buffer = Buffer.from(await imgResponse.arrayBuffer());
-      } else {
-        throw new Error("No image data returned from provider");
-      }
-    } catch (downloadErr: any) {
-      console.error(`[PremiumLeaflet] Failed to obtain rendered image | url=${renderResult.imageUrl} | error="${downloadErr.message}"`);
-      await setPostImageStatus(contentPostId, {
-        imageStatus: "failed",
-        imageError: `Obtaining rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
+    let aiQualityResult: LeafletQualityResult | undefined;
+    let aiAttempts: any[] | undefined;
+
+    if (isAiProvider) {
+      const aiRender = await renderAiLeafletWithQuality(templateRenderer, renderReq, {
+        business,
+        campaign,
+        hasLogo,
+        brandPalette,
       });
-      return {
-        status: "failed",
-        jobId: renderResult.providerJobId || "",
-        errorMessage: `Obtaining rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
-        provider: templateRenderer.name,
-        providerJobId: renderResult.providerJobId,
-      };
+      if (!aiRender.success) {
+        const message = `${aiRender.errorMessage} You can generate a Basic Draft (0 credits) instead.`;
+        await setPostImageStatus(contentPostId, {
+          imageStatus: "failed",
+          imageError: message,
+          imageAttempts: aiRender.attempts,
+        });
+        return {
+          status: "failed",
+          jobId: "",
+          errorMessage: message,
+          provider: templateRenderer.name,
+        };
+      }
+      renderResult = aiRender.result;
+      buffer = aiRender.finalBuffer;
+      aiQualityResult = aiRender.qualityResult;
+      aiAttempts = aiRender.attempts;
+    } else {
+      renderResult = await templateRenderer.render(renderReq);
+
+      if (!renderResult.success || (!renderResult.imageUrl && !renderResult.imageBase64)) {
+        const errorMessage = renderResult.error || "Premium template provider failed to render the leaflet.";
+        console.error(`[PremiumLeaflet] Provider render failed | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`);
+        await setPostImageStatus(contentPostId, {
+          imageStatus: "failed",
+          imageError: `${errorMessage} You can generate a Basic Draft (0 credits) instead.`,
+        });
+        return {
+          status: "failed",
+          jobId: renderResult.providerJobId || "",
+          errorMessage: `${errorMessage} You can generate a Basic Draft (0 credits) instead.`,
+          provider: templateRenderer.name,
+          providerJobId: renderResult.providerJobId,
+        };
+      }
+
+      try {
+        if (renderResult.imageBase64) {
+          buffer = Buffer.from(renderResult.imageBase64, "base64");
+        } else if (renderResult.imageUrl) {
+          const imgResponse = await fetch(renderResult.imageUrl);
+          if (!imgResponse.ok) throw new Error(`Failed to download rendered image: ${imgResponse.status}`);
+          buffer = Buffer.from(await imgResponse.arrayBuffer());
+        } else {
+          throw new Error("No image data returned from provider");
+        }
+      } catch (downloadErr: any) {
+        console.error(`[PremiumLeaflet] Failed to obtain rendered image | url=${renderResult.imageUrl} | error="${downloadErr.message}"`);
+        await setPostImageStatus(contentPostId, {
+          imageStatus: "failed",
+          imageError: `Obtaining rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
+        });
+        return {
+          status: "failed",
+          jobId: renderResult.providerJobId || "",
+          errorMessage: `Obtaining rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
+          provider: templateRenderer.name,
+          providerJobId: renderResult.providerJobId,
+        };
+      }
     }
+
+    const storagePrefix = {
+      ai: "premium-leaflet-ai",
+      external: "premium-leaflet",
+      internal: "premium-leaflet-internal",
+    }[provider];
 
     const stored = await storeImageBuffer(buffer, {
       campaignId: post.campaignId ?? undefined,
-      prefix: useExternalProvider ? "premium-leaflet" : "premium-leaflet-internal",
+      prefix: storagePrefix,
       extension: renderResult.extension || "png",
     });
 
@@ -705,7 +727,7 @@ export async function generatePremiumLeaflet({
       throw new Error("Failed to store premium leaflet");
     }
 
-    // ─── Charge credits only after successful render + storage ───
+    // ─── Charge credits only after successful render + storage + quality validation ───
     const deduction = await deductCredits({
       userId,
       amount: cost,
@@ -743,10 +765,12 @@ export async function generatePremiumLeaflet({
       },
     });
 
-    const qualityTier: ImageQualityTier = "premium";
-    const qualityLabel = "Premium Marketing Leaflet";
-    const score = 90;
-    const warnings: string[] = [];
+    const qualityTier: ImageQualityTier = isAiProvider
+      ? ((aiQualityResult?.qualityTier as ImageQualityTier) ?? "premium")
+      : "premium";
+    const qualityLabel = isAiProvider ? qualityTierLabel(aiQualityResult?.qualityTier ?? "premium") : "Premium Marketing Leaflet";
+    const score = isAiProvider ? (aiQualityResult?.score ?? 80) : 90;
+    const warnings = isAiProvider ? aiQualityResult?.warnings ?? [] : [];
 
     const previousVersions = Array.isArray(currentMeta?.imageVersions) ? currentMeta.imageVersions : [];
     const newVersion = {
@@ -799,6 +823,7 @@ export async function generatePremiumLeaflet({
         iterationNumber,
         assetType: "leaflet",
         assetTier: "premium",
+        ...(aiAttempts ? { attempts: aiAttempts } : {}),
       },
     });
 
@@ -848,6 +873,7 @@ export async function generatePremiumLeaflet({
           iterationNumber,
           assetType: "leaflet",
           assetTier: "premium",
+          ...(aiAttempts ? { imageAttempts: aiAttempts } : {}),
         },
       })
       .where(eq(contentPosts.id, post.id));
@@ -883,6 +909,87 @@ export async function generatePremiumLeaflet({
     await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: errorMessage });
     return { status: "failed", jobId: "", errorMessage };
   }
+}
+
+async function renderAiLeafletWithQuality(
+  renderer: TemplateRendererProvider,
+  renderReq: TemplateRendererRequest,
+  opts: {
+    business: any;
+    campaign: any;
+    hasLogo: boolean;
+    brandPalette: any;
+    maxAttempts?: number;
+  }
+): Promise<
+  | { success: true; result: TemplateRendererResult; finalBuffer: Buffer; qualityResult: LeafletQualityResult; attempts: any[] }
+  | { success: false; errorMessage: string; attempts: any[] }
+> {
+  const attempts: any[] = [];
+  const maxAttempts = opts.maxAttempts ?? 2;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const req = { ...renderReq, isRetry: attempt > 1 };
+    const result: TemplateRendererResult = await renderer.render(req);
+
+    if (!result.success || (!result.imageUrl && !result.imageBase64)) {
+      const error = result.error || "AI leaflet render failed.";
+      attempts.push({
+        number: attempt,
+        source: "openai",
+        passed: false,
+        score: 0,
+        criticalFailures: [error],
+        warnings: [],
+      });
+      return { success: false, errorMessage: error, attempts };
+    }
+
+    const finalBuffer = result.imageBase64
+      ? Buffer.from(result.imageBase64, "base64")
+      : Buffer.from(await (await fetch(result.imageUrl!)).arrayBuffer());
+
+    const raw = (result.rawResponse || {}) as any;
+    const backgroundBuffer = raw.backgroundBase64 ? Buffer.from(raw.backgroundBase64, "base64") : undefined;
+
+    const validation = await validateAiLeafletQuality({
+      backgroundBuffer,
+      finalBuffer,
+      business: opts.business,
+      campaign: opts.campaign,
+      prompt: raw.prompt || renderReq.headline,
+      hasLogo: opts.hasLogo,
+      logoOverlayApplied: opts.hasLogo,
+      palette: opts.brandPalette,
+      headline: renderReq.headline,
+      cta: renderReq.cta,
+      serviceBullets: renderReq.services,
+    });
+
+    attempts.push({
+      number: attempt,
+      source: "openai",
+      passed: validation.passed,
+      score: validation.score,
+      qualityTier: validation.qualityTier,
+      criticalFailures: validation.criticalFailures,
+      warnings: validation.warnings,
+    });
+
+    if (validation.passed) {
+      return { success: true, result, finalBuffer, qualityResult: validation, attempts };
+    }
+
+    console.warn(
+      `[PremiumLeaflet] AI leaflet quality check failed on attempt ${attempt} | score=${validation.score} | critical=${validation.criticalFailures.join(", ")} | warnings=${validation.warnings.join(", ")}`
+    );
+  }
+
+  return {
+    success: false,
+    errorMessage: `AI leaflet did not pass quality validation after ${maxAttempts} attempts.`,
+    attempts,
+  };
 }
 
 async function refineLeafletCopy({

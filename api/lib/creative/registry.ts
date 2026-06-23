@@ -7,6 +7,7 @@ import { BannerbearTemplateRenderer } from "./providers/bannerbear-template-rend
 import { TemplatedIoTemplateRenderer } from "./providers/templatedio-template-renderer";
 import { PlaceholderTemplateRenderer } from "./providers/placeholder-template-renderer";
 import { InternalTemplateRenderer } from "./providers/internal-template-renderer";
+import { OpenAiLeafletRenderer } from "./providers/openai-leaflet-renderer";
 import type { ImageProvider, VideoProvider } from "./types";
 import type { TemplateRendererProvider } from "./providers/template-renderer";
 
@@ -16,6 +17,7 @@ const localVideo = new LocalVideoProvider();
 const bannerbearTemplate = new BannerbearTemplateRenderer();
 const templatedIoTemplate = new TemplatedIoTemplateRenderer();
 const internalTemplate = new InternalTemplateRenderer();
+const openAiLeaflet = new OpenAiLeafletRenderer();
 
 export function getImageProvider(): ImageProvider {
   if (env.openaiApiKey) return openaiImage;
@@ -70,6 +72,14 @@ export function getTemplateRendererProvider(): TemplateRendererProvider {
 
 export function getInternalTemplateRenderer(): TemplateRendererProvider {
   return internalTemplate;
+}
+
+export function getOpenAiLeafletRenderer(): TemplateRendererProvider {
+  return openAiLeaflet;
+}
+
+export function isOpenAiLeafletConfigured(): boolean {
+  return openAiLeaflet.configured;
 }
 
 export function isPremiumTemplateProviderConfigured(): boolean {

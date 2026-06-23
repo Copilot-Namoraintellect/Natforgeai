@@ -79,6 +79,7 @@ export const env = {
   premiumImageCredits: parseInt(process.env.PREMIUM_IMAGE_CREDITS || "10", 10),
   premiumImageInternalCredits: parseInt(process.env.PREMIUM_IMAGE_INTERNAL_CREDITS || "5", 10),
   premiumImageExternalCredits: parseInt(process.env.PREMIUM_IMAGE_EXTERNAL_CREDITS || "10", 10),
+  premiumImageAiCredits: parseInt(process.env.PREMIUM_IMAGE_AI_CREDITS || "10", 10),
   premiumVideoCredits: parseInt(process.env.PREMIUM_VIDEO_CREDITS || "100", 10),
   premiumHeroPackCredits: parseInt(process.env.PREMIUM_HERO_PACK_CREDITS || "120", 10),
 

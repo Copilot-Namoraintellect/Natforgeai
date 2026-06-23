@@ -15,6 +15,11 @@ export function getPremiumImageExternalCredits(): number {
   return Number.isFinite(value) && value > 0 ? value : 10;
 }
 
+export function getPremiumImageAiCredits(): number {
+  const value = env.premiumImageAiCredits;
+  return Number.isFinite(value) && value > 0 ? value : 10;
+}
+
 export function getPremiumVideoCredits(): number {
   const value = env.premiumVideoCredits;
   return Number.isFinite(value) && value > 0 ? value : 100;

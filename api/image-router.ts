@@ -10,12 +10,14 @@ import {
   getPremiumImageCredits,
   getPremiumImageInternalCredits,
   getPremiumImageExternalCredits,
+  getPremiumImageAiCredits,
 } from "./lib/creative/costs";
 import {
   getPremiumTemplateStatus,
   listPremiumTemplates,
   getBestTemplateForCampaign,
 } from "./lib/creative/template-catalogue";
+import { isOpenAiLeafletConfigured } from "./lib/creative/registry";
 import { TRPCError } from "@trpc/server";
 
 const ALL_TEMPLATE_IDS = [
@@ -35,6 +37,7 @@ export const imageRouter = createRouter({
     return {
       internal: getPremiumImageInternalCredits(),
       external: getPremiumImageExternalCredits(),
+      ai: getPremiumImageAiCredits(),
     };
   }),
 
@@ -212,6 +215,10 @@ export const imageRouter = createRouter({
     return getPremiumTemplateStatus();
   }),
 
+  openAiLeafletStatus: authedQuery.query(async () => {
+    return { configured: isOpenAiLeafletConfigured() };
+  }),
+
   generateForPost: aiActionQuery
     .input(
       z.object({
@@ -280,7 +287,7 @@ export const imageRouter = createRouter({
         brandColors: z.array(z.string()).optional(),
         creativeType: z.enum(["leaflet", "poster", "service_menu", "offer_advert", "event_announcement"]).default("leaflet"),
         templateId: z.enum(ALL_TEMPLATE_IDS).optional(),
-        provider: z.enum(["internal", "external"]).default("internal"),
+        provider: z.enum(["internal", "external", "ai"]).default("ai"),
         strongerBrandFit: z.boolean().default(false),
         creativeGuidance: z.string().optional(),
         refinementInstruction: z.string().optional(),

@@ -533,7 +533,9 @@ export default function ContentStudio() {
   const { data: premiumImageCosts } = trpc.image.premiumImageCosts.useQuery();
   const internalCost = premiumImageCosts?.internal ?? 5;
   const externalCost = premiumImageCosts?.external ?? 10;
+  const aiCost = premiumImageCosts?.ai ?? 10;
   const { data: premiumTemplateStatus } = trpc.image.premiumTemplateStatus.useQuery();
+  const { data: openAiLeafletStatus } = trpc.image.openAiLeafletStatus.useQuery();
   const { data: internalTemplatesData } = trpc.image.listInternalTemplates.useQuery(
     hasCampaignId && campaignForContext?.businessId
       ? { businessId: campaignForContext.businessId, campaignId: numericCampaignId }
@@ -993,14 +995,15 @@ Include:
       stopAction(variables.contentPostId, "premium");
       const message = err.message || "";
       const code = (err as { data?: { code?: string } } | undefined)?.data?.code;
+      const prefix = message ? `${message} ` : "";
       if (code === "PAYMENT_REQUIRED" || message.includes("Insufficient credits") || message.includes("credits.")) {
         toast.error(message || "You don't have enough credits to generate a Premium Marketing Leaflet.");
       } else if (code === "NOT_IMPLEMENTED" || message.includes("not configured")) {
-        toast.error("Premium leaflet generation is not configured. Generate a Basic Draft (0 credits) instead, or contact admin.");
+        toast.error(`${prefix}Premium leaflet generation is not configured. Generate a Basic Draft (0 credits) instead, or contact admin.`);
       } else if (message.includes("System AI generation limit")) {
-        toast.error("System AI generation limit reached. Please contact admin or try again later.");
+        toast.error(message || "System AI generation limit reached. Please contact admin or try again later.");
       } else if (code === "BAD_REQUEST" || message.includes("400") || message.includes("content policy") || message.includes("safety")) {
-        toast.error("We could not generate the Premium Marketing Leaflet. No credits were deducted. Please try again or contact support if the issue continues.");
+        toast.error(`${prefix}We could not generate the Premium Marketing Leaflet. No credits were deducted. Please try again or contact support if the issue continues.`);
       } else {
         toast.error(message || "We could not generate the Premium Marketing Leaflet. No credits were deducted. Try a Basic Draft instead.");
       }
@@ -1331,7 +1334,7 @@ Include:
     const isPremiumReady = premiumTemplateStatus?.ready === true;
     const isBasicDraftAsset = metadata?.imageSource === "draft" || (metadata?.imageCreditsCharged ?? 0) === 0;
     const isFailed = imageStatus === "failed";
-    const isReady = imageStatus === "ready" && !!imageUrl;
+    const isReady = !!imageUrl;
     const imageLoading = loadingImageIds.has(content.id);
     const imageBroken = brokenImageIds.has(content.id);
     const captionPack = campaignAssets?.find(
@@ -1345,6 +1348,17 @@ Include:
       generateImageMutation.mutate({
         contentPostId: content.id,
         templateId: imageTemplateId === "auto" ? undefined : imageTemplateId,
+        creativeGuidance: creativeGuidance.trim() || undefined,
+        refinementInstruction: refinementInstruction.trim() || undefined,
+        allowNoLogo,
+      });
+
+    const generatePremiumAi = (strongerBrandFit = false) =>
+      generatePremiumLeafletMutation.mutate({
+        contentPostId: content.id,
+        templateId: imageTemplateId === "auto" ? undefined : imageTemplateId,
+        provider: "ai",
+        strongerBrandFit,
         creativeGuidance: creativeGuidance.trim() || undefined,
         refinementInstruction: refinementInstruction.trim() || undefined,
         allowNoLogo,
@@ -1427,10 +1441,10 @@ Include:
                 {metadata?.imageQualityLabel ||
                   (metadata?.imageSource === "draft" || metadata?.imageFallbackUsed
                     ? "Basic Draft"
+                    : metadata?.imageSource === "openai" || metadata?.imageProvider === "openai-leaflet"
+                    ? "Premium AI"
                     : metadata?.imageSource === "premium"
                     ? "Premium Marketing Leaflet"
-                    : metadata?.imageSource === "openai"
-                    ? "Premium"
                     : "Generated")}
               </Badge>
             )}
@@ -1534,15 +1548,23 @@ Include:
                     {metadata?.imageQualityLabel ||
                       (metadata?.imageSource === "draft" || metadata?.imageFallbackUsed
                         ? "Basic Draft"
+                        : metadata?.imageSource === "openai" || metadata?.imageProvider === "openai-leaflet"
+                        ? "Premium AI"
                         : metadata?.imageSource === "premium"
                         ? "Premium Marketing Leaflet"
-                        : metadata?.imageSource === "openai"
-                        ? "Premium"
                         : "Not generated")}
                     {typeof metadata?.imageQualityScore === "number" && ` · ${metadata.imageQualityScore}/100`}
                   </p>
                 </div>
 
+                {openAiLeafletStatus?.configured === false && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-left">
+                    <p className="text-[11px] text-red-800 font-medium flex items-start gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      OpenAI API key is missing — Premium AI disabled.
+                    </p>
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-2 pt-1">
                   {isReady && (
                     <Button
@@ -1572,11 +1594,21 @@ Include:
                   <Button
                     size="sm"
                     className="h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
+                    onClick={() => generatePremiumAi(false)}
+                    disabled={isGenerating || !openAiLeafletStatus?.configured}
+                  >
+                    {isGeneratingPremium ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Sparkles className="w-3 h-3 mr-1" />}
+                    Regenerate Premium AI
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-[11px]"
                     onClick={() => generatePremiumInternal(false)}
                     disabled={isGenerating}
                   >
-                    {isGeneratingPremium ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Sparkles className="w-3 h-3 mr-1" />}
-                    Regenerate Premium
+                    <Sparkles className="w-3 h-3 mr-1" />
+                    Internal Premium
                   </Button>
                   {isPremiumReady && (
                     <Button
@@ -1642,9 +1674,13 @@ Include:
                     {isGeneratingBasic ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
                     Retry Basic Draft
                   </Button>
-                  <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremiumInternal(false)} disabled={isGenerating}>
+                  <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremiumAi(false)} disabled={isGenerating || !openAiLeafletStatus?.configured}>
                     {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                    Retry Premium
+                    Retry Premium AI
+                  </Button>
+                  <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremiumInternal(false)} disabled={isGenerating}>
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    Retry Internal
                   </Button>
                   {isPremiumReady && (
                     <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremiumExternal(false)} disabled={isGenerating}>
@@ -1706,7 +1742,7 @@ Include:
                   <Image className="w-12 h-12 text-slate-300 mb-3 mx-auto" />
                   <p className="text-base font-medium text-slate-800">Marketing leaflet not created yet</p>
                   <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                    Generate a Basic Draft (0 credits) for a quick preview, or a Premium Leaflet ({internalCost} credits) for a polished, customer-ready result.
+                    Generate a Premium AI Leaflet ({aiCost} credits) for a polished, customer-ready visual, or start with a Basic Draft (0 credits) for a quick preview.
                     {isPremiumReady && ` External provider premium is also available (${externalCost} credits).`}
                   </p>
                 </div>
@@ -1780,6 +1816,18 @@ Include:
                     </div>
                   )}
 
+                  {openAiLeafletStatus?.configured === false && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-left">
+                      <p className="text-xs text-red-800 font-medium flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                        OpenAI API key is missing.
+                      </p>
+                      <p className="text-[11px] text-red-700 mt-1 ml-6">
+                        Premium AI leaflet generation is disabled. Add OPENAI_API_KEY to your environment variables, or use Internal Premium as a fallback.
+                      </p>
+                    </div>
+                  )}
+
                   <div className="text-left">
                     <Label htmlFor={`guidance-${content.id}`} className="text-xs font-medium text-slate-700">
                       Creative direction <span className="text-slate-400 font-normal">(optional)</span>
@@ -1809,11 +1857,20 @@ Include:
                     <Button
                       size="sm"
                       className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                      onClick={() => generatePremiumAi(false)}
+                      disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo) || !openAiLeafletStatus?.configured}
+                    >
+                      {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                      Generate Premium AI Leaflet — {aiCost} credits
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
                       onClick={() => generatePremiumInternal(false)}
                       disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
                     >
-                      {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                      Generate Premium Leaflet — {internalCost} credits
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Internal Premium — {internalCost} credits
                     </Button>
                     {isPremiumReady && (
                       <Button
@@ -1892,10 +1949,10 @@ Include:
                     {metadata?.imageQualityLabel ||
                       (metadata?.imageSource === "draft" || metadata?.imageFallbackUsed
                         ? "Basic Draft"
+                        : metadata?.imageSource === "openai" || metadata?.imageProvider === "openai-leaflet"
+                        ? "Premium AI"
                         : metadata?.imageSource === "premium"
                         ? "Premium Marketing Leaflet"
-                        : metadata?.imageSource === "openai"
-                        ? "Premium"
                         : "Generated")}
                   </p>
                 </div>
@@ -2033,11 +2090,11 @@ Include:
                   <Button
                     size="sm"
                     className="flex-1 h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
-                    onClick={() => generatePremiumInternal(true)}
-                    disabled={isGenerating || !refinementInstruction.trim()}
+                    onClick={() => generatePremiumAi(true)}
+                    disabled={isGenerating || !refinementInstruction.trim() || !openAiLeafletStatus?.configured}
                   >
                     {isGeneratingPremium ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
-                    Premium + Stronger Brand Fit
+                    Premium AI + Stronger Brand Fit
                   </Button>
                 </div>
               </div>
@@ -2059,15 +2116,30 @@ Include:
                   Download Leaflet
                 </Button>
               )}
+              {openAiLeafletStatus?.configured === false && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-left">
+                  <p className="text-xs text-red-800 font-medium flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    OpenAI API key is missing.
+                  </p>
+                  <p className="text-[11px] text-red-700 mt-1 ml-6">
+                    Premium AI leaflet generation is disabled. Add OPENAI_API_KEY to your environment variables, or use Internal Premium as a fallback.
+                  </p>
+                </div>
+              )}
               {(isReady || isFailed) && !isGenerating && (
                 <>
                   <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generateBasicDraft()} disabled={isGenerating}>
                     {isGeneratingBasic ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Image className="w-3.5 h-3.5 mr-1.5" />}
                     Regenerate Basic Draft
                   </Button>
-                  <Button size="sm" className="w-full h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generatePremiumInternal(false)} disabled={isGenerating}>
+                  <Button size="sm" className="w-full h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generatePremiumAi(false)} disabled={isGenerating || !openAiLeafletStatus?.configured}>
                     {isGeneratingPremium ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
-                    Regenerate Premium Leaflet
+                    Regenerate Premium AI Leaflet
+                  </Button>
+                  <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generatePremiumInternal(false)} disabled={isGenerating}>
+                    <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                    Regenerate Internal Premium
                   </Button>
                   {isPremiumReady && (
                     <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generatePremiumExternal(false)} disabled={isGenerating}>
@@ -2109,7 +2181,7 @@ Include:
             )}
             {businessForLeaflet?.logo && (
               <p className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md p-2.5">
-                Your uploaded logo and brand colours are used for the final layout. Basic Draft uses the internal template engine; Premium uses NatForgeAI internal templates (or an external provider if configured).
+                Your uploaded logo and brand colours are used for the final layout. Premium uses NatForgeAI AI Leaflet generation with your real logo, brand colours, offer, CTA and contact details. Internal templates are available as fallback.
               </p>
             )}
           </div>
@@ -2125,7 +2197,9 @@ Include:
         onSelect={(id) => setImageTemplateId(id as LeafletTemplateId)}
         internalCost={internalCost}
         externalCost={externalCost}
+        aiCost={aiCost}
         externalReady={isPremiumReady}
+        aiReady={openAiLeafletStatus?.configured === true}
         onGenerateInternal={() => {
           setGalleryOpen(false);
           generatePremiumInternal(false);
@@ -2135,6 +2209,14 @@ Include:
             ? () => {
                 setGalleryOpen(false);
                 generatePremiumExternal(false);
+              }
+            : undefined
+        }
+        onGenerateAi={
+          openAiLeafletStatus?.configured === true
+            ? () => {
+                setGalleryOpen(false);
+                generatePremiumAi(false);
               }
             : undefined
         }
@@ -2333,7 +2415,11 @@ Include:
         )}
         {metadata.assetKind === "master_campaign_post" && metadata.imageStatus === "ready" && metadata.imageUrl && (
           <Badge variant="outline" className={`text-[10px] h-5 ${metadata?.imageSource === "draft" || metadata?.isDraft ? "border-amber-200 text-amber-600 bg-amber-50" : "border-emerald-200 text-emerald-600 bg-emerald-50"}`}>
-            {metadata?.imageSource === "draft" || metadata?.isDraft ? "Marketing Draft" : "Premium Marketing Leaflet"}
+            {metadata?.imageSource === "draft" || metadata?.isDraft
+              ? "Marketing Draft"
+              : metadata?.imageProvider === "openai-leaflet"
+              ? "Premium AI"
+              : "Premium Marketing Leaflet"}
           </Badge>
         )}
       </div>
@@ -2834,7 +2920,7 @@ Include:
       },
       schedule_generated: {
         title: "Your campaign pack is ready. Next step: generate your marketing leaflet.",
-        description: "Click Generate below to create a ready-to-post marketing leaflet. Start with a free Basic Draft, or choose Premium if it is configured.",
+        description: "Click Generate below to create a ready-to-post marketing leaflet. Start with a free Basic Draft, or choose Premium AI for a polished result.",
         tone: "warning",
       },
       launch_approval_required: {

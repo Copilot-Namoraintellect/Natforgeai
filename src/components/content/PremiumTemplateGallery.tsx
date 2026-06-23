@@ -30,9 +30,12 @@ interface PremiumTemplateGalleryProps {
   onSelect: (id: string) => void;
   internalCost: number;
   externalCost: number;
+  aiCost: number;
   externalReady: boolean;
+  aiReady: boolean;
   onGenerateInternal: () => void;
   onGenerateExternal?: () => void;
+  onGenerateAi?: () => void;
   isGenerating: boolean;
 }
 
@@ -61,9 +64,12 @@ export function PremiumTemplateGallery({
   onSelect,
   internalCost,
   externalCost,
+  aiCost,
   externalReady,
+  aiReady,
   onGenerateInternal,
   onGenerateExternal,
+  onGenerateAi,
   isGenerating,
 }: PremiumTemplateGalleryProps) {
   const [filter, setFilter] = useState("all");
@@ -173,16 +179,25 @@ export function PremiumTemplateGallery({
           >
             Cancel
           </Button>
+          {aiReady && onGenerateAi && (
+            <Button
+              onClick={onGenerateAi}
+              disabled={isGenerating}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {isGenerating ? "Generating…" : `Generate Premium AI — ${aiCost} credits`}
+            </Button>
+          )}
           <Button
             onClick={onGenerateInternal}
             disabled={isGenerating}
-            className="bg-[#00D4FF] text-slate-900 hover:bg-[#00D4FF]/90"
+            variant="secondary"
           >
-            {isGenerating ? "Generating…" : `Generate Premium — ${internalCost} credits`}
+            {isGenerating ? "Generating…" : `Internal Premium (fallback) — ${internalCost} credits`}
           </Button>
           {externalReady && onGenerateExternal && (
             <Button
-              variant="secondary"
+              variant="outline"
               onClick={onGenerateExternal}
               disabled={isGenerating}
             >

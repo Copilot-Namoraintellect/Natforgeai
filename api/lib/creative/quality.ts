@@ -227,7 +227,11 @@ interface LayoutHeuristics {
   issues: string[];
 }
 
-async function imageLayoutHeuristics(buffer: Buffer, businessCategory: string): Promise<LayoutHeuristics> {
+async function imageLayoutHeuristics(
+  buffer: Buffer,
+  businessCategory: string,
+  opts?: { relaxed?: boolean }
+): Promise<LayoutHeuristics> {
   const issues: string[] = [];
   let edgeDensity = 0;
   try {
@@ -260,8 +264,8 @@ async function imageLayoutHeuristics(buffer: Buffer, businessCategory: string): 
 
     // Print/copy/courier/branding/retail leaflets are expected to show several products.
     const busy = isBusyCategory(businessCategory);
-    const lowThreshold = busy ? 0.004 : 0.012;
-    const highThreshold = busy ? 0.35 : 0.20;
+    const lowThreshold = opts?.relaxed ? 0.006 : busy ? 0.004 : 0.012;
+    const highThreshold = opts?.relaxed ? 0.45 : busy ? 0.35 : 0.20;
 
     if (edgeDensity < lowThreshold) {
       issues.push("Layout appears too flat or blocky (possible icon grid).");
@@ -518,6 +522,104 @@ export interface FakeBrandingResult {
   hasLogo: boolean;
   hasBusinessName: boolean;
   details: string;
+}
+
+export async function validateAiLeafletQuality(opts: {
+  backgroundBuffer?: Buffer;
+  finalBuffer: Buffer;
+  business: any;
+  campaign: any;
+  prompt: string;
+  hasLogo: boolean;
+  logoOverlayApplied: boolean;
+  palette?: { source?: string } | null;
+  headline: string;
+  cta: string;
+  serviceBullets?: string[];
+}): Promise<LeafletQualityResult> {
+  const criticalFailures: string[] = [];
+  const warnings: string[] = [];
+  let scorePenalty = 0;
+
+  // 1. Prompt-level checks (cheap, before any image call).
+  const promptValidation = validateLeafletPrompt(opts.prompt, opts.business);
+  criticalFailures.push(...promptValidation.criticalFailures);
+  warnings.push(...promptValidation.warnings);
+  scorePenalty += promptValidation.warnings.length * 10;
+
+  // 2. Raw AI background must not contain fake text/logos.
+  if (opts.backgroundBuffer) {
+    const fakeBranding = await detectFakeBranding(opts.backgroundBuffer, opts.business);
+    if (fakeBranding.hasText) {
+      criticalFailures.push("AI background contains readable text.");
+    }
+    if (fakeBranding.hasLogo) {
+      criticalFailures.push("AI background contains a logo or brand mark.");
+    }
+    if (fakeBranding.hasBusinessName) {
+      criticalFailures.push("AI background contains the business name.");
+    }
+    if (fakeBranding.hasText || fakeBranding.hasLogo || fakeBranding.hasBusinessName) {
+      warnings.push(`Fake-branding check: ${fakeBranding.details}`);
+    }
+  }
+
+  // 3. Final composite must decode.
+  if (await isImageCorrupt(opts.finalBuffer)) {
+    return {
+      score: 0,
+      criticalFailures: ["Generated leaflet is corrupt or cannot be decoded."],
+      warnings: [],
+      passed: false,
+      qualityTier: "failed",
+    };
+  }
+
+  // 4. Layout heuristics on the final composite (relaxed because real text/logos are intentionally overlaid).
+  const category = businessCategoryFrom(opts.business);
+  const { issues: layoutIssues } = await imageLayoutHeuristics(opts.finalBuffer, category, { relaxed: true });
+  warnings.push(...layoutIssues);
+  for (const issue of layoutIssues) {
+    if (issue.includes("busy or cluttered")) scorePenalty += 5;
+    else if (issue.includes("flat or blocky")) scorePenalty += 15;
+    else if (issue.includes("Large empty central area")) scorePenalty += 15;
+    else scorePenalty += 10;
+  }
+
+  // 5. Brand fidelity.
+  const brandFidelity = validateBrandFidelity({
+    hasLogo: opts.hasLogo,
+    logoOverlayApplied: opts.logoOverlayApplied,
+    palette: opts.palette,
+    businessName: opts.business?.name,
+    headline: opts.headline,
+  });
+  warnings.push(...brandFidelity.issues);
+  scorePenalty += brandFidelity.scorePenalty;
+
+  // 6. Overlay composition.
+  const composition = validateLeafletComposition({
+    hasLogo: opts.hasLogo,
+    headline: opts.headline,
+    cta: opts.cta,
+    serviceBullets: opts.serviceBullets,
+  });
+  warnings.push(...composition.issues);
+  scorePenalty += composition.scorePenalty;
+
+  let score = 100 - criticalFailures.length * 50 - scorePenalty;
+  score = Math.max(0, Math.min(100, score));
+
+  const qualityTier = computeQualityTier(score, false);
+  const passed = criticalFailures.length === 0 && score >= 60;
+
+  return {
+    score,
+    criticalFailures,
+    warnings,
+    passed,
+    qualityTier,
+  };
 }
 
 export async function detectFakeBranding(imageBuffer: Buffer, business: any): Promise<FakeBrandingResult> {
