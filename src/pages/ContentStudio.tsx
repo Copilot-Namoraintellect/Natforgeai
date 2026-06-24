@@ -491,6 +491,7 @@ export default function ContentStudio() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [loadingImageIds, setLoadingImageIds] = useState<Set<number>>(new Set());
   const [brokenImageIds, setBrokenImageIds] = useState<Set<number>>(new Set());
+  const [brokenIterationIds, setBrokenIterationIds] = useState<Set<string>>(new Set());
   const [creativeGuidanceById, setCreativeGuidanceById] = useState<Record<number, string>>({});
   const [refinementById, setRefinementById] = useState<Record<number, string>>({});
   const [allowNoLogoById, setAllowNoLogoById] = useState<Record<number, boolean>>({});
@@ -561,6 +562,7 @@ export default function ContentStudio() {
       setSelectedIterationId(campaignIterations[0].id);
     }
   }, [campaignIterations, selectedIterationId]);
+
   const { data: videoJobs } = trpc.video.listForCampaign.useQuery(
     { campaignId: numericCampaignId },
     { enabled: hasCampaignId }
@@ -984,13 +986,15 @@ Include:
       });
       setLoadingImageIds((prev) => new Set(prev).add(variables.contentPostId));
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: async (_data, variables) => {
       stopAction(variables.contentPostId, "basic");
       stopAllDraftActions(variables.contentPostId);
       toast.success("Basic draft leaflet generated (0 credits). Upgrade to Premium for a polished, customer-ready result.");
-      utils.content.list.invalidate();
-      utils.image.list.invalidate({ campaignId: numericCampaignId });
-      utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
+      await Promise.all([
+        utils.content.list.invalidate(),
+        utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId }),
+        utils.image.list.invalidate({ campaignId: numericCampaignId }),
+      ]);
     },
     onError: (err, variables) => {
       stopAction(variables.contentPostId, "basic");
@@ -1019,13 +1023,16 @@ Include:
       });
       setLoadingImageIds((prev) => new Set(prev).add(variables.contentPostId));
     },
-    onSuccess: (data, variables) => {
+    onSuccess: async (data, variables) => {
       stopAction(variables.contentPostId, "premium");
       const costText = (data.creditsCharged ?? internalCost) === 0 ? "no charge" : `${data.creditsCharged ?? internalCost} credits`;
       toast.success(`Premium Marketing Leaflet generated (${costText}). Review the leaflet and caption pack, then approve or regenerate.`);
-      utils.content.list.invalidate();
-      utils.image.list.invalidate({ campaignId: numericCampaignId });
-      utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
+      // Await the critical queries so the Campaign Pack can pick up the new leaflet/imageUrl immediately.
+      await Promise.all([
+        utils.content.list.invalidate(),
+        utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId }),
+        utils.image.list.invalidate({ campaignId: numericCampaignId }),
+      ]);
     },
     onError: (err, variables) => {
       stopAction(variables.contentPostId, "premium");
@@ -1045,6 +1052,59 @@ Include:
       }
     },
   });
+
+  const selectedIteration = useMemo(() => {
+    const currentIterations = campaignIterations.filter(
+      (i) => !i.isLegacy && (i.leaflet || i.captionPack || i.videoConcept)
+    );
+    const displayIterations = currentIterations.length > 0 ? currentIterations : campaignIterations;
+    return displayIterations.find((i) => i.id === selectedIterationId) || displayIterations[0];
+  }, [campaignIterations, selectedIterationId]);
+
+  const legacyIteration = useMemo(
+    () => campaignIterations.find((i) => i.isLegacy),
+    [campaignIterations]
+  );
+
+  const selectedIterationItems = selectedIteration?.items || [];
+  const leafletCandidate = selectedIteration?.leaflet || findLeafletCandidate(selectedIterationItems);
+  const leafletImageUrl = getImageUrl(leafletCandidate);
+  const isLeafletGenerating =
+    selectedIteration &&
+    !leafletCandidate &&
+    (getContentMeta(selectedIteration.leaflet).imageStatus === "generating" ||
+      selectedIterationItems.some((i) => getContentMeta(i).imageStatus === "generating") ||
+      generatePremiumLeafletMutation.isPending);
+  const isLeafletMissingButReady =
+    selectedIteration &&
+    selectedIteration.tier === "premium" &&
+    !leafletCandidate &&
+    !isLeafletGenerating;
+
+  // Poll/refetch briefly when a premium leaflet should exist but the candidate hasn't appeared yet.
+  useEffect(() => {
+    if (!isLeafletMissingButReady || !hasCampaignId) return;
+    let count = 0;
+    const interval = setInterval(() => {
+      count += 1;
+      if (count > 12) {
+        clearInterval(interval);
+        return;
+      }
+      utils.content.list.invalidate();
+      utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [isLeafletMissingButReady, hasCampaignId, numericCampaignId, utils.content.list, utils.content.campaignAssets]);
+
+  // Scroll to the Marketing Leaflet section once the leaflet imageUrl becomes available.
+  useEffect(() => {
+    if (!leafletImageUrl) return;
+    const el = document.getElementById("marketing-leaflet-section");
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [leafletImageUrl]);
 
   const generateCaptionPackMutation = trpc.image.generateCaptionPack.useMutation({
     onMutate: (variables) => {
@@ -3043,49 +3103,11 @@ Include:
     const allApproved = filtered.every((c) => getApprovalState(c));
     const anyDraft = filtered.some((c) => c.status === "draft");
 
-    const legacyIteration = campaignIterations.find((i) => i.isLegacy);
     const currentIterations = campaignIterations.filter(
       (i) => !i.isLegacy && (i.leaflet || i.captionPack || i.videoConcept)
     );
     const displayIterations = currentIterations.length > 0 ? currentIterations : campaignIterations;
-    const selectedIteration =
-      displayIterations.find((i) => i.id === selectedIterationId) || displayIterations[0];
     const previousIterations = displayIterations.filter((i) => i.id !== selectedIteration?.id);
-
-    const selectedIterationItems = selectedIteration?.items || [];
-    const leafletCandidate = selectedIteration?.leaflet || findLeafletCandidate(selectedIterationItems);
-    const captionPackCandidate = selectedIteration?.captionPack;
-    const leafletImageUrl = getImageUrl(leafletCandidate);
-
-    // eslint-disable-next-line no-console
-    console.debug("[ContentStudio] renderCampaignPack", {
-      selectedIteration: selectedIteration
-        ? { id: selectedIteration.id, iterationNumber: selectedIteration.iterationNumber, runId: selectedIteration.runId }
-        : null,
-      selectedIterationItems: selectedIterationItems.map((i) => ({
-        id: i.id,
-        _recordKind: i._recordKind,
-        assetType: getContentMeta(i).assetType,
-        assetKind: getContentMeta(i).assetKind,
-        imageProvider: getContentMeta(i).imageProvider,
-        imageSource: getContentMeta(i).imageSource,
-        imageUrl: getImageUrl(i),
-      })),
-      leafletCandidate: leafletCandidate
-        ? {
-            id: leafletCandidate.id,
-            imageUrl: getImageUrl(leafletCandidate),
-            assetType: getContentMeta(leafletCandidate).assetType,
-            assetKind: getContentMeta(leafletCandidate).assetKind,
-            imageProvider: getContentMeta(leafletCandidate).imageProvider,
-            imageSource: getContentMeta(leafletCandidate).imageSource,
-          }
-        : null,
-      captionPackCandidate: captionPackCandidate
-        ? { id: captionPackCandidate.id, assetType: getContentMeta(captionPackCandidate).assetType }
-        : null,
-      imageUrl: leafletImageUrl,
-    });
 
     const supportingAssets = selectedIteration?.isLegacy
       ? []
@@ -3269,23 +3291,35 @@ Include:
         {selectedIteration && (
           <div className="space-y-8">
             {/* Marketing Leaflet */}
-            {leafletCandidate && (
-              <section className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
-                    <Image className="w-5 h-5 text-[#00D4FF]" />
-                    Marketing Leaflet
-                  </h3>
+            <section id="marketing-leaflet-section" className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
+                  <Image className="w-5 h-5 text-[#00D4FF]" />
+                  Marketing Leaflet
+                </h3>
+                {leafletCandidate && (
                   <div className="flex items-center gap-2">
                     {statusBadgeFor(leafletCandidate)}
                     <Badge variant="outline" className={iterationBadgeClasses(selectedIteration)}>
                       {iterationLabel(selectedIteration)}
                     </Badge>
                   </div>
+                )}
+              </div>
+              {leafletCandidate && leafletImageUrl ? (
+                renderMasterImageSection(leafletCandidate, false, false, true)
+              ) : isLeafletGenerating || isLeafletMissingButReady || (leafletCandidate && !leafletImageUrl) ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center min-h-[380px] text-center px-6">
+                  <Loader2 className="w-10 h-10 text-[#00D4FF] animate-spin mb-3" />
+                  <p className="text-sm font-medium text-slate-800">Loading leaflet preview…</p>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                    The leaflet was generated. Refreshing the workspace now.
+                  </p>
                 </div>
-                {renderMasterImageSection(leafletCandidate, false, false, true)}
-              </section>
-            )}
+              ) : selectedIterationItems[0] ? (
+                renderMasterImageSection(selectedIterationItems[0], false, false, true)
+              ) : null}
+            </section>
 
             {/* Caption Pack */}
             {selectedIteration.captionPack && (
@@ -3293,7 +3327,7 @@ Include:
                 {renderCaptionPack(
                   selectedIteration.captionPack,
                   selectedIteration.captionPack?.metadata?.contentPostId ??
-                    selectedIteration.leaflet?.id ??
+                    leafletCandidate?.id ??
                     0
                 )}
               </section>
@@ -3337,9 +3371,12 @@ Include:
           </Collapsible>
         )}
 
-        {/* Previous Iterations — compact */}
+        {/* Previous Iterations — compact, collapsed by default */}
         {(previousIterations.length > 0 || legacyIteration) && (
-          <Collapsible defaultOpen={false}>
+          <Collapsible
+            open={expandedSections.has("previous")}
+            onOpenChange={() => toggleSection("previous")}
+          >
             <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden">
               <CollapsibleTrigger asChild>
                 <button className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-100 transition-colors">
@@ -3354,51 +3391,55 @@ Include:
               </CollapsibleTrigger>
               <CollapsibleContent>
                 <div className="p-4 space-y-4">
-                  {/* Previous current iterations */}
+                  {/* Previous current iterations with a visual record only */}
                   {previousIterations.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {previousIterations.map((iteration) => {
-                        const leafletMeta = getContentMeta(iteration.leaflet);
-                        const thumbnailUrl = leafletMeta?.imageUrl;
-                        return (
-                          <button
-                            key={iteration.id}
-                            type="button"
-                            onClick={() => setSelectedIterationId(iteration.id)}
-                            className="text-left rounded-lg border border-slate-200 bg-white p-3 hover:shadow-md transition-all"
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <p className="text-sm font-semibold text-slate-900">
-                                  Iteration {iteration.iterationNumber}
-                                </p>
-                                <p className="text-xs text-muted-foreground">
-                                  {formatIterationDate(iteration.createdAt)}
-                                </p>
+                      {previousIterations
+                        .filter((iteration) => findLeafletCandidate(iteration.items) || iteration.videoConcept)
+                        .map((iteration) => {
+                          const prevLeaflet = findLeafletCandidate(iteration.items) || iteration.leaflet;
+                          const thumbnailUrl = getImageUrl(prevLeaflet);
+                          const thumbnailBroken = brokenIterationIds.has(iteration.id);
+                          return (
+                            <button
+                              key={iteration.id}
+                              type="button"
+                              onClick={() => setSelectedIterationId(iteration.id)}
+                              className="text-left rounded-lg border border-slate-200 bg-white p-3 hover:shadow-md transition-all"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-900">
+                                    Iteration {iteration.iterationNumber}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {formatIterationDate(iteration.createdAt)}
+                                  </p>
+                                </div>
+                                <Badge variant="outline" className={iterationBadgeClasses(iteration)}>
+                                  {iterationLabel(iteration)}
+                                </Badge>
                               </div>
-                              <Badge variant="outline" className={iterationBadgeClasses(iteration)}>
-                                {iterationLabel(iteration)}
-                              </Badge>
-                            </div>
-                            {thumbnailUrl ? (
-                              <div className="mt-3 aspect-[4/3] rounded-md overflow-hidden bg-slate-100">
-                                <img
-                                  src={thumbnailUrl}
-                                  alt={`Iteration ${iteration.iterationNumber} leaflet`}
-                                  className="w-full h-full object-cover"
-                                  onError={(e) => {
-                                    (e.currentTarget as HTMLImageElement).style.display = "none";
-                                  }}
-                                />
-                              </div>
-                            ) : (
-                              <div className="mt-3 aspect-[4/3] rounded-md bg-slate-100 flex items-center justify-center">
-                                <Image className="w-6 h-6 text-slate-300" />
-                              </div>
-                            )}
-                          </button>
-                        );
-                      })}
+                              {thumbnailUrl && !thumbnailBroken ? (
+                                <div className="mt-3 aspect-[4/3] rounded-md overflow-hidden bg-slate-100">
+                                  <img
+                                    src={thumbnailUrl}
+                                    alt={`Iteration ${iteration.iterationNumber} leaflet`}
+                                    className="w-full h-full object-cover"
+                                    onError={() => setBrokenIterationIds((prev) => new Set(prev).add(iteration.id))}
+                                  />
+                                </div>
+                              ) : (
+                                <div className="mt-3 rounded-md border border-slate-100 bg-slate-50 px-3 py-2">
+                                  <p className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                                    <Image className="w-3.5 h-3.5" />
+                                    Preview unavailable
+                                  </p>
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
                     </div>
                   )}
 
