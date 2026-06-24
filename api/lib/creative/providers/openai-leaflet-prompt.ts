@@ -19,6 +19,9 @@ export interface LeafletPromptInput {
   offer?: string;
   headline?: string;
   campaignObjective?: string;
+  campaignAudience?: string;
+  campaignPrimaryService?: string;
+  captionPackSummary?: string;
   brandColors: string[];
   format: TemplateFormat;
   aspectRatio?: string;
@@ -43,16 +46,19 @@ RETRY NOTE: The previous attempt still contained readable text, logos, labels, s
 
 function visualSceneFrom(input: LeafletPromptInput): string {
   const category = (input.businessCategory || input.industry || "").toLowerCase();
-  const product = input.productOrService || "";
+  const product = input.productOrService || input.campaignPrimaryService || "";
   const offer = input.offer || "";
   const headline = input.headline || "";
+  const summary = input.captionPackSummary?.toLowerCase() || "";
+  const combined = `${category} ${product} ${offer} ${headline} ${summary}`;
+
+  // Prioritise explicit product cues over broad business category.
+  if (combined.includes("canvas") || combined.includes("wall art") || combined.includes("framed print") || combined.includes("poster")) {
+    return `an elegant interior scene showing framed wall art, canvas prints, and tasteful home décor textures with warm, gallery-style lighting`;
+  }
 
   if (category.includes("print") || category.includes("copy") || product.toLowerCase().includes("print")) {
     return `a premium workspace still-life for a print and copy shop: crisp paper stacks, colourful flyers, business cards, a sleek printer, and premium packaging materials arranged with depth and soft shadows`;
-  }
-
-  if (category.includes("art") || category.includes("décor") || category.includes("decor") || product.toLowerCase().includes("canvas")) {
-    return `an elegant interior scene showing framed wall art, canvas prints, and tasteful home décor textures with warm, gallery-style lighting`;
   }
 
   if (category.includes("food") || category.includes("restaurant") || category.includes("cafe") || product.toLowerCase().includes("food")) {
@@ -114,12 +120,17 @@ export function buildOpenAiLeafletPrompt(input: LeafletPromptInput): {
   const refinementClause = input.refinementInstruction ? ` Refinement: ${input.refinementInstruction}.` : "";
   const offerClause = input.offer ? ` The image should subtly evoke the offer "${input.offer}" without showing text.` : "";
   const objectiveClause = input.campaignObjective ? ` Campaign goal: ${input.campaignObjective}.` : "";
+  const audienceClause = input.campaignAudience ? ` Target audience: ${input.campaignAudience}.` : "";
+  const primaryServiceClause = input.campaignPrimaryService ? ` Primary service: ${input.campaignPrimaryService}.` : "";
+  const captionPackClause = input.captionPackSummary
+    ? ` Copy and messaging to align with (do not render text): ${input.captionPackSummary}.`
+    : "";
 
   const visualDescription = `${scene}${locationClause}`;
 
   const prompt = `Create a premium, unbranded marketing background image for ${input.businessName}.
 
-Visual scene: ${visualDescription}.${guidanceClause}${refinementClause}${offerClause}${objectiveClause}
+Visual scene: ${visualDescription}.${guidanceClause}${refinementClause}${offerClause}${objectiveClause}${audienceClause}${primaryServiceClause}${captionPackClause}
 
 Style: ${style}.
 Colour palette: ${palette}.

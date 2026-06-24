@@ -558,8 +558,9 @@ export default function ContentStudio() {
     [contents, campaignAssets]
   );
   useEffect(() => {
-    if (campaignIterations.length > 0 && !campaignIterations.some((i) => i.id === selectedIterationId)) {
-      setSelectedIterationId(campaignIterations[0].id);
+    // Reset the explicit selection only when it no longer exists in the iteration set.
+    if (selectedIterationId && campaignIterations.length > 0 && !campaignIterations.some((i) => i.id === selectedIterationId)) {
+      setSelectedIterationId(null);
     }
   }, [campaignIterations, selectedIterationId]);
 
@@ -995,6 +996,8 @@ Include:
         utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId }),
         utils.image.list.invalidate({ campaignId: numericCampaignId }),
       ]);
+      // Switch the active view to the newest image-bearing iteration.
+      setSelectedIterationId(null);
     },
     onError: (err, variables) => {
       stopAction(variables.contentPostId, "basic");
@@ -1033,6 +1036,8 @@ Include:
         utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId }),
         utils.image.list.invalidate({ campaignId: numericCampaignId }),
       ]);
+      // Switch the active view to the newest image-bearing iteration (the one just generated).
+      setSelectedIterationId(null);
     },
     onError: (err, variables) => {
       stopAction(variables.contentPostId, "premium");
@@ -1058,7 +1063,20 @@ Include:
       (i) => !i.isLegacy && (i.leaflet || i.captionPack || i.videoConcept)
     );
     const displayIterations = currentIterations.length > 0 ? currentIterations : campaignIterations;
-    return displayIterations.find((i) => i.id === selectedIterationId) || displayIterations[0];
+
+    const hasLeafletImage = (iteration?: ContentIteration) =>
+      !!iteration && !!getImageUrl(findLeafletCandidate(iteration.items) || iteration.leaflet);
+
+    const selected = displayIterations.find((i) => i.id === selectedIterationId);
+    // Respect an explicit user selection that already carries a leaflet image.
+    if (selected && hasLeafletImage(selected)) return selected;
+
+    // Default to the newest iteration that has a leaflet image.
+    const newestWithImage = displayIterations.find((i) => hasLeafletImage(i));
+    if (newestWithImage) return newestWithImage;
+
+    // Final fallback: explicit selection, then the newest iteration.
+    return selected || displayIterations[0];
   }, [campaignIterations, selectedIterationId]);
 
   const legacyIteration = useMemo(

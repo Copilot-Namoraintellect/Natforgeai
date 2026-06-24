@@ -29,6 +29,12 @@ export interface HybridComposerContext {
   cta: string;
   services: string[];
   contact: TemplateRendererContact;
+  campaignProduct?: string;
+  campaignOffer?: string;
+  campaignHeadline?: string;
+  campaignAudience?: string;
+  campaignPrimaryService?: string;
+  captionPackSummary?: string;
 }
 
 const TARGET_WIDTH = 1080;
@@ -191,8 +197,13 @@ function buildOverlaySvg(ctx: HybridComposerContext): string {
   const headlineMaxChars = Math.floor((W - SAFE_LEFT - SAFE_RIGHT) / (headlineSize * 0.52));
   const headlineLines = wrapText(ctx.headline, headlineMaxChars).slice(0, 2);
 
-  const subheadlineLines = ctx.subheadline
-    ? wrapText(ctx.subheadline, Math.floor((W - SAFE_LEFT - SAFE_RIGHT) / 24)).slice(0, 2)
+  const subheadlineText =
+    ctx.subheadline ||
+    ctx.campaignProduct ||
+    (ctx.campaignAudience ? `For ${ctx.campaignAudience}` : undefined) ||
+    "";
+  const subheadlineLines = subheadlineText
+    ? wrapText(subheadlineText, Math.floor((W - SAFE_LEFT - SAFE_RIGHT) / 24)).slice(0, 2)
     : [];
 
   const showOffer = ctx.offer && !isOfferRedundant(ctx.headline, ctx.offer);

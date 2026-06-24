@@ -190,6 +190,34 @@ async function loadPostCampaignBusiness({
   return { post, campaign, business };
 }
 
+async function loadCaptionPackSummary(campaignId: number | null | undefined): Promise<string | undefined> {
+  if (!campaignId) return undefined;
+  const db = getDb();
+  const [pack] = await db
+    .select({ metadata: campaignAssets.metadata })
+    .from(campaignAssets)
+    .where(and(eq(campaignAssets.campaignId, campaignId), eq(campaignAssets.assetType, "caption_pack")))
+    .orderBy(desc(campaignAssets.createdAt))
+    .limit(1);
+  if (!pack?.metadata) return undefined;
+  const meta = pack.metadata as any;
+  const parts: string[] = [];
+  const add = (label: string, value?: string | null) => {
+    if (typeof value === "string" && value.trim().length > 0) parts.push(`${label}: ${value.trim()}`);
+  };
+  add("Master caption", meta.masterCaption);
+  add("Instagram", meta.instagramCaption);
+  add("Facebook", meta.facebookCaption);
+  add("LinkedIn", meta.linkedinCaption);
+  add("WhatsApp", meta.whatsappCaption);
+  add("Email subject", meta.emailSubject);
+  add("Email body", meta.emailBody);
+  add("CTA", meta.cta || meta.callToAction);
+  add("Hashtags", Array.isArray(meta.hashtags) ? meta.hashtags.join(" ") : meta.hashtags);
+  if (parts.length === 0) return undefined;
+  return parts.join(" | ").slice(0, 1200);
+}
+
 interface NormalizedLeafletInputs {
   formattedOffer: string;
   leafletHeadline: string;
@@ -580,6 +608,8 @@ export async function generatePremiumLeaflet({
 
     console.log(`[PremiumLeaflet] Rendering | userId=${userId} | contentPostId=${contentPostId} | provider=${templateRenderer.name} | template=${resolvedProviderTemplateId}`);
 
+    const captionPackSummary = await loadCaptionPackSummary(post.campaignId);
+
     // Optional OpenAI copy refinement when stronger brand fit is requested.
     // Prefer a proper headline so the offer pill does not duplicate the headline text.
     let headline = leafletHeadline || formattedOffer || campaign.primaryOutcome || post?.title || business.name;
@@ -634,6 +664,12 @@ export async function generatePremiumLeaflet({
         location: business.address || business.location || undefined,
       },
       campaignObjective: campaign.primaryOutcome || campaign.goal || undefined,
+      campaignProduct: campaign.productOrService || undefined,
+      campaignOffer: campaign.offerDetails || undefined,
+      campaignHeadline: campaign.coreMessage || campaign.name || campaign.primaryOutcome || undefined,
+      campaignAudience: campaign.targetAudience || campaign.targetBuyer || undefined,
+      campaignPrimaryService: campaign.productOrService || undefined,
+      captionPackSummary,
       creativeGuidance,
     };
 

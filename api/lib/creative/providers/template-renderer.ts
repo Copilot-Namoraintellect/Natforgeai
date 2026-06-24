@@ -46,6 +46,18 @@ export interface TemplateRendererRequest {
   contact: TemplateRendererContact;
   /** High-level campaign objective (e.g. "drive foot traffic"). */
   campaignObjective?: string;
+  /** Specific campaign product being promoted. */
+  campaignProduct?: string;
+  /** Exact campaign offer (e.g. "10% off orders over R3,000"). */
+  campaignOffer?: string;
+  /** Campaign headline to prioritise over generic business messaging. */
+  campaignHeadline?: string;
+  /** Target audience for the campaign. */
+  campaignAudience?: string;
+  /** Primary service line the campaign is anchored to. */
+  campaignPrimaryService?: string;
+  /** Summary of an existing caption pack to keep visuals and copy aligned. */
+  captionPackSummary?: string;
   /** Optional creative direction passed through to the provider if supported. */
   creativeGuidance?: string;
   /** Optional OpenAI-generated background/hero image URL. */
