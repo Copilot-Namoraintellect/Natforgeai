@@ -2,6 +2,7 @@ import { z } from "zod";
 import { runAgent } from "./runner";
 import { getDb } from "../../queries/connection";
 import {
+  agentRuns,
   campaigns,
   businesses,
   leads,
@@ -10,9 +11,12 @@ import {
   outreachRecommendations,
   campaignInterestSignals,
   socialEngagementEvents,
+  socialIntegrations,
+  socialProfiles,
 } from "@db/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { extractCampaignKeywords, computeBaselineScore } from "../audience/scoring";
+import { hasAudienceSourceData } from "../audience/source-data";
 import { normaliseOutput, type AudienceIntelligenceOutput } from "./audience-intelligence-normalise";
 
 // ─── Strict Output Schema ───
@@ -92,6 +96,98 @@ export async function runAudienceIntelligenceAgent({
   const audienceProfiles = Array.isArray(workflowContext?.audienceProfiles)
     ? workflowContext.audienceProfiles
     : [];
+
+  // ─── Source-data guard ───
+  // Do not run the LLM (and therefore do not charge credits) when there is no
+  // permissioned audience data to ground the analysis in.
+  const [integrationCount] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(socialIntegrations)
+    .where(
+      and(
+        eq(socialIntegrations.userId, userId),
+        eq(socialIntegrations.status, "connected"),
+        inArray(socialIntegrations.platform, ["facebook", "instagram", "linkedin"])
+      )
+    );
+
+  const [profileCount] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(socialProfiles)
+    .where(eq(socialProfiles.userId, userId));
+
+  const [eventCount] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(socialEngagementEvents)
+    .where(eq(socialEngagementEvents.userId, userId));
+
+  const [signalCount] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(campaignInterestSignals)
+    .where(
+      and(
+        eq(campaignInterestSignals.userId, userId),
+        eq(campaignInterestSignals.campaignId, campaignId)
+      )
+    );
+
+  const hasSourceData = hasAudienceSourceData({
+    integrations: integrationCount?.count ?? 0,
+    profiles: profileCount?.count ?? 0,
+    events: eventCount?.count ?? 0,
+    signals: signalCount?.count ?? 0,
+  });
+
+  if (!hasSourceData) {
+    const [insertResult] = await db.insert(agentRuns).values({
+      userId,
+      campaignId,
+      agentType: "audience",
+      status: "completed",
+      input: { reason: "no_audience_source_data" },
+      output: {
+        noData: true,
+        executiveSummary: "",
+        discoveredProfiles: [],
+        scoredLeads: [],
+        contentResonance: [],
+        nextSteps: [],
+      },
+      startedAt: new Date(),
+      completedAt: new Date(),
+    });
+
+    const runId = Number(insertResult.insertId);
+
+    await db
+      .update(campaigns)
+      .set({
+        workflowContext: {
+          ...workflowContext,
+          audienceIntelligenceGeneratedAt: new Date().toISOString(),
+          audienceIntelligenceRunId: runId,
+          audienceIntelligenceSummary: {
+            executiveSummary: "",
+            scoredLeadCount: 0,
+            reachOutCount: 0,
+          },
+        } as Record<string, unknown>,
+      })
+      .where(eq(campaigns.id, campaignId));
+
+    return {
+      runId,
+      output: {
+        noData: true,
+        executiveSummary: "",
+        discoveredProfiles: [],
+        scoredLeads: [],
+        contentResonance: [],
+        nextSteps: [],
+      },
+      createdLeadIds: [],
+    };
+  }
 
   // Load signals + source events
   const signals = await db
@@ -281,7 +377,13 @@ async function persistAudienceIntelligence(
     );
   const signalByExternalId = new Map(signalRows.map((s) => [s.externalIdentifier, s]));
 
-  for (const lead of output.scoredLeads) {
+  // Only persist leads that are grounded in a real campaign interest signal.
+  // This prevents the LLM from hallucinating leads when no source data exists.
+  const groundedLeads = output.scoredLeads.filter((lead) =>
+    lead.externalIdentifier ? signalByExternalId.has(lead.externalIdentifier) : false
+  );
+
+  for (const lead of groundedLeads) {
     if (!lead.externalIdentifier) continue;
 
     const signal = signalByExternalId.get(lead.externalIdentifier);

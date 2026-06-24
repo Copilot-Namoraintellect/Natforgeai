@@ -35,6 +35,7 @@ export interface ContentResonance {
 }
 
 export interface AudienceIntelligenceOutput {
+  noData?: boolean;
   executiveSummary: string;
   discoveredProfiles: DiscoveredProfile[];
   scoredLeads: ScoredLead[];

@@ -32,6 +32,7 @@ import { Link } from "react-router";
 import { useAuth } from "@/hooks/useAuth";
 
 interface AudienceIntelligenceOutput {
+  noData?: boolean;
   executiveSummary?: string;
   discoveredProfiles?: Array<{
     handle?: string;
@@ -116,6 +117,16 @@ export default function AudienceIntelligence() {
   const signals = intelligenceQuery.data?.signals || [];
   const output = (intelligenceQuery.data?.latestRun?.output || {}) as AudienceIntelligenceOutput;
   const warnings = runMutation.data?.ingestionSummary?.warnings || [];
+
+  const hasNoAudienceData =
+    !!selectedCampaignId &&
+    !!intelligenceQuery.data &&
+    profiles.length === 0 &&
+    signals.length === 0 &&
+    scores.length === 0 &&
+    recommendations.length === 0 &&
+    !output.executiveSummary &&
+    !intelligenceQuery.isLoading;
 
   const reachOutLeads = scores.filter((s) => s.recommendedAction === "reach_out");
   const nurtureLeads = scores.filter((s) => s.recommendedAction === "nurture");
@@ -237,8 +248,25 @@ export default function AudienceIntelligence() {
         </Alert>
       )}
 
+      {/* No-data empty state */}
+      {selectedCampaignId && hasNoAudienceData && (
+        <Card className="bg-[#0F172A] border-[#1E293B]">
+          <CardContent className="py-16 flex flex-col items-center text-center">
+            <AlertTriangle className="w-12 h-12 text-amber-500 mb-4" />
+            <h3 className="text-lg font-semibold text-white">No audience data available yet</h3>
+            <p className="text-sm text-gray-400 max-w-md mt-2">
+              Connect Facebook, Instagram, or LinkedIn, or publish a campaign to start collecting
+              real engagement signals.
+            </p>
+            <Button asChild className="mt-4 bg-[#00D4FF] text-[#0F172A] hover:bg-[#00D4FF]/90 font-semibold">
+              <Link to="/integrations">Connect integrations</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Results */}
-      {selectedCampaignId && intelligenceQuery.data && (
+      {selectedCampaignId && intelligenceQuery.data && !hasNoAudienceData && (
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="bg-[#0F172A] border border-[#1E293B]">
             <TabsTrigger value="overview" className="data-[state=active]:bg-[#1E293B]">
