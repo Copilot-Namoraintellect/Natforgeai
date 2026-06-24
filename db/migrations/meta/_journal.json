@@ -57,6 +57,13 @@
       "when": 1781691852016,
       "tag": "0007_curved_nitro",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1782301770674,
+      "tag": "0012_strange_puff_adder",
+      "breakpoints": true
     }
   ]
 }

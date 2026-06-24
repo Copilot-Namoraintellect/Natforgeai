@@ -5,6 +5,8 @@ import { transitionCampaignState, createApprovalRequest } from "./engine";
 import { runCreativeAgent } from "../agents/creative-agent";
 import { runDistributionAgent } from "../agents/distribution-agent";
 import { runAudienceAgent } from "../agents/audience-agent";
+import { runAudienceIntelligenceAgent } from "../agents/audience-intelligence-agent";
+import { getUserTier } from "../subscription";
 import { canRunAutonomousWorkflow } from "../billing/cost-control";
 
 export async function onAgentRunComplete(runId: number) {
@@ -154,6 +156,21 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
   if (request.approvalType === "campaign_launch") {
     if (decision === "approved") {
       await transitionCampaignState(campaignId, userId, "approve_launch");
+
+      // Optional: auto-run audience intelligence after launch approval
+      try {
+        const tier = await getUserTier(userId);
+        const autoCheck = await canRunAutonomousWorkflow(userId, campaignId);
+        if (tier?.audienceAgent && autoCheck.allowed) {
+          await runAudienceIntelligenceAgent({
+            userId,
+            campaignId,
+            autoCreateLeads: false,
+          });
+        }
+      } catch (err: any) {
+        console.error(`[Workflow] Auto audience-intelligence failed for campaign ${campaignId}:`, err.message);
+      }
     } else {
       await transitionCampaignState(campaignId, userId, "reject_launch");
     }

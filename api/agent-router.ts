@@ -1,12 +1,25 @@
 import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { agentRuns, campaigns, businesses } from "@db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import {
+  agentRuns,
+  campaigns,
+  businesses,
+  socialProfiles,
+  campaignInterestSignals,
+  leadScores,
+  outreachRecommendations,
+  leads,
+  leadActivities,
+} from "@db/schema";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { runStrategyAgent } from "./lib/agents/strategy-agent";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { runDistributionAgent } from "./lib/agents/distribution-agent";
 import { runAudienceAgent } from "./lib/agents/audience-agent";
+import { runAudienceIntelligenceAgent } from "./lib/agents/audience-intelligence-agent";
+import { ingestAudienceData } from "./lib/audience/ingest";
+import { getUserTier } from "./lib/subscription";
 import { generateReply } from "./lib/agents/engagement-agent";
 import { generateFollowUpSequence, generateProposal, generateMeetingPrompt } from "./lib/agents/sales-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
@@ -461,6 +474,298 @@ export const agentRouter = createRouter({
     .mutation(async () => {
       // Stub for Phase 5
       return { success: false, message: "Optimisation Agent coming in Phase 5" };
+    }),
+
+  runAudienceIntelligence: aiActionQuery
+    .input(
+      z.object({
+        campaignId: z.number(),
+        ingest: z.boolean().default(true),
+        autoCreateLeads: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+
+      const [campaign] = await db
+        .select()
+        .from(campaigns)
+        .where(
+          and(
+            eq(campaigns.id, input.campaignId),
+            eq(campaigns.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
+      // Tier gate
+      const tier = await getUserTier(ctx.user.id);
+      if (!tier?.audienceAgent) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Audience Intelligence is not available on your plan. Upgrade to unlock it.",
+        });
+      }
+
+      // Deduplication guard
+      const existingRun = await db
+        .select()
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.campaignId, input.campaignId),
+            eq(agentRuns.agentType, "audience"),
+            eq(agentRuns.userId, ctx.user.id),
+            eq(agentRuns.status, "running")
+          )
+        )
+        .orderBy(agentRuns.createdAt)
+        .limit(1);
+
+      if (existingRun.length > 0) {
+        return {
+          success: true,
+          skipped: true,
+          reason: "An audience intelligence run is already in progress.",
+          runId: existingRun[0].id,
+        };
+      }
+
+      // Ingest permissioned data
+      let ingestionSummary: {
+        profilesSynced: number;
+        eventsSynced: number;
+        signalsGenerated: number;
+        warnings: string[];
+      } = { profilesSynced: 0, eventsSynced: 0, signalsGenerated: 0, warnings: [] };
+
+      if (input.ingest) {
+        ingestionSummary = await ingestAudienceData({
+          userId: ctx.user.id,
+          businessId: campaign.businessId,
+          campaignId: input.campaignId,
+        });
+      }
+
+      // Run the agent
+      const result = await runAudienceIntelligenceAgent({
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+        autoCreateLeads: input.autoCreateLeads,
+      });
+
+      return {
+        success: true,
+        runId: result.runId,
+        output: result.output,
+        createdLeadIds: result.createdLeadIds,
+        ingestionSummary,
+      };
+    }),
+
+  getAudienceIntelligence: authedQuery
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+
+      const [campaign] = await db
+        .select()
+        .from(campaigns)
+        .where(
+          and(
+            eq(campaigns.id, input.campaignId),
+            eq(campaigns.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
+      const [latestRun] = await db
+        .select()
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.campaignId, input.campaignId),
+            eq(agentRuns.agentType, "audience"),
+            eq(agentRuns.userId, ctx.user.id)
+          )
+        )
+        .orderBy(desc(agentRuns.createdAt))
+        .limit(1);
+
+      const profiles = await db
+        .select()
+        .from(socialProfiles)
+        .where(
+          and(
+            eq(socialProfiles.userId, ctx.user.id),
+            eq(socialProfiles.campaignId, input.campaignId)
+          )
+        );
+
+      const signals = await db
+        .select()
+        .from(campaignInterestSignals)
+        .where(
+          and(
+            eq(campaignInterestSignals.userId, ctx.user.id),
+            eq(campaignInterestSignals.campaignId, input.campaignId)
+          )
+        )
+        .orderBy(campaignInterestSignals.strength);
+
+      const scores = await db
+        .select()
+        .from(leadScores)
+        .where(
+          and(
+            eq(leadScores.userId, ctx.user.id),
+            eq(leadScores.campaignId, input.campaignId)
+          )
+        )
+        .orderBy(leadScores.score);
+
+      const recommendations = await db
+        .select()
+        .from(outreachRecommendations)
+        .where(
+          and(
+            eq(outreachRecommendations.userId, ctx.user.id),
+            eq(outreachRecommendations.campaignId, input.campaignId)
+          )
+        )
+        .orderBy(outreachRecommendations.priority);
+
+      const createdLeadIds = scores.map((s) => s.leadId).filter(Boolean) as number[];
+      const createdLeads = createdLeadIds.length
+        ? await db
+            .select()
+            .from(leads)
+            .where(
+              and(
+                eq(leads.userId, ctx.user.id),
+                inArray(leads.id, createdLeadIds)
+              )
+            )
+        : [];
+
+      return {
+        campaign,
+        latestRun,
+        profiles,
+        signals,
+        scores,
+        recommendations,
+        createdLeads,
+      };
+    }),
+
+  acceptRecommendation: aiActionQuery
+    .input(z.object({ recommendationId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+
+      const [recommendation] = await db
+        .select()
+        .from(outreachRecommendations)
+        .where(
+          and(
+            eq(outreachRecommendations.id, input.recommendationId),
+            eq(outreachRecommendations.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!recommendation) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Recommendation not found" });
+      }
+
+      if (recommendation.acceptedAt) {
+        return { success: true, leadId: recommendation.leadId };
+      }
+
+      const [score] = await db
+        .select()
+        .from(leadScores)
+        .where(
+          and(
+            eq(leadScores.id, recommendation.leadScoreId),
+            eq(leadScores.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!score) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Lead score not found" });
+      }
+
+      let leadId = recommendation.leadId;
+
+      if (!leadId) {
+        // Check for existing lead by external identifier
+        const existing = await db
+          .select()
+          .from(leads)
+          .where(
+            and(
+              eq(leads.userId, ctx.user.id),
+              eq(leads.campaignId, recommendation.campaignId)
+            )
+          );
+
+        const matched = existing.find(
+          (l) =>
+            (l.customFields as Record<string, unknown> | null)?.externalIdentifier ===
+            score.externalIdentifier
+        );
+
+        if (matched) {
+          leadId = matched.id;
+        } else {
+          const [insertResult] = await db.insert(leads).values({
+            userId: ctx.user.id,
+            businessId: recommendation.businessId,
+            campaignId: recommendation.campaignId,
+            name: score.displayName || score.handle || `Lead from ${score.platform}`,
+            source: score.platform,
+            score: score.score,
+            status: "new",
+            notes: score.explanation,
+            customFields: {
+              externalIdentifier: score.externalIdentifier,
+              handle: score.handle,
+              platform: score.platform,
+              discoveredBy: "audience_intelligence_agent",
+            },
+          });
+          leadId = Number(insertResult.insertId);
+
+          await db.insert(leadActivities).values({
+            leadId,
+            type: "note",
+            description: `Accepted from Audience Intelligence recommendation (score ${score.score}, confidence ${score.confidence}). ${score.explanation}`,
+          });
+        }
+      }
+
+      await db
+        .update(outreachRecommendations)
+        .set({ acceptedAt: new Date(), leadId })
+        .where(eq(outreachRecommendations.id, recommendation.id));
+
+      await db
+        .update(leadScores)
+        .set({ leadId })
+        .where(eq(leadScores.id, score.id));
+
+      return { success: true, leadId };
     }),
 
   getAgentRuns: authedQuery

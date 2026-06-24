@@ -20,6 +20,7 @@ const Banking = lazy(() => import('./pages/Banking'))
 const Onboarding = lazy(() => import('./pages/Onboarding'))
 const ApprovalCentre = lazy(() => import('./pages/ApprovalCentre'))
 const AgentActivity = lazy(() => import('./pages/AgentActivity'))
+const AudienceIntelligence = lazy(() => import('./pages/AudienceIntelligence'))
 const Integrations = lazy(() => import('./pages/Integrations'))
 const AutonomousSettings = lazy(() => import('./pages/AutonomousSettings'))
 const Credits = lazy(() => import('./pages/Credits'))
@@ -45,6 +46,7 @@ export default function App() {
         <Route path="/settings" element={<Suspense fallback={<PageLoader />}><Settings /></Suspense>} />
         <Route path="/approvals" element={<Suspense fallback={<PageLoader />}><ApprovalCentre /></Suspense>} />
         <Route path="/agent-activity" element={<Suspense fallback={<PageLoader />}><AgentActivity /></Suspense>} />
+        <Route path="/audience-intelligence" element={<Suspense fallback={<PageLoader />}><AudienceIntelligence /></Suspense>} />
         <Route path="/integrations" element={<Suspense fallback={<PageLoader />}><Integrations /></Suspense>} />
         <Route path="/autonomous-settings" element={<Suspense fallback={<PageLoader />}><AutonomousSettings /></Suspense>} />
         <Route path="/credits" element={<Suspense fallback={<PageLoader />}><Credits /></Suspense>} />

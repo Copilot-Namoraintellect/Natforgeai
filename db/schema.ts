@@ -10,6 +10,8 @@ import {
   json,
   boolean,
   date,
+  index,
+  uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
 // ─── Users ───
@@ -671,6 +673,210 @@ export const socialIntegrations = mysqlTable("social_integrations", {
 });
 
 export type SocialIntegration = typeof socialIntegrations.$inferSelect;
+
+// ─── Social Profiles (permissioned / owned account audiences) ───
+export const socialProfiles = mysqlTable(
+  "social_profiles",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    platform: mysqlEnum("platform", [
+      "facebook_page",
+      "instagram_account",
+      "linkedin_page",
+      "tiktok_account",
+      "twitter_account",
+    ]).notNull(),
+    externalId: varchar("externalId", { length: 255 }).notNull(),
+    handle: varchar("handle", { length: 255 }),
+    displayName: varchar("displayName", { length: 255 }),
+    url: text("url"),
+    followerCount: int("followerCount").default(0),
+    category: varchar("category", { length: 255 }),
+    location: varchar("location", { length: 255 }),
+    profilePictureUrl: text("profilePictureUrl"),
+    lastSyncedAt: timestamp("lastSyncedAt"),
+    metadata: json("metadata"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    userPlatformExternalIdx: index("user_platform_external_idx").on(
+      table.userId,
+      table.platform,
+      table.externalId
+    ),
+    userCampaignIdx: index("sp_user_campaign_idx").on(table.userId, table.campaignId),
+  })
+);
+
+export type SocialProfile = typeof socialProfiles.$inferSelect;
+
+// ─── Social Engagement Events (official API events only) ───
+export const socialEngagementEvents = mysqlTable(
+  "social_engagement_events",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    platform: mysqlEnum("platform", [
+      "facebook",
+      "instagram",
+      "linkedin",
+      "tiktok",
+      "twitter",
+    ]).notNull(),
+    socialProfileId: bigint("socialProfileId", { mode: "number", unsigned: true }),
+    externalProfileId: varchar("externalProfileId", { length: 255 }).notNull(),
+    externalContentId: varchar("externalContentId", { length: 255 }),
+    dedupHash: varchar("dedupHash", { length: 64 }).notNull(),
+    eventType: mysqlEnum("eventType", [
+      "follow",
+      "like",
+      "comment",
+      "share",
+      "message",
+      "click",
+      "save",
+      "post_interaction",
+    ]).notNull(),
+    actorHandle: varchar("actorHandle", { length: 255 }),
+    actorDisplayName: varchar("actorDisplayName", { length: 255 }),
+    actorExternalId: varchar("actorExternalId", { length: 255 }),
+    messageText: text("messageText"),
+    eventTimestamp: timestamp("eventTimestamp").notNull(),
+    metadata: json("metadata"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    profileEventIdx: index("see_profile_event_idx").on(
+      table.socialProfileId,
+      table.eventTimestamp
+    ),
+    userCampaignIdx: index("see_user_campaign_idx").on(table.userId, table.campaignId),
+    dedupHashIdx: uniqueIndex("see_dedup_hash_idx").on(table.dedupHash),
+  })
+);
+
+export type SocialEngagementEvent = typeof socialEngagementEvents.$inferSelect;
+
+// ─── Campaign Interest Signals (aggregated per campaign / actor) ───
+export const campaignInterestSignals = mysqlTable(
+  "campaign_interest_signals",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
+    socialProfileId: bigint("socialProfileId", { mode: "number", unsigned: true }),
+    externalIdentifier: varchar("externalIdentifier", { length: 255 }).notNull(),
+    signalType: mysqlEnum("signalType", ["engagement", "follow", "message", "click"])
+      .notNull()
+      .default("engagement"),
+    strength: int("strength").default(0).notNull(),
+    sourceEventIds: json("sourceEventIds"),
+    contextSnippet: text("contextSnippet"),
+    detectedAt: timestamp("detectedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    campaignIdentifierIdx: index("cis_campaign_identifier_idx").on(
+      table.campaignId,
+      table.externalIdentifier
+    ),
+    userCampaignIdx: index("cis_user_campaign_idx").on(table.userId, table.campaignId),
+  })
+);
+
+export type CampaignInterestSignal = typeof campaignInterestSignals.$inferSelect;
+
+// ─── Lead Scores (AI + rule-based scoring output) ───
+export const leadScores = mysqlTable(
+  "lead_scores",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
+    leadId: bigint("leadId", { mode: "number", unsigned: true }),
+    socialProfileId: bigint("socialProfileId", { mode: "number", unsigned: true }),
+    externalIdentifier: varchar("externalIdentifier", { length: 255 }).notNull(),
+    platform: varchar("platform", { length: 50 }).notNull(),
+    handle: varchar("handle", { length: 255 }),
+    displayName: varchar("displayName", { length: 255 }),
+    score: int("score").default(0).notNull(),
+    confidence: mysqlEnum("confidence", ["low", "medium", "high"])
+      .default("medium")
+      .notNull(),
+    signalsSummary: json("signalsSummary"),
+    explanation: text("explanation"),
+    recommendedAction: mysqlEnum("recommendedAction", ["reach_out", "nurture", "ignore"])
+      .default("nurture")
+      .notNull(),
+    scoredAt: timestamp("scoredAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    campaignScoreIdx: index("ls_campaign_score_idx").on(table.campaignId, table.score),
+    userCampaignIdx: index("ls_user_campaign_idx").on(table.userId, table.campaignId),
+    externalIdx: index("ls_external_idx").on(
+      table.userId,
+      table.campaignId,
+      table.externalIdentifier
+    ),
+  })
+);
+
+export type LeadScore = typeof leadScores.$inferSelect;
+
+// ─── Outreach Recommendations (AI next-best-action) ───
+export const outreachRecommendations = mysqlTable(
+  "outreach_recommendations",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
+    leadScoreId: bigint("leadScoreId", { mode: "number", unsigned: true }).notNull(),
+    leadId: bigint("leadId", { mode: "number", unsigned: true }),
+    channel: mysqlEnum("channel", [
+      "email",
+      "instagram_dm",
+      "facebook_dm",
+      "linkedin_dm",
+      "whatsapp",
+      "sms",
+    ]).notNull(),
+    angle: text("angle"),
+    personalisedHook: text("personalisedHook"),
+    cta: text("cta"),
+    expectedOutcome: text("expectedOutcome"),
+    priority: int("priority").default(0),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    acceptedAt: timestamp("acceptedAt"),
+    dismissedAt: timestamp("dismissedAt"),
+  },
+  (table) => ({
+    leadScoreIdx: index("or_lead_score_idx").on(table.leadScoreId),
+    userCampaignIdx: index("or_user_campaign_idx").on(table.userId, table.campaignId),
+  })
+);
+
+export type OutreachRecommendation = typeof outreachRecommendations.$inferSelect;
 
 // ─── Conversation Threads ───
 export const conversationThreads = mysqlTable("conversation_threads", {
