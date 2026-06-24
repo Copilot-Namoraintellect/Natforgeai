@@ -102,6 +102,7 @@ type ContentIteration = {
   videoConcept?: any;
   supporting: any[];
   isLegacy?: boolean;
+  items: any[];
 };
 
 function actionKey(contentId: number, action: string): PendingActionKey {
@@ -148,6 +149,40 @@ function isVideoConcept(c: any) {
 
 function isCaptionPackAsset(a: any) {
   return a?.assetType === "caption_pack" || getContentMeta(a).assetType === "caption_pack";
+}
+
+function getImageUrl(c: any): string | undefined {
+  if (!c) return undefined;
+  const meta = getContentMeta(c);
+  return meta?.imageUrl || c?.imageUrl || meta?.url || c?.url;
+}
+
+function isLeafletCandidate(c: any): boolean {
+  if (!c) return false;
+  const meta = getContentMeta(c);
+  if (isCaptionPackAsset(c)) return false;
+  if (meta?.assetType === "leaflet" || meta?.assetKind === "master_campaign_post") return true;
+  if (meta?.imageProvider === "openai-leaflet" || meta?.imageSource === "openai") return true;
+  if (meta?.imageUrl || c?.imageUrl) return true;
+  return false;
+}
+
+function findLeafletCandidate(items: any[]): any | undefined {
+  if (!items?.length) return undefined;
+  // Prefer explicit leaflet markers, then OpenAI sources, then any imageUrl-bearing non-caption record.
+  const candidates = items.filter(isLeafletCandidate);
+  return (
+    candidates.find((c) => {
+      const meta = getContentMeta(c);
+      return meta?.assetType === "leaflet" || meta?.assetKind === "master_campaign_post";
+    }) ||
+    candidates.find((c) => {
+      const meta = getContentMeta(c);
+      return meta?.imageProvider === "openai-leaflet" || meta?.imageSource === "openai";
+    }) ||
+    candidates.find((c) => getImageUrl(c)) ||
+    candidates[0]
+  );
 }
 
 type CampaignSummaryStatus = "ready" | "approved" | "draft" | "failed" | "generating" | "none";
@@ -253,11 +288,11 @@ function computeCampaignIterations(contents: any[], assets: any[]): ContentItera
     );
     const explicitNumber = Math.max(...items.map((i) => getIterationNumber(i) || 0));
     const isLegacy = runId === "legacy-group";
-    const leaflet = items.find(isMasterLeaflet);
+    const leaflet = findLeafletCandidate(items) || items.find(isMasterLeaflet);
     const videoConcept = items.find(isVideoConcept);
     const captionPack = items.find(isCaptionPackAsset);
     const supporting = items.filter(
-      (i) => !isMasterLeaflet(i) && !isVideoConcept(i) && !isCaptionPackAsset(i)
+      (i) => !isMasterLeaflet(i) && !isVideoConcept(i) && !isCaptionPackAsset(i) && i !== leaflet
     );
     const tier: "premium" | "basic" | "standard" =
       (leaflet && getAssetTier(leaflet)) ||
@@ -276,6 +311,7 @@ function computeCampaignIterations(contents: any[], assets: any[]): ContentItera
       videoConcept,
       supporting,
       isLegacy,
+      items,
     } as ContentIteration);
   }
 
@@ -3016,10 +3052,45 @@ Include:
       displayIterations.find((i) => i.id === selectedIterationId) || displayIterations[0];
     const previousIterations = displayIterations.filter((i) => i.id !== selectedIteration?.id);
 
+    const selectedIterationItems = selectedIteration?.items || [];
+    const leafletCandidate = selectedIteration?.leaflet || findLeafletCandidate(selectedIterationItems);
+    const captionPackCandidate = selectedIteration?.captionPack;
+    const leafletImageUrl = getImageUrl(leafletCandidate);
+
+    // eslint-disable-next-line no-console
+    console.debug("[ContentStudio] renderCampaignPack", {
+      selectedIteration: selectedIteration
+        ? { id: selectedIteration.id, iterationNumber: selectedIteration.iterationNumber, runId: selectedIteration.runId }
+        : null,
+      selectedIterationItems: selectedIterationItems.map((i) => ({
+        id: i.id,
+        _recordKind: i._recordKind,
+        assetType: getContentMeta(i).assetType,
+        assetKind: getContentMeta(i).assetKind,
+        imageProvider: getContentMeta(i).imageProvider,
+        imageSource: getContentMeta(i).imageSource,
+        imageUrl: getImageUrl(i),
+      })),
+      leafletCandidate: leafletCandidate
+        ? {
+            id: leafletCandidate.id,
+            imageUrl: getImageUrl(leafletCandidate),
+            assetType: getContentMeta(leafletCandidate).assetType,
+            assetKind: getContentMeta(leafletCandidate).assetKind,
+            imageProvider: getContentMeta(leafletCandidate).imageProvider,
+            imageSource: getContentMeta(leafletCandidate).imageSource,
+          }
+        : null,
+      captionPackCandidate: captionPackCandidate
+        ? { id: captionPackCandidate.id, assetType: getContentMeta(captionPackCandidate).assetType }
+        : null,
+      imageUrl: leafletImageUrl,
+    });
+
     const supportingAssets = selectedIteration?.isLegacy
       ? []
       : (campaignAssets || []).filter(
-          (a) => !isCaptionPackAsset(a) && getGenerationRunId(a) === selectedIteration?.runId
+          (a) => !isCaptionPackAsset(a) && getGenerationRunId(a) === selectedIteration?.runId && a !== leafletCandidate
         );
 
     const tierLabel: Record<string, string> = {
@@ -3198,7 +3269,7 @@ Include:
         {selectedIteration && (
           <div className="space-y-8">
             {/* Marketing Leaflet */}
-            {selectedIteration.leaflet && (
+            {leafletCandidate && (
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
@@ -3206,13 +3277,13 @@ Include:
                     Marketing Leaflet
                   </h3>
                   <div className="flex items-center gap-2">
-                    {statusBadgeFor(selectedIteration.leaflet)}
+                    {statusBadgeFor(leafletCandidate)}
                     <Badge variant="outline" className={iterationBadgeClasses(selectedIteration)}>
                       {iterationLabel(selectedIteration)}
                     </Badge>
                   </div>
                 </div>
-                {renderMasterImageSection(selectedIteration.leaflet, false, false, true)}
+                {renderMasterImageSection(leafletCandidate, false, false, true)}
               </section>
             )}
 

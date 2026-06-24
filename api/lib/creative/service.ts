@@ -581,7 +581,8 @@ export async function generatePremiumLeaflet({
     console.log(`[PremiumLeaflet] Rendering | userId=${userId} | contentPostId=${contentPostId} | provider=${templateRenderer.name} | template=${resolvedProviderTemplateId}`);
 
     // Optional OpenAI copy refinement when stronger brand fit is requested.
-    let headline = formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name;
+    // Prefer a proper headline so the offer pill does not duplicate the headline text.
+    let headline = leafletHeadline || formattedOffer || campaign.primaryOutcome || post?.title || business.name;
     let offer = formattedOffer;
     const subheadline = campaign.mainPainPoint || campaign.coreMessage || post?.hook || "";
     let cta = leafletCta;

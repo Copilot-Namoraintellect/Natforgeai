@@ -33,10 +33,11 @@ export interface HybridComposerContext {
 
 const TARGET_WIDTH = 1080;
 const TARGET_HEIGHT = 1350;
-const SAFE_LEFT = 60;
-const SAFE_RIGHT = 60;
-const LOGO_MAX_W = 260;
-const LOGO_MAX_H = 120;
+const SAFE_LEFT = 70;
+const SAFE_RIGHT = 70;
+const LOGO_MAX_W = 380;
+const LOGO_MAX_H = 170;
+const LOGO_BACKING_PADDING = 18;
 
 function escapeXml(text: string): string {
   return text
@@ -160,10 +161,22 @@ function wrapText(text: string, maxChars: number): string[] {
 
 function headlineFontSize(text: string): number {
   const len = text.length;
-  if (len <= 28) return 68;
-  if (len <= 45) return 60;
-  if (len <= 70) return 52;
-  return 46;
+  if (len <= 24) return 76;
+  if (len <= 40) return 68;
+  if (len <= 60) return 58;
+  if (len <= 80) return 50;
+  return 44;
+}
+
+function normalizeText(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]/g, " ");
+}
+
+function isOfferRedundant(headline: string, offer: string): boolean {
+  if (!headline || !offer) return false;
+  const h = normalizeText(headline);
+  const o = normalizeText(offer);
+  return h.includes(o) || o.includes(h);
 }
 
 function buildOverlaySvg(ctx: HybridComposerContext): string {
@@ -171,53 +184,63 @@ function buildOverlaySvg(ctx: HybridComposerContext): string {
   const H = ctx.height;
   const primary = ctx.brandColors.primary || "#00D4FF";
   const accent = ctx.brandColors.accent || primary;
-  const darkOverlay = isLightColor(ctx.brandColors.background) ? "rgba(10,15,25,0.72)" : "rgba(0,0,0,0.55)";
+  const darkOverlay = isLightColor(ctx.brandColors.background) ? "rgba(10,15,25,0.78)" : "rgba(0,0,0,0.58)";
+  const footerOverlay = isLightColor(ctx.brandColors.background) ? "rgba(10,15,25,0.88)" : "rgba(0,0,0,0.72)";
 
   const headlineSize = headlineFontSize(ctx.headline);
-  const headlineMaxChars = Math.floor((W - SAFE_LEFT - SAFE_RIGHT) / (headlineSize * 0.55));
+  const headlineMaxChars = Math.floor((W - SAFE_LEFT - SAFE_RIGHT) / (headlineSize * 0.52));
   const headlineLines = wrapText(ctx.headline, headlineMaxChars).slice(0, 2);
 
   const subheadlineLines = ctx.subheadline
-    ? wrapText(ctx.subheadline, Math.floor((W - SAFE_LEFT - SAFE_RIGHT) / 26)).slice(0, 2)
+    ? wrapText(ctx.subheadline, Math.floor((W - SAFE_LEFT - SAFE_RIGHT) / 24)).slice(0, 2)
     : [];
 
-  const offerLines = wrapText(ctx.offer || "", Math.floor((W - SAFE_LEFT - SAFE_RIGHT) / 24)).slice(0, 2);
-  const ctaLines = wrapText(ctx.cta || "", Math.floor(420 / 28)).slice(0, 2);
+  const showOffer = ctx.offer && !isOfferRedundant(ctx.headline, ctx.offer);
+  const offerLines = showOffer
+    ? wrapText(ctx.offer, Math.floor((W - SAFE_LEFT - SAFE_RIGHT) / 22)).slice(0, 2)
+    : [];
+  const ctaLines = wrapText(ctx.cta || "", Math.floor(460 / 30)).slice(0, 2);
 
-  let cursorY = H - 110;
+  // Start from the bottom and stack upward for a fixed footer feel.
+  const footerH = 90;
+  let cursorY = H - footerH - 42;
 
-  // Contact strip (bottom-most).
+  // Contact strip sits inside the footer strip (rendered separately).
   const contactParts: string[] = [];
   if (ctx.contact.whatsapp) contactParts.push(`WhatsApp ${ctx.contact.whatsapp}`);
   else if (ctx.contact.phone) contactParts.push(ctx.contact.phone);
   if (ctx.contact.website) contactParts.push(ctx.contact.website);
+  if (ctx.contact.email) contactParts.push(ctx.contact.email);
   if (ctx.contact.location) contactParts.push(ctx.contact.location);
   const contactText = contactParts.join("  ·  ");
 
-  const contactY = cursorY;
-  cursorY -= 60;
-
-  // CTA button.
-  const ctaH = 36 + ctaLines.length * 32;
-  const ctaW = Math.min(520, Math.max(260, estimateWidth(ctx.cta || "") * 34));
+  // CTA button — larger and more prominent.
+  const ctaH = 48 + ctaLines.length * 38;
+  const ctaW = Math.min(W - SAFE_LEFT - SAFE_RIGHT, Math.max(300, estimateWidth(ctx.cta || "") * 38));
   const ctaY = cursorY - ctaH;
-  cursorY = ctaY - 30;
+  cursorY = ctaY - 42;
 
   // Offer pill.
-  const offerH = 34 + offerLines.length * 30;
-  const offerW = Math.min(W - SAFE_LEFT - SAFE_RIGHT, Math.max(220, estimateWidth(ctx.offer || "") * 30));
+  const offerH = showOffer ? 38 + offerLines.length * 32 : 0;
+  const offerW = showOffer
+    ? Math.min(W - SAFE_LEFT - SAFE_RIGHT, Math.max(240, estimateWidth(ctx.offer || "") * 32))
+    : 0;
   const offerY = cursorY - offerH;
-  if (ctx.offer) cursorY = offerY - 26;
+  if (showOffer) cursorY = offerY - 32;
 
   // Subheadline.
-  const subheadlineY = cursorY - subheadlineLines.length * 38;
-  if (subheadlineLines.length) cursorY = subheadlineY - 18;
+  const subheadlineY = cursorY - subheadlineLines.length * 42;
+  if (subheadlineLines.length) cursorY = subheadlineY - 24;
 
   // Headline.
-  const headlineY = cursorY - headlineLines.length * (headlineSize * 1.15);
+  const headlineLineHeight = headlineSize * 1.12;
+  const headlineY = cursorY - headlineLines.length * headlineLineHeight;
+
+  // Footer strip for contact readability.
+  const footerY = H - footerH;
 
   // Top gradient for logo legibility.
-  const topGradient = `
+  const defs = `
     <defs>
       <linearGradient id="topGrad" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="${darkOverlay}" />
@@ -225,16 +248,21 @@ function buildOverlaySvg(ctx: HybridComposerContext): string {
       </linearGradient>
       <linearGradient id="bottomGrad" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="${dropAlpha(darkOverlay)}" />
-        <stop offset="55%" stop-color="${darkOverlay}" />
-        <stop offset="100%" stop-color="${darkOverlay}" />
+        <stop offset="50%" stop-color="${darkOverlay}" />
+        <stop offset="100%" stop-color="${footerOverlay}" />
       </linearGradient>
+      <filter id="ctaShadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="rgba(0,0,0,0.35)" />
+      </filter>
     </defs>
-    <rect x="0" y="0" width="${W}" height="240" fill="url(#topGrad)" />
-    <rect x="0" y="${H - 720}" width="${W}" height="720" fill="url(#bottomGrad)" />
   `;
 
-  function renderLines(lines: string[], x: number, y: number, size: number, weight: string, fill: string): string {
-    const lineHeight = size * 1.18;
+  const topGradient = `<rect x="0" y="0" width="${W}" height="280" fill="url(#topGrad)" />`;
+  const bottomGradient = `<rect x="0" y="${H - 820}" width="${W}" height="820" fill="url(#bottomGrad)" />`;
+  const footerStrip = `<rect x="0" y="${footerY}" width="${W}" height="${footerH}" fill="${footerOverlay}" />`;
+
+  function renderLines(lines: string[], x: number, y: number, size: number, weight: string, fill: string, lineHeightRatio = 1.18): string {
+    const lineHeight = size * lineHeightRatio;
     return lines
       .map((line, idx) => {
         const yy = y + idx * lineHeight;
@@ -243,28 +271,39 @@ function buildOverlaySvg(ctx: HybridComposerContext): string {
       .join("");
   }
 
-  const offerSvg = ctx.offer
+  const offerSvg = showOffer
     ? `
-    <rect x="${SAFE_LEFT}" y="${offerY}" width="${offerW}" height="${offerH}" rx="26" fill="${hexToRgba(accent, 0.92)}" />
-    ${renderLines(offerLines, SAFE_LEFT + 26, offerY + 16, 26, "700", "#ffffff")}
+    <rect x="${SAFE_LEFT}" y="${offerY}" width="${offerW}" height="${offerH}" rx="30" fill="${hexToRgba(accent, 0.94)}" />
+    ${renderLines(offerLines, SAFE_LEFT + 28, offerY + 18, 28, "700", "#ffffff")}
   `
     : "";
 
+  const ctaFill = isLightColor(primary) ? "#0a0a0a" : "#ffffff";
   const ctaSvg = ctx.cta
     ? `
-    <rect x="${SAFE_LEFT}" y="${ctaY}" width="${ctaW}" height="${ctaH}" rx="28" fill="${primary}" stroke="rgba(255,255,255,0.25)" stroke-width="2" />
-    ${renderLines(ctaLines, SAFE_LEFT + 28, ctaY + 14, 28, "700", isLightColor(primary) ? "#0a0a0a" : "#ffffff")}
+    <g filter="url(#ctaShadow)">
+      <rect x="${SAFE_LEFT}" y="${ctaY}" width="${ctaW}" height="${ctaH}" rx="32" fill="${primary}" stroke="rgba(255,255,255,0.35)" stroke-width="2" />
+    </g>
+    ${renderLines(ctaLines, SAFE_LEFT + 34, ctaY + 16, 32, "700", ctaFill)}
+    <text x="${SAFE_LEFT + ctaW - 34}" y="${ctaY + ctaH / 2 + 6}" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="${ctaFill}" text-anchor="end" dominant-baseline="middle">›</text>
   `
     : "";
 
   const contactSvg = contactText
-    ? `<text x="${SAFE_LEFT}" y="${contactY}" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="500" fill="rgba(255,255,255,0.85)" dominant-baseline="hanging">${escapeXml(contactText)}</text>`
+    ? `<text x="${SAFE_LEFT}" y="${footerY + 34}" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="600" fill="rgba(255,255,255,0.95)" dominant-baseline="hanging">${escapeXml(contactText)}</text>`
     : "";
 
+  // Constrain headline so it doesn't run into the logo backing area.
+  const minHeadlineY = 420;
+  const finalHeadlineY = Math.max(headlineY, minHeadlineY);
+
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+    ${defs}
     ${topGradient}
-    ${renderLines(headlineLines, SAFE_LEFT, Math.max(headlineY, 720), headlineSize, "800", "#ffffff")}
-    ${subheadlineLines.length ? renderLines(subheadlineLines, SAFE_LEFT, Math.max(subheadlineY, headlineY + headlineLines.length * headlineSize * 1.2 + 10), 28, "500", "rgba(255,255,255,0.92)") : ""}
+    ${bottomGradient}
+    ${footerStrip}
+    ${renderLines(headlineLines, SAFE_LEFT, finalHeadlineY, headlineSize, "800", "#ffffff", 1.12)}
+    ${subheadlineLines.length ? renderLines(subheadlineLines, SAFE_LEFT, Math.max(subheadlineY, finalHeadlineY + headlineLines.length * headlineLineHeight + 16), 30, "500", "rgba(255,255,255,0.93)", 1.2) : ""}
     ${offerSvg}
     ${ctaSvg}
     ${contactSvg}
@@ -298,6 +337,27 @@ export async function composeHybridLeaflet(
       .ensureAlpha()
       .png()
       .toBuffer();
+
+    const logoMeta = await sharp(logoResized).metadata();
+    const logoW = logoMeta.width || LOGO_MAX_W;
+    const logoH = logoMeta.height || LOGO_MAX_H;
+    const backingW = logoW + LOGO_BACKING_PADDING * 2;
+    const backingH = logoH + LOGO_BACKING_PADDING * 2;
+    const backingX = SAFE_LEFT - LOGO_BACKING_PADDING;
+    const backingY = 50 - LOGO_BACKING_PADDING;
+
+    // Subtle rounded backing behind logo for legibility on busy backgrounds.
+    const logoBackingSvg = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="${backingW}" height="${backingH}">
+        <rect x="0" y="0" width="${backingW}" height="${backingH}" rx="20" fill="rgba(255,255,255,0.92)" />
+      </svg>
+    `;
+    const logoBackingBuffer = await sharp(Buffer.from(logoBackingSvg, "utf-8"))
+      .resize(backingW, backingH)
+      .png()
+      .toBuffer();
+
+    composites.push({ input: logoBackingBuffer, blend: "over", left: backingX, top: backingY });
     composites.push({ input: logoResized, blend: "over", left: SAFE_LEFT, top: 50 });
   }
 
