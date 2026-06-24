@@ -202,6 +202,7 @@ export const subscriptionRouter = createRouter({
       const featureMap: Record<string, boolean> = {
         aiGeneration: tier.aiGeneration ?? false,
         analytics: tier.analytics ?? false,
+        audienceAgent: tier.audienceAgent ?? false,
       };
 
       const allowed = featureMap[input.feature] ?? true;
@@ -232,6 +233,7 @@ export const subscriptionRouter = createRouter({
         maxAutomations: tier?.maxAutomations ?? 0,
         aiGeneration: tier?.aiGeneration ?? false,
         analytics: tier?.analytics ?? false,
+        audienceAgent: tier?.audienceAgent ?? false,
       },
       usage: {
         campaignsCreated: Number(campaignCount?.count ?? 0),

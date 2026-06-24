@@ -19,7 +19,7 @@ import { runDistributionAgent } from "./lib/agents/distribution-agent";
 import { runAudienceAgent } from "./lib/agents/audience-agent";
 import { runAudienceIntelligenceAgent } from "./lib/agents/audience-intelligence-agent";
 import { ingestAudienceData } from "./lib/audience/ingest";
-import { getUserTier } from "./lib/subscription";
+import { checkAudienceAgentAccess } from "./lib/audience/access";
 import { generateReply } from "./lib/agents/engagement-agent";
 import { generateFollowUpSequence, generateProposal, generateMeetingPrompt } from "./lib/agents/sales-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
@@ -502,12 +502,12 @@ export const agentRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
 
-      // Tier gate
-      const tier = await getUserTier(ctx.user.id);
-      if (!tier?.audienceAgent) {
+      // Tier / admin gate
+      const access = await checkAudienceAgentAccess(ctx.user.id, ctx.user.role);
+      if (!access.allowed) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "Audience Intelligence is not available on your plan. Upgrade to unlock it.",
+          message: access.reason || "Audience Intelligence is not available on your plan.",
         });
       }
 
@@ -585,6 +585,22 @@ export const agentRouter = createRouter({
 
       if (!campaign) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
+      // Tier / admin gate: return locked state instead of crashing
+      const access = await checkAudienceAgentAccess(ctx.user.id, ctx.user.role);
+      if (!access.allowed) {
+        return {
+          campaign,
+          latestRun: null,
+          profiles: [],
+          signals: [],
+          scores: [],
+          recommendations: [],
+          createdLeads: [],
+          locked: true,
+          reason: access.reason || "Audience Intelligence is not available on your plan.",
+        };
       }
 
       const [latestRun] = await db

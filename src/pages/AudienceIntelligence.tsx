@@ -26,7 +26,9 @@ import {
   CheckCircle,
   UserPlus,
   ExternalLink,
+  Lock,
 } from "lucide-react";
+import { Link } from "react-router";
 
 interface AudienceIntelligenceOutput {
   executiveSummary?: string;
@@ -53,7 +55,11 @@ export default function AudienceIntelligence() {
   const [activeTab, setActiveTab] = useState("overview");
 
   const campaignsQuery = trpc.campaign.list.useQuery();
+  const usageQuery = trpc.subscription.myUsage.useQuery();
   const utils = trpc.useUtils();
+
+  const isEligible =
+    usageQuery.data?.tier?.audienceAgent || usageQuery.data?.tier?.slug === "admin";
 
   const intelligenceQuery = trpc.agent.getAudienceIntelligence.useQuery(
     { campaignId: Number(selectedCampaignId) },
@@ -149,18 +155,45 @@ export default function AudienceIntelligence() {
           </Select>
           <Button
             onClick={handleRun}
-            disabled={!selectedCampaignId || isRunning}
+            disabled={!selectedCampaignId || isRunning || !isEligible}
             className="bg-[#00D4FF] hover:bg-[#00D4FF]/90 text-[#0F172A] font-semibold"
           >
             {isRunning ? (
               <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+            ) : !isEligible ? (
+              <Lock className="w-4 h-4 mr-2" />
             ) : (
               <Sparkles className="w-4 h-4 mr-2" />
             )}
-            {isRunning ? "Analysing..." : "Discover Leads"}
+            {!isEligible ? "Upgrade required" : isRunning ? "Analysing..." : "Discover Leads"}
           </Button>
         </div>
       </div>
+
+      {/* Locked upgrade card */}
+      {usageQuery.data && !isEligible && (
+        <Card className="bg-gradient-to-r from-[#0F172A] to-[#1E293B] border-[#334155]">
+          <CardContent className="p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <div className="p-3 rounded-xl bg-[#00D4FF]/10">
+                <Lock className="w-6 h-6 text-[#00D4FF]" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-white">Audience Intelligence is locked</h3>
+                <p className="text-sm text-gray-400 mt-1 max-w-lg">
+                  Discover and score leads from your connected social accounts. This feature is
+                  available on the Growth and Enterprise plans.
+                </p>
+              </div>
+            </div>
+            <Link to="/pricing">
+              <Button className="bg-[#00D4FF] hover:bg-[#00D4FF]/90 text-[#0F172A] font-semibold whitespace-nowrap">
+                Upgrade plan
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Empty state */}
       {!selectedCampaignId && (
