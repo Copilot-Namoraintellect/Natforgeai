@@ -11,6 +11,11 @@ export interface AudienceAgentTier {
 
 export type Tier = typeof subscriptionTiers.$inferSelect;
 
+// TEMPORARY (2026-06-23): allow a specific test account to use Audience Intelligence
+// regardless of subscription tier. Remove once testing is complete.
+// Account: mothepane.tshabalala@gmail.com (userId 14)
+const TEMP_AUDIENCE_INTELLIGENCE_USER_IDS = new Set<number>([14]);
+
 export function canUseAudienceAgent(
   tier: AudienceAgentTier | null | undefined,
   userRole: string | undefined | null
@@ -38,6 +43,11 @@ export async function checkAudienceAgentAccess(
   userId: number,
   userRole: string | undefined | null
 ): Promise<AudienceAgentAccessResult> {
+  // Temporary test-account bypass (see TEMP_AUDIENCE_INTELLIGENCE_USER_IDS above).
+  if (TEMP_AUDIENCE_INTELLIGENCE_USER_IDS.has(userId)) {
+    return { allowed: true };
+  }
+
   // Dynamic import keeps this module free of top-level DB dependencies,
   // so the pure eligibility helper can be unit-tested without resolving @db/schema.
   const { getUserTier } = await import("../subscription");

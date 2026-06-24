@@ -29,6 +29,7 @@ import {
   Lock,
 } from "lucide-react";
 import { Link } from "react-router";
+import { useAuth } from "@/hooks/useAuth";
 
 interface AudienceIntelligenceOutput {
   executiveSummary?: string;
@@ -57,9 +58,13 @@ export default function AudienceIntelligence() {
   const campaignsQuery = trpc.campaign.list.useQuery();
   const usageQuery = trpc.subscription.myUsage.useQuery();
   const utils = trpc.useUtils();
+  const { user } = useAuth();
 
+  // TEMPORARY (2026-06-23): allow mothepane.tshabalala@gmail.com (userId 14)
+  // to test Audience Intelligence regardless of tier. Keep in sync with api/lib/audience/access.ts.
+  const isTempAllowed = user?.id === 14;
   const isEligible =
-    usageQuery.data?.tier?.audienceAgent || usageQuery.data?.tier?.slug === "admin";
+    usageQuery.data?.tier?.audienceAgent || usageQuery.data?.tier?.slug === "admin" || isTempAllowed;
 
   const intelligenceQuery = trpc.agent.getAudienceIntelligence.useQuery(
     { campaignId: Number(selectedCampaignId) },
