@@ -175,18 +175,12 @@ export default function Integrations() {
 
     setConnectingPlatform(platform);
     try {
-      const result = await fetch(`/api/trpc/integration.getOAuthUrl?input=${encodeURIComponent(JSON.stringify({ json: { platform } }))}`, {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("auth_token")}`,
-        },
+      const { url } = await utils.integration.getOAuthUrl.fetch({
+        platform: platform as "facebook" | "instagram" | "linkedin" | "tiktok" | "twitter" | "whatsapp" | "email",
       });
 
-      const data = await result.json();
-
-      if (data.result?.data?.url) {
-        window.location.href = data.result.data.url;
-      } else if (data.error) {
-        toast.error(data.error.message || "Failed to get OAuth URL");
+      if (url) {
+        window.location.href = url;
       } else {
         toast.info(`${platformConfig[platform].name} integration requires API credentials. Set environment variables to enable.`);
       }
