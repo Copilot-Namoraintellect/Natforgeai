@@ -4,6 +4,9 @@ import { AppLayout } from './components/layout/AppLayout'
 import Home from './pages/Home'
 import Login from './pages/Login'
 import Pricing from './pages/Pricing'
+import Privacy from './pages/Privacy'
+import Terms from './pages/Terms'
+import DataDeletion from './pages/DataDeletion'
 import NotFound from './pages/NotFound'
 
 const MissionControl = lazy(() => import('./pages/MissionControl'))
@@ -33,6 +36,9 @@ export default function App() {
       <Route path="/" element={<Home />} />
       <Route path="/login" element={<Login />} />
       <Route path="/pricing" element={<Pricing />} />
+      <Route path="/privacy" element={<Privacy />} />
+      <Route path="/terms" element={<Terms />} />
+      <Route path="/data-deletion" element={<DataDeletion />} />
       <Route element={<AppLayout />}>
         <Route path="/dashboard" element={<Suspense fallback={<PageLoader />}><Navigate to="/mission-control" replace /></Suspense>} />
         <Route path="/mission-control" element={<Suspense fallback={<PageLoader />}><MissionControl /></Suspense>} />
