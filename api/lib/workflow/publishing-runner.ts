@@ -146,29 +146,46 @@ export async function publishSinglePost(queueItemId: number) {
       : [null];
 
     // Get platform integration
-    const [integration] = await db
-      .select()
-      .from(socialIntegrations)
-      .where(
-        and(
-          eq(socialIntegrations.userId, post.userId),
-          eq(socialIntegrations.platform, post.platform as any),
-          eq(socialIntegrations.status, "connected")
-        )
-      )
-      .limit(1);
+    let integration: typeof socialIntegrations.$inferSelect | undefined;
 
-    let publishResult: { success: boolean; postId?: string; url?: string; error?: string } = {
-      success: false,
-      error: "No integration connected",
-    };
+    if (post.integrationId) {
+      const [byId] = await db
+        .select()
+        .from(socialIntegrations)
+        .where(
+          and(
+            eq(socialIntegrations.id, post.integrationId),
+            eq(socialIntegrations.userId, post.userId)
+          )
+        )
+        .limit(1);
+      integration = byId;
+    }
 
     if (!integration) {
+      const [byPlatform] = await db
+        .select()
+        .from(socialIntegrations)
+        .where(
+          and(
+            eq(socialIntegrations.userId, post.userId),
+            eq(socialIntegrations.platform, post.platform as any),
+            eq(socialIntegrations.status, "connected")
+          )
+        )
+        .limit(1);
+      integration = byPlatform;
+    }
+
+    let publishResult: { success: boolean; postId?: string; url?: string; error?: string } = { success: false };
+
+    if (!integration) {
+      const error = `Admin setup required: no connected ${post.platform} account. Connect the platform in Settings > Integrations first.`;
       await db
         .update(publishingQueue)
         .set({
           status: "failed",
-          lastError: `Admin setup required: no connected ${post.platform} account. Connect the platform in Settings > Integrations first.`,
+          lastError: error,
           retryCount: (post.retryCount || 0) + 1,
           nextRetryAt: null,
         })
@@ -177,7 +194,7 @@ export async function publishSinglePost(queueItemId: number) {
         id: post.id,
         status: "failed",
         platform: post.platform,
-        error: `Admin setup required: no connected ${post.platform} account. Connect the platform in Settings > Integrations first.`,
+        error,
       };
     }
 
@@ -212,6 +229,18 @@ export async function publishSinglePost(queueItemId: number) {
       };
 
       const accessToken = decryptToken(integration.accessTokenEncrypted || "");
+
+      console.log("[Publishing Runner] Publishing", {
+        queueItemId: post.id,
+        campaignId: post.campaignId,
+        platform: post.platform,
+        integrationId: integration.id,
+        loadedIntegrationFound: true,
+        loadedIntegrationPlatform: integration.platform,
+        loadedIntegrationStatus: integration.status,
+        pageId: post.platform === "facebook" ? (integration.pageId || integration.accountName || "me") : undefined,
+        hasPageAccessToken: post.platform === "facebook" ? !!integration.pageAccessTokenEncrypted : undefined,
+      });
 
       switch (post.platform) {
         case "facebook": {

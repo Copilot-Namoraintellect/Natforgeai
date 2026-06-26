@@ -491,6 +491,7 @@ export const contentRouter = createRouter({
           userId: ctx.user.id,
           campaignId: input.campaignId,
           contentPostId: post.id,
+          integrationId: integration.id,
           platform,
           status: "approved",
           approvalRequired: false,

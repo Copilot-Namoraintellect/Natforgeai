@@ -619,6 +619,7 @@ export const publishingQueue = mysqlTable("publishing_queue", {
   userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
   campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
   contentPostId: bigint("contentPostId", { mode: "number", unsigned: true }),
+  integrationId: bigint("integrationId", { mode: "number", unsigned: true }),
   platform: varchar("platform", { length: 50 }).notNull(),
   scheduledAt: timestamp("scheduledAt"),
   status: mysqlEnum("status", [
