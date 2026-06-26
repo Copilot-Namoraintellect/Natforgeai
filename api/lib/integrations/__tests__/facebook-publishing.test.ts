@@ -4,6 +4,7 @@ import {
   isFacebookPublishingReady,
   selectFacebookPage,
   getFacebookPages,
+  fetchFacebookPages,
 } from "../platforms";
 
 describe("Facebook publishing", () => {
@@ -131,6 +132,54 @@ describe("Facebook publishing", () => {
       const pages = [{ id: "1", name: "Page One", access_token: "token1" }];
       const selected = selectFacebookPage(pages, "99");
       expect(selected?.name).toBe("Page One");
+    });
+  });
+
+  describe("fetchFacebookPages", () => {
+    it("returns ok, status, and pages on success", async () => {
+      const mockFetch = vi.mocked(fetch);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            { id: "1", name: "Page One", access_token: "token1", category: "Business" },
+          ],
+        }),
+      } as Response);
+
+      const result = await fetchFacebookPages("user-token");
+      expect(result.ok).toBe(true);
+      expect(result.status).toBe(200);
+      expect(result.pages).toHaveLength(1);
+      expect(result.error).toBeUndefined();
+    });
+
+    it("returns error details when Graph API returns an error", async () => {
+      const mockFetch = vi.mocked(fetch);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ error: { message: "Invalid token", type: "OAuthException" } }),
+      } as Response);
+
+      const result = await fetchFacebookPages("bad-token");
+      expect(result.ok).toBe(false);
+      expect(result.pages).toHaveLength(0);
+      expect(result.error).toContain("Invalid token");
+    });
+
+    it("returns HTTP status on non-ok response", async () => {
+      const mockFetch = vi.mocked(fetch);
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({}),
+      } as Response);
+
+      const result = await fetchFacebookPages("bad-token");
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(400);
     });
   });
 

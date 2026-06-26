@@ -14,7 +14,7 @@ import {
 import {
   platformConfigs,
   getMetaOAuthScopes,
-  getFacebookPages,
+  fetchFacebookPages,
   selectFacebookPage,
   getFacebookGrantedPermissions,
   getInstagramAccounts,
@@ -171,6 +171,11 @@ export const integrationRouter = createRouter({
       })
     )
     .mutation(async ({ input }) => {
+      console.log("[Integration OAuth Callback] Mutation hit", {
+        hasCode: !!input.code,
+        hasState: !!input.state,
+      });
+
       const pending = await getOAuthState(input.state);
       if (!pending) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid OAuth state" });
@@ -186,6 +191,11 @@ export const integrationRouter = createRouter({
         });
       }
 
+      console.log("[Integration OAuth Callback] Platform resolved", {
+        platform: pending.platform,
+        userId: pending.userId,
+      });
+
       const tokens = await exchangeCodeForToken(config, input.code);
 
       // Fetch account info
@@ -196,20 +206,61 @@ export const integrationRouter = createRouter({
 
       try {
         if (pending.platform === "facebook") {
-          const pages = await getFacebookPages(tokens.accessToken);
-          const selectedPage = selectFacebookPage(pages);
-          accountName = selectedPage?.name || "Facebook Page";
-          pageId = selectedPage?.id;
-          pageAccessToken = selectedPage?.access_token;
           const granted = await getFacebookGrantedPermissions(tokens.accessToken);
           permissions = granted.length > 0 ? granted : config.scopes;
+          console.log("[Integration OAuth Callback] Granted permissions", {
+            platform: pending.platform,
+            count: permissions.length,
+            permissions,
+          });
+
+          const pagesResult = await fetchFacebookPages(tokens.accessToken);
+          console.log("[Integration OAuth Callback] /me/accounts result", {
+            ok: pagesResult.ok,
+            status: pagesResult.status,
+            count: pagesResult.pages.length,
+            error: pagesResult.error,
+          });
+
+          if (!pagesResult.ok) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: `Facebook Page lookup failed: ${pagesResult.error}`,
+            });
+          }
+
+          if (pagesResult.pages.length === 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "No Facebook Pages found for this account. Ensure you manage at least one Page and that pages_show_list is granted.",
+            });
+          }
+
+          const selectedPage = selectFacebookPage(pagesResult.pages);
+          console.log("[Integration OAuth Callback] Selected Page", {
+            name: selectedPage?.name,
+            id: selectedPage?.id,
+            hasAccessToken: !!selectedPage?.access_token,
+          });
+
+          if (!selectedPage?.access_token) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Selected Facebook Page has no access token.",
+            });
+          }
+
+          accountName = selectedPage.name;
+          pageId = selectedPage.id;
+          pageAccessToken = selectedPage.access_token;
         } else if (pending.platform === "instagram") {
-          const pages = await getFacebookPages(tokens.accessToken);
-          const igAccount = pages[0]
-            ? await getInstagramAccounts(tokens.accessToken, pages[0].id)
+          const pagesResult = await fetchFacebookPages(tokens.accessToken);
+          const igAccount = pagesResult.pages[0]
+            ? await getInstagramAccounts(tokens.accessToken, pagesResult.pages[0].id)
             : null;
           accountName = igAccount
-            ? `Instagram (${pages[0]?.name})`
+            ? `Instagram (${pagesResult.pages[0]?.name})`
             : "Instagram Business";
         } else if (pending.platform === "linkedin") {
           const profile = await getLinkedInProfile(tokens.accessToken);
@@ -222,6 +273,11 @@ export const integrationRouter = createRouter({
         }
       } catch (err: any) {
         console.error("[Integration] Failed to fetch account info:", err.message);
+        if (err instanceof TRPCError) throw err;
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Account info lookup failed: ${err.message}`,
+        });
       }
 
       const db = getDb();
@@ -414,8 +470,11 @@ export const integrationRouter = createRouter({
       try {
         if (input.platform === "facebook") {
           const accessToken = decryptToken(integration.accessTokenEncrypted || "");
-          const pages = await getFacebookPages(accessToken);
-          return { success: true, pages: pages.length };
+          const pagesResult = await fetchFacebookPages(accessToken);
+          if (!pagesResult.ok) {
+            throw new Error(pagesResult.error || `HTTP ${pagesResult.status}`);
+          }
+          return { success: true, pages: pagesResult.pages.length };
         } else if (input.platform === "linkedin") {
           const accessToken = decryptToken(integration.accessTokenEncrypted || "");
           const profile = await getLinkedInProfile(accessToken);

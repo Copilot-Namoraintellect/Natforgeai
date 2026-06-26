@@ -396,11 +396,29 @@ export interface FacebookPage {
 
 // Platform-specific account info fetching
 export async function getFacebookPages(accessToken: string): Promise<FacebookPage[]> {
+  const result = await fetchFacebookPages(accessToken);
+  return result.pages;
+}
+
+export async function fetchFacebookPages(accessToken: string): Promise<{
+  ok: boolean;
+  status: number;
+  pages: FacebookPage[];
+  error?: string;
+}> {
   const response = await fetch(
     `https://graph.facebook.com/v18.0/me/accounts?fields=id,name,access_token,category&access_token=${accessToken}`
   );
   const data = await response.json() as any;
-  return data.data || [];
+  if (!response.ok || data.error) {
+    return {
+      ok: false,
+      status: response.status,
+      pages: [],
+      error: data?.error?.message || `HTTP ${response.status}`,
+    };
+  }
+  return { ok: true, status: response.status, pages: data.data || [] };
 }
 
 export function selectFacebookPage(

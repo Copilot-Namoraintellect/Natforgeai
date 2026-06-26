@@ -12,7 +12,6 @@ import { connectRedis, isRedisConfigured } from "./lib/redis";
 import { startPublishingWorker } from "./lib/queue/publishing-worker";
 import {
   platformConfigs,
-  getFacebookPages,
   selectFacebookPage,
   getFacebookGrantedPermissions,
   getInstagramAccounts,
@@ -51,11 +50,16 @@ startCreditRenewalScheduler();
 
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 
-// OAuth callback endpoint - handles redirects from social platforms
-app.get("/api/oauth/callback", async (c) => {
+async function handleOAuthCallback(c: any) {
   const code = c.req.query("code");
   const state = c.req.query("state");
   const error = c.req.query("error");
+
+  console.log("[OAuth Callback] Route hit", {
+    hasCode: !!code,
+    hasState: !!state,
+    error,
+  });
 
   if (error) {
     const errorDescription = c.req.query("error_description") || error;
@@ -78,6 +82,11 @@ app.get("/api/oauth/callback", async (c) => {
     return c.redirect(`/integrations?error=unsupported_platform_${pending.platform}`);
   }
 
+  console.log("[OAuth Callback] Platform resolved", {
+    platform: pending.platform,
+    userId: pending.userId,
+  });
+
   try {
     const tokens = await exchangeCodeForToken(config, code);
 
@@ -89,15 +98,75 @@ app.get("/api/oauth/callback", async (c) => {
 
     try {
       if (pending.platform === "facebook") {
-        const pages = await getFacebookPages(tokens.accessToken);
-        const selectedPage = selectFacebookPage(pages);
-        accountName = selectedPage?.name || "Facebook Page";
-        pageId = selectedPage?.id;
-        pageAccessToken = selectedPage?.access_token;
         const granted = await getFacebookGrantedPermissions(tokens.accessToken);
         permissions = granted.length > 0 ? granted : config.scopes;
+        console.log("[OAuth Callback] Granted permissions", {
+          count: permissions.length,
+          permissions,
+        });
+
+        const accountsUrl =
+          `https://graph.facebook.com/v18.0/me/accounts?fields=id,name,access_token,category&access_token=${tokens.accessToken}`;
+        console.log("[OAuth Callback] Fetching /me/accounts", {
+          url: accountsUrl.replace(tokens.accessToken, "[REDACTED]"),
+        });
+
+        const response = await fetch(accountsUrl);
+        console.log("[OAuth Callback] /me/accounts HTTP status", {
+          status: response.status,
+        });
+
+        const data = await response.json() as any;
+
+        if (!response.ok || data.error) {
+          const errorMessage = data?.error?.message || `HTTP ${response.status}`;
+          console.error("[OAuth Callback] /me/accounts failed", {
+            error: errorMessage,
+            body: data,
+          });
+          return c.redirect(
+            `/integrations?error=${encodeURIComponent(`Facebook Page lookup failed: ${errorMessage}`)}`
+          );
+        }
+
+        const pages = data.data || [];
+        console.log("[OAuth Callback] /me/accounts Pages returned", {
+          count: pages.length,
+        });
+
+        if (pages.length === 0) {
+          console.error("[OAuth Callback] No Facebook Pages returned");
+          return c.redirect(
+            `/integrations?error=${encodeURIComponent(
+              "No Facebook Pages found for this account. Ensure you manage at least one Page and that pages_show_list is granted."
+            )}`
+          );
+        }
+
+        const selectedPage = selectFacebookPage(pages);
+        console.log("[OAuth Callback] Selected Page", {
+          name: selectedPage?.name,
+          id: selectedPage?.id,
+          hasAccessToken: !!selectedPage?.access_token,
+        });
+
+        if (!selectedPage?.access_token) {
+          return c.redirect(
+            `/integrations?error=${encodeURIComponent(
+              "Selected Facebook Page has no access token. Try reconnecting or selecting a different Page."
+            )}`
+          );
+        }
+
+        accountName = selectedPage.name;
+        pageId = selectedPage.id;
+        pageAccessToken = selectedPage.access_token;
       } else if (pending.platform === "instagram") {
-        const pages = await getFacebookPages(tokens.accessToken);
+        const accountsUrl =
+          `https://graph.facebook.com/v18.0/me/accounts?fields=id,name,access_token,category&access_token=${tokens.accessToken}`;
+        const response = await fetch(accountsUrl);
+        const data = await response.json() as any;
+        const pages = data.data || [];
         const igAccount = pages[0]
           ? await getInstagramAccounts(tokens.accessToken, pages[0].id)
           : null;
@@ -115,6 +184,9 @@ app.get("/api/oauth/callback", async (c) => {
       }
     } catch (err: any) {
       console.error("[OAuth Callback] Failed to fetch account info:", err.message);
+      return c.redirect(
+        `/integrations?error=${encodeURIComponent(`Account info lookup failed: ${err.message}`)}`
+      );
     }
 
     const db = getDb();
@@ -162,12 +234,26 @@ app.get("/api/oauth/callback", async (c) => {
       });
     }
 
+    console.log("[OAuth Callback] Integration saved", {
+      platform: pending.platform,
+      userId: pending.userId,
+      accountName,
+      pageId,
+      hasPageToken: !!pageAccessToken,
+    });
+
     return c.redirect(`/integrations?success=${pending.platform}`);
   } catch (err: any) {
     console.error("[OAuth Callback] Error:", err.message);
     return c.redirect(`/integrations?error=${encodeURIComponent(err.message)}`);
   }
-});
+}
+
+// OAuth callback endpoint - handles redirects from social platforms
+app.get("/api/oauth/callback", handleOAuthCallback);
+
+// Alias for legacy Meta redirect URI configuration
+app.get("/api/oauth/meta/callback", handleOAuthCallback);
 
 // Webhook endpoints for inbound social platform messages
 // For now: verify signatures where possible and log payloads safely
