@@ -648,7 +648,8 @@ npm run reset:superadmin     # Reset superadmin password
 | `OWNER_UNION_ID` | Firebase UID that gets auto-promoted to admin |
 | `META_APP_ID` | Meta OAuth app ID (Facebook + Instagram) |
 | `META_APP_SECRET` | Meta OAuth app secret |
-| `META_REDIRECT_URI` | Meta OAuth callback URI (default `https://natforgeai.com/api/oauth/meta/callback`) |
+| `META_REDIRECT_URI` | Meta OAuth callback URI (default `https://natforgeai.com/api/oauth/callback`) |
+| `META_OAUTH_SCOPES` | Comma-separated Meta OAuth scopes (default `public_profile,email,pages_show_list,pages_manage_posts`) |
 | `LINKEDIN_CLIENT_ID` | LinkedIn OAuth client ID |
 | `LINKEDIN_CLIENT_SECRET` | LinkedIn OAuth client secret |
 | `LINKEDIN_REDIRECT_URI` | LinkedIn OAuth callback URI (default `https://natforgeai.com/api/oauth/linkedin/callback`) |

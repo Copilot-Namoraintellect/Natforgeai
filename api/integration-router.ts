@@ -13,10 +13,14 @@ import {
 } from "./lib/integrations/oauth";
 import {
   platformConfigs,
+  getMetaOAuthScopes,
   getFacebookPages,
+  selectFacebookPage,
+  getFacebookGrantedPermissions,
   getInstagramAccounts,
   getLinkedInProfile,
   getTwitterProfile,
+  isFacebookPublishingReady,
 } from "./lib/integrations/platforms";
 import { setOAuthState, getOAuthState, deleteOAuthState } from "./lib/integrations/oauth-state";
 import { encryptToken, decryptToken } from "./lib/crypto";
@@ -39,16 +43,28 @@ export const integrationRouter = createRouter({
 
   getConnectedPlatforms: authedQuery.query(async ({ ctx }) => {
     const db = getDb();
-    return db
+    const rows = await db
       .select({
         id: socialIntegrations.id,
         provider: socialIntegrations.platform,
         providerAccountName: socialIntegrations.accountName,
         status: socialIntegrations.status,
+        permissions: socialIntegrations.permissions,
+        pageId: socialIntegrations.pageId,
+        pageAccessTokenEncrypted: socialIntegrations.pageAccessTokenEncrypted,
         createdAt: socialIntegrations.createdAt,
       })
       .from(socialIntegrations)
       .where(eq(socialIntegrations.userId, ctx.user.id));
+
+    return rows.map((row) => ({
+      ...row,
+      ready:
+        row.status === "connected" &&
+        (row.provider === "facebook"
+          ? isFacebookPublishingReady(row)
+          : ["instagram", "linkedin", "twitter", "tiktok", "email"].includes(row.provider)),
+    }));
   }),
 
   initiateConnection: authedQuery
@@ -66,13 +82,12 @@ export const integrationRouter = createRouter({
         const state = generateOAuthState();
         await setOAuthState(state, { userId: ctx.user.id, platform: input.provider });
 
+        const scopes = getMetaOAuthScopes();
         const authUrl =
           `https://www.facebook.com/v18.0/dialog/oauth?` +
           `client_id=${encodeURIComponent(env.metaAppId)}` +
           `&redirect_uri=${encodeURIComponent(env.metaRedirectUri)}` +
-          `&scope=${encodeURIComponent(
-            "pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish"
-          )}` +
+          `&scope=${encodeURIComponent(scopes.join(","))}` +
           `&state=${encodeURIComponent(state)}`;
 
         return { success: true as const, authUrl };
@@ -175,13 +190,19 @@ export const integrationRouter = createRouter({
 
       // Fetch account info
       let accountName: string | undefined;
+      let pageId: string | undefined;
+      let pageAccessToken: string | undefined;
       let permissions: string[] = config.scopes;
 
       try {
         if (pending.platform === "facebook") {
           const pages = await getFacebookPages(tokens.accessToken);
-          accountName = pages[0]?.name || "Facebook Page";
-          permissions = ["pages_manage_posts", "pages_read_engagement"];
+          const selectedPage = selectFacebookPage(pages);
+          accountName = selectedPage?.name || "Facebook Page";
+          pageId = selectedPage?.id;
+          pageAccessToken = selectedPage?.access_token;
+          const granted = await getFacebookGrantedPermissions(tokens.accessToken);
+          permissions = granted.length > 0 ? granted : config.scopes;
         } else if (pending.platform === "instagram") {
           const pages = await getFacebookPages(tokens.accessToken);
           const igAccount = pages[0]
@@ -190,7 +211,6 @@ export const integrationRouter = createRouter({
           accountName = igAccount
             ? `Instagram (${pages[0]?.name})`
             : "Instagram Business";
-          permissions = ["instagram_content_publish"];
         } else if (pending.platform === "linkedin") {
           const profile = await getLinkedInProfile(tokens.accessToken);
           accountName = `${profile.localizedFirstName || ""} ${profile.localizedLastName || ""}`.trim() || "LinkedIn Profile";
@@ -224,6 +244,10 @@ export const integrationRouter = createRouter({
           .set({
             accessTokenEncrypted: encryptToken(tokens.accessToken),
             refreshTokenEncrypted: tokens.refreshToken ? encryptToken(tokens.refreshToken) : null,
+            pageId: pageId || existing.pageId || null,
+            pageAccessTokenEncrypted: pageAccessToken
+              ? encryptToken(pageAccessToken)
+              : existing.pageAccessTokenEncrypted || null,
             accountName: accountName || null,
             permissions: permissions as any,
             status: "connected",
@@ -237,6 +261,8 @@ export const integrationRouter = createRouter({
           accountName: accountName || null,
           accessTokenEncrypted: encryptToken(tokens.accessToken),
           refreshTokenEncrypted: tokens.refreshToken ? encryptToken(tokens.refreshToken) : null,
+          pageId: pageId || null,
+          pageAccessTokenEncrypted: pageAccessToken ? encryptToken(pageAccessToken) : null,
           permissions: permissions as any,
           status: "connected",
           lastSyncAt: new Date(),

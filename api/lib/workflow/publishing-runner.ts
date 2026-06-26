@@ -213,13 +213,14 @@ export async function publishSinglePost(queueItemId: number) {
       const accessToken = decryptToken(integration.accessTokenEncrypted || "");
 
       switch (post.platform) {
-        case "facebook":
-          publishResult = await publishToFacebook(
-            accessToken,
-            integration.accountName || "me",
-            payload
-          );
+        case "facebook": {
+          const pageToken = integration.pageAccessTokenEncrypted
+            ? decryptToken(integration.pageAccessTokenEncrypted)
+            : accessToken;
+          const pageId = integration.pageId || integration.accountName || "me";
+          publishResult = await publishToFacebook(pageToken, pageId, payload);
           break;
+        }
         case "instagram":
           publishResult = await publishToInstagram(
             accessToken,

@@ -39,7 +39,9 @@ export const env = {
   metaAppId: process.env.META_APP_ID ?? "",
   metaAppSecret: process.env.META_APP_SECRET ?? "",
   metaRedirectUri:
-    process.env.META_REDIRECT_URI ?? "https://natforgeai.com/api/oauth/meta/callback",
+    process.env.META_REDIRECT_URI ?? "https://natforgeai.com/api/oauth/callback",
+  metaOAuthScopes:
+    process.env.META_OAUTH_SCOPES ?? "public_profile,email,pages_show_list,pages_manage_posts",
   linkedinClientId: process.env.LINKEDIN_CLIENT_ID ?? "",
   linkedinClientSecret: process.env.LINKEDIN_CLIENT_SECRET ?? "",
   linkedinRedirectUri:

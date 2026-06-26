@@ -5,18 +5,29 @@ import { createTransport } from "nodemailer";
 // Platform OAuth configurations
 // NOTE: Client IDs and secrets should be set via environment variables
 
+export function getMetaOAuthScopes(): string[] {
+  if (process.env.META_OAUTH_SCOPES) {
+    return process.env.META_OAUTH_SCOPES.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  return ["public_profile", "email", "pages_show_list", "pages_manage_posts"];
+}
+
+const metaScopes = getMetaOAuthScopes();
+
 export const platformConfigs: Record<string, OAuthConfig> = {
   facebook: {
     authorizeUrl: "https://www.facebook.com/v18.0/dialog/oauth",
     tokenUrl: "https://graph.facebook.com/v18.0/oauth/access_token",
-    scopes: ["pages_manage_posts", "pages_read_engagement", "pages_messaging"],
+    scopes: metaScopes,
     clientId: env.metaAppId || process.env.FACEBOOK_APP_ID || "",
     clientSecret: env.metaAppSecret || process.env.FACEBOOK_APP_SECRET || "",
   },
   instagram: {
     authorizeUrl: "https://www.facebook.com/v18.0/dialog/oauth",
     tokenUrl: "https://graph.facebook.com/v18.0/oauth/access_token",
-    scopes: ["instagram_basic", "instagram_content_publish", "instagram_manage_messages"],
+    scopes: metaScopes.includes("instagram_basic")
+      ? metaScopes
+      : [...metaScopes, "instagram_basic"],
     clientId: env.metaAppId || process.env.FACEBOOK_APP_ID || "",
     clientSecret: env.metaAppSecret || process.env.FACEBOOK_APP_SECRET || "",
   },
@@ -376,13 +387,56 @@ export async function sendEmail(
   }
 }
 
+export interface FacebookPage {
+  id: string;
+  name: string;
+  access_token: string;
+  category?: string;
+}
+
 // Platform-specific account info fetching
-export async function getFacebookPages(accessToken: string) {
+export async function getFacebookPages(accessToken: string): Promise<FacebookPage[]> {
   const response = await fetch(
-    `https://graph.facebook.com/v18.0/me/accounts?access_token=${accessToken}`
+    `https://graph.facebook.com/v18.0/me/accounts?fields=id,name,access_token,category&access_token=${accessToken}`
   );
   const data = await response.json() as any;
   return data.data || [];
+}
+
+export function selectFacebookPage(
+  pages: FacebookPage[],
+  preferredPageId?: string
+): FacebookPage | undefined {
+  if (preferredPageId) {
+    return pages.find((p) => p.id === preferredPageId) || pages[0];
+  }
+  return pages[0];
+}
+
+export function isFacebookPublishingReady(integration: {
+  status: string;
+  permissions: unknown;
+  pageId?: string | null;
+  pageAccessTokenEncrypted?: string | null;
+}): boolean {
+  if (integration.status !== "connected") return false;
+  const perms = Array.isArray(integration.permissions) ? integration.permissions : [];
+  return perms.includes("pages_manage_posts");
+}
+
+export async function getFacebookGrantedPermissions(accessToken: string): Promise<string[]> {
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v18.0/me/permissions?access_token=${accessToken}`
+    );
+    const data = await response.json() as any;
+    if (!data.data) return [];
+    return data.data
+      .filter((p: any) => p.status === "granted")
+      .map((p: any) => p.permission);
+  } catch {
+    return [];
+  }
 }
 
 export async function getInstagramAccounts(accessToken: string, pageId: string) {

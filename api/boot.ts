@@ -10,7 +10,15 @@ import { startCreditRenewalScheduler } from "./lib/jobs/credit-renewal";
 import { getOAuthState, deleteOAuthState } from "./lib/integrations/oauth-state";
 import { connectRedis, isRedisConfigured } from "./lib/redis";
 import { startPublishingWorker } from "./lib/queue/publishing-worker";
-import { platformConfigs, getFacebookPages, getInstagramAccounts, getLinkedInProfile, getTwitterProfile } from "./lib/integrations/platforms";
+import {
+  platformConfigs,
+  getFacebookPages,
+  selectFacebookPage,
+  getFacebookGrantedPermissions,
+  getInstagramAccounts,
+  getLinkedInProfile,
+  getTwitterProfile,
+} from "./lib/integrations/platforms";
 import { exchangeCodeForToken } from "./lib/integrations/oauth";
 import { getDb } from "./queries/connection";
 import { socialIntegrations, videoRenderJobs } from "@db/schema";
@@ -75,13 +83,19 @@ app.get("/api/oauth/callback", async (c) => {
 
     // Fetch account info
     let accountName: string | undefined;
+    let pageId: string | undefined;
+    let pageAccessToken: string | undefined;
     let permissions: string[] = config.scopes;
 
     try {
       if (pending.platform === "facebook") {
         const pages = await getFacebookPages(tokens.accessToken);
-        accountName = pages[0]?.name || "Facebook Page";
-        permissions = ["pages_manage_posts", "pages_read_engagement"];
+        const selectedPage = selectFacebookPage(pages);
+        accountName = selectedPage?.name || "Facebook Page";
+        pageId = selectedPage?.id;
+        pageAccessToken = selectedPage?.access_token;
+        const granted = await getFacebookGrantedPermissions(tokens.accessToken);
+        permissions = granted.length > 0 ? granted : config.scopes;
       } else if (pending.platform === "instagram") {
         const pages = await getFacebookPages(tokens.accessToken);
         const igAccount = pages[0]
@@ -90,7 +104,6 @@ app.get("/api/oauth/callback", async (c) => {
         accountName = igAccount
           ? `Instagram (${pages[0]?.name})`
           : "Instagram Business";
-        permissions = ["instagram_content_publish"];
       } else if (pending.platform === "linkedin") {
         const profile = await getLinkedInProfile(tokens.accessToken);
         accountName = `${profile.localizedFirstName || ""} ${profile.localizedLastName || ""}`.trim() || "LinkedIn Profile";
@@ -124,6 +137,10 @@ app.get("/api/oauth/callback", async (c) => {
         .set({
           accessTokenEncrypted: encryptToken(tokens.accessToken),
           refreshTokenEncrypted: tokens.refreshToken ? encryptToken(tokens.refreshToken) : null,
+          pageId: pageId || existing.pageId || null,
+          pageAccessTokenEncrypted: pageAccessToken
+            ? encryptToken(pageAccessToken)
+            : existing.pageAccessTokenEncrypted || null,
           accountName: accountName || null,
           permissions: permissions as any,
           status: "connected",
@@ -137,6 +154,8 @@ app.get("/api/oauth/callback", async (c) => {
         accountName: accountName || null,
         accessTokenEncrypted: encryptToken(tokens.accessToken),
         refreshTokenEncrypted: tokens.refreshToken ? encryptToken(tokens.refreshToken) : null,
+        pageId: pageId || null,
+        pageAccessTokenEncrypted: pageAccessToken ? encryptToken(pageAccessToken) : null,
         permissions: permissions as any,
         status: "connected",
         lastSyncAt: new Date(),

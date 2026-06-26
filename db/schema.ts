@@ -664,6 +664,8 @@ export const socialIntegrations = mysqlTable("social_integrations", {
   accountName: varchar("accountName", { length: 255 }),
   accessTokenEncrypted: text("accessTokenEncrypted"),
   refreshTokenEncrypted: text("refreshTokenEncrypted"),
+  pageId: varchar("pageId", { length: 255 }),
+  pageAccessTokenEncrypted: text("pageAccessTokenEncrypted"),
   permissions: json("permissions"),
   status: mysqlEnum("status", ["connected", "expired", "disconnected"])
     .default("disconnected")

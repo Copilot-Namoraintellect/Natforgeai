@@ -1,6 +1,6 @@
 import { env } from "../env";
 
-export const redirectUri = `${env.isProduction ? "https://natforgeai.com" : "http://localhost:3000"}/api/oauth/callback`;
+export const redirectUri = env.metaRedirectUri;
 
 export interface OAuthConfig {
   authorizeUrl: string;

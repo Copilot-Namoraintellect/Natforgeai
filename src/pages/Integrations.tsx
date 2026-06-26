@@ -111,9 +111,15 @@ export default function Integrations() {
         platform: i.provider,
         accountName: i.providerAccountName,
         status: i.status,
+        ready: i.ready,
         createdAt: i.createdAt,
       })) ?? [],
     [connectedPlatforms]
+  );
+
+  const hasPublishingReadyPlatform = useMemo(
+    () => integrations.some((i) => i.status === "connected" && i.ready),
+    [integrations]
   );
 
   const platformStatus = useMemo(
@@ -237,17 +243,19 @@ export default function Integrations() {
       </Card>
 
       {/* Setup notice */}
-      <Card className="bg-amber-500/5 border-amber-500/20">
-        <CardContent className="p-4 flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
-          <div>
-            <p className="text-sm text-amber-700 font-medium">Publishing Setup Required</p>
-            <p className="text-xs text-amber-600/80 mt-1">
-              Social platform publishing is not yet connected. You can continue creating campaigns and generating content. Platform connections will be available once your workspace is configured.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      {!hasPublishingReadyPlatform && (
+        <Card className="bg-amber-500/5 border-amber-500/20">
+          <CardContent className="p-4 flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm text-amber-700 font-medium">Publishing Setup Required</p>
+              <p className="text-xs text-amber-600/80 mt-1">
+                Social platform publishing is not yet connected. You can continue creating campaigns and generating content. Platform connections will be available once your workspace is configured.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Admin-only technical checklist */}
       {isAdmin && (

@@ -5,8 +5,11 @@ import { publishingQueue, contentPosts, socialIntegrations } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { publishDuePosts, publishSinglePost } from "./lib/workflow/publishing-runner";
+import { isFacebookPublishingReady } from "./lib/integrations/platforms";
 import { schedulePublishingJob, isBullMQAvailable } from "./lib/queue/bullmq";
 import { env } from "./lib/env";
+import { publishToFacebook } from "./lib/integrations/platforms";
+import { decryptToken } from "./lib/crypto";
 
 export const publishingRouter = createRouter({
   createPublishingQueue: authedQuery
@@ -241,16 +244,26 @@ export const publishingRouter = createRouter({
         )
         .limit(1);
 
+      const connected = !!integration;
+      const publishingReady = connected
+        ? input.platform === "facebook"
+          ? isFacebookPublishingReady(integration)
+          : true
+        : false;
+      const ready = adminConfigured && publishingReady;
+
       return {
         platform: input.platform,
         adminConfigured,
-        connected: !!integration,
+        connected,
         accountName: integration?.accountName || null,
-        ready: adminConfigured && !!integration,
+        ready,
         message: !adminConfigured
           ? `Admin setup required: ${input.platform} OAuth credentials are not configured.`
-          : !integration
+          : !connected
           ? `Connect your ${input.platform} account in Settings > Integrations before publishing.`
+          : !publishingReady
+          ? `Your ${input.platform} account is connected but missing publishing permissions. Reconnect to grant pages_manage_posts.`
           : "Ready to publish.",
       };
     }),
@@ -259,6 +272,71 @@ export const publishingRouter = createRouter({
     const results = await publishDuePosts();
     return { success: true, results };
   }),
+
+  publishSmokeTest: authedQuery
+    .input(
+      z.object({
+        platform: z.enum(["facebook"]).default("facebook"),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.platform !== "facebook") {
+        throw new TRPCError({ code: "NOT_IMPLEMENTED", message: "Smoke test only supports Facebook Pages" });
+      }
+
+      const db = getDb();
+      const [integration] = await db
+        .select()
+        .from(socialIntegrations)
+        .where(
+          and(
+            eq(socialIntegrations.userId, ctx.user.id),
+            eq(socialIntegrations.platform, "facebook"),
+            eq(socialIntegrations.status, "connected")
+          )
+        )
+        .limit(1);
+
+      if (!integration) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "No connected Facebook Page found. Connect a Page first.",
+        });
+      }
+
+      if (!isFacebookPublishingReady(integration)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Facebook integration is not publishing-ready. Reconnect to grant pages_manage_posts.",
+        });
+      }
+
+      if (!integration.pageAccessTokenEncrypted || !integration.pageId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Selected Page token or Page ID is missing. Reconnect your Facebook Page.",
+        });
+      }
+
+      const pageToken = decryptToken(integration.pageAccessTokenEncrypted);
+      const result = await publishToFacebook(pageToken, integration.pageId, {
+        text: `NatForgeAI smoke test: connection is healthy. Timestamp: ${new Date().toISOString()}`,
+      });
+
+      if (!result.success) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Smoke test failed: ${result.error || "Unknown error"}`,
+        });
+      }
+
+      return {
+        success: true,
+        postId: result.postId,
+        url: result.url,
+        pageName: integration.accountName,
+      };
+    }),
 
   getPublishingQueue: authedQuery
     .input(
