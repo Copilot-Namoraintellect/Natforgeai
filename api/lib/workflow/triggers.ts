@@ -8,6 +8,7 @@ import { runAudienceAgent } from "../agents/audience-agent";
 import { runAudienceIntelligenceAgent } from "../agents/audience-intelligence-agent";
 import { checkAudienceAgentAccess } from "../audience/access";
 import { canRunAutonomousWorkflow } from "../billing/cost-control";
+import { ingestAudienceData } from "../audience/ingest";
 
 export async function onAgentRunComplete(runId: number) {
   const db = getDb();
@@ -244,6 +245,38 @@ export async function onStrategyApproved(campaignId: number, userId: number) {
 
   // Transition to strategy_approved
   await transitionCampaignState(campaignId, userId, "approve_strategy");
+
+  // Run Audience Intelligence after strategy approval to refine audience segments
+  // before content generation. This is credit-safe: if no permissioned source data
+  // exists, the agent returns early without calling the LLM.
+  try {
+    const access = await checkAudienceAgentAccess(userId, null);
+    if (access.allowed) {
+      const existingAiRun = await db
+        .select()
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.campaignId, campaignId),
+            eq(agentRuns.agentType, "audience"),
+            eq(agentRuns.userId, userId)
+          )
+        )
+        .orderBy(agentRuns.createdAt)
+        .limit(1);
+
+      if (existingAiRun.length > 0 && ["running", "completed"].includes(existingAiRun[0].status)) {
+        console.log(`[Workflow] Skipping duplicate audience-intelligence run for campaign ${campaignId}.`);
+      } else {
+        console.log(`[Workflow] Running audience-intelligence for campaign ${campaignId} before creative generation.`);
+        await ingestAudienceData({ userId, businessId: campaign.businessId, campaignId });
+        await runAudienceIntelligenceAgent({ userId, campaignId, autoCreateLeads: false });
+      }
+    }
+  } catch (err: any) {
+    console.error(`[Workflow] Audience-intelligence pre-creative failed for campaign ${campaignId}:`, err.message);
+    // Continue to creative generation even if audience intelligence fails
+  }
 
   // Transition to creatives_generating before running the creative agent
   await transitionCampaignState(campaignId, userId, "generate_creatives");

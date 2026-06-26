@@ -11,6 +11,7 @@ export function strategyAgentPrompt(input: {
   strategyText?: string;
   website?: string;
   websiteEvidence?: unknown;
+  audienceIntelligenceSummaries?: string[];
   campaignBrief?: {
     name?: string;
     goal?: string;
@@ -72,6 +73,15 @@ CAMPAIGN BRIEF — USE THESE DETAILS EXACTLY. DO NOT IGNORE THEM:
 `
     : "";
 
+  const aiSummaries = input.audienceIntelligenceSummaries;
+  const audienceIntelligenceSection =
+    aiSummaries && aiSummaries.length > 0
+      ? `
+AUDIENCE INTELLIGENCE INSIGHTS FROM PREVIOUS CAMPAIGNS — USE THESE TO REFINE PERSONAS, MESSAGING, AND PLATFORM FOCUS:
+${aiSummaries.map((summary, idx) => `--- Insight ${idx + 1} ---\n${summary}`).join("\n\n")}
+`
+      : "";
+
   return `You are a senior marketing strategist. ${hasStrategy ? "Review and enhance the provided marketing strategy" : "Create a comprehensive marketing strategy"} for the following business.
 
 BUSINESS PROFILE:
@@ -87,6 +97,7 @@ BUSINESS PROFILE:
 - Website: ${input.website || "Not specified"}
 ${evidenceSection}
 ${briefSection}
+${audienceIntelligenceSection}
 
 ${hasStrategy ? `EXISTING STRATEGY:\n${input.strategyText}\n\nEnhance this strategy with additional insights.` : "Create a complete marketing strategy from scratch."}
 

@@ -13,6 +13,7 @@ import { checkContentSafety } from "../safety/checker";
 import { deductCredits } from "../billing/credit-engine";
 import { createAlert } from "../alerts";
 import { rateLimitUser } from "../rate-limiter";
+import { ingestAudienceData } from "../audience/ingest";
 
 const RETRY_DELAYS_MS = [60_000, 300_000, 900_000]; // 1min, 5min, 15min
 
@@ -283,6 +284,12 @@ export async function publishSinglePost(queueItemId: number) {
           })
           .where(eq(contentPosts.id, post.contentPostId));
       }
+
+      // Refresh permissioned audience data after a successful publish so that
+      // engagement and performance signals can feed back into Audience Intelligence.
+      ingestAudienceData({ userId: post.userId, businessId: null, campaignId: post.campaignId }).catch((err: any) => {
+        console.error(`[Publishing Runner] Post-publish audience ingestion failed for campaign ${post.campaignId}:`, err.message);
+      });
     } else {
       // Retry logic
       const retryCount = (post.retryCount || 0) + 1;

@@ -3,7 +3,7 @@ import { runAgent } from "./runner";
 import { strategyAgentPrompt } from "./prompts";
 import { getDb } from "../../queries/connection";
 import { campaigns } from "@db/schema";
-import { eq } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 
 function parseBudgetNumber(value: unknown): number {
   if (typeof value === "number") return value;
@@ -116,6 +116,39 @@ export async function runStrategyAgent({
     contentStyle?: string;
   };
 }) {
+  const db = getDb();
+
+  // Load audience intelligence summaries from previous campaigns for the same business/user
+  const [currentCampaign] = await db
+    .select({ businessId: campaigns.businessId })
+    .from(campaigns)
+    .where(and(eq(campaigns.userId, userId), eq(campaigns.id, campaignId)))
+    .limit(1);
+
+  const previousCampaigns = currentCampaign?.businessId
+    ? await db
+        .select({ id: campaigns.id, workflowContext: campaigns.workflowContext })
+        .from(campaigns)
+        .where(
+          and(
+            eq(campaigns.userId, userId),
+            eq(campaigns.businessId, currentCampaign.businessId)
+          )
+        )
+        .orderBy(desc(campaigns.createdAt))
+        .limit(10)
+    : [];
+
+  const audienceIntelligenceSummaries = previousCampaigns
+    .filter((c) => c.id !== campaignId)
+    .map((c) => {
+      const ctx = (c.workflowContext || {}) as Record<string, unknown>;
+      const summary = ctx?.audienceIntelligenceSummary as Record<string, unknown> | undefined;
+      return summary?.executiveSummary ? String(summary.executiveSummary) : null;
+    })
+    .filter((s): s is string => !!s)
+    .slice(0, 3);
+
   const prompt = strategyAgentPrompt({
     businessName: business.name,
     industry: business.industry ?? undefined,
@@ -130,6 +163,7 @@ export async function runStrategyAgent({
     websiteEvidence: business.websiteEvidence,
     strategyText,
     campaignBrief,
+    audienceIntelligenceSummaries,
   });
 
   const result = await runAgent({
@@ -143,7 +177,6 @@ export async function runStrategyAgent({
   });
 
   // Save strategy output to campaign
-  const db = getDb();
   await db
     .update(campaigns)
     .set({

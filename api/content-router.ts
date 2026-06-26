@@ -1,11 +1,14 @@
 import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { contentPosts, campaigns, campaignAssets } from "@db/schema";
+import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations } from "@db/schema";
 import { eq, and, desc, count } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { env } from "./lib/env";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
+import { publishSinglePost } from "./lib/workflow/publishing-runner";
+import { isFacebookPublishingReady } from "./lib/integrations/platforms";
 
 export const contentRouter = createRouter({
   list: authedQuery
@@ -307,6 +310,16 @@ export const contentRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
 
+      const [campaign] = await db
+        .select()
+        .from(campaigns)
+        .where(and(eq(campaigns.userId, ctx.user.id), eq(campaigns.id, input.campaignId)))
+        .limit(1);
+
+      if (!campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
       const posts = await db
         .select()
         .from(contentPosts)
@@ -324,7 +337,10 @@ export const contentRouter = createRouter({
         return meta.approved === true || p.status === "published";
       });
       if (approvedSocial.length === 0 && socialPosts.length > 0) {
-        throw new Error("At least one social post must be approved before publishing the campaign pack.");
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "At least one social post must be approved before publishing the campaign pack.",
+        });
       }
 
       // Guard: platform-specific captions or caption pack must exist
@@ -349,7 +365,10 @@ export const contentRouter = createRouter({
           )
         );
       if (adaptations.length === 0 && captionPacks.length === 0) {
-        throw new Error("Platform captions are missing. Generate content first.");
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Platform captions are missing. Generate content first.",
+        });
       }
 
       // Guard: if video exists, it must be ready with a videoUrl — but only when video features are enabled
@@ -358,13 +377,22 @@ export const contentRouter = createRouter({
         for (const video of videos) {
           const meta = (video.metadata || {}) as any;
           if (meta.videoStatus === "concept" || meta.videoStatus === "rendering") {
-            throw new Error("This campaign contains a video concept only. Render the video before publishing.");
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "This campaign contains a video concept only. Render the video before publishing.",
+            });
           }
           if (meta.videoStatus === "ready" && !meta.videoUrl) {
-            throw new Error("This campaign contains a video concept only. Render the video before publishing.");
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "This campaign contains a video concept only. Render the video before publishing.",
+            });
           }
           if (meta.videoStatus === "failed") {
-            throw new Error("Video rendering failed. Retry rendering or remove the video before publishing.");
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Video rendering failed. Retry rendering or remove the video before publishing.",
+            });
           }
         }
       }
@@ -386,6 +414,150 @@ export const contentRouter = createRouter({
         }
       }
 
-      return { success: true, approvedCount: posts.filter((p) => p.status !== "published" && p.status !== "archived").length };
+      // Determine target platforms from campaign settings
+      const campaignPlatforms = (campaign.platforms || "")
+        .split(/[,;]+/)
+        .map((p) => p.trim().toLowerCase())
+        .filter(Boolean);
+
+      // Load connected integrations
+      const integrations = await db
+        .select()
+        .from(socialIntegrations)
+        .where(and(eq(socialIntegrations.userId, ctx.user.id), eq(socialIntegrations.status, "connected")));
+
+      const connectedPlatforms = new Set(integrations.map((i) => i.platform));
+      const autoPublishPlatforms = ["facebook", "instagram", "linkedin", "twitter", "tiktok", "email"];
+      const publishablePlatforms = campaignPlatforms.filter(
+        (p) => autoPublishPlatforms.includes(p) && connectedPlatforms.has(p as any)
+      );
+
+      console.log("[PublishCampaignPack] Starting publish", {
+        campaignId: input.campaignId,
+        userId: ctx.user.id,
+        platforms: campaignPlatforms,
+        publishablePlatforms,
+        integrationIds: integrations.map((i) => ({ platform: i.platform, id: i.id })),
+      });
+
+      // Refresh approved social posts after updates
+      const publishablePosts = posts.filter((p) => {
+        if (p.type !== "social_post") return false;
+        const meta = (p.metadata || {}) as any;
+        return meta.approved === true || p.status === "published";
+      });
+
+      const results: Array<{
+        platform: string;
+        queueItemId: number;
+        status: string;
+        postId?: string;
+        error?: string;
+      }> = [];
+
+      for (const platform of publishablePlatforms) {
+        const integration = integrations.find((i) => i.platform === platform);
+        if (!integration) continue;
+
+        // Facebook readiness check
+        if (platform === "facebook" && !isFacebookPublishingReady(integration)) {
+          console.log("[PublishCampaignPack] Facebook integration not publishing-ready", {
+            campaignId: input.campaignId,
+            integrationId: integration.id,
+          });
+          results.push({
+            platform,
+            queueItemId: 0,
+            status: "skipped",
+            error: "Facebook integration is not publishing-ready. Reconnect to grant pages_manage_posts.",
+          });
+          continue;
+        }
+
+        // Find best content post for this platform
+        let post = publishablePosts.find((p) => p.platform?.toLowerCase() === platform);
+        if (!post) post = publishablePosts[0];
+
+        if (!post) {
+          console.log("[PublishCampaignPack] No approved social post for platform", {
+            campaignId: input.campaignId,
+            platform,
+          });
+          continue;
+        }
+
+        // Create publishing queue item
+        const [queueResult] = await db.insert(publishingQueue).values({
+          userId: ctx.user.id,
+          campaignId: input.campaignId,
+          contentPostId: post.id,
+          platform,
+          status: "approved",
+          approvalRequired: false,
+          scheduledAt: null,
+        });
+        const queueItemId = Number(queueResult.insertId);
+
+        console.log("[PublishCampaignPack] Created queue item", {
+          campaignId: input.campaignId,
+          platform,
+          contentPostId: post.id,
+          queueItemId,
+          integrationId: integration.id,
+          pageId: platform === "facebook" ? integration.pageId : undefined,
+        });
+
+        // Attempt immediate publish
+        const publishResult = await publishSinglePost(queueItemId);
+
+        console.log("[PublishCampaignPack] Publish attempt completed", {
+          campaignId: input.campaignId,
+          platform,
+          queueItemId,
+          integrationId: integration.id,
+          pageId: platform === "facebook" ? integration.pageId : undefined,
+          status: publishResult.status,
+          success: publishResult.status === "published",
+          error: publishResult.error,
+          postId: publishResult.postId,
+        });
+
+        results.push({
+          platform,
+          queueItemId,
+          status: publishResult.status,
+          postId: publishResult.postId,
+          error: publishResult.error,
+        });
+      }
+
+      // Update campaign state based on publish results
+      const anyPublished = results.some((r) => r.status === "published");
+      const allPublished = results.length > 0 && results.every((r) => r.status === "published");
+
+      console.log("[PublishCampaignPack] Campaign state update", {
+        campaignId: input.campaignId,
+        anyPublished,
+        allPublished,
+        resultCount: results.length,
+      });
+
+      await db
+        .update(campaigns)
+        .set({
+          status: anyPublished ? "active" : campaign.status,
+          workflowState: allPublished ? "campaign_live" : "launch_approval_required",
+          updatedAt: new Date(),
+        })
+        .where(eq(campaigns.id, input.campaignId));
+
+      return {
+        success: true,
+        approvedCount: posts.filter((p) => p.status !== "published" && p.status !== "archived").length,
+        publishedCount: results.filter((r) => r.status === "published").length,
+        failedCount: results.filter((r) => r.status === "failed").length,
+        skippedCount: results.filter((r) => r.status === "skipped").length,
+        results,
+      };
     }),
 });

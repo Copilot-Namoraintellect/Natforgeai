@@ -602,6 +602,11 @@ export default function ContentStudio() {
 
   const { data: connectedPlatforms } = trpc.integration.getConnectedPlatforms.useQuery();
   const { data: platformConfigStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
+  const { data: publishingQueueItems, refetch: refetchPublishingQueue } =
+    trpc.publishing.getPublishingQueue.useQuery(
+      { campaignId: numericCampaignId },
+      { enabled: hasCampaignId, refetchInterval: 5000 }
+    );
 
   // Fetch agent runs so we can detect failed regenerations and avoid showing "completed" creative rows with no content
   const { data: creativeAgentRuns } = trpc.agent.getAgentRuns.useQuery(
@@ -907,6 +912,28 @@ Include:
     return !!metadata.approved;
   }
 
+  function getContentPublishStatus(contentId: number): { status: string; platform?: string; error?: string } | null {
+    const items = publishingQueueItems?.filter((item) => item.contentPostId === contentId);
+    if (!items || items.length === 0) return null;
+    // Return the most recent item
+    const latest = items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    return {
+      status: latest.status,
+      platform: latest.platform,
+      error: latest.lastError || undefined,
+    };
+  }
+
+  function getCampaignPublishStatus(): "idle" | "pending" | "in_progress" | "published" | "failed" {
+    const items = publishingQueueItems;
+    if (!items || items.length === 0) return "idle";
+    if (items.some((i) => i.status === "failed")) return "failed";
+    if (items.some((i) => ["approved", "retrying"].includes(i.status))) return "in_progress";
+    if (items.some((i) => i.status === "pending_approval")) return "pending";
+    if (items.every((i) => i.status === "published")) return "published";
+    return "idle";
+  }
+
   function isPending(contentId: number, action: string) {
     return pendingActions.has(actionKey(contentId, action));
   }
@@ -1143,10 +1170,23 @@ Include:
   const publishCampaignPackMutation = trpc.content.publishCampaignPack.useMutation({
     onSuccess: (data) => {
       utils.content.list.invalidate();
-      toast.success(`Campaign pack published. ${data.approvedCount} items approved.`);
+      refetchPublishingQueue();
+      const published = data.publishedCount || 0;
+      const failed = data.failedCount || 0;
+      const skipped = data.skippedCount || 0;
+      if (failed === 0 && skipped === 0) {
+        toast.success(`Campaign pack published. ${published} platform(s) published.`);
+      } else if (published > 0) {
+        toast.success(`${published} platform(s) published. ${failed} failed, ${skipped} skipped.`);
+      } else if (skipped > 0) {
+        toast.warning(`Publishing skipped: ${skipped} platform(s) not ready.`);
+      } else {
+        toast.error("Publishing failed. Check platform connections and try again.");
+      }
       setPublishDialogOpen(false);
     },
     onError: (err) => {
+      refetchPublishingQueue();
       toast.error(err.message || "Failed to publish campaign pack");
     },
   });
@@ -2679,6 +2719,43 @@ Include:
                   Approved
                 </Badge>
               )}
+              {(() => {
+                const publishStatus = getContentPublishStatus(content.id);
+                if (!publishStatus) return null;
+                if (publishStatus.status === "published") {
+                  return (
+                    <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      Published
+                    </Badge>
+                  );
+                }
+                if (publishStatus.status === "failed") {
+                  return (
+                    <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 flex items-center gap-1" title={publishStatus.error}>
+                      <AlertCircle className="w-3 h-3" />
+                      Publishing failed
+                    </Badge>
+                  );
+                }
+                if (["approved", "retrying"].includes(publishStatus.status)) {
+                  return (
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Publishing in progress
+                    </Badge>
+                  );
+                }
+                if (publishStatus.status === "pending_approval") {
+                  return (
+                    <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      Publishing pending
+                    </Badge>
+                  );
+                }
+                return null;
+              })()}
               {isFailedAttempt(content) && (
                 <Badge variant="outline" className="text-[10px] h-6 border-red-200 text-red-700 bg-red-50">
                   <AlertCircle className="w-3 h-3 mr-1" />
@@ -2945,9 +3022,9 @@ Include:
   }
 
   function handlePublishPack() {
-    const unapproved = filtered?.filter((c) => !getApprovalState(c) && c.status !== "published") || [];
-    if (unapproved.length === 0) {
-      toast.info("All items are already approved or published.");
+    const publishable = filtered?.filter((c) => c.status !== "published" && c.status !== "archived") || [];
+    if (publishable.length === 0) {
+      toast.info("All items are already published or archived.");
       return;
     }
 
@@ -3119,7 +3196,7 @@ Include:
     const premiumConfigured = videoConfig?.premiumConfigured ?? false;
     const videoEnabled = (ENABLE_PREMIUM_VIDEO && premiumConfigured) || (ENABLE_BASIC_DRAFT_VIDEO && basicConfigured);
     const allApproved = filtered.every((c) => getApprovalState(c));
-    const anyDraft = filtered.some((c) => c.status === "draft");
+    const canPublish = filtered.some((c) => c.status !== "published" && c.status !== "archived");
 
     const currentIterations = campaignIterations.filter(
       (i) => !i.isLegacy && (i.leaflet || i.captionPack || i.videoConcept)
@@ -3237,6 +3314,42 @@ Include:
                     {filtered.filter((c) => !getApprovalState(c)).length} pending approval
                   </Badge>
                 )}
+                {(() => {
+                  const publishStatus = getCampaignPublishStatus();
+                  if (publishStatus === "published") {
+                    return (
+                      <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                        <CheckCircle2 className="w-3 h-3 mr-1" />
+                        Published
+                      </Badge>
+                    );
+                  }
+                  if (publishStatus === "in_progress") {
+                    return (
+                      <Badge className="bg-blue-50 text-blue-700 border-blue-200">
+                        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                        Publishing in progress
+                      </Badge>
+                    );
+                  }
+                  if (publishStatus === "pending") {
+                    return (
+                      <Badge variant="outline" className="text-amber-600 border-amber-200 bg-amber-50">
+                        <Clock className="w-3 h-3 mr-1" />
+                        Publishing pending
+                      </Badge>
+                    );
+                  }
+                  if (publishStatus === "failed") {
+                    return (
+                      <Badge variant="outline" className="text-red-700 border-red-200 bg-red-50">
+                        <AlertCircle className="w-3 h-3 mr-1" />
+                        Publishing failed
+                      </Badge>
+                    );
+                  }
+                  return null;
+                })()}
                 <Button
                   size="sm"
                   variant="outline"
@@ -3261,7 +3374,7 @@ Include:
                 <Button
                   size="sm"
                   className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
-                  disabled={!anyDraft}
+                  disabled={!canPublish}
                   onClick={handlePublishPack}
                 >
                   <Upload className="w-3.5 h-3.5 mr-1.5" />
@@ -3516,9 +3629,9 @@ Include:
         <Dialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
           <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Publish Campaign Pack</DialogTitle>
+              <DialogTitle>Confirm Publish to Connected Channels</DialogTitle>
               <DialogDescription>
-                Review platform connections before publishing.
+                This will immediately post the approved campaign content to each connected platform below. This action cannot be undone.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-2">
@@ -3600,11 +3713,25 @@ Include:
                 );
               })()}
               <div className="flex gap-2 pt-2">
-                <Button variant="outline" className="flex-1" onClick={() => setPublishDialogOpen(false)}>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => setPublishDialogOpen(false)}
+                  disabled={publishCampaignPackMutation.isPending}
+                >
                   Cancel
                 </Button>
-                <Button className="flex-1 bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white" onClick={executePublishPack}>
-                  Approve All & Publish
+                <Button
+                  className="flex-1 bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
+                  onClick={executePublishPack}
+                  disabled={publishCampaignPackMutation.isPending}
+                >
+                  {publishCampaignPackMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Upload className="w-4 h-4 mr-2" />
+                  )}
+                  {publishCampaignPackMutation.isPending ? "Publishing..." : "Confirm Publish"}
                 </Button>
               </div>
             </div>
