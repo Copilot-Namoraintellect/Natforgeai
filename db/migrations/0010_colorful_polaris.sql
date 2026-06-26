@@ -1,0 +1,1 @@
+ALTER TABLE `publishing_queue` ADD `integrationId` bigint unsigned;
