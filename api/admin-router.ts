@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createRouter, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
+import { aggregateIntegrationStatuses } from "./lib/admin/integration-status";
 import {
   users,
   subscriptions,
@@ -418,13 +419,7 @@ export const adminRouter = createRouter({
       .select({ platform: socialIntegrations.platform, status: socialIntegrations.status })
       .from(socialIntegrations);
 
-    const integrations: Record<string, Record<string, number>> = {};
-    for (const row of integrationRows) {
-      const platform = row.platform || "unknown";
-      const status = row.status || "unknown";
-      integrations[platform] = integrations[platform] || {};
-      integrations[platform][status] = (integrations[platform][status] || 0) + 1;
-    }
+    const integrations = aggregateIntegrationStatuses(integrationRows);
 
     // Publishing queue status counts
     const queueRows = await db

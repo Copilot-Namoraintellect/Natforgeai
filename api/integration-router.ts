@@ -15,14 +15,12 @@ import {
   platformConfigs,
   getMetaOAuthScopes,
   fetchFacebookPages,
-  selectFacebookPage,
-  getFacebookGrantedPermissions,
-  getInstagramAccounts,
   getLinkedInProfile,
   getTwitterProfile,
   isFacebookPublishingReady,
   isInstagramPublishingReady,
 } from "./lib/integrations/platforms";
+import { processMetaOAuthConnection } from "./lib/integrations/oauth-callback";
 import { setOAuthState, getOAuthState, deleteOAuthState } from "./lib/integrations/oauth-state";
 import { encryptToken, decryptToken } from "./lib/crypto";
 
@@ -201,135 +199,22 @@ export const integrationRouter = createRouter({
       });
 
       const tokens = await exchangeCodeForToken(config, input.code);
-
-      // Fetch account info
-      let accountName: string | undefined;
-      let pageId: string | undefined;
-      let pageAccessToken: string | undefined;
-      let permissions: string[] = config.scopes;
-
-      try {
-        if (pending.platform === "facebook") {
-          const granted = await getFacebookGrantedPermissions(tokens.accessToken);
-          permissions = granted.length > 0 ? granted : config.scopes;
-          console.log("[Integration OAuth Callback] Granted permissions", {
-            platform: pending.platform,
-            count: permissions.length,
-            permissions,
-          });
-
-          const pagesResult = await fetchFacebookPages(tokens.accessToken);
-          console.log("[Integration OAuth Callback] /me/accounts result", {
-            ok: pagesResult.ok,
-            status: pagesResult.status,
-            count: pagesResult.pages.length,
-            error: pagesResult.error,
-          });
-
-          if (!pagesResult.ok) {
-            throw new TRPCError({
-              code: "INTERNAL_SERVER_ERROR",
-              message: `Facebook Page lookup failed: ${pagesResult.error}`,
-            });
-          }
-
-          if (pagesResult.pages.length === 0) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message:
-                "No Facebook Pages found for this account. Ensure you manage at least one Page and that pages_show_list is granted.",
-            });
-          }
-
-          const selectedPage = selectFacebookPage(pagesResult.pages);
-          console.log("[Integration OAuth Callback] Selected Page", {
-            name: selectedPage?.name,
-            id: selectedPage?.id,
-            hasAccessToken: !!selectedPage?.access_token,
-          });
-
-          if (!selectedPage?.access_token) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "Selected Facebook Page has no access token.",
-            });
-          }
-
-          accountName = selectedPage.name;
-          pageId = selectedPage.id;
-          pageAccessToken = selectedPage.access_token;
-        } else if (pending.platform === "instagram") {
-          const pagesResult = await fetchFacebookPages(tokens.accessToken);
-          const igAccount = pagesResult.pages[0]
-            ? await getInstagramAccounts(tokens.accessToken, pagesResult.pages[0].id)
-            : null;
-          accountName = igAccount
-            ? `Instagram (${pagesResult.pages[0]?.name})`
-            : "Instagram Business";
-        } else if (pending.platform === "linkedin") {
-          const profile = await getLinkedInProfile(tokens.accessToken);
-          accountName = `${profile.localizedFirstName || ""} ${profile.localizedLastName || ""}`.trim() || "LinkedIn Profile";
-        } else if (pending.platform === "twitter") {
-          const profile = await getTwitterProfile(tokens.accessToken);
-          accountName = profile.data?.username
-            ? `@${profile.data.username}`
-            : "Twitter/X Account";
-        }
-      } catch (err: any) {
-        console.error("[Integration] Failed to fetch account info:", err.message);
-        if (err instanceof TRPCError) throw err;
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Account info lookup failed: ${err.message}`,
-        });
-      }
-
       const db = getDb();
 
-      // Check if integration already exists
-      const [existing] = await db
-        .select()
-        .from(socialIntegrations)
-        .where(
-          and(
-            eq(socialIntegrations.userId, pending.userId),
-            eq(socialIntegrations.platform, pending.platform as any)
-          )
-        )
-        .limit(1);
-
-      if (existing) {
-        await db
-          .update(socialIntegrations)
-          .set({
-            accessTokenEncrypted: encryptToken(tokens.accessToken),
-            refreshTokenEncrypted: tokens.refreshToken ? encryptToken(tokens.refreshToken) : null,
-            pageId: pageId || existing.pageId || null,
-            pageAccessTokenEncrypted: pageAccessToken
-              ? encryptToken(pageAccessToken)
-              : existing.pageAccessTokenEncrypted || null,
-            accountName: accountName || null,
-            permissions: permissions as any,
-            status: "connected",
-            lastSyncAt: new Date(),
-          })
-          .where(eq(socialIntegrations.id, existing.id));
-      } else {
-        await db.insert(socialIntegrations).values({
-          userId: pending.userId,
-          platform: pending.platform as any,
-          accountName: accountName || null,
-          accessTokenEncrypted: encryptToken(tokens.accessToken),
-          refreshTokenEncrypted: tokens.refreshToken ? encryptToken(tokens.refreshToken) : null,
-          pageId: pageId || null,
-          pageAccessTokenEncrypted: pageAccessToken ? encryptToken(pageAccessToken) : null,
-          permissions: permissions as any,
-          status: "connected",
-          lastSyncAt: new Date(),
+      try {
+        const result = await processMetaOAuthConnection(db, pending, tokens);
+        return {
+          success: true,
+          platform: result.platform,
+          instagramConnected: result.instagramRowUpserted,
+        };
+      } catch (err: any) {
+        console.error("[Integration OAuth Callback] Failed to process connection:", err.message);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: err.message,
         });
       }
-
-      return { success: true, platform: pending.platform };
     }),
 
   connectPlatform: authedQuery
