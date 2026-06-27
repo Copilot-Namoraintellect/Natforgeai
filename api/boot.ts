@@ -14,7 +14,7 @@ import {
   platformConfigs,
   selectFacebookPage,
   getFacebookGrantedPermissions,
-  getInstagramAccounts,
+  fetchInstagramBusinessAccount,
   getLinkedInProfile,
   getTwitterProfile,
 } from "./lib/integrations/platforms";
@@ -94,6 +94,8 @@ async function handleOAuthCallback(c: any) {
     let accountName: string | undefined;
     let pageId: string | undefined;
     let pageAccessToken: string | undefined;
+    let instagramBusinessAccountId: string | undefined;
+    let instagramAccountName: string | undefined;
     let permissions: string[] = config.scopes;
 
     try {
@@ -161,18 +163,42 @@ async function handleOAuthCallback(c: any) {
         accountName = selectedPage.name;
         pageId = selectedPage.id;
         pageAccessToken = selectedPage.access_token;
+
+        // Look for an Instagram professional account linked to this Page
+        try {
+          const igAccount = pageAccessToken
+            ? await fetchInstagramBusinessAccount(pageAccessToken, pageId)
+            : null;
+          if (igAccount) {
+            instagramBusinessAccountId = igAccount.id;
+            instagramAccountName = igAccount.username || `Instagram (${accountName})`;
+            console.log("[OAuth Callback] Linked Instagram business account found", {
+              pageId,
+              igId: igAccount.id,
+              username: igAccount.username,
+            });
+          }
+        } catch (err: any) {
+          console.error("[OAuth Callback] Failed to fetch linked Instagram account:", err.message);
+        }
       } else if (pending.platform === "instagram") {
         const accountsUrl =
           `https://graph.facebook.com/v18.0/me/accounts?fields=id,name,access_token,category&access_token=${tokens.accessToken}`;
         const response = await fetch(accountsUrl);
         const data = await response.json() as any;
         const pages = data.data || [];
-        const igAccount = pages[0]
-          ? await getInstagramAccounts(tokens.accessToken, pages[0].id)
-          : null;
-        accountName = igAccount
-          ? `Instagram (${pages[0]?.name})`
-          : "Instagram Business";
+        const selectedPage = selectFacebookPage(pages);
+
+        if (selectedPage?.access_token) {
+          pageId = selectedPage.id;
+          pageAccessToken = selectedPage.access_token;
+          const igAccount = await fetchInstagramBusinessAccount(pageAccessToken, pageId);
+          if (igAccount) {
+            instagramBusinessAccountId = igAccount.id;
+            instagramAccountName = igAccount.username || `Instagram (${selectedPage.name})`;
+          }
+        }
+        accountName = instagramAccountName || "Instagram Business";
       } else if (pending.platform === "linkedin") {
         const profile = await getLinkedInProfile(tokens.accessToken);
         accountName = `${profile.localizedFirstName || ""} ${profile.localizedLastName || ""}`.trim() || "LinkedIn Profile";
@@ -231,6 +257,52 @@ async function handleOAuthCallback(c: any) {
         permissions: permissions as any,
         status: "connected",
         lastSyncAt: new Date(),
+      });
+    }
+
+    // Save a separate Instagram integration if the selected Facebook Page has a linked IG account
+    if (instagramBusinessAccountId && pageAccessToken) {
+      const [existingInstagram] = await db
+        .select()
+        .from(socialIntegrations)
+        .where(
+          and(
+            eq(socialIntegrations.userId, pending.userId),
+            eq(socialIntegrations.platform, "instagram")
+          )
+        )
+        .limit(1);
+
+      const instagramPayload = {
+        accessTokenEncrypted: encryptToken(tokens.accessToken),
+        refreshTokenEncrypted: tokens.refreshToken ? encryptToken(tokens.refreshToken) : null,
+        pageId: pageId || null,
+        pageAccessTokenEncrypted: encryptToken(pageAccessToken),
+        instagramBusinessAccountId,
+        accountName: instagramAccountName || "Instagram Business",
+        permissions: permissions as any,
+        status: "connected" as const,
+        lastSyncAt: new Date(),
+      };
+
+      if (existingInstagram) {
+        await db
+          .update(socialIntegrations)
+          .set(instagramPayload)
+          .where(eq(socialIntegrations.id, existingInstagram.id));
+      } else {
+        await db.insert(socialIntegrations).values({
+          userId: pending.userId,
+          platform: "instagram",
+          ...instagramPayload,
+        });
+      }
+
+      console.log("[OAuth Callback] Instagram integration saved", {
+        userId: pending.userId,
+        instagramBusinessAccountId,
+        accountName: instagramAccountName,
+        pageId,
       });
     }
 

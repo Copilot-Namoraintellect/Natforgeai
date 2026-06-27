@@ -1,4 +1,5 @@
 import { env } from "../env";
+import { resolvePublicImageUrl } from "../media/url";
 import type { OAuthConfig } from "./oauth";
 import { createTransport } from "nodemailer";
 
@@ -9,7 +10,16 @@ export function getMetaOAuthScopes(): string[] {
   if (process.env.META_OAUTH_SCOPES) {
     return process.env.META_OAUTH_SCOPES.split(",").map((s) => s.trim()).filter(Boolean);
   }
-  return ["public_profile", "email", "pages_show_list", "pages_manage_posts"];
+  return [
+    "public_profile",
+    "email",
+    "business_management",
+    "pages_show_list",
+    "pages_read_engagement",
+    "pages_manage_posts",
+    "instagram_basic",
+    "instagram_content_publishing",
+  ];
 }
 
 const metaScopes = getMetaOAuthScopes();
@@ -117,25 +127,36 @@ export async function publishToInstagram(
   payload: PublishPayload
 ): Promise<PublishResult> {
   try {
+    const rawImageUrl = payload.mediaUrls?.[0];
+    const { publicUrl: imageUrl } = resolvePublicImageUrl(rawImageUrl, env.publicAppUrl);
+
+    if (!imageUrl) {
+      return {
+        success: false,
+        error: "Instagram publishing requires a valid public image URL.",
+      };
+    }
+
     // Step 1: Create media container
     const containerUrl = `https://graph.facebook.com/v18.0/${instagramAccountId}/media`;
     const containerParams = new URLSearchParams({
       access_token: accessToken,
       caption: payload.text,
+      image_url: imageUrl,
     });
-
-    if (payload.mediaUrls && payload.mediaUrls.length > 0) {
-      containerParams.append("image_url", payload.mediaUrls[0]);
-    }
 
     const containerResponse = await fetch(`${containerUrl}?${containerParams.toString()}`, {
       method: "POST",
     });
 
-    const containerData = await containerResponse.json() as any;
+    const containerData = (await containerResponse.json()) as any;
 
     if (containerData.error) {
       return { success: false, error: containerData.error.message };
+    }
+
+    if (!containerData.id) {
+      return { success: false, error: "Instagram did not return a media container ID." };
     }
 
     // Step 2: Publish the container
@@ -149,7 +170,7 @@ export async function publishToInstagram(
       method: "POST",
     });
 
-    const publishData = await publishResponse.json() as any;
+    const publishData = (await publishResponse.json()) as any;
 
     if (publishData.error) {
       return { success: false, error: publishData.error.message };
@@ -440,6 +461,32 @@ export function isFacebookPublishingReady(integration: {
   if (integration.status !== "connected") return false;
   const perms = Array.isArray(integration.permissions) ? integration.permissions : [];
   return perms.includes("pages_manage_posts");
+}
+
+export function isInstagramPublishingReady(integration: {
+  status: string;
+  permissions: unknown;
+  instagramBusinessAccountId?: string | null;
+  pageAccessTokenEncrypted?: string | null;
+}): boolean {
+  if (integration.status !== "connected") return false;
+  if (!integration.instagramBusinessAccountId) return false;
+  if (!integration.pageAccessTokenEncrypted) return false;
+  const perms = Array.isArray(integration.permissions) ? integration.permissions : [];
+  return (
+    perms.includes("instagram_content_publishing") || perms.includes("instagram_content_publish")
+  );
+}
+
+export async function fetchInstagramBusinessAccount(
+  accessToken: string,
+  pageId: string
+): Promise<{ id: string; username?: string } | null> {
+  const response = await fetch(
+    `https://graph.facebook.com/v18.0/${pageId}?fields=instagram_business_account{id,username}&access_token=${accessToken}`
+  );
+  const data = (await response.json()) as any;
+  return data?.instagram_business_account || null;
 }
 
 export async function getFacebookGrantedPermissions(accessToken: string): Promise<string[]> {

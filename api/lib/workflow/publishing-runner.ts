@@ -290,13 +290,23 @@ export async function publishSinglePost(queueItemId: number) {
           publishResult = await publishToFacebook(pageToken, pageId, payload);
           break;
         }
-        case "instagram":
+        case "instagram": {
+          if (!integration.instagramBusinessAccountId || !integration.pageAccessTokenEncrypted) {
+            publishResult = {
+              success: false,
+              error:
+                "Instagram publishing is not ready. Reconnect Meta and ensure a linked Instagram professional account exists.",
+            };
+            break;
+          }
+          const igPageToken = decryptToken(integration.pageAccessTokenEncrypted);
           publishResult = await publishToInstagram(
-            accessToken,
-            integration.accountName || "",
+            igPageToken,
+            integration.instagramBusinessAccountId,
             payload
           );
           break;
+        }
         case "linkedin":
           publishResult = await publishToLinkedIn(
             accessToken,

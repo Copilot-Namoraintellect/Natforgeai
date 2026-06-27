@@ -21,6 +21,7 @@ import {
   getLinkedInProfile,
   getTwitterProfile,
   isFacebookPublishingReady,
+  isInstagramPublishingReady,
 } from "./lib/integrations/platforms";
 import { setOAuthState, getOAuthState, deleteOAuthState } from "./lib/integrations/oauth-state";
 import { encryptToken, decryptToken } from "./lib/crypto";
@@ -52,6 +53,7 @@ export const integrationRouter = createRouter({
         permissions: socialIntegrations.permissions,
         pageId: socialIntegrations.pageId,
         pageAccessTokenEncrypted: socialIntegrations.pageAccessTokenEncrypted,
+        instagramBusinessAccountId: socialIntegrations.instagramBusinessAccountId,
         createdAt: socialIntegrations.createdAt,
       })
       .from(socialIntegrations)
@@ -63,7 +65,9 @@ export const integrationRouter = createRouter({
         row.status === "connected" &&
         (row.provider === "facebook"
           ? isFacebookPublishingReady(row)
-          : ["instagram", "linkedin", "twitter", "tiktok", "email"].includes(row.provider)),
+          : row.provider === "instagram"
+          ? isInstagramPublishingReady(row)
+          : ["linkedin", "twitter", "tiktok", "email"].includes(row.provider)),
     }));
   }),
 

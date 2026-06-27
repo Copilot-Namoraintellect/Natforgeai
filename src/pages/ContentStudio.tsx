@@ -625,6 +625,10 @@ export default function ContentStudio() {
         platform: i.provider,
         accountName: i.providerAccountName,
         status: i.status,
+        ready: i.ready,
+        instagramBusinessAccountId: i.instagramBusinessAccountId,
+        permissions: i.permissions,
+        pageAccessTokenEncrypted: i.pageAccessTokenEncrypted,
       })) ?? [],
     [connectedPlatforms]
   );
@@ -765,8 +769,27 @@ export default function ContentStudio() {
     const connectable = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
     if (!connectable.includes(platform)) return true;
     return connectedIntegrations?.some(
-      (i) => i.platform === platform && i.status === "connected"
+      (i) => i.platform === platform && i.status === "connected" && i.ready
     );
+  }
+
+  function getInstagramReadinessError(platform?: string | null) {
+    if (platform !== "instagram") return null;
+    const integration = connectedIntegrations?.find((i) => i.platform === "instagram");
+    if (!integration || integration.status !== "connected") return null;
+    if (!integration.instagramBusinessAccountId) {
+      return "No Instagram professional account is linked to the connected Facebook Page.";
+    }
+    const perms = Array.isArray(integration.permissions) ? integration.permissions : [];
+    const hasPublishingPermission =
+      perms.includes("instagram_content_publishing") || perms.includes("instagram_content_publish");
+    if (!hasPublishingPermission) {
+      return "Instagram content publishing permission is missing. Reconnect Meta to grant it.";
+    }
+    if (!integration.pageAccessTokenEncrypted) {
+      return "Instagram page token is missing. Reconnect Meta to refresh it.";
+    }
+    return null;
   }
 
   function isPlatformConfigurable(platform?: string | null) {
@@ -3696,6 +3719,14 @@ Include:
                           ))}
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">Connect this platform in Integrations to auto-publish, or post manually.</p>
+                        {groups.not_connected.some((s) => getInstagramReadinessError(s.platform)) && (
+                          <div className="mt-2 p-2 rounded-md bg-red-50 border border-red-200 text-xs text-red-700 space-y-1">
+                            {groups.not_connected.map((s) => {
+                              const err = getInstagramReadinessError(s.platform);
+                              return err ? <p key={s.platform}>{err}</p> : null;
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                     {groups.manual.length > 0 && (

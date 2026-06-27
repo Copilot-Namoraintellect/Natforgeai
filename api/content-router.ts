@@ -8,7 +8,7 @@ import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { env } from "./lib/env";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
 import { publishSinglePost } from "./lib/workflow/publishing-runner";
-import { isFacebookPublishingReady } from "./lib/integrations/platforms";
+import { isFacebookPublishingReady, isInstagramPublishingReady } from "./lib/integrations/platforms";
 
 export const contentRouter = createRouter({
   list: authedQuery
@@ -478,6 +478,22 @@ export const contentRouter = createRouter({
             queueItemId: 0,
             status: "skipped",
             error: "Facebook integration is not publishing-ready. Reconnect to grant pages_manage_posts.",
+          });
+          continue;
+        }
+
+        // Instagram readiness check
+        if (platform === "instagram" && !isInstagramPublishingReady(integration)) {
+          console.log("[PublishCampaignPack] Instagram integration not publishing-ready", {
+            campaignId: input.campaignId,
+            integrationId: integration.id,
+          });
+          results.push({
+            platform,
+            queueItemId: 0,
+            status: "skipped",
+            error:
+              "Instagram publishing is not ready. Ensure your Facebook Page has a linked Instagram professional account and that the Instagram content publishing permission is granted.",
           });
           continue;
         }

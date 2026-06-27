@@ -667,6 +667,7 @@ export const socialIntegrations = mysqlTable("social_integrations", {
   refreshTokenEncrypted: text("refreshTokenEncrypted"),
   pageId: varchar("pageId", { length: 255 }),
   pageAccessTokenEncrypted: text("pageAccessTokenEncrypted"),
+  instagramBusinessAccountId: varchar("instagramBusinessAccountId", { length: 255 }),
   permissions: json("permissions"),
   status: mysqlEnum("status", ["connected", "expired", "disconnected"])
     .default("disconnected")

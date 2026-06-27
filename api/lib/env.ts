@@ -41,7 +41,8 @@ export const env = {
   metaRedirectUri:
     process.env.META_REDIRECT_URI ?? "https://natforgeai.com/api/oauth/callback",
   metaOAuthScopes:
-    process.env.META_OAUTH_SCOPES ?? "public_profile,email,pages_show_list,pages_manage_posts",
+    process.env.META_OAUTH_SCOPES ??
+    "public_profile,email,business_management,pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publishing",
   linkedinClientId: process.env.LINKEDIN_CLIENT_ID ?? "",
   linkedinClientSecret: process.env.LINKEDIN_CLIENT_SECRET ?? "",
   linkedinRedirectUri:
@@ -92,11 +93,15 @@ export const env = {
   dailyAiCreditLimit: parseInt(process.env.DAILY_AI_CREDIT_LIMIT || "500", 10),
   monthlyAiCreditLimit: parseInt(process.env.MONTHLY_AI_CREDIT_LIMIT || "5000", 10),
 
-  // Public-facing app URL used to turn relative media paths into absolute HTTPS URLs
+  // Public-facing app URL used to turn relative media paths into absolute HTTPS URLs.
+  // Ignore BASE_URL when it is only a path (e.g. Vite's default "/") because it is not
+  // a usable origin for resolving absolute media URLs.
   publicAppUrl:
     process.env.PUBLIC_APP_URL ||
     process.env.APP_PUBLIC_URL ||
-    process.env.BASE_URL ||
+    (process.env.BASE_URL && /^https?:\/\//i.test(process.env.BASE_URL)
+      ? process.env.BASE_URL
+      : undefined) ||
     (process.env.NODE_ENV === "production" ? "https://natforgeai.com" : "http://localhost:5173"),
 };
 
