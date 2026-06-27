@@ -16,8 +16,10 @@ import {
   generatedImages,
   bankingDetails,
   userUsage,
+  publishingQueue,
+  socialIntegrations,
 } from "@db/schema";
-import { eq, desc, sql, count, and } from "drizzle-orm";
+import { eq, desc, sql, count, and, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
 export const adminRouter = createRouter({
@@ -393,4 +395,68 @@ export const adminRouter = createRouter({
         },
       };
     }),
+
+  // ─── Production Diagnostics ───
+  diagnostics: adminQuery.query(async () => {
+    const db = getDb();
+
+    // DB connectivity + latency
+    const dbStart = Date.now();
+    let dbConnected = false;
+    let dbLatencyMs = 0;
+    try {
+      await db.execute(sql`SELECT 1`);
+      dbConnected = true;
+    } catch (err: any) {
+      console.error("[Admin Diagnostics] DB ping failed:", err.message);
+    } finally {
+      dbLatencyMs = Date.now() - dbStart;
+    }
+
+    // Integration status counts by platform
+    const integrationRows = await db
+      .select({ platform: socialIntegrations.platform, status: socialIntegrations.status })
+      .from(socialIntegrations);
+
+    const integrations: Record<string, Record<string, number>> = {};
+    for (const row of integrationRows) {
+      const platform = row.platform || "unknown";
+      const status = row.status || "unknown";
+      integrations[platform] = integrations[platform] || {};
+      integrations[platform][status] = (integrations[platform][status] || 0) + 1;
+    }
+
+    // Publishing queue status counts
+    const queueRows = await db
+      .select({ status: publishingQueue.status, count: count() })
+      .from(publishingQueue)
+      .groupBy(publishingQueue.status);
+
+    const queueStatus: Record<string, number> = {};
+    for (const row of queueRows) {
+      queueStatus[row.status || "unknown"] = row.count;
+    }
+
+    // Latest publish errors
+    const latestPublishErrors = await db
+      .select({
+        id: publishingQueue.id,
+        campaignId: publishingQueue.campaignId,
+        platform: publishingQueue.platform,
+        status: publishingQueue.status,
+        lastError: publishingQueue.lastError,
+        createdAt: publishingQueue.createdAt,
+      })
+      .from(publishingQueue)
+      .where(isNotNull(publishingQueue.lastError))
+      .orderBy(desc(publishingQueue.createdAt))
+      .limit(20);
+
+    return {
+      db: { connected: dbConnected, latencyMs: dbLatencyMs },
+      integrations,
+      queue: queueStatus,
+      latestPublishErrors,
+    };
+  }),
 });

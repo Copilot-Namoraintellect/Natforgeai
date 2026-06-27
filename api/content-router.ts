@@ -306,7 +306,7 @@ export const contentRouter = createRouter({
     }),
 
   publishCampaignPack: authedQuery
-    .input(z.object({ campaignId: z.number() }))
+    .input(z.object({ campaignId: z.number(), allowRepublish: z.boolean().default(false) }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
 
@@ -318,6 +318,14 @@ export const contentRouter = createRouter({
 
       if (!campaign) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
+      const isAlreadyLive = campaign.status === "active" && campaign.workflowState === "campaign_live";
+      if (isAlreadyLive && !input.allowRepublish) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This campaign is already live. Use Publish again if you want to republish.",
+        });
       }
 
       const posts = await db

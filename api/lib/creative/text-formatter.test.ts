@@ -7,6 +7,9 @@ describe("text-formatter", () => {
       expect(renderOffer("10% off orders above R3000")).toBe("Enjoy 10% off orders above R3,000");
       expect(renderOffer("10% off orders above R 3 000")).toBe("Enjoy 10% off orders above R3,000");
       expect(renderOffer("10% off any orders R3000 and above")).toBe("Enjoy 10% off orders above R3,000");
+      expect(renderOffer("10% off orders above 3000 R")).toBe("Enjoy 10% off orders above R3,000");
+      expect(renderOffer("10% off orders above 3000R")).toBe("Enjoy 10% off orders above R3,000");
+      expect(renderOffer("10% off orders above 3000 rands")).toBe("Enjoy 10% off orders above R3,000");
     });
 
     it("preserves already-formatted offers", () => {

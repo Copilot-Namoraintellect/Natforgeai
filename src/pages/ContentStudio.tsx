@@ -477,6 +477,7 @@ export default function ContentStudio() {
   const [scheduleDate, setScheduleDate] = useState("");
   const [pendingActions, setPendingActions] = useState<Set<PendingActionKey>>(new Set());
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [isRepublish, setIsRepublish] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["masterVisual", "masterVideo"]));
   const [selectedIterationId, setSelectedIterationId] = useState<string | null>(null);
   const [captionPackTab, setCaptionPackTab] = useState<string>("master");
@@ -3029,6 +3030,8 @@ Include:
       return;
     }
 
+    setIsRepublish(campaignForContext?.workflowState === "campaign_live");
+
     // Frontend guard: check video readiness ONLY when video features are enabled
     const basicConfigured = videoConfig?.basicConfigured ?? true;
     const premiumConfigured = videoConfig?.premiumConfigured ?? false;
@@ -3057,7 +3060,7 @@ Include:
 
   function executePublishPack() {
     if (!urlCampaignId) return;
-    publishCampaignPackMutation.mutate({ campaignId: numericCampaignId });
+    publishCampaignPackMutation.mutate({ campaignId: numericCampaignId, allowRepublish: isRepublish });
   }
 
   function renderWorkflowGuidance() {
@@ -3197,7 +3200,10 @@ Include:
     const premiumConfigured = videoConfig?.premiumConfigured ?? false;
     const videoEnabled = (ENABLE_PREMIUM_VIDEO && premiumConfigured) || (ENABLE_BASIC_DRAFT_VIDEO && basicConfigured);
     const allApproved = filtered.every((c) => getApprovalState(c));
-    const canPublish = filtered.some((c) => c.status !== "published" && c.status !== "archived");
+    const isCampaignLive = campaignForContext?.workflowState === "campaign_live";
+    const hasPublishableContent = filtered.some((c) => c.status !== "published" && c.status !== "archived");
+    const canPublish = hasPublishableContent && !isCampaignLive;
+    const canPublishAgain = isCampaignLive && hasPublishableContent;
 
     const currentIterations = campaignIterations.filter(
       (i) => !i.isLegacy && (i.leaflet || i.captionPack || i.videoConcept)
@@ -3372,15 +3378,27 @@ Include:
                   )}
                   Regenerate from Profile
                 </Button>
-                <Button
-                  size="sm"
-                  className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
-                  disabled={!canPublish}
-                  onClick={handlePublishPack}
-                >
-                  <Upload className="w-3.5 h-3.5 mr-1.5" />
-                  Publish Campaign Pack
-                </Button>
+                {canPublishAgain ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-amber-700 border-amber-200 hover:bg-amber-50"
+                    onClick={handlePublishPack}
+                  >
+                    <Upload className="w-3.5 h-3.5 mr-1.5" />
+                    Publish again
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
+                    disabled={!canPublish}
+                    onClick={handlePublishPack}
+                  >
+                    <Upload className="w-3.5 h-3.5 mr-1.5" />
+                    Publish Campaign Pack
+                  </Button>
+                )}
               </div>
             </div>
             {campaignForContext?.workflowState && (
@@ -3630,9 +3648,13 @@ Include:
         <Dialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
           <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Confirm Publish to Connected Channels</DialogTitle>
+              <DialogTitle>
+                {isRepublish ? "Confirm Publish Again" : "Confirm Publish to Connected Channels"}
+              </DialogTitle>
               <DialogDescription>
-                This will immediately post the approved campaign content to each connected platform below. This action cannot be undone.
+                {isRepublish
+                  ? "This campaign is already live. Publishing again will create new posts on the connected platforms below. This action cannot be undone."
+                  : "This will immediately post the approved campaign content to each connected platform below. This action cannot be undone."}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-2">
@@ -3732,7 +3754,11 @@ Include:
                   ) : (
                     <Upload className="w-4 h-4 mr-2" />
                   )}
-                  {publishCampaignPackMutation.isPending ? "Publishing..." : "Confirm Publish"}
+                  {publishCampaignPackMutation.isPending
+                    ? "Publishing..."
+                    : isRepublish
+                    ? "Publish again"
+                    : "Confirm Publish"}
                 </Button>
               </div>
             </div>
@@ -4342,8 +4368,17 @@ Include:
                         <Button
                           size="sm"
                           variant="outline"
-                          className="text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-                          onClick={() => publishCampaignPackMutation.mutate({ campaignId: summary.campaign.id })}
+                          className={
+                            summary.campaign.workflowState === "campaign_live"
+                              ? "text-amber-700 border-amber-200 hover:bg-amber-50"
+                              : "text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                          }
+                          onClick={() =>
+                            publishCampaignPackMutation.mutate({
+                              campaignId: summary.campaign.id,
+                              allowRepublish: summary.campaign.workflowState === "campaign_live",
+                            })
+                          }
                           disabled={publishCampaignPackMutation.isPending}
                         >
                           {publishCampaignPackMutation.isPending ? (

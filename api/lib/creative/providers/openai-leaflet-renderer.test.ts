@@ -3,6 +3,7 @@ import sharp from "sharp";
 import type { TemplateRendererRequest } from "./template-renderer";
 
 const originalEnv = { ...process.env };
+delete originalEnv.OPENAI_API_KEY;
 
 function setEnv(patch: Record<string, string>) {
   Object.keys(process.env).forEach((key) => delete process.env[key]);

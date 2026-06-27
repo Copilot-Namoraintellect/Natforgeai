@@ -30,6 +30,11 @@ function formatRandCurrency(text: string): string {
       const num = Number(amount.toString().replace(/,/g, ""));
       return `R${formatRandNumber(num)}`;
     })
+    // "3000 R" / "3000R" (trailing currency marker) → "R3,000"
+    .replace(/\b(\d{1,3}(?:,\d{3})+|\d+)\s*R\b/gi, (_, amount) => {
+      const num = Number(amount.toString().replace(/,/g, ""));
+      return `R${formatRandNumber(num)}`;
+    })
     // "R3000" / "R 3000" → "R3,000"
     .replace(/\bR\s*(\d{1,3}(?:,\d{3})+|\d+)\b/g, (_, amount) => {
       const num = Number(amount.toString().replace(/,/g, ""));

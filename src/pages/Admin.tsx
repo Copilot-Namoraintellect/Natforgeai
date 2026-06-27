@@ -36,7 +36,9 @@ import {
   Coins,
   Activity,
   ArrowRight,
+  Stethoscope,
 } from "lucide-react";
+import { DiagnosticsPanel } from "@/components/admin/DiagnosticsPanel";
 import { toast } from "sonner";
 
 export default function Admin() {
@@ -245,6 +247,7 @@ export default function Admin() {
           <TabsTrigger value="profitability">AI Profitability</TabsTrigger>
           <TabsTrigger value="credits">Credits</TabsTrigger>
           <TabsTrigger value="systemHealth">System Health</TabsTrigger>
+          <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
         </TabsList>
 
         {/* OVERVIEW TAB */}
@@ -626,6 +629,24 @@ export default function Admin() {
                   </a>
                 </CardContent>
               </Card>
+            </div>
+          )}
+
+          {/* DIAGNOSTICS TAB */}
+          {activeTab === "diagnostics" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <Stethoscope className="w-5 h-5 text-[#00D4FF]" />
+                    Production Diagnostics
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Real-time DB connectivity, integrations, queue status and recent publish errors.
+                  </p>
+                </div>
+              </div>
+              <DiagnosticsPanel />
             </div>
           )}
 
