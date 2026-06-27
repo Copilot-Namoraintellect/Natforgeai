@@ -1181,7 +1181,8 @@ Include:
       } else if (skipped > 0) {
         toast.warning(`Publishing skipped: ${skipped} platform(s) not ready.`);
       } else {
-        toast.error("Publishing failed. Check platform connections and try again.");
+        const firstError = (data.results || []).find((r) => r.error)?.error;
+        toast.error(firstError || "Publishing failed. Check platform connections and try again.");
       }
       setPublishDialogOpen(false);
     },

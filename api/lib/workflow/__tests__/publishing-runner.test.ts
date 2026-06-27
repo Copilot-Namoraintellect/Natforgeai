@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+process.env.PUBLIC_APP_URL = "https://natforgeai.com";
+
 vi.mock("../../../queries/connection", () => ({
   getDb: vi.fn(),
 }));
@@ -104,12 +106,15 @@ const baseIntegration = {
   permissions: ["pages_manage_posts"],
 };
 
+const relativeImageUrl = "/generated/images/27/premium-leaflet-ai_38f59991-4a9a-4f2e-aa47-c47efdb72924.png";
+const absoluteImageUrl = `https://natforgeai.com${relativeImageUrl}`;
+
 const baseContentPost = {
   id: 117,
   hook: "Hook line",
   caption: "Caption body",
   cta: "Shop now",
-  metadata: { imageUrl: "https://cdn.example.com/image.png" },
+  metadata: { imageUrl: relativeImageUrl },
 };
 
 describe("publishSinglePost", () => {
@@ -117,7 +122,7 @@ describe("publishSinglePost", () => {
     vi.clearAllMocks();
   });
 
-  it("publishes to Facebook using the persisted integrationId and page token", async () => {
+  it("publishes to Facebook using the persisted integrationId and a public image URL", async () => {
     const { getDb } = await import("../../../queries/connection");
     const { publishToFacebook } = await import("../../integrations/platforms");
     const { publishSinglePost } = await import("../publishing-runner");
@@ -146,7 +151,7 @@ describe("publishSinglePost", () => {
       "830205703508466",
       expect.objectContaining({
         text: expect.stringContaining("Hook line"),
-        mediaUrls: ["https://cdn.example.com/image.png"],
+        mediaUrls: [absoluteImageUrl],
         mediaType: "image",
       })
     );
@@ -176,7 +181,7 @@ describe("publishSinglePost", () => {
     expect(publishToFacebook).toHaveBeenCalledWith(
       "decrypted:page-token-encrypted",
       "830205703508466",
-      expect.any(Object)
+      expect.objectContaining({ mediaUrls: [absoluteImageUrl] })
     );
   });
 
@@ -197,6 +202,26 @@ describe("publishSinglePost", () => {
 
     expect(result.status).toBe("failed");
     expect(result.error).toContain("no connected facebook account");
+    expect(publishToFacebook).not.toHaveBeenCalled();
+  });
+
+  it("fails without calling Facebook when the image URL is invalid", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishSinglePost } = await import("../publishing-runner");
+
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+        queueItem: { ...baseQueueItem, integrationId: 9 },
+        contentPost: { ...baseContentPost, metadata: { imageUrl: "blob:https://natforgeai.com/abc" } },
+        integration: baseIntegration,
+      }) as any
+    );
+
+    const result = await publishSinglePost(1);
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("invalid image URL");
     expect(publishToFacebook).not.toHaveBeenCalled();
   });
 });

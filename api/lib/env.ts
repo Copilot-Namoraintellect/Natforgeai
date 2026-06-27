@@ -91,6 +91,13 @@ export const env = {
   // System AI usage limits (admin/system-level guardrails)
   dailyAiCreditLimit: parseInt(process.env.DAILY_AI_CREDIT_LIMIT || "500", 10),
   monthlyAiCreditLimit: parseInt(process.env.MONTHLY_AI_CREDIT_LIMIT || "5000", 10),
+
+  // Public-facing app URL used to turn relative media paths into absolute HTTPS URLs
+  publicAppUrl:
+    process.env.PUBLIC_APP_URL ||
+    process.env.APP_PUBLIC_URL ||
+    process.env.BASE_URL ||
+    (process.env.NODE_ENV === "production" ? "https://natforgeai.com" : "http://localhost:5173"),
 };
 
 // Validate Redis in production

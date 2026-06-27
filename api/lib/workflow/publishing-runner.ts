@@ -9,6 +9,8 @@ import {
   sendEmail,
 } from "../integrations/platforms";
 import { decryptToken } from "../crypto";
+import { resolvePublicImageUrl } from "../media/url";
+import { env } from "../env";
 import { checkContentSafety } from "../safety/checker";
 import { deductCredits } from "../billing/credit-engine";
 import { createAlert } from "../alerts";
@@ -198,6 +200,53 @@ export async function publishSinglePost(queueItemId: number) {
       };
     }
 
+    // Build content payload
+    const postMeta = contentPost ? (contentPost.metadata || {}) as any : {};
+    const imageUrl: string | undefined =
+      postMeta?.imageUrl || (contentPost as any)?.imageUrl || undefined;
+
+    const payload = contentPost
+      ? {
+          text: `${contentPost.hook || ""}\n\n${contentPost.caption || ""}\n\n${contentPost.cta || ""}`.trim(),
+          mediaUrls: imageUrl ? [imageUrl] : undefined,
+          mediaType: imageUrl ? ("image" as const) : undefined,
+        }
+      : null;
+
+    // For Facebook, validate/normalize the media URL before charging credits
+    if (post.platform === "facebook" && payload?.mediaUrls?.[0]) {
+      const { publicUrl: publicImageUrl, isAbsoluteUrl } = resolvePublicImageUrl(
+        payload.mediaUrls[0],
+        env.publicAppUrl
+      );
+      const publishMode = publicImageUrl ? "photo" : "text";
+
+      console.log("[Publishing Runner] Facebook media", {
+        queueItemId: post.id,
+        contentPostId: post.contentPostId,
+        rawImageUrl: imageUrl,
+        publicImageUrl,
+        isAbsoluteUrl,
+        publishMode,
+      });
+
+      if (!publicImageUrl) {
+        const error = "Facebook publishing failed: invalid image URL.";
+        await db
+          .update(publishingQueue)
+          .set({
+            status: "failed",
+            lastError: error,
+            retryCount: (post.retryCount || 0) + 1,
+            nextRetryAt: null,
+          })
+          .where(eq(publishingQueue.id, post.id));
+        return { id: post.id, status: "failed", platform: post.platform, error };
+      }
+
+      payload.mediaUrls = [publicImageUrl];
+    }
+
     // Deduct publishing credit before attempting publish
     // Skip deduction on retries — credits were already deducted on first attempt
     if (post.status !== "retrying") {
@@ -217,17 +266,7 @@ export async function publishSinglePost(queueItemId: number) {
       }
     }
 
-    if (contentPost && !publishResult.error) {
-      const postMeta = (contentPost.metadata || {}) as any;
-      const imageUrl: string | undefined =
-        postMeta?.imageUrl || (contentPost as any).imageUrl || undefined;
-
-      const payload = {
-        text: `${contentPost.hook || ""}\n\n${contentPost.caption || ""}\n\n${contentPost.cta || ""}`.trim(),
-        mediaUrls: imageUrl ? [imageUrl] : undefined,
-        mediaType: imageUrl ? ("image" as const) : undefined,
-      };
-
+    if (payload && !publishResult.error) {
       const accessToken = decryptToken(integration.accessTokenEncrypted || "");
 
       console.log("[Publishing Runner] Publishing", {
@@ -281,7 +320,7 @@ export async function publishSinglePost(queueItemId: number) {
               fromName: "NatForge AI",
             },
             "",
-            contentPost.title || "Marketing Update",
+            contentPost?.title || "Marketing Update",
             payload.text
           );
           break;

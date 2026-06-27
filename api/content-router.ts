@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations } from "@db/schema";
-import { eq, and, desc, count } from "drizzle-orm";
+import { eq, and, desc, count, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { env } from "./lib/env";
@@ -486,27 +486,55 @@ export const contentRouter = createRouter({
           continue;
         }
 
-        // Create publishing queue item
-        const [queueResult] = await db.insert(publishingQueue).values({
-          userId: ctx.user.id,
-          campaignId: input.campaignId,
-          contentPostId: post.id,
-          integrationId: integration.id,
-          platform,
-          status: "approved",
-          approvalRequired: false,
-          scheduledAt: null,
-        });
-        const queueItemId = Number(queueResult.insertId);
+        // Reuse an existing pending/retrying queue item for this post/platform if present
+        let queueItemId: number;
+        const [existingQueue] = await db
+          .select()
+          .from(publishingQueue)
+          .where(
+            and(
+              eq(publishingQueue.userId, ctx.user.id),
+              eq(publishingQueue.campaignId, input.campaignId),
+              eq(publishingQueue.contentPostId, post.id),
+              eq(publishingQueue.platform, platform),
+              inArray(publishingQueue.status, ["approved", "retrying", "pending_approval"])
+            )
+          )
+          .limit(1);
 
-        console.log("[PublishCampaignPack] Created queue item", {
-          campaignId: input.campaignId,
-          platform,
-          contentPostId: post.id,
-          queueItemId,
-          integrationId: integration.id,
-          pageId: platform === "facebook" ? integration.pageId : undefined,
-        });
+        if (existingQueue) {
+          queueItemId = existingQueue.id;
+          console.log("[PublishCampaignPack] Reusing existing queue item", {
+            campaignId: input.campaignId,
+            platform,
+            contentPostId: post.id,
+            queueItemId,
+            integrationId: integration.id,
+            pageId: platform === "facebook" ? integration.pageId : undefined,
+          });
+        } else {
+          // Create publishing queue item
+          const [queueResult] = await db.insert(publishingQueue).values({
+            userId: ctx.user.id,
+            campaignId: input.campaignId,
+            contentPostId: post.id,
+            integrationId: integration.id,
+            platform,
+            status: "approved",
+            approvalRequired: false,
+            scheduledAt: null,
+          });
+          queueItemId = Number(queueResult.insertId);
+
+          console.log("[PublishCampaignPack] Created queue item", {
+            campaignId: input.campaignId,
+            platform,
+            contentPostId: post.id,
+            queueItemId,
+            integrationId: integration.id,
+            pageId: platform === "facebook" ? integration.pageId : undefined,
+          });
+        }
 
         // Attempt immediate publish
         const publishResult = await publishSinglePost(queueItemId);
