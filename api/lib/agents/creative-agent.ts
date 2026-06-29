@@ -1,8 +1,42 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { runAgent } from "./runner";
 import { getDb } from "../../queries/connection";
 import { campaigns, contentPosts, campaignAssets, businesses, agentRuns } from "@db/schema";
 import { eq, and } from "drizzle-orm";
+import { logInfo, logError, logWarn } from "../logger";
+
+// Valid content_posts.type enum values from db/schema.ts
+const CONTENT_POST_TYPES = new Set([
+  "social_post",
+  "ad_copy",
+  "email",
+  "script",
+  "blog",
+  "story",
+  "video_concept",
+  "reel_script",
+  "carousel_ad",
+  "whatsapp_promo",
+  "lead_gen_ad",
+  "launch_pack",
+]);
+
+function sanitizeTitle(title: string): string {
+  const trimmed = String(title ?? "").trim();
+  if (trimmed.length === 0) return "Untitled";
+  return trimmed.slice(0, 255);
+}
+
+function safeType(type: string, fallback: string): string {
+  return CONTENT_POST_TYPES.has(type) ? type : fallback;
+}
+
+interface InsertError {
+  type: string;
+  title: string;
+  error: string;
+}
 
 // ─── Schema Normalisation Helpers ───
 // OpenAI structured output requires EVERY property to be in the `required` array.
@@ -256,17 +290,17 @@ function normalisePremiumPack(raw: any): any {
     : [];
 
   return {
-    videoConcepts: videoConcepts.length > 0 ? videoConcepts : [normaliseVideoConcept(null)],
-    carouselAds: carouselAds.length > 0 ? carouselAds : [normaliseCarouselAd(null)],
-    socialPosts: socialPosts.length > 0 ? socialPosts : [normaliseSocialPost(null)],
-    adCopyVariations: adCopyVariations.length > 0 ? adCopyVariations : [normaliseAdCopy(null)],
-    whatsAppPromos: whatsAppPromos.length > 0 ? whatsAppPromos : [normaliseWhatsApp(null)],
+    videoConcepts: videoConcepts.length > 0 ? videoConcepts : [],
+    carouselAds: carouselAds.length > 0 ? carouselAds : [],
+    socialPosts: socialPosts.length > 0 ? socialPosts : [],
+    adCopyVariations: adCopyVariations.length > 0 ? adCopyVariations : [],
+    whatsAppPromos: whatsAppPromos.length > 0 ? whatsAppPromos : [],
     emailCampaign: normaliseEmail(raw.emailCampaign),
     launchSequence: normaliseLaunchSequence(raw.launchSequence),
     platformAdaptations: platformAdaptations.length > 0 ? platformAdaptations : [],
     hashtagSet,
-    hooks: hooks.length > 0 ? hooks : [normaliseHook(null)],
-    ctaVariations: ctaVariations.length > 0 ? ctaVariations : [normaliseCtaVariation(null)],
+    hooks: hooks.length > 0 ? hooks : [],
+    ctaVariations: ctaVariations.length > 0 ? ctaVariations : [],
     packSummary: String(raw.packSummary ?? ""),
   };
 }
@@ -576,7 +610,13 @@ export async function runCreativeAgent({
 }) {
   const db = getDb();
 
-  console.log(`[CreativeAgent] Started | campaignId=${campaignId} | userId=${userId} | deleteExistingDrafts=${deleteExistingDrafts}`);
+  logInfo("[CreativeAgent] started", {
+    campaignId,
+    userId,
+    stage: "start",
+    provider: "openai",
+    deleteExistingDrafts,
+  });
 
   // Get campaign and business info
   const [campaign] = await db
@@ -586,11 +626,17 @@ export async function runCreativeAgent({
     .limit(1);
 
   if (!campaign) {
-    console.error(`[CreativeAgent] Campaign not found | campaignId=${campaignId}`);
-    throw new Error("Campaign not found");
+    logError("[CreativeAgent] campaign not found", { campaignId, userId, stage: "load" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
   }
 
-  console.log(`[CreativeAgent] Campaign loaded | campaignId=${campaignId} | workflowState=${campaign.workflowState}`);
+  logInfo("[CreativeAgent] campaign loaded", {
+    campaignId,
+    userId,
+    stage: "load",
+    workflowState: campaign.workflowState,
+    businessId: campaign.businessId,
+  });
 
   const strategyContext = campaign.workflowContext as any;
   const personas = campaign.personas as any[];
@@ -631,7 +677,13 @@ export async function runCreativeAgent({
     }
   }
 
-  console.log(`[CreativeAgent] Business evidence loaded | campaignId=${campaignId} | location=${location || "none"} | industry=${industry || "none"}`);
+  logInfo("[CreativeAgent] business evidence loaded", {
+    campaignId,
+    userId,
+    stage: "context",
+    location: location || "none",
+    industry: industry || "none",
+  });
 
   // Step 1: Generate Hero Campaign Pack
   const packPrompt = `You are an elite creative director for a premium marketing agency. You build tight, high-performing Hero Campaign Packs — not content factories. Approved strategy becomes one strong campaign idea, then platform adaptations and supporting assets.
@@ -811,15 +863,34 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     });
   } catch (err: any) {
     packError = err.message || String(err);
-    console.error(`[CreativeAgent] Schema/generation failure | campaignId=${campaignId} | userId=${userId} | error="${packError}"`);
-    throw new Error("Content generation needs to be retried. No content was published.");
+    logError("[CreativeAgent] schema/generation failure", {
+      campaignId,
+      userId,
+      stage: "generation",
+      provider: "openai",
+      error: packError,
+    });
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "The AI provider returned content we could not use. Please retry in a moment.",
+    });
   }
 
   if (!packResult) {
-    throw new Error("Content generation needs to be retried. No content was published.");
+    logError("[CreativeAgent] pack result missing", { campaignId, userId, stage: "generation" });
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Content generation did not return any results. Please retry.",
+    });
   }
 
-  console.log(`[CreativeAgent] Pack generated | campaignId=${campaignId} | runId=${packResult.runId}`);
+  logInfo("[CreativeAgent] pack generated", {
+    campaignId,
+    userId,
+    stage: "generation",
+    provider: "openai",
+    runId: packResult.runId,
+  });
 
   // Normalise the AI output so missing/undefined fields become safe defaults
   let pack = normalisePremiumPack(packResult.output);
@@ -827,7 +898,13 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
   // Quality gate: check for invented offers and generic copy
   const quality = assessPackQuality(pack, hasExplicitOffer, brief);
   if (!quality.passed) {
-    console.warn(`[CreativeAgent] Quality gate failed | campaignId=${campaignId} | issues=${JSON.stringify(quality.issues)}`);
+    logWarn("[CreativeAgent] quality gate failed", {
+      campaignId,
+      userId,
+      stage: "quality_gate",
+      provider: "openai",
+      issues: quality.issues,
+    });
     // One regeneration attempt with stricter instructions
     try {
       const retryPrompt = `${packPrompt}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${quality.issues.map((i) => `- ${i}`).join("\n")}\n\nDo not invent offers. Do not use generic motivational language. Ground every line in the campaign brief above.`;
@@ -843,20 +920,44 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       pack = normalisePremiumPack(retryResult.output);
       const retryQuality = assessPackQuality(pack, hasExplicitOffer, brief);
       if (!retryQuality.passed) {
-        console.error(`[CreativeAgent] Quality gate failed after retry | campaignId=${campaignId} | issues=${JSON.stringify(retryQuality.issues)}`);
-        throw new Error(`Generated content did not meet quality standards: ${retryQuality.issues.join("; ")}`);
+        logError("[CreativeAgent] quality gate failed after retry", {
+          campaignId,
+          userId,
+          stage: "quality_gate",
+          provider: "openai",
+          issues: retryQuality.issues,
+        });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Generated content did not meet quality standards: ${retryQuality.issues.join("; ")}`,
+        });
       }
     } catch (err: any) {
       const failMsg = err.message?.includes("Generated content did not meet quality standards")
         ? err.message
         : `Content generation needs to be retried. The first draft did not meet quality standards: ${err.message}`;
-      console.error(`[CreativeAgent] Retry generation failed | campaignId=${campaignId} | error="${failMsg}"`);
+      logError("[CreativeAgent] retry generation failed", {
+        campaignId,
+        userId,
+        stage: "quality_gate",
+        provider: "openai",
+        error: failMsg,
+      });
       await markPackRunFailed(failMsg);
-      throw new Error(failMsg);
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: failMsg,
+      });
     }
   }
 
-  console.log(`[CreativeAgent] Quality gate passed | campaignId=${campaignId} | runId=${packResult.runId}`);
+  logInfo("[CreativeAgent] quality gate passed", {
+    campaignId,
+    userId,
+    stage: "quality_gate",
+    provider: "openai",
+    runId: packResult.runId,
+  });
 
   // Helper to mark the creative run as failed when post-save fails
   async function markPackRunFailed(error: string) {
@@ -869,9 +970,21 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           completedAt: new Date(),
         })
         .where(eq(agentRuns.id, packResult!.runId));
-      console.log(`[CreativeAgent] Marked run ${packResult!.runId} as failed | campaignId=${campaignId} | error="${error}"`);
+      logInfo("[CreativeAgent] marked run as failed", {
+        campaignId,
+        userId,
+        stage: "post_save",
+        runId: packResult!.runId,
+        error,
+      });
     } catch (markErr: any) {
-      console.error(`[CreativeAgent] Could not mark run ${packResult!.runId} as failed | campaignId=${campaignId} | error="${markErr.message}"`);
+      logError("[CreativeAgent] could not mark run as failed", {
+        campaignId,
+        userId,
+        stage: "post_save",
+        runId: packResult!.runId,
+        error: markErr.message,
+      });
     }
   }
 
@@ -893,7 +1006,13 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     })
     .where(eq(campaigns.id, campaignId));
 
-  console.log(`[CreativeAgent] Saving pack summary | campaignId=${campaignId} | runId=${packResult.runId}`);
+  logInfo("[CreativeAgent] saving pack summary", {
+    campaignId,
+    userId,
+    stage: "post_save",
+    provider: "openai",
+    runId: packResult.runId,
+  });
 
   // Determine the next campaign iteration number before any deletions occur.
   const existingPostsForIteration = await db
@@ -927,14 +1046,26 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       await db.delete(contentPosts).where(eq(contentPosts.id, draft.id));
     }
 
-    console.log(`[CreativeAgent] Existing drafts deleted | campaignId=${campaignId} | count=${existingDrafts.length}`);
+    logInfo("[CreativeAgent] existing drafts deleted", {
+      campaignId,
+      userId,
+      stage: "post_save",
+      count: existingDrafts.length,
+    });
   }
 
   let savedPosts = 0;
   let failedInserts = 0;
   let savedAssets = 0;
+  const insertErrors: InsertError[] = [];
 
-  console.log(`[CreativeAgent] Inserting posts and assets | campaignId=${campaignId} | runId=${packResult.runId}`);
+  logInfo("[CreativeAgent] inserting posts and assets", {
+    campaignId,
+    userId,
+    stage: "post_save",
+    provider: "openai",
+    runId: packResult.runId,
+  });
 
   // Helper to insert content post with metadata
   async function insertPost(
@@ -949,12 +1080,15 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     metadata: any,
     assetType: string
   ) {
+    const safeTitle = sanitizeTitle(title);
+    const resolvedType = safeType(type, "social_post");
+
     try {
       await db.insert(contentPosts).values({
         userId,
         campaignId,
-        title,
-        type: type as any,
+        title: safeTitle,
+        type: resolvedType as any,
         platform,
         hook,
         caption,
@@ -972,9 +1106,25 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         },
       });
       savedPosts++;
+      logInfo("[CreativeAgent] content post saved", {
+        campaignId,
+        userId,
+        stage: "post_save",
+        type: resolvedType,
+        title: safeTitle,
+      });
     } catch (err: any) {
       failedInserts++;
-      console.error(`[CreativeAgent] Failed to save content post | campaignId=${campaignId} | type=${type} | error="${err.message}"`);
+      const errorDetail = err.message || String(err);
+      insertErrors.push({ type: resolvedType, title: safeTitle, error: errorDetail });
+      logError("[CreativeAgent] failed to save content post", {
+        campaignId,
+        userId,
+        stage: "post_save",
+        type: resolvedType,
+        title: safeTitle,
+        error: errorDetail,
+      });
     }
   }
 
@@ -1036,12 +1186,13 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
 
   // Save supporting assets as campaign assets (collapsed in the UI), not as primary content posts
   async function insertAsset(title: string, assetType: string, metadata: any) {
+    const safeTitle = sanitizeTitle(title);
     try {
       await db.insert(campaignAssets).values({
         userId,
         campaignId,
         assetType: assetType as any,
-        title,
+        title: safeTitle,
         status: "ready",
         metadata: {
           ...metadata,
@@ -1053,7 +1204,16 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       });
       savedAssets++;
     } catch (err: any) {
-      console.error(`[CreativeAgent] Failed to save supporting asset | campaignId=${campaignId} | type=${assetType} | error="${err.message}"`);
+      const errorDetail = err.message || String(err);
+      insertErrors.push({ type: assetType, title: safeTitle, error: errorDetail });
+      logError("[CreativeAgent] failed to save supporting asset", {
+        campaignId,
+        userId,
+        stage: "asset_save",
+        assetType,
+        title: safeTitle,
+        error: errorDetail,
+      });
     }
   }
 
@@ -1152,7 +1312,14 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       });
       savedAssets++;
     } catch (err: any) {
-      console.error(`[CreativeAgent] Failed to save hook bank | campaignId=${campaignId} | error="${err.message}"`);
+      const errorDetail = err.message || String(err);
+      insertErrors.push({ type: "hook_bank", title: "Hook Bank", error: errorDetail });
+      logError("[CreativeAgent] failed to save hook bank", {
+        campaignId,
+        userId,
+        stage: "asset_save",
+        error: errorDetail,
+      });
     }
   }
 
@@ -1171,7 +1338,14 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       });
       savedAssets++;
     } catch (err: any) {
-      console.error(`[CreativeAgent] Failed to save CTA variation bank | campaignId=${campaignId} | error="${err.message}"`);
+      const errorDetail = err.message || String(err);
+      insertErrors.push({ type: "cta_variation_bank", title: "CTA Variation Bank", error: errorDetail });
+      logError("[CreativeAgent] failed to save CTA variation bank", {
+        campaignId,
+        userId,
+        stage: "asset_save",
+        error: errorDetail,
+      });
     }
   }
 
@@ -1223,7 +1397,15 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       });
       savedAssets++;
     } catch (err: any) {
-      console.error(`[CreativeAgent] Failed to save platform adaptation | campaignId=${campaignId} | platform=${adaptation.platform} | error="${err.message}"`);
+      const errorDetail = err.message || String(err);
+      insertErrors.push({ type: "caption_adaptation", title: `${adaptation.platform} Adaptation`, error: errorDetail });
+      logError("[CreativeAgent] failed to save platform adaptation", {
+        campaignId,
+        userId,
+        stage: "asset_save",
+        platform: adaptation.platform,
+        error: errorDetail,
+      });
     }
   }
 
@@ -1248,20 +1430,56 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       });
       savedAssets++;
     } catch (err: any) {
-      console.error(`[CreativeAgent] Failed to save hashtag set | campaignId=${campaignId} | error="${err.message}"`);
+      const errorDetail = err.message || String(err);
+      insertErrors.push({ type: "hashtag_set", title: "Master Hashtag Set", error: errorDetail });
+      logError("[CreativeAgent] failed to save hashtag set", {
+        campaignId,
+        userId,
+        stage: "asset_save",
+        error: errorDetail,
+      });
     }
   }
 
-  console.log(`[CreativeAgent] Premium pack saved: campaignId=${campaignId} savedPosts=${savedPosts} failedInserts=${failedInserts}`);
+  logInfo("[CreativeAgent] premium pack saved", {
+    campaignId,
+    userId,
+    stage: "post_save",
+    savedPosts,
+    failedInserts,
+    savedAssets,
+    insertErrorCount: insertErrors.length,
+  });
 
   if (savedPosts === 0) {
     const errMsg = `Content generation completed but no posts were saved. failedInserts=${failedInserts}`;
-    console.error(`[CreativeAgent] CRITICAL: ${errMsg} | campaignId=${campaignId} | userId=${userId}`);
+    logError("[CreativeAgent] critical: no posts saved", {
+      campaignId,
+      userId,
+      stage: "post_save",
+      savedPosts,
+      failedInserts,
+      savedAssets,
+      insertErrors: insertErrors.slice(0, 10),
+    });
     await markPackRunFailed(errMsg);
-    throw new Error("Content generation needs to be retried. No content was published.");
+    const detail = insertErrors.length > 0
+      ? `Database save failed: ${insertErrors.map((e) => `[${e.type}] ${e.error}`).join("; ")}`
+      : "The AI returned a pack with no usable posts.";
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `The Creative Agent ran but no posts were saved. ${detail}`,
+    });
   }
 
-  console.log(`[CreativeAgent] Posts and assets inserted | campaignId=${campaignId} | savedPosts=${savedPosts} | savedAssets=${savedAssets} | failedInserts=${failedInserts}`);
+  logInfo("[CreativeAgent] posts and assets inserted", {
+    campaignId,
+    userId,
+    stage: "post_save",
+    savedPosts,
+    savedAssets,
+    failedInserts,
+  });
 
   // Step 2: Generate additional creative assets (best-effort)
   const assetsPrompt = `You are a conversion-focused creative director. Generate supplementary high-performing sales assets for this campaign.
@@ -1298,7 +1516,13 @@ Respond with structured data.`;
     });
   } catch (err: any) {
     assetsError = err.message || String(err);
-    console.error(`[CreativeAgent] Assets generation failed | campaignId=${campaignId} | userId=${userId} | error="${assetsError}"`);
+    logError("[CreativeAgent] assets generation failed", {
+      campaignId,
+      userId,
+      stage: "asset_generation",
+      provider: "openai",
+      error: assetsError,
+    });
   }
 
   // Update campaign with final context
@@ -1319,7 +1543,7 @@ Respond with structured data.`;
     .where(eq(campaigns.id, campaignId));
 
   // Save campaign_assets records from Step 2 (best-effort)
-  if (assetsResult) {
+  if (assetsResult?.output?.assets && Array.isArray(assetsResult.output.assets)) {
     for (const asset of assetsResult.output.assets) {
       try {
         await db.insert(campaignAssets).values({
@@ -1337,13 +1561,35 @@ Respond with structured data.`;
         });
         savedAssets++;
       } catch (err: any) {
-        console.error(`[CreativeAgent] Failed to save campaign asset | campaignId=${campaignId} | error="${err.message}"`);
+        const errorDetail = err.message || String(err);
+        insertErrors.push({ type: asset.assetType, title: asset.title, error: errorDetail });
+        logError("[CreativeAgent] failed to save supplementary asset", {
+          campaignId,
+          userId,
+          stage: "asset_save",
+          assetType: asset.assetType,
+          title: asset.title,
+          error: errorDetail,
+        });
       }
     }
   }
-  console.log(`[CreativeAgent] Saved ${savedAssets} supplementary assets for campaign ${campaignId}`);
+  logInfo("[CreativeAgent] supplementary assets saved", {
+    campaignId,
+    userId,
+    stage: "complete",
+    savedAssets,
+  });
 
-  console.log(`[CreativeAgent] Completed | campaignId=${campaignId} | runId=${packResult.runId} | savedPosts=${savedPosts} | savedAssets=${savedAssets}`);
+  logInfo("[CreativeAgent] completed", {
+    campaignId,
+    userId,
+    stage: "complete",
+    provider: "openai",
+    runId: packResult.runId,
+    savedPosts,
+    savedAssets,
+  });
 
   return {
     packRunId: packResult.runId,

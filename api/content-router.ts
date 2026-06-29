@@ -7,6 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { env } from "./lib/env";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
+import { logInfo, logError } from "./lib/logger";
 import { publishSinglePost } from "./lib/workflow/publishing-runner";
 import { isFacebookPublishingReady, isInstagramPublishingReady } from "./lib/integrations/platforms";
 
@@ -98,32 +99,169 @@ export const contentRouter = createRouter({
     .input(z.object({ campaignId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
+      const { campaignId } = input;
+      const { id: userId } = ctx.user;
+
+      logInfo("[content.generateForCampaign] started", {
+        campaignId,
+        userId,
+        stage: "validation",
+        provider: "openai",
+      });
 
       const [campaign] = await db
         .select()
         .from(campaigns)
         .where(
           and(
-            eq(campaigns.id, input.campaignId),
-            eq(campaigns.userId, ctx.user.id)
+            eq(campaigns.id, campaignId),
+            eq(campaigns.userId, userId)
           )
         )
         .limit(1);
 
       if (!campaign) {
-        throw new Error("Campaign not found");
+        logError("[content.generateForCampaign] campaign not found", {
+          campaignId,
+          userId,
+          stage: "validation",
+        });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Campaign not found or you do not have access to it.",
+        });
       }
 
-      const result = await runCreativeAgent({
-        userId: ctx.user.id,
-        campaignId: input.campaignId,
+      // Validate prerequisites for creative generation
+      const eligibleStates = [
+        "strategy_approved",
+        "creatives_generating",
+        "creatives_ready",
+      ];
+      if (!eligibleStates.includes(campaign.workflowState)) {
+        logError("[content.generateForCampaign] invalid workflow state", {
+          campaignId,
+          userId,
+          stage: "validation",
+          workflowState: campaign.workflowState,
+        });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Cannot generate content while campaign is in "${campaign.workflowState}" state. Approve the strategy first.`,
+        });
+      }
+
+      if (!campaign.businessId) {
+        logError("[content.generateForCampaign] missing business", {
+          campaignId,
+          userId,
+          stage: "validation",
+        });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Campaign is not linked to a business. Complete business onboarding first.",
+        });
+      }
+
+      const personas = campaign.personas as any[] | null | undefined;
+      const hasCreativeContext =
+        campaign.coreMessage ||
+        (campaign.workflowContext as any)?.coreMessage ||
+        (campaign.workflowContext as any)?.valueProposition ||
+        (personas && Array.isArray(personas) && personas.length > 0);
+
+      if (!hasCreativeContext) {
+        logError("[content.generateForCampaign] missing creative context", {
+          campaignId,
+          userId,
+          stage: "validation",
+          hasCoreMessage: !!campaign.coreMessage,
+          hasWorkflowContext: !!campaign.workflowContext,
+          hasPersonas: !!(personas && personas.length > 0),
+        });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Campaign is missing creative context (core message, personas, or approved strategy). Generate and approve a strategy first.",
+        });
+      }
+
+      logInfo("[content.generateForCampaign] prerequisites validated", {
+        campaignId,
+        userId,
+        stage: "agent_run",
+        provider: "openai",
+        businessId: campaign.businessId,
+        workflowState: campaign.workflowState,
+      });
+
+      let result: Awaited<ReturnType<typeof runCreativeAgent>>;
+      try {
+        result = await runCreativeAgent({
+          userId,
+          campaignId,
+        });
+      } catch (err: any) {
+        const errorMessage = err instanceof TRPCError ? err.message : err.message || String(err);
+        logError("[content.generateForCampaign] creative agent failed", {
+          campaignId,
+          userId,
+          stage: "agent_run",
+          provider: "openai",
+          error: errorMessage,
+          trpcCode: err instanceof TRPCError ? err.code : undefined,
+        });
+        throw new TRPCError({
+          code: err instanceof TRPCError ? err.code : "INTERNAL_SERVER_ERROR",
+          message: errorMessage,
+        });
+      }
+
+      logInfo("[content.generateForCampaign] creative agent completed", {
+        campaignId,
+        userId,
+        stage: "workflow_trigger",
+        provider: "openai",
+        packRunId: result.packRunId,
+        savedPosts: result.savedPosts,
+        savedAssets: result.savedAssets,
       });
 
       try {
         await onAgentRunComplete(result.packRunId);
       } catch (err: any) {
-        console.error("[content.generateForCampaign] onAgentRunComplete failed:", err.message);
+        logError("[content.generateForCampaign] workflow trigger failed", {
+          campaignId,
+          userId,
+          stage: "workflow_trigger",
+          provider: "openai",
+          packRunId: result.packRunId,
+          error: err.message || String(err),
+        });
+        // Non-fatal: posts were saved even if workflow transition failed
       }
+
+      if (result.savedPosts === 0) {
+        logError("[content.generateForCampaign] no posts saved", {
+          campaignId,
+          userId,
+          stage: "post_save",
+          provider: "openai",
+          savedAssets: result.savedAssets,
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "The Creative Agent ran but no posts were saved. Please retry or contact support if the issue persists.",
+        });
+      }
+
+      logInfo("[content.generateForCampaign] completed", {
+        campaignId,
+        userId,
+        stage: "complete",
+        provider: "openai",
+        savedPosts: result.savedPosts,
+        savedAssets: result.savedAssets,
+      });
 
       return { success: true, postCount: result.savedPosts };
     }),
