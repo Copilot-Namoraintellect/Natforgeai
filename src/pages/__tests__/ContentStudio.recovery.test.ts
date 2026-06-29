@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { campaignNeedsRecoveryDecision } from "../../lib/content-studio/logic";
+import {
+  campaignNeedsRecoveryDecision,
+  asNumber,
+  asString,
+  getImageUrl,
+} from "../../lib/content-studio/logic";
 
 describe("campaignNeedsRecoveryDecision", () => {
   const campaign = { id: 28, workflowState: "creatives_generating" };
@@ -77,5 +82,94 @@ describe("campaignNeedsRecoveryDecision", () => {
       ]
     );
     expect(result).toBe(false);
+  });
+});
+
+describe("asNumber", () => {
+  it("returns finite numbers as-is", () => {
+    expect(asNumber(1)).toBe(1);
+    expect(asNumber(0)).toBe(0);
+  });
+
+  it("parses numeric strings", () => {
+    expect(asNumber("42")).toBe(42);
+  });
+
+  it("returns null for non-numeric strings", () => {
+    expect(asNumber("abc")).toBeNull();
+  });
+
+  it("returns null for objects and arrays", () => {
+    expect(asNumber({})).toBeNull();
+    expect(asNumber([])).toBeNull();
+  });
+
+  it("returns null for NaN and Infinity", () => {
+    expect(asNumber(NaN)).toBeNull();
+    expect(asNumber(Infinity)).toBeNull();
+  });
+});
+
+describe("asString", () => {
+  it("returns non-empty strings", () => {
+    expect(asString("hello")).toBe("hello");
+  });
+
+  it("returns null for empty or whitespace strings", () => {
+    expect(asString("")).toBeNull();
+    expect(asString("   ")).toBeNull();
+  });
+
+  it("returns null for non-string values", () => {
+    expect(asString(123)).toBeNull();
+    expect(asString(null)).toBeNull();
+    expect(asString(undefined)).toBeNull();
+  });
+});
+
+describe("getImageUrl", () => {
+  it("resolves metadata imageUrl", () => {
+    expect(getImageUrl({ metadata: { imageUrl: "https://example.com/img.png" } })).toBe(
+      "https://example.com/img.png"
+    );
+  });
+
+  it("resolves metadata url fallback", () => {
+    expect(getImageUrl({ metadata: { url: "https://example.com/fallback.png" } })).toBe(
+      "https://example.com/fallback.png"
+    );
+  });
+
+  it("resolves record-level imageUrl", () => {
+    expect(getImageUrl({ imageUrl: "https://example.com/direct.png" })).toBe(
+      "https://example.com/direct.png"
+    );
+  });
+
+  it("prefers metadata over record", () => {
+    expect(
+      getImageUrl({
+        metadata: { imageUrl: "https://example.com/meta.png" },
+        imageUrl: "https://example.com/record.png",
+      })
+    ).toBe("https://example.com/meta.png");
+  });
+
+  it("falls back to campaign image assets", () => {
+    const assets = [
+      { assetType: "image", status: "ready", url: "https://example.com/asset.png" },
+    ];
+    expect(getImageUrl({}, assets)).toBe("https://example.com/asset.png");
+  });
+
+  it("returns undefined when no image source exists", () => {
+    expect(getImageUrl({})).toBeUndefined();
+  });
+
+  it("ignores non-ready assets", () => {
+    const assets = [
+      { assetType: "image", status: "pending", url: "https://example.com/pending.png" },
+    ];
+    expect(getImageUrl({}, assets)).toBeUndefined();
   });
 });

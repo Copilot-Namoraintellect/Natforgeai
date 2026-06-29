@@ -116,14 +116,16 @@ import {
   isCaptionPackAsset,
   findLeafletCandidate,
   campaignNeedsRecoveryDecision,
+  asNumber,
+  asString,
 } from "../lib/content-studio/logic";
 
-function getGenerationRunId(c: any) {
-  return getContentMeta(c).generationRunId || "legacy-group";
+function getRunId(c: unknown): string {
+  return asString(getContentMeta(c).generationRunId) || "legacy-group";
 }
 
-function getIterationNumber(c: any) {
-  return getContentMeta(c).iterationNumber ?? 0;
+function getIterationNumber(c: unknown): number | null {
+  return asNumber(getContentMeta(c).iterationNumber);
 }
 
 function getAssetTier(c: any): "premium" | "basic" | "standard" {
@@ -216,7 +218,7 @@ function computeCampaignSummaries(
       businessName: business?.name || "Unknown business",
       latestLeaflet,
       thumbnailUrl: getImageUrl(latestLeaflet, assets) || null,
-      iterationNumber: meta.iterationNumber || 1,
+      iterationNumber: asNumber(meta.iterationNumber) ?? 1,
       tier,
       status,
       lastGeneratedAt: latestLeaflet ? new Date(latestLeaflet.createdAt || 0) : null,
@@ -244,7 +246,7 @@ function computeCampaignIterations(contents: any[], assets: any[]): ContentItera
   // Records without one are grouped together as a single legacy iteration.
   const byRun = new Map<string, any[]>();
   for (const record of records) {
-    const runId = getGenerationRunId(record);
+    const runId = getRunId(record);
     if (!byRun.has(runId)) byRun.set(runId, []);
     byRun.get(runId)!.push(record);
   }
@@ -3212,7 +3214,7 @@ Include:
     const supportingAssets = selectedIteration?.isLegacy
       ? []
       : (campaignAssets || []).filter(
-          (a) => !isCaptionPackAsset(a) && getGenerationRunId(a) === selectedIteration?.runId && a !== leafletCandidate
+          (a) => !isCaptionPackAsset(a) && getRunId(a) === selectedIteration?.runId && a !== leafletCandidate
         );
 
     const tierLabel: Record<string, string> = {

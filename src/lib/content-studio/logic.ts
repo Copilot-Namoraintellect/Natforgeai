@@ -4,6 +4,19 @@
  * loading JSX or tRPC hooks.
  */
 
+export function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+export function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
 export function getContentMeta(c: unknown): Record<string, unknown> {
   return ((c as Record<string, unknown>)?.metadata as Record<string, unknown>) || {};
 }
