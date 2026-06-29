@@ -1087,6 +1087,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       await db.insert(contentPosts).values({
         userId,
         campaignId,
+        businessId: campaign.businessId ?? null,
         title: safeTitle,
         type: resolvedType as any,
         platform,

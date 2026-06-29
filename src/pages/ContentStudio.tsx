@@ -109,9 +109,14 @@ function actionKey(contentId: number, action: string): PendingActionKey {
   return `${contentId}:${action}`;
 }
 
-function getContentMeta(c: any) {
-  return (c?.metadata || {}) as any;
-}
+import {
+  getContentMeta,
+  getImageUrl,
+  getCampaignImageAssetUrl,
+  isCaptionPackAsset,
+  findLeafletCandidate,
+  campaignNeedsRecoveryDecision,
+} from "../lib/content-studio/logic";
 
 function getGenerationRunId(c: any) {
   return getContentMeta(c).generationRunId || "legacy-group";
@@ -144,44 +149,6 @@ function isVideoConcept(c: any) {
     getAssetType(c) === "video_concept" ||
     getContentMeta(c).assetKind === "master_video_ad" ||
     c?.type === "video_concept"
-  );
-}
-
-function isCaptionPackAsset(a: any) {
-  return a?.assetType === "caption_pack" || getContentMeta(a).assetType === "caption_pack";
-}
-
-function getImageUrl(c: any): string | undefined {
-  if (!c) return undefined;
-  const meta = getContentMeta(c);
-  return meta?.imageUrl || c?.imageUrl || meta?.url || c?.url;
-}
-
-function isLeafletCandidate(c: any): boolean {
-  if (!c) return false;
-  const meta = getContentMeta(c);
-  if (isCaptionPackAsset(c)) return false;
-  if (meta?.assetType === "leaflet" || meta?.assetKind === "master_campaign_post") return true;
-  if (meta?.imageProvider === "openai-leaflet" || meta?.imageSource === "openai") return true;
-  if (meta?.imageUrl || c?.imageUrl) return true;
-  return false;
-}
-
-function findLeafletCandidate(items: any[]): any | undefined {
-  if (!items?.length) return undefined;
-  // Prefer explicit leaflet markers, then OpenAI sources, then any imageUrl-bearing non-caption record.
-  const candidates = items.filter(isLeafletCandidate);
-  return (
-    candidates.find((c) => {
-      const meta = getContentMeta(c);
-      return meta?.assetType === "leaflet" || meta?.assetKind === "master_campaign_post";
-    }) ||
-    candidates.find((c) => {
-      const meta = getContentMeta(c);
-      return meta?.imageProvider === "openai-leaflet" || meta?.imageSource === "openai";
-    }) ||
-    candidates.find((c) => getImageUrl(c)) ||
-    candidates[0]
   );
 }
 
@@ -220,7 +187,8 @@ function getLeafletTier(leaflet: any): "premium" | "basic" | "none" {
 function computeCampaignSummaries(
   campaigns: any[] | undefined,
   businesses: any[] | undefined,
-  contents: any[] | undefined
+  contents: any[] | undefined,
+  assets: any[] | undefined
 ): CampaignSummary[] {
   const leaflets = (contents || []).filter((c) => isMasterLeaflet(c));
   const leafletsByCampaign = new Map<number, any[]>();
@@ -247,7 +215,7 @@ function computeCampaignSummaries(
       campaign,
       businessName: business?.name || "Unknown business",
       latestLeaflet,
-      thumbnailUrl: meta.imageUrl || null,
+      thumbnailUrl: getImageUrl(latestLeaflet, assets) || null,
       iterationNumber: meta.iterationNumber || 1,
       tier,
       status,
@@ -288,7 +256,7 @@ function computeCampaignIterations(contents: any[], assets: any[]): ContentItera
     );
     const explicitNumber = Math.max(...items.map((i) => getIterationNumber(i) || 0));
     const isLegacy = runId === "legacy-group";
-    const leaflet = findLeafletCandidate(items) || items.find(isMasterLeaflet);
+    const leaflet = findLeafletCandidate(items, assets) || items.find(isMasterLeaflet);
     const videoConcept = items.find(isVideoConcept);
     const captionPack = items.find(isCaptionPackAsset);
     const supporting = items.filter(
@@ -637,14 +605,17 @@ export default function ContentStudio() {
   const strategyGeneratedCampaign = campaigns?.find((c) => c.workflowState === "strategy_generated");
   const strategyPendingCampaign = campaigns?.find((c) => c.workflowState === "strategy_pending");
 
-  const hasFailedCreativeRun = creativeAgentRuns?.some((r) => r.status === "failed");
-  const hasFailedStrategyRun = strategyAgentRuns?.some((r) => r.status === "failed");
+  // Keep the latest-run failure flag so the recovery UI can show the right message.
+  const latestStrategyRun = strategyAgentRuns?.[0];
+  const hasFailedStrategyRun = latestStrategyRun?.status === "failed";
 
-  const campaignNeedsRecovery = hasCampaignId && campaignForContext &&
-    ((["creatives_generating", "creatives_ready"].includes(campaignForContext.workflowState) &&
-      (postCountForCampaign === 0 || (contents?.length ?? 0) === 0)) ||
-      hasFailedCreativeRun ||
-      hasFailedStrategyRun);
+  const campaignNeedsRecovery = campaignNeedsRecoveryDecision(
+    campaignForContext,
+    postCountForCampaign,
+    contents,
+    creativeAgentRuns,
+    strategyAgentRuns
+  );
 
   const generateForCampaignMutation = trpc.content.generateForCampaign.useMutation({
     onSuccess: (data) => {
@@ -1116,7 +1087,7 @@ Include:
     const displayIterations = currentIterations.length > 0 ? currentIterations : campaignIterations;
 
     const hasLeafletImage = (iteration?: ContentIteration) =>
-      !!iteration && !!getImageUrl(findLeafletCandidate(iteration.items) || iteration.leaflet);
+      !!iteration && !!getImageUrl(findLeafletCandidate(iteration.items, campaignAssets) || iteration.leaflet, campaignAssets);
 
     const selected = displayIterations.find((i) => i.id === selectedIterationId);
     // Respect an explicit user selection that already carries a leaflet image.
@@ -1136,8 +1107,8 @@ Include:
   );
 
   const selectedIterationItems = selectedIteration?.items || [];
-  const leafletCandidate = selectedIteration?.leaflet || findLeafletCandidate(selectedIterationItems);
-  const leafletImageUrl = getImageUrl(leafletCandidate);
+  const leafletCandidate = selectedIteration?.leaflet || findLeafletCandidate(selectedIterationItems, campaignAssets);
+  const leafletImageUrl = getImageUrl(leafletCandidate, campaignAssets);
   const isLeafletGenerating =
     selectedIteration &&
     !leafletCandidate &&
@@ -1505,7 +1476,11 @@ Include:
 
   function renderMasterImageSection(content: any, compact = false, showCaptionPack = true, hero = false) {
     const metadata = (content.metadata || {}) as any;
-    const imageUrl = metadata?.imageUrl;
+    const imageUrl =
+      metadata?.imageUrl ||
+      metadata?.url ||
+      content?.url ||
+      getCampaignImageAssetUrl(campaignAssets);
     const imageStatus = metadata?.imageStatus;
     const isGeneratingBasic = isPending(content.id, "basic");
     const isGeneratingPremium = isPending(content.id, "premium");
@@ -3568,10 +3543,10 @@ Include:
                   {previousIterations.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {previousIterations
-                        .filter((iteration) => findLeafletCandidate(iteration.items) || iteration.videoConcept)
+                        .filter((iteration) => findLeafletCandidate(iteration.items, campaignAssets) || iteration.videoConcept)
                         .map((iteration) => {
-                          const prevLeaflet = findLeafletCandidate(iteration.items) || iteration.leaflet;
-                          const thumbnailUrl = getImageUrl(prevLeaflet);
+                          const prevLeaflet = findLeafletCandidate(iteration.items, campaignAssets) || iteration.leaflet;
+                          const thumbnailUrl = getImageUrl(prevLeaflet, campaignAssets);
                           const thumbnailBroken = brokenIterationIds.has(iteration.id);
                           return (
                             <button
@@ -4037,7 +4012,7 @@ Include:
   }
 
   function renderCampaignLibrary() {
-    const summaries = computeCampaignSummaries(campaigns, businessesList, contents);
+    const summaries = computeCampaignSummaries(campaigns, businessesList, contents, campaignAssets);
     const filteredSummaries = summaries.filter((summary) => {
       const matchesSearch =
         summary.campaign.name.toLowerCase().includes(search.toLowerCase()) ||
