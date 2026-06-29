@@ -194,6 +194,53 @@ export const contentRouter = createRouter({
         workflowState: campaign.workflowState,
       });
 
+      // Idempotency + repair guard: if the campaign already has saved posts, do not
+      // charge credits or rerun the creative agent. Repair a stuck creatives_generating
+      // state back to creatives_ready automatically.
+      const [existingPostCountResult] = await db
+        .select({ value: count() })
+        .from(contentPosts)
+        .where(
+          and(
+            eq(contentPosts.userId, userId),
+            eq(contentPosts.campaignId, campaignId)
+          )
+        );
+      const existingPostCount = existingPostCountResult?.value ?? 0;
+
+      if (existingPostCount > 0) {
+        if (campaign.workflowState === "creatives_generating") {
+          await db
+            .update(campaigns)
+            .set({
+              workflowState: "creatives_ready",
+              workflowContext: {
+                ...(campaign.workflowContext || {}),
+                repairedAt: new Date().toISOString(),
+                repairedReason: "existing_content_posts_found",
+              } as any,
+              updatedAt: new Date(),
+            })
+            .where(eq(campaigns.id, campaignId));
+          logInfo("[content.generateForCampaign] repaired stuck workflow state", {
+            campaignId,
+            userId,
+            stage: "idempotency_guard",
+            fromState: "creatives_generating",
+            toState: "creatives_ready",
+            postCount: existingPostCount,
+          });
+        } else {
+          logInfo("[content.generateForCampaign] idempotent skip: posts already exist", {
+            campaignId,
+            userId,
+            stage: "idempotency_guard",
+            postCount: existingPostCount,
+          });
+        }
+        return { success: true, postCount: existingPostCount, idempotent: true };
+      }
+
       let result: Awaited<ReturnType<typeof runCreativeAgent>>;
       try {
         result = await runCreativeAgent({
@@ -225,6 +272,42 @@ export const contentRouter = createRouter({
         savedPosts: result.savedPosts,
         savedAssets: result.savedAssets,
       });
+
+      // Ensure the campaign advances to creatives_ready as soon as posts were saved.
+      // Do not rely solely on the fire-and-forget onAgentRunComplete handler.
+      if (result.savedPosts > 0 && campaign.workflowState !== "creatives_ready") {
+        try {
+          await db
+            .update(campaigns)
+            .set({
+              workflowState: "creatives_ready",
+              workflowContext: {
+                ...(campaign.workflowContext || {}),
+                creativeGeneratedAt: new Date().toISOString(),
+                creativeRunId: result.packRunId,
+                savedPosts: result.savedPosts,
+                savedAssets: result.savedAssets,
+              } as any,
+              updatedAt: new Date(),
+            })
+            .where(eq(campaigns.id, campaignId));
+          logInfo("[content.generateForCampaign] advanced workflow state", {
+            campaignId,
+            userId,
+            stage: "state_transition",
+            fromState: campaign.workflowState,
+            toState: "creatives_ready",
+            savedPosts: result.savedPosts,
+          });
+        } catch (stateErr: any) {
+          logError("[content.generateForCampaign] failed to advance workflow state", {
+            campaignId,
+            userId,
+            stage: "state_transition",
+            error: stateErr.message || String(stateErr),
+          });
+        }
+      }
 
       try {
         await onAgentRunComplete(result.packRunId);

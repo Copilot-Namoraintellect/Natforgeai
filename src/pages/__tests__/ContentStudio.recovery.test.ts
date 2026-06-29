@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   campaignNeedsRecoveryDecision,
+  campaignHasGeneratedContent,
   asNumber,
   asString,
   getImageUrl,
@@ -82,6 +83,50 @@ describe("campaignNeedsRecoveryDecision", () => {
       ]
     );
     expect(result).toBe(false);
+  });
+});
+
+describe("campaignHasGeneratedContent", () => {
+  it("returns true when posts exist", () => {
+    expect(
+      campaignHasGeneratedContent({ postCount: 2, contents: [], assets: [] })
+    ).toBe(true);
+  });
+
+  it("returns true when contents exist", () => {
+    expect(
+      campaignHasGeneratedContent({
+        postCount: 0,
+        contents: [{ id: 1, type: "social_post" }],
+        assets: [],
+      })
+    ).toBe(true);
+  });
+
+  it("returns true when assets exist", () => {
+    expect(
+      campaignHasGeneratedContent({
+        postCount: 0,
+        contents: [],
+        assets: [{ id: 1, assetType: "caption_pack" }],
+      })
+    ).toBe(true);
+  });
+
+  it("returns false when nothing exists", () => {
+    expect(
+      campaignHasGeneratedContent({ postCount: 0, contents: [], assets: [] })
+    ).toBe(false);
+  });
+
+  it("returns false for undefined/null inputs", () => {
+    expect(
+      campaignHasGeneratedContent({
+        postCount: undefined,
+        contents: undefined,
+        assets: undefined,
+      })
+    ).toBe(false);
   });
 });
 

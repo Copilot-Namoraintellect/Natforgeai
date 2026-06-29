@@ -116,6 +116,7 @@ import {
   isCaptionPackAsset,
   findLeafletCandidate,
   campaignNeedsRecoveryDecision,
+  campaignHasGeneratedContent,
   asNumber,
   asString,
 } from "../lib/content-studio/logic";
@@ -3066,7 +3067,19 @@ Include:
   function renderWorkflowGuidance() {
     if (!campaignForContext) return null;
 
-    const state = campaignForContext.workflowState || "strategy_pending";
+    let state = campaignForContext.workflowState || "strategy_pending";
+    const hasGeneratedContent = campaignHasGeneratedContent({
+      postCount: postCountForCampaign,
+      contents,
+      assets: campaignAssets,
+    });
+
+    // If posts/assets already exist but the campaign is still marked as generating,
+    // show the ready state guidance instead of the spinner so the user is not blocked.
+    if (state === "creatives_generating" && hasGeneratedContent) {
+      state = "creatives_ready";
+    }
+
     const hasCaptionPack = campaignAssets?.some((a) => a.assetType === "caption_pack");
     const masterVisual =
       filtered?.find((c) => ((c.metadata as any)?.assetKind === "master_campaign_post")) ||

@@ -96,6 +96,15 @@ export function findLeafletCandidate(items: unknown[], assets?: unknown[]): unkn
   );
 }
 
+export function campaignHasGeneratedContent(params: {
+  postCount: number | undefined;
+  contents: unknown[] | undefined;
+  assets: unknown[] | undefined;
+}): boolean {
+  const { postCount, contents, assets } = params;
+  return (postCount ?? 0) > 0 || (contents?.length ?? 0) > 0 || (assets?.length ?? 0) > 0;
+}
+
 export function campaignNeedsRecoveryDecision(
   campaign: unknown,
   postCount: number | undefined,
