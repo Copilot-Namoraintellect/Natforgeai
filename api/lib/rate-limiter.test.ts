@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { TRPCError } from "@trpc/server";
 import {
   rateLimitUser,
   TIER_RATE_LIMITS,
@@ -7,6 +6,11 @@ import {
 } from "./rate-limiter";
 import { env } from "./env";
 import * as logger from "./logger";
+
+vi.mock("./redis", () => ({
+  connectRedis: vi.fn(),
+  isRedisConfigured: vi.fn(() => false),
+}));
 
 function buildCtx(role: "user" | "admin" = "user") {
   return {
@@ -25,29 +29,28 @@ describe("rateLimitUser admin AI bypass", () => {
 
   beforeEach(() => {
     clearRateLimitStateForTests();
-    // Use a tiny AI limit so we can trigger rate limiting quickly.
     TIER_RATE_LIMITS.free = { ...originalFreeLimits, aiPerDay: 2 };
+    env.enableAdminRateLimitBypass = false;
   });
 
   afterEach(() => {
+    clearRateLimitStateForTests();
     TIER_RATE_LIMITS.free = { ...originalFreeLimits };
     env.enableAdminRateLimitBypass = false;
   });
 
   it("rate limits normal users", async () => {
     const ctx = buildCtx("user");
+
     await rateLimitUser(ctx, "ai", "content.generateForCampaign");
     await rateLimitUser(ctx, "ai", "content.generateForCampaign");
+
     await expect(
       rateLimitUser(ctx, "ai", "content.generateForCampaign")
-    ).rejects.toThrow(TRPCError);
-    try {
-      await rateLimitUser(ctx, "ai", "content.generateForCampaign");
-    } catch (err) {
-      expect(err).toBeInstanceOf(TRPCError);
-      expect((err as TRPCError).code).toBe("TOO_MANY_REQUESTS");
-      expect((err as TRPCError).message).toContain("Rate limit reached");
-    }
+    ).rejects.toMatchObject({
+      code: "TOO_MANY_REQUESTS",
+      message: expect.stringContaining("Rate limit reached"),
+    });
   });
 
   it("allows admin to bypass AI rate limits only when the env flag is enabled", async () => {
@@ -81,9 +84,13 @@ describe("rateLimitUser admin AI bypass", () => {
 
     await rateLimitUser(ctx, "ai", "content.generateForCampaign");
     await rateLimitUser(ctx, "ai", "content.generateForCampaign");
+
     await expect(
       rateLimitUser(ctx, "ai", "content.generateForCampaign")
-    ).rejects.toThrow(TRPCError);
+    ).rejects.toMatchObject({
+      code: "TOO_MANY_REQUESTS",
+      message: expect.stringContaining("Rate limit reached"),
+    });
   });
 
   it("does not bypass non-AI rate limits for admins", async () => {
@@ -92,8 +99,12 @@ describe("rateLimitUser admin AI bypass", () => {
     const ctx = buildCtx("admin");
 
     await rateLimitUser(ctx, "api", "content.list");
-    await expect(rateLimitUser(ctx, "api", "content.list")).rejects.toThrow(
-      TRPCError
+
+    await expect(rateLimitUser(ctx, "api", "content.list")).rejects.toMatchObject(
+      {
+        code: "TOO_MANY_REQUESTS",
+        message: expect.stringContaining("Rate limit reached"),
+      }
     );
   });
 });
