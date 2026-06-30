@@ -237,7 +237,7 @@ interface NormalizedLeafletInputs {
   approvedMessagePack?: CampaignMessagePack;
 }
 
-async function normalizeLeafletInputs({
+export async function normalizeLeafletInputs({
   business,
   campaign,
   post,
@@ -246,6 +246,7 @@ async function normalizeLeafletInputs({
   templateId,
   creativeGuidance,
   refinementInstruction,
+  approvedMessagePack: providedMessagePack,
 }: {
   business: any;
   campaign: any;
@@ -255,6 +256,7 @@ async function normalizeLeafletInputs({
   templateId?: TemplateId;
   creativeGuidance?: string;
   refinementInstruction?: string;
+  approvedMessagePack?: CampaignMessagePack;
 }): Promise<NormalizedLeafletInputs> {
   const brandPalette = await resolveBrandPalette({ ...business, brandColors });
   const hasLogo = !!business?.logo;
@@ -268,8 +270,9 @@ async function normalizeLeafletInputs({
   ).toString();
 
   // Prefer the approved Campaign Message Architect pack for headline/subheadline/CTA.
-  let approvedMessagePack: CampaignMessagePack | undefined;
-  if (campaign?.id) {
+  // A caller may pass a refined pack so we do not reload stale copy.
+  let approvedMessagePack: CampaignMessagePack | undefined = providedMessagePack;
+  if (!approvedMessagePack && campaign?.id) {
     approvedMessagePack = (await loadApprovedMessagePack(campaign.id)) || undefined;
   }
 
@@ -658,6 +661,42 @@ export async function generatePremiumLeaflet({
         await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
         return { status: "failed", jobId: "", errorMessage: message };
       }
+
+      // ─── Premium Refinement: re-run the architect with the user's instruction ───
+      if (refinementInstruction?.trim()) {
+        const { refineApprovedMessagePack } = await import("./campaign-message-architect");
+        const refinedPack = await refineApprovedMessagePack({
+          userId,
+          campaignId: post.campaignId,
+          existingPack: approvedMessagePack,
+          refinementInstruction: refinementInstruction.trim(),
+          skipBilling: true,
+          maxAttempts: 2,
+        });
+
+        // Validate the newly generated/refined message pack, not stale leaflet metadata.
+        if (!refinedPack.validation.passed) {
+          const failedCopy = JSON.stringify(
+            {
+              headline: refinedPack.headline,
+              subheadline: refinedPack.subheadline,
+              benefitBullets: refinedPack.benefitBullets,
+              cta: refinedPack.cta,
+            },
+            null,
+            2
+          );
+          const message = `Refined copy failed quality validation:\n${refinedPack.validation.rejections.join("; ")}\n\nGenerated copy that failed:\n${failedCopy}`;
+          console.error(`[PremiumLeaflet] Refinement validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
+          await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+          return { status: "failed", jobId: "", errorMessage: message };
+        }
+
+        // Persist the refined pack so future renders use the latest approved copy.
+        const { saveApprovedMessagePack } = await import("./campaign-message-architect");
+        await saveApprovedMessagePack(userId, post.campaignId, refinedPack);
+        approvedMessagePack = refinedPack;
+      }
     }
 
     const {
@@ -669,7 +708,7 @@ export async function generatePremiumLeaflet({
       selectedTemplate,
       brandPalette,
       aspectRatio,
-    } = await normalizeLeafletInputs({ business, campaign, post, brandColors, creativeType, templateId, creativeGuidance, refinementInstruction });
+    } = await normalizeLeafletInputs({ business, campaign, post, brandColors, creativeType, templateId, creativeGuidance, refinementInstruction, approvedMessagePack });
 
     const premiumTemplateId: PremiumTemplateId = selectedTemplate as PremiumTemplateId;
     const providerTemplateId = isExternalProvider
@@ -698,7 +737,30 @@ export async function generatePremiumLeaflet({
     let cta = leafletCta;
     let services = serviceBullets;
 
+    if (strongerBrandFit && env.openaiApiKey) {
+      try {
+        const refined = await refineLeafletCopy({
+          business,
+          campaign,
+          headline,
+          offer,
+          cta,
+          services,
+          creativeGuidance,
+          refinementInstruction,
+        });
+        headline = refined.headline;
+        offer = refined.offer;
+        cta = refined.cta;
+        services = refined.services;
+      } catch (refineErr: any) {
+        console.warn(`[PremiumLeaflet] Copy refinement failed, using original copy | error="${refineErr.message}"`);
+      }
+    }
+
     // Validate the render inputs against the architect rules one more time.
+    // This must happen AFTER any refinement so stale or invented copy is caught
+    // before credits are spent.
     if (approvedMessagePack) {
       const renderCopyValidation = validateCampaignCopy(
         {
@@ -729,27 +791,6 @@ export async function generatePremiumLeaflet({
         console.error(`[PremiumLeaflet] Render copy validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
         await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
         return { status: "failed", jobId: "", errorMessage: message };
-      }
-    }
-
-    if (strongerBrandFit && env.openaiApiKey) {
-      try {
-        const refined = await refineLeafletCopy({
-          business,
-          campaign,
-          headline,
-          offer,
-          cta,
-          services,
-          creativeGuidance,
-          refinementInstruction,
-        });
-        headline = refined.headline;
-        offer = refined.offer;
-        cta = refined.cta;
-        services = refined.services;
-      } catch (refineErr: any) {
-        console.warn(`[PremiumLeaflet] Copy refinement failed, using original copy | error="${refineErr.message}"`);
       }
     }
 

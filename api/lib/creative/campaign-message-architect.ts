@@ -155,6 +155,9 @@ export type BusinessCategory =
   | "cleaning"
   | "retail"
   | "consulting"
+  | "trades"
+  | "education"
+  | "healthcare"
   | "service"
   | "other";
 
@@ -176,6 +179,9 @@ export function detectBusinessCategory(ctx: ValidationContext): BusinessCategory
   if (/\b(clean|cleaning|maid|domestic|office clean)\b/.test(haystack)) return "cleaning";
   if (/\b(shop|store|retail|e-?commerce|online store|boutique)\b/.test(haystack)) return "retail";
   if (/\b(consult|consulting|advisor|coach|agency|professional|legal|account)\b/.test(haystack)) return "consulting";
+  if (/\b(plumb|plumber|plumbing|electrical|electrician|handyman|builder|building|carpenter|carpentry|roofer|roofing|tiler|tiling|painter|painting|hvac|aircon|air conditioning|garden|landscap|pool|security|locksmith)\b/.test(haystack)) return "trades";
+  if (/\b(education|training|course|tutor|school|academy|learn|learning|workshop|coaching|bootcamp|coding course)\b/.test(haystack)) return "education";
+  if (/\b(health|wellness|therapy|physio|chiro|diet|nutrition|yoga|pilates|meditation|massage|care|clinic)\b/.test(haystack)) return "healthcare";
   if (/\b(service|local service)\b/.test(haystack)) return "service";
   return "other";
 }
@@ -196,6 +202,12 @@ export function expectedCtasForCategory(category: BusinessCategory): string[] {
       return ["Shop Now", "Visit Store", "Order Online", "Browse the Collection"];
     case "consulting":
       return ["Book a Consultation", "Schedule a Consultation", "Request a Quote", "Book a Demo"];
+    case "trades":
+      return ["Request a Quote", "Book a Call-Out", "Get an Estimate", "Contact Us"];
+    case "education":
+      return ["Enrol Now", "Book a Session", "View Courses", "Get More Info"];
+    case "healthcare":
+      return ["Book a Session", "Schedule a Consultation", "Get in Touch", "View Services"];
     case "service":
     case "other":
     default:
@@ -786,6 +798,167 @@ export async function saveApprovedMessagePack(
       })
       .where(eq(campaigns.id, campaignId));
   }
+}
+
+export interface RefineMessagePackOptions {
+  userId: number;
+  campaignId: number;
+  existingPack: CampaignMessagePack;
+  refinementInstruction: string;
+  skipBilling?: boolean;
+  maxAttempts?: number;
+}
+
+function refinementPrompt(ctx: ValidationContext, existingPack: CampaignMessagePack, instruction: string, platforms: string[]): string {
+  const category = detectBusinessCategory(ctx);
+  const categoryCtas = expectedCtasForCategory(category).join('", "');
+  const explicitOffer = hasExplicitOffer(ctx) ? ctx.offerDetails : "None — do NOT invent offers, discounts, free trials, free assessments, guarantees, same-day service, limited-time deals, loans, BNPL or loyalty programmes.";
+
+  return `You are a senior conversion copywriter for NatForgeAI. Refine an existing campaign message pack using the user's specific instruction below.
+
+BUSINESS GROUND TRUTH:
+- Business name: ${ctx.businessName}
+- Industry/category: ${ctx.industry || "Not specified"}
+- Products/Services: ${(ctx.websiteEvidence?.productsServices || [ctx.productOrService]).join(", ")}
+- Target customers: ${(ctx.websiteEvidence?.targetCustomers || [ctx.targetCustomer]).join(", ")}
+- Location: ${ctx.location || "Not specified"}
+- Website evidence category: ${ctx.websiteEvidence?.businessCategory || "Not specified"}
+
+CAMPAIGN BRIEF:
+- Campaign name: ${ctx.campaignName}
+- Product/Service being promoted: ${ctx.productOrService}
+- Target buyer: ${ctx.targetCustomer || "Not specified"}
+- Main pain point: ${ctx.mainPainPoint || "Not specified"}
+- Explicit offer (use ONLY this): ${explicitOffer}
+- Preferred CTA: ${ctx.preferredCta || "Not specified"}
+- Exclusions (never use): ${ctx.excludedOffers || "None"}
+- Platforms: ${platforms.join(", ")}
+
+EXISTING APPROVED MESSAGE PACK (preserve what works, only change what the instruction asks for):
+- Headline: ${existingPack.headline}
+- Subheadline: ${existingPack.subheadline}
+- Benefits: ${existingPack.benefitBullets.join(" | ")}
+- CTA: ${existingPack.cta}
+- Footer/Contact: ${JSON.stringify(existingPack.footerContact)}
+- Proof Points: ${(existingPack.proofPoints || []).join(" | ") || "None"}
+
+USER REFINEMENT INSTRUCTION (apply precisely; do not ignore):
+${instruction}
+
+REQUIRED OUTPUT:
+1. Headline — customer-facing, specific, never the campaign name only, never "Marketing Campaign".
+2. Subheadline — explains the value proposition in one line.
+3. Three benefit bullets or cards — each must mention a concrete outcome, product feature, or customer relief.
+4. CTA — action-driven and matched to the business type. For this business, preferred CTAs are: "${categoryCtas}". Only use "Free" in the CTA if the explicit offer above contains "free".
+5. Footer/contact details — phone, WhatsApp, email, website, location (use only verified details).
+6. Optional proof points or trust signals — only include if there is real evidence. Do NOT invent testimonials, awards, or numbers.
+7. Platform-specific caption adaptations — one per platform listed above, each with caption, CTA, and hashtags.
+
+COPY RULES:
+- NEVER use generic phrases such as "Marketing Campaign", "Transform your business", "Revolutionise", "Unlock success", "Unlock your potential", "Discover the best", "Join thousands" or similar.
+- NEVER invent offers, discounts, free items, loans, BNPL, guarantees, same-day service, or limited-time deals unless the explicit offer above includes them.
+- ALWAYS explain what the business does, who it helps, and why the customer should act.
+- ALWAYS ground claims in the business evidence and brief above.
+- NEVER use placeholders like [Your Business], YourBrandName, [Company] or [Product].
+- Respect the user's refinement instruction above all else, unless it conflicts with the offer/exclusion rules.
+
+Return strict JSON matching the provided schema. Every field must be present. Use null for missing optional values.`;
+}
+
+export async function refineApprovedMessagePack(
+  opts: RefineMessagePackOptions
+): Promise<CampaignMessagePack> {
+  const db = getDb();
+  const { userId, campaignId, existingPack, refinementInstruction, skipBilling, maxAttempts = 2 } = opts;
+
+  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
+  if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+
+  let business: any = null;
+  if (campaign.businessId) {
+    const [b] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
+    business = b;
+  }
+  if (!business) business = {};
+
+  const ctx = buildValidationContext(business, campaign);
+  const platforms = (campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn")
+    .split(/[,;]+/)
+    .map((p: string) => p.trim())
+    .filter(Boolean);
+
+  let attempt = 0;
+  let lastPack: CampaignMessagePack | undefined;
+  let prompt = refinementPrompt(ctx, existingPack, refinementInstruction, platforms);
+
+  while (attempt < maxAttempts) {
+    attempt++;
+    logInfo("[CampaignMessageArchitect] refining message pack", {
+      campaignId,
+      userId,
+      attempt,
+      skipBilling: !!skipBilling,
+    });
+
+    let raw: any;
+    try {
+      const result = await runAgent({
+        userId,
+        campaignId,
+        agentType: "creative",
+        prompt,
+        schema: ArchitectOutputSchema,
+        system:
+          "You are a senior conversion copywriter. You refine campaign copy based on user instructions. Never use generic marketing filler. Never invent offers. Always return valid JSON matching the schema exactly.",
+        skipBilling,
+      });
+      raw = result.output;
+    } catch (err: any) {
+      logError("[CampaignMessageArchitect] refinement generation failed", {
+        campaignId,
+        userId,
+        attempt,
+        error: err.message,
+      });
+      if (attempt === maxAttempts) {
+        lastPack = existingPack;
+        break;
+      }
+      continue;
+    }
+
+    const pack = normaliseArchitectOutput(raw, ctx);
+    lastPack = pack;
+
+    if (pack.validation.passed) {
+      logInfo("[CampaignMessageArchitect] refined message pack approved", {
+        campaignId,
+        userId,
+        score: pack.validation.score,
+      });
+      break;
+    }
+
+    logWarn("[CampaignMessageArchitect] refined message pack rejected", {
+      campaignId,
+      userId,
+      attempt,
+      rejections: pack.validation.rejections,
+      warnings: pack.validation.warnings,
+    });
+
+    if (attempt < maxAttempts) {
+      prompt = `${prompt}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${pack.validation.rejections
+        .map((r) => `- ${r}`)
+        .join("\n")}\n\nAlso address warnings where possible. Never invent offers or use generic phrases.`;
+    }
+  }
+
+  if (!lastPack) {
+    lastPack = existingPack;
+  }
+
+  return lastPack;
 }
 
 export async function ensureApprovedMessagePack(

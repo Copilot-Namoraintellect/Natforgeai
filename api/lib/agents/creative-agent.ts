@@ -868,12 +868,6 @@ QUALITY GATE — IF THE OUTPUT CONTAINS ANY OF THE FOLLOWING, IT FAILS:
 - No connection to the product/service being promoted.
 - If the output fails, regenerate until it meets the premium standard.
 
-ZUTOHUB / STAFF PAYOUT FOCUS (apply when the campaign is about staff earnings, tips, commissions or payouts):
-- Focus on: tips payouts, commission payouts, staff earnings payouts, faster access to earned money, reducing manual payout admin, improving staff retention, helping merchants support staff without increasing salaries, helping restaurants, salons, barbershops, delivery operators and commission-based businesses manage payouts.
-- Core idea: "What if you could improve staff retention without increasing salaries?"
-- Example tone: "Your team works hard for every tip, commission and earned payout. ZutoHub helps businesses move those earnings faster, cleaner and with less admin, so staff feel supported and owners stay in control."
-- Avoid discount language. Avoid "free". Lead with operational relief and staff retention.
-
 GENERATE THE FOLLOWING STRUCTURE:
 
 A. 1 MASTER CAMPAIGN POST (social_post) — the hero visual post

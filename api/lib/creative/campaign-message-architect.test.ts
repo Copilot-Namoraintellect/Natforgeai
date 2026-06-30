@@ -168,6 +168,51 @@ const consulting = ctx({
   },
 });
 
+const trades = ctx({
+  businessName: "Sparky Pros",
+  campaignName: "Electrical Safety Month",
+  productOrService: "Residential and commercial electrical repairs and inspections",
+  targetCustomer: "Homeowners and property managers in Centurion",
+  mainPainPoint: "Electrical faults that go unfixed cause safety risks and tenant complaints",
+  industry: "electrical services",
+  websiteEvidence: {
+    businessCategory: "local trades",
+    productsServices: ["electrical repairs", "safety inspections", "fault finding", "rewiring"],
+    targetCustomers: ["homeowners", "property managers"],
+    location: "Centurion",
+  },
+});
+
+const education = ctx({
+  businessName: "CodeLift Academy",
+  campaignName: "Part-Time Coding Bootcamp",
+  productOrService: "Part-time full-stack coding bootcamp for working professionals",
+  targetCustomer: "Working professionals switching to tech careers",
+  mainPainPoint: "Evening and weekend courses lack practical portfolio projects",
+  industry: "education",
+  websiteEvidence: {
+    businessCategory: "education and training",
+    productsServices: ["coding bootcamp", "web development course", "portfolio projects", "career coaching"],
+    targetCustomers: ["working professionals", "career switchers"],
+    location: "Cape Town",
+  },
+});
+
+const healthcare = ctx({
+  businessName: "Stillpoint Wellness",
+  campaignName: "Stress Relief Sessions",
+  productOrService: "Massage therapy and guided relaxation sessions",
+  targetCustomer: "Professionals dealing with chronic tension and stress",
+  mainPainPoint: "Long work hours create neck, shoulder and back tension that affects sleep",
+  industry: "wellness",
+  websiteEvidence: {
+    businessCategory: "health and wellness",
+    productsServices: ["massage therapy", "relaxation sessions", "stress relief", "guided relaxation"],
+    targetCustomers: ["professionals", "stressed clients"],
+    location: "Durban",
+  },
+});
+
 // ─── Industry-specific tests ───
 
 describe("Campaign Message Architect — industry fixtures", () => {
@@ -179,6 +224,9 @@ describe("Campaign Message Architect — industry fixtures", () => {
     { name: "cleaning service", ctx: cleaningService, expectedCta: "Get a Quote" },
     { name: "e-commerce/retail", ctx: ecommerceRetail, expectedCta: "Shop Now" },
     { name: "consulting", ctx: consulting, expectedCta: "Book a Consultation" },
+    { name: "trades/electrician", ctx: trades, expectedCta: "Request a Quote" },
+    { name: "education/bootcamp", ctx: education, expectedCta: "Enrol Now" },
+    { name: "healthcare/wellness", ctx: healthcare, expectedCta: "Book a Session" },
   ])("generates specific, non-generic copy for $name", ({ ctx, expectedCta }) => {
     const messagePack = buildDeterministicMessagePack(ctx);
 
@@ -352,6 +400,56 @@ describe("validateCampaignCopy", () => {
     const result = validateCampaignCopy(vague, ctx());
     expect(result.warnings.some((w) => w.includes("measurable"))).toBe(true);
   });
+
+  it("rejects invented loan/BNPL claim", () => {
+    const bad = pack({
+      headline: "Get a business loan today",
+      subheadline: "Easy BNPL for small businesses.",
+    });
+    const result = validateCampaignCopy(bad, ctx({ offerDetails: "" }));
+    expect(result.passed).toBe(false);
+    expect(result.rejections.some((r) => /\b(loan|BNPL)\b/i.test(r))).toBe(true);
+  });
+
+  it("rejects invented guarantee claim", () => {
+    const bad = pack({
+      headline: "Money-back guarantee on every service",
+      subheadline: "We guarantee results or your money back.",
+    });
+    const result = validateCampaignCopy(bad, ctx({ offerDetails: "" }));
+    expect(result.passed).toBe(false);
+    expect(result.rejections.some((r) => r.toLowerCase().includes("guarantee"))).toBe(true);
+  });
+
+  it("rejects invented same-day claim", () => {
+    const bad = pack({
+      headline: "Same-day service for local customers",
+      subheadline: "We arrive the same day you call.",
+    });
+    const result = validateCampaignCopy(bad, ctx({ offerDetails: "" }));
+    expect(result.passed).toBe(false);
+    expect(result.rejections.some((r) => r.toLowerCase().includes("same-day"))).toBe(true);
+  });
+
+  it("rejects copy that could apply to any business", () => {
+    const vague = pack({
+      headline: "Quality service for your business",
+      subheadline: "Trusted professional local company serving customers.",
+      benefitBullets: ["Professional team", "Great quality", "Reliable service"],
+      platformCaptions: [],
+    });
+    const result = validateCampaignCopy(
+      vague,
+      ctx({
+        productOrService: "custom software development",
+        websiteEvidence: {
+          productsServices: ["custom software development"],
+          targetCustomers: ["scaling startups"],
+        },
+      })
+    );
+    expect(result.warnings.some((w) => w.includes("any business"))).toBe(true);
+  });
 });
 
 // ─── CTA expectations ───
@@ -365,6 +463,9 @@ describe("detectBusinessCategory / expectedCtasForCategory", () => {
     { industry: "cleaning service", category: "cleaning" },
     { industry: "online retail store", category: "retail" },
     { industry: "business consulting", category: "consulting" },
+    { industry: "electrical repairs", category: "trades" },
+    { industry: "coding bootcamp", category: "education" },
+    { industry: "massage therapy", category: "healthcare" },
   ])("maps '$industry' to $category", ({ industry, category }) => {
     const detected = detectBusinessCategory({
       businessName: "X",
