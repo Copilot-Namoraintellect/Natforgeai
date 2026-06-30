@@ -68,6 +68,13 @@ export interface ValidationContext {
     targetCustomers?: string[];
     location?: string;
   };
+  /**
+   * Optional raw refinement instruction. When provided, the validator may
+   * extract additional target-customer and pain-point terms from it so the
+   * user's explicit copy is not rejected just because it differs from the
+   * original campaign brief.
+   */
+  refinementInstruction?: string;
 }
 
 // ─── Shared constants ───
@@ -255,15 +262,50 @@ function extractTargetCustomerTerms(ctx: ValidationContext): string[] {
   };
   addTerms(ctx.targetCustomer);
   (ctx.websiteEvidence?.targetCustomers || []).forEach(addTerms);
+  // Allow the user's refinement instruction to supply additional customer
+  // segments so explicit structured copy is not blocked by the original brief.
+  if (ctx.refinementInstruction) {
+    const instruction = sanitize(ctx.refinementInstruction).toLowerCase();
+    // Extract likely audience phrases that appear after customer-facing labels.
+    const audiencePatterns = /(?:for|to|target|audience|customer|teams?)\s*[:\-—]?\s*([^.\n]+)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = audiencePatterns.exec(instruction)) !== null) {
+      match[1]
+        .split(/[,;]+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 3)
+        .forEach((t) => terms.add(t));
+    }
+  }
   return Array.from(terms);
 }
 
 function extractPainPointTerms(ctx: ValidationContext): string[] {
-  if (!ctx.mainPainPoint) return [];
-  return ctx.mainPainPoint
-    .split(/[,;]+/)
-    .map((t) => t.trim().toLowerCase())
-    .filter((t) => t.length > 3);
+  const terms = new Set<string>();
+  const addTerms = (source?: string) => {
+    if (!source) return;
+    source
+      .split(/[,;]+/)
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 3)
+      .forEach((t) => terms.add(t));
+  };
+  addTerms(ctx.mainPainPoint);
+  // Allow the user's refinement instruction to supply additional pain/outcome
+  // language so explicit structured copy is not blocked by the original brief.
+  if (ctx.refinementInstruction) {
+    const instruction = sanitize(ctx.refinementInstruction).toLowerCase();
+    const painPatterns = /(?:pain|problem|frustration|delay|wait|stop|avoid|manual|reconciliation|settlement|admin)\s*[:\-—]?\s*([^.\n]+)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = painPatterns.exec(instruction)) !== null) {
+      match[1]
+        .split(/[,;]+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 3)
+        .forEach((t) => terms.add(t));
+    }
+  }
+  return Array.from(terms);
 }
 
 function normaliseForComparison(value: string): string {
@@ -352,8 +394,23 @@ export function validateCampaignCopy(
     score -= 30;
   }
   const matchesExpected = expectedCtas.some((expected) => cta.toLowerCase().includes(expected.toLowerCase()));
-  const preferredCta = sanitize(ctx.preferredCta).toLowerCase();
-  const matchesPreferred = preferredCta.length > 0 && cta.toLowerCase().includes(preferredCta);
+
+  // The preferred CTA field sometimes contains a funnel-stage strategy list
+  // (e.g. "Awareness: Learn more... Consideration: Join... Conversion: Get started...").
+  // Treat that as a set of acceptable CTAs rather than one exact required string.
+  function extractPreferredCtas(raw?: string): string[] {
+    if (!raw) return [];
+    const text = sanitize(raw);
+    if (/\b(Awareness|Consideration|Conversion|Retention)\s*:/i.test(text)) {
+      return text
+        .split(/\n|;/)
+        .map((line) => line.replace(/^\s*[A-Za-z]+\s*:\s*/, "").trim())
+        .filter((c) => c.length > 0);
+    }
+    return [text];
+  }
+  const preferredCtas = extractPreferredCtas(ctx.preferredCta).map((c) => c.toLowerCase());
+  const matchesPreferred = preferredCtas.length > 0 && preferredCtas.some((p) => cta.toLowerCase().includes(p));
   if (!matchesExpected && !matchesPreferred && expectedCtas.length > 0) {
     warnings.push(`CTA "${cta}" may not match the expected action for a ${category} business (${expectedCtas.join(", ")}).`);
     score -= 10;
@@ -1152,18 +1209,38 @@ export async function refineApprovedMessagePack(
     logInfo("[CampaignMessageArchitect] falling back to user-provided structured pack", {
       campaignId,
       userId,
+      source: "fallback_user_pack",
       aiRejections: lastPack.validation.rejections,
     });
     return userPack;
   }
 
   if (!lastPack && userPack && userPack.validation.passed) {
+    logInfo("[CampaignMessageArchitect] using user-provided structured pack (no AI output)", {
+      campaignId,
+      userId,
+      source: "user_pack_only",
+    });
     return userPack;
   }
 
   if (!lastPack) {
     lastPack = existingPack;
   }
+
+  const finalSource =
+    lastPack === userPack
+      ? "user_structured_pack"
+      : lastPack === existingPack
+      ? "existing_pack"
+      : "ai_refined_pack";
+  logInfo("[CampaignMessageArchitect] refinement resolved", {
+    campaignId,
+    userId,
+    source: finalSource,
+    passed: lastPack.validation.passed,
+    score: lastPack.validation.score,
+  });
 
   return lastPack;
 }

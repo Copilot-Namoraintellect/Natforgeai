@@ -40,7 +40,9 @@ import { validateAiLeafletQuality, qualityTierLabel, type LeafletQualityResult }
 import {
   ensureApprovedMessagePack,
   loadApprovedMessagePack,
+  saveApprovedMessagePack,
   validateCampaignCopy,
+  parseStructuredRefinementInstruction,
   type CampaignMessagePack,
 } from "./campaign-message-architect";
 import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendererResult } from "./providers/template-renderer";
@@ -646,56 +648,168 @@ export async function generatePremiumLeaflet({
       return { status: "failed", jobId: "", errorMessage: message };
     }
 
-    // ─── Ensure approved message pack exists before rendering ───
+    // ─── Resolve approved message pack before rendering ───
     let approvedMessagePack: CampaignMessagePack | undefined;
     if (post.campaignId) {
-      approvedMessagePack = await ensureApprovedMessagePack({
+      const trimmedInstruction = refinementInstruction?.trim();
+
+      console.log(
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: "info",
+          message: "[PremiumLeaflet] resolving message pack",
+          userId,
+          contentPostId,
+          campaignId: post.campaignId,
+          hasRefinementInstruction: !!trimmedInstruction,
+          refinementInstructionLength: trimmedInstruction?.length ?? 0,
+          selectedInputFieldName: "refinementInstruction",
+        })
+      );
+
+      // Always start from the latest approved / generated base pack. If it fails
+      // validation, a valid user-provided refinement may still rescue the render.
+      const basePack = await ensureApprovedMessagePack({
         userId,
         campaignId: post.campaignId,
         skipBilling: true,
         maxAttempts: 2,
       });
-      if (!approvedMessagePack.validation.passed) {
-        const message = `Campaign copy did not pass quality validation: ${approvedMessagePack.validation.rejections.join("; ")}`;
-        console.error(`[PremiumLeaflet] Copy validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
-        await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
-        return { status: "failed", jobId: "", errorMessage: message };
+
+      // 1. If the user supplied explicit structured copy, parse and validate it
+      // first. When it passes, use it directly and skip the LLM rewrite.
+      let userStructuredPack: CampaignMessagePack | undefined;
+      if (trimmedInstruction) {
+        const parsed = parseStructuredRefinementInstruction(trimmedInstruction, basePack);
+        const parsedFields = {
+          parsedStructuredCopy: !!parsed,
+          parsedHeadlinePresent: !!parsed?.headline,
+          parsedSubheadlinePresent: !!parsed?.subheadline,
+          parsedBenefitsCount: parsed?.benefitBullets?.length ?? 0,
+          parsedCtaPresent: !!parsed?.cta,
+          parsedFooterPresent: !!parsed?.footerContact,
+        };
+        console.log(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            level: "info",
+            message: "[PremiumLeaflet] parsed refinement instruction",
+            userId,
+            contentPostId,
+            campaignId: post.campaignId,
+            ...parsedFields,
+          })
+        );
+
+        if (parsed) {
+          const validationCtx = {
+            businessName: business.name,
+            campaignName: campaign.name,
+            productOrService: campaign.productOrService || business.productOrService,
+            targetCustomer: campaign.targetBuyer || business.targetCustomer,
+            mainPainPoint: campaign.mainPainPoint,
+            offerDetails: campaign.offerDetails,
+            excludedOffers: campaign.excludedOffers || business.avoidWords,
+            preferredCta: campaign.preferredCta,
+            location: business.location,
+            industry: business.industry,
+            websiteEvidence: business.websiteEvidence,
+            refinementInstruction: trimmedInstruction,
+          };
+          // The parser fills missing required fields from the existing base pack,
+          // so the parsed object is complete enough to treat as a CampaignMessagePack.
+          const completePack = parsed as CampaignMessagePack;
+          const validation = validateCampaignCopy(completePack, validationCtx);
+          const candidatePack: CampaignMessagePack = { ...completePack, validation };
+          userStructuredPack = candidatePack;
+
+          if (candidatePack.validation.passed) {
+            console.log(
+              JSON.stringify({
+                timestamp: new Date().toISOString(),
+                level: "info",
+                message: "[PremiumLeaflet] using user-provided structured pack directly",
+                userId,
+                contentPostId,
+                campaignId: post.campaignId,
+                source: "user_structured_copy",
+              })
+            );
+            await saveApprovedMessagePack(userId, post.campaignId, candidatePack);
+            approvedMessagePack = candidatePack;
+          }
+        }
       }
 
-      // ─── Premium Refinement: re-run the architect with the user's instruction ───
-      if (refinementInstruction?.trim()) {
-        const { refineApprovedMessagePack } = await import("./campaign-message-architect");
-        const refinedPack = await refineApprovedMessagePack({
-          userId,
-          campaignId: post.campaignId,
-          existingPack: approvedMessagePack,
-          refinementInstruction: refinementInstruction.trim(),
-          skipBilling: true,
-          maxAttempts: 2,
-        });
-
-        // Validate the newly generated/refined message pack, not stale leaflet metadata.
-        if (!refinedPack.validation.passed) {
-          const failedCopy = JSON.stringify(
-            {
-              headline: refinedPack.headline,
-              subheadline: refinedPack.subheadline,
-              benefitBullets: refinedPack.benefitBullets,
-              cta: refinedPack.cta,
-            },
-            null,
-            2
-          );
-          const message = `Refined copy failed quality validation:\n${refinedPack.validation.rejections.join("; ")}\n\nGenerated copy that failed:\n${failedCopy}`;
-          console.error(`[PremiumLeaflet] Refinement validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
+      // 2. If no valid user structured pack, try to refine the base pack.
+      // A refinement instruction may rescue even a failed base pack, so we
+      // attempt refinement whenever the user provided guidance.
+      if (!approvedMessagePack) {
+        if (!basePack.validation.passed && !trimmedInstruction) {
+          const message = `Campaign copy did not pass quality validation: ${basePack.validation.rejections.join("; ")}`;
+          console.error(`[PremiumLeaflet] Copy validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
           await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
           return { status: "failed", jobId: "", errorMessage: message };
         }
 
-        // Persist the refined pack so future renders use the latest approved copy.
-        const { saveApprovedMessagePack } = await import("./campaign-message-architect");
-        await saveApprovedMessagePack(userId, post.campaignId, refinedPack);
-        approvedMessagePack = refinedPack;
+        if (trimmedInstruction) {
+          const { refineApprovedMessagePack } = await import("./campaign-message-architect");
+          const refinedPack = await refineApprovedMessagePack({
+            userId,
+            campaignId: post.campaignId,
+            existingPack: basePack,
+            refinementInstruction: trimmedInstruction,
+            skipBilling: true,
+            maxAttempts: 2,
+          });
+
+          console.log(
+            JSON.stringify({
+              timestamp: new Date().toISOString(),
+              level: "info",
+              message: "[PremiumLeaflet] refinement result",
+              userId,
+              contentPostId,
+              campaignId: post.campaignId,
+              source: refinedPack.validation.passed
+                ? "ai_refined_pack"
+                : userStructuredPack
+                ? "fallback_user_pack"
+                : "stale_metadata",
+              passed: refinedPack.validation.passed,
+            })
+          );
+
+          // Fallback: if the AI-refined pack failed but the user-provided
+          // structured pack validated, prefer the user pack.
+          if (!refinedPack.validation.passed && userStructuredPack?.validation.passed) {
+            approvedMessagePack = userStructuredPack;
+          } else if (!refinedPack.validation.passed) {
+            const failedCopy = JSON.stringify(
+              {
+                headline: refinedPack.headline,
+                subheadline: refinedPack.subheadline,
+                benefitBullets: refinedPack.benefitBullets,
+                cta: refinedPack.cta,
+              },
+              null,
+              2
+            );
+            const message = `Refined copy failed quality validation:\n${refinedPack.validation.rejections.join("; ")}\n\nGenerated copy that failed:\n${failedCopy}`;
+            console.error(`[PremiumLeaflet] Refinement validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
+            await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+            return { status: "failed", jobId: "", errorMessage: message };
+          } else {
+            approvedMessagePack = refinedPack;
+          }
+
+          // Persist the approved pack so future renders use the latest copy.
+          if (approvedMessagePack.validation.passed) {
+            await saveApprovedMessagePack(userId, post.campaignId, approvedMessagePack);
+          }
+        } else {
+          approvedMessagePack = basePack;
+        }
       }
     }
 
@@ -784,6 +898,7 @@ export async function generatePremiumLeaflet({
           location: business.location,
           industry: business.industry,
           websiteEvidence: business.websiteEvidence,
+          refinementInstruction,
         }
       );
       if (!renderCopyValidation.passed) {
