@@ -602,8 +602,9 @@ export async function generatePremiumLeaflet({
     }
   }
 
-  const isAiProvider = provider === "ai";
+  let isAiProvider = provider === "ai";
   const isExternalProvider = provider === "external";
+  let storageProvider = provider;
 
   if (isAiProvider) {
     if (!isOpenAiLeafletConfigured()) {
@@ -624,12 +625,12 @@ export async function generatePremiumLeaflet({
     }
   }
 
-  const templateRenderer = isAiProvider
+  let templateRenderer = isAiProvider
     ? getOpenAiLeafletRenderer()
     : isExternalProvider
     ? getTemplateRendererProvider()
     : getInternalTemplateRenderer();
-  const cost = isAiProvider
+  let cost = isAiProvider
     ? getPremiumImageAiCredits()
     : isExternalProvider
     ? getPremiumImageExternalCredits()
@@ -837,7 +838,7 @@ export async function generatePremiumLeaflet({
       return { status: "failed", jobId: "", errorMessage: message };
     }
 
-    const resolvedProviderTemplateId = providerTemplateId as string;
+    let resolvedProviderTemplateId = providerTemplateId as string;
 
     console.log(`[PremiumLeaflet] Rendering | userId=${userId} | contentPostId=${contentPostId} | provider=${templateRenderer.name} | template=${resolvedProviderTemplateId}`);
 
@@ -949,6 +950,15 @@ export async function generatePremiumLeaflet({
     let aiQualityResult: LeafletQualityResult | undefined;
     let aiAttempts: any[] | undefined;
 
+    let fallbackMeta: {
+      provider: "internal-premium-fallback";
+      fallbackReason: "openai_background_quality_failed";
+      originalAiQualityScore: number;
+      criticalFailures: string[];
+      attempts: any[];
+      creditsReason?: "admin_test_fallback";
+    } | undefined;
+
     if (isAiProvider) {
       const aiRender = await renderAiLeafletWithQuality(templateRenderer, renderReq, {
         business,
@@ -957,23 +967,71 @@ export async function generatePremiumLeaflet({
         brandPalette,
       });
       if (!aiRender.success) {
-        const message = `${aiRender.errorMessage} You can generate a Basic Draft (0 credits) instead.`;
-        await setPostImageStatus(contentPostId, {
-          imageStatus: "failed",
-          imageError: message,
-          imageAttempts: aiRender.attempts,
-        });
-        return {
-          status: "failed",
-          jobId: "",
-          errorMessage: message,
-          provider: templateRenderer.name,
+        const lastAttempt = aiRender.attempts[aiRender.attempts.length - 1];
+        const originalAiQualityScore = lastAttempt?.score ?? 0;
+        const criticalFailures = lastAttempt?.criticalFailures ?? [];
+
+        console.warn(
+          `[PremiumLeaflet] OpenAI background quality failed after ${aiRender.attempts.length} attempt(s), falling back to internal premium renderer | userId=${userId} | contentPostId=${contentPostId} | score=${originalAiQualityScore} | critical=${criticalFailures.join(", ")}`
+        );
+
+        const isFreeFallback = env.freeAiLeafletFallback;
+        const fallbackCost = isFreeFallback ? 0 : getPremiumImageInternalCredits();
+        const internalRenderer = getInternalTemplateRenderer();
+        const fallbackRenderReq: TemplateRendererRequest = {
+          ...renderReq,
+          providerTemplateId: selectedTemplate,
+          isRetry: false,
         };
+        const fallbackResult = await internalRenderer.render(fallbackRenderReq);
+
+        if (!fallbackResult.success || (!fallbackResult.imageUrl && !fallbackResult.imageBase64)) {
+          const fallbackError = fallbackResult.error || "Internal premium fallback renderer failed.";
+          const message = `${aiRender.errorMessage} Fallback also failed: ${fallbackError} You can generate a Basic Draft (0 credits) instead.`;
+          await setPostImageStatus(contentPostId, {
+            imageStatus: "failed",
+            imageError: message,
+            imageAttempts: aiRender.attempts,
+          });
+          return {
+            status: "failed",
+            jobId: "",
+            errorMessage: message,
+            provider: templateRenderer.name,
+          };
+        }
+
+        // Use the deterministic fallback image and metadata.
+        templateRenderer = internalRenderer;
+        resolvedProviderTemplateId = selectedTemplate;
+        renderResult = fallbackResult;
+        if (fallbackResult.imageBase64) {
+          buffer = Buffer.from(fallbackResult.imageBase64, "base64");
+        } else if (fallbackResult.imageUrl) {
+          const imgResponse = await fetch(fallbackResult.imageUrl);
+          if (!imgResponse.ok) throw new Error(`Failed to download fallback image: ${imgResponse.status}`);
+          buffer = Buffer.from(await imgResponse.arrayBuffer());
+        } else {
+          throw new Error("No image data returned from fallback renderer");
+        }
+        aiAttempts = aiRender.attempts;
+        cost = fallbackCost;
+        storageProvider = "internal";
+        isAiProvider = false;
+        fallbackMeta = {
+          provider: "internal-premium-fallback",
+          fallbackReason: "openai_background_quality_failed",
+          originalAiQualityScore,
+          criticalFailures,
+          attempts: aiRender.attempts,
+          ...(isFreeFallback ? { creditsReason: "admin_test_fallback" } : {}),
+        };
+      } else {
+        renderResult = aiRender.result;
+        buffer = aiRender.finalBuffer;
+        aiQualityResult = aiRender.qualityResult;
+        aiAttempts = aiRender.attempts;
       }
-      renderResult = aiRender.result;
-      buffer = aiRender.finalBuffer;
-      aiQualityResult = aiRender.qualityResult;
-      aiAttempts = aiRender.attempts;
     } else {
       renderResult = await templateRenderer.render(renderReq);
 
@@ -1023,7 +1081,7 @@ export async function generatePremiumLeaflet({
       ai: "premium-leaflet-ai",
       external: "premium-leaflet",
       internal: "premium-leaflet-internal",
-    }[provider];
+    }[storageProvider];
 
     const stored = await storeImageBuffer(buffer, {
       campaignId: post.campaignId ?? undefined,
@@ -1035,43 +1093,58 @@ export async function generatePremiumLeaflet({
       throw new Error("Failed to store premium leaflet");
     }
 
-    // ─── Charge credits only after successful render + storage + quality validation ───
-    const deduction = await deductCredits({
-      userId,
-      amount: cost,
-      type: "image_generation",
-      description: `Premium Marketing Leaflet (${templateRenderer.name})`,
-      metadata: {
-        provider: templateRenderer.name,
-        providerJobId: renderResult.providerJobId,
-        providerTemplateId: resolvedProviderTemplateId,
-        contentPostId: post.id,
-        campaignId: post.campaignId,
-        cost,
-        source: "premium",
-      },
-    });
+    const finalProviderName = fallbackMeta?.provider ?? templateRenderer.name;
+    const finalProviderTemplateId = fallbackMeta ? selectedTemplate : resolvedProviderTemplateId;
+    const fallbackMessage = fallbackMeta
+      ? "OpenAI background included readable text, so NatForgeAI generated a clean premium fallback layout instead."
+      : undefined;
 
-    await recordAiUsage({
-      userId,
-      campaignId: post.campaignId ?? undefined,
-      agentType: "image_generation",
-      model: `${templateRenderer.name}-template`,
-      promptTokens: 500,
-      completionTokens: 100,
-      actualCostUsdMicro: usdToMicroCents(renderResult.costUsd || 0),
-      estimatedCostUsdMicro: usdToMicroCents(renderResult.costUsd || 0),
-      creditsDeducted: cost,
-      metadata: {
-        provider: templateRenderer.name,
-        providerJobId: renderResult.providerJobId,
-        providerTemplateId: resolvedProviderTemplateId,
-        contentPostId: post.id,
-        aspectRatio,
-        outputUrl: stored.publicUrl,
-        source: "premium",
-      },
-    });
+    // ─── Charge credits only after successful render + storage + quality validation ───
+    let deduction: { newBalance?: number | null } = {
+      newBalance: null,
+    };
+    if (cost > 0) {
+      deduction = await deductCredits({
+        userId,
+        amount: cost,
+        type: "image_generation",
+        description: `Premium Marketing Leaflet (${finalProviderName})`,
+        metadata: {
+          provider: finalProviderName,
+          providerJobId: renderResult.providerJobId,
+          providerTemplateId: finalProviderTemplateId,
+          contentPostId: post.id,
+          campaignId: post.campaignId,
+          cost,
+          source: "premium",
+          ...(fallbackMeta?.creditsReason ? { creditsReason: fallbackMeta.creditsReason } : {}),
+        },
+      });
+
+      await recordAiUsage({
+        userId,
+        campaignId: post.campaignId ?? undefined,
+        agentType: "image_generation",
+        model: `${finalProviderName}-template`,
+        promptTokens: 500,
+        completionTokens: 100,
+        actualCostUsdMicro: usdToMicroCents(renderResult.costUsd || 0),
+        estimatedCostUsdMicro: usdToMicroCents(renderResult.costUsd || 0),
+        creditsDeducted: cost,
+        metadata: {
+          provider: finalProviderName,
+          providerJobId: renderResult.providerJobId,
+          providerTemplateId: finalProviderTemplateId,
+          contentPostId: post.id,
+          aspectRatio,
+          outputUrl: stored.publicUrl,
+          source: "premium",
+          ...(fallbackMeta?.creditsReason ? { creditsReason: fallbackMeta.creditsReason } : {}),
+        },
+      });
+    } else if (fallbackMeta) {
+      console.log(`[PremiumLeaflet] Fallback rendered at 0 credits (admin testing) | userId=${userId} | contentPostId=${contentPostId}`);
+    }
 
     const qualityTier: ImageQualityTier = isAiProvider
       ? ((aiQualityResult?.qualityTier as ImageQualityTier) ?? "premium")
@@ -1084,7 +1157,7 @@ export async function generatePremiumLeaflet({
     const newVersion = {
       version: previousVersions.length + 1,
       url: stored.publicUrl,
-      source: templateRenderer.name,
+      source: finalProviderName,
       score,
       qualityTier,
       qualityLabel,
@@ -1105,7 +1178,7 @@ export async function generatePremiumLeaflet({
       campaignId: post.campaignId,
       businessId: business.id,
       contentPostId: post.id,
-      provider: templateRenderer.name,
+      provider: finalProviderName,
       providerJobId: renderResult.providerJobId,
       prompt: renderReq.headline,
       url: stored.publicUrl,
@@ -1119,7 +1192,7 @@ export async function generatePremiumLeaflet({
         localPath: stored.localPath,
         balanceAfter: deduction.newBalance,
         source: "premium",
-        providerTemplateId,
+        providerTemplateId: finalProviderTemplateId,
         qualityScore: score,
         qualityTier,
         qualityLabel,
@@ -1132,6 +1205,8 @@ export async function generatePremiumLeaflet({
         assetType: "leaflet",
         assetTier: "premium",
         ...(aiAttempts ? { attempts: aiAttempts } : {}),
+        ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
+        ...(fallbackMessage ? { fallbackMessage } : {}),
       },
     });
 
@@ -1151,7 +1226,7 @@ export async function generatePremiumLeaflet({
           currentVersionId,
           imageCurrentVersionId: currentVersionId,
           imageUrl: stored.publicUrl,
-          imageProvider: templateRenderer.name,
+          imageProvider: finalProviderName,
           imageJobId: renderResult.providerJobId,
           imageStatus: "ready",
           imageGeneratedAt: new Date().toISOString(),
@@ -1173,6 +1248,8 @@ export async function generatePremiumLeaflet({
           imageQualityWarnings: warnings,
           validationIssues: warnings,
           imageVersions,
+          imageFallbackMessage: fallbackMessage,
+          imageFallback: fallbackMeta,
           imageBrandPalette: brandPalette,
           imageHasLogo: hasLogo,
           imageCreativeGuidance: creativeGuidance,
@@ -1197,11 +1274,11 @@ export async function generatePremiumLeaflet({
       console.error(`[PremiumLeaflet] Caption pack async error | userId=${userId} | contentPostId=${post.id} | error="${err.message}"`);
     });
 
-    console.log(`[PremiumLeaflet] Ready | userId=${userId} | contentPostId=${contentPostId} | provider=${templateRenderer.name} | url=${stored.publicUrl} | credits=${cost}`);
+    console.log(`[PremiumLeaflet] Ready | userId=${userId} | contentPostId=${contentPostId} | provider=${finalProviderName} | url=${stored.publicUrl} | credits=${cost}${fallbackMeta ? " | fallback=" + fallbackMeta.fallbackReason : ""}`);
 
     return {
       jobId: renderResult.providerJobId || "premium",
-      provider: templateRenderer.name,
+      provider: finalProviderName,
       status: "completed",
       imageUrl: stored.publicUrl,
       extension: renderResult.extension || "png",
@@ -1209,7 +1286,8 @@ export async function generatePremiumLeaflet({
       qualityTier,
       qualityLabel,
       isDraft: false,
-      usingFallback: false,
+      usingFallback: !!fallbackMeta,
+      fallbackMessage,
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

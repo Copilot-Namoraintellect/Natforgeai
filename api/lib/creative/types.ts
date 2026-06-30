@@ -25,6 +25,7 @@ export interface ImageResult {
   isDraft?: boolean;
   creditsCharged?: number;
   usingFallback?: boolean;
+  fallbackMessage?: string;
 }
 
 export interface VideoResult {

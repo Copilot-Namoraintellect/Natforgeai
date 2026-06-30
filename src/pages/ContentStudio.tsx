@@ -45,6 +45,7 @@ import {
   CalendarClock,
   ExternalLink,
   AlertCircle,
+  Info,
   Loader2,
   Megaphone,
   MessageCircle,
@@ -1849,6 +1850,12 @@ Include:
               </div>
             ) : isReady ? (
               <div className="relative group overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-2">
+                {metadata?.imageFallbackMessage && typeof metadata.imageFallbackMessage === "string" && (
+                  <div className="mb-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 flex items-start gap-2">
+                    <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                    <p className="text-xs text-blue-800">{metadata.imageFallbackMessage}</p>
+                  </div>
+                )}
                 {imageLoading && (
                   <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-50">
                     <Loader2 className="w-8 h-8 text-[#00D4FF] animate-spin mb-2" />

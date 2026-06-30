@@ -39,6 +39,9 @@ export const env = {
   enableAdminRateLimitBypass:
     process.env.ENABLE_ADMIN_RATE_LIMIT_BYPASS === "true",
 
+  // When true, OpenAI leaflet fallback renders are charged 0 credits (admin testing only).
+  freeAiLeafletFallback: process.env.FREE_AI_LEAFLET_FALLBACK === "true",
+
   // Social platform OAuth (Meta / LinkedIn)
   metaAppId: process.env.META_APP_ID ?? "",
   metaAppSecret: process.env.META_APP_SECRET ?? "",
