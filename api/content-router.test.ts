@@ -13,6 +13,23 @@ vi.mock("./lib/workflow/triggers", () => ({
   onAgentRunComplete: vi.fn(),
 }));
 
+vi.mock("./lib/rate-limiter", () => ({
+  rateLimitUser: vi.fn().mockResolvedValue(undefined),
+  rateLimitPublic: vi.fn().mockResolvedValue(undefined),
+  checkRateLimit: vi.fn().mockResolvedValue({
+    allowed: true,
+    limit: 100,
+    remaining: 99,
+    resetAt: Date.now() + 60 * 60 * 1000,
+  }),
+  TIER_RATE_LIMITS: {
+    free: { aiPerDay: 20, apiPerHour: 100, publishPerHour: 10 },
+    startup: { aiPerDay: 200, apiPerHour: 1000, publishPerHour: 100 },
+    growth: { aiPerDay: 2000, apiPerHour: 5000, publishPerHour: 500 },
+    enterprise: { aiPerDay: 20000, apiPerHour: 20000, publishPerHour: 2000 },
+  },
+}));
+
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string | undefined;
 }
