@@ -35,6 +35,10 @@ export const env = {
   videoProvider: process.env.VIDEO_PROVIDER ?? "",
   requireTwoFactor: process.env.REQUIRE_TWO_FACTOR !== "false",
 
+  // Admin/debug bypasses (use with caution; do not weaken customer limits)
+  enableAdminRateLimitBypass:
+    process.env.ENABLE_ADMIN_RATE_LIMIT_BYPASS === "true",
+
   // Social platform OAuth (Meta / LinkedIn)
   metaAppId: process.env.META_APP_ID ?? "",
   metaAppSecret: process.env.META_APP_SECRET ?? "",

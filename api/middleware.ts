@@ -58,7 +58,7 @@ const rateLimitUserMiddleware = t.middleware(async (opts) => {
 });
 
 const rateLimitAIMiddleware = t.middleware(async (opts) => {
-  await rateLimitUser(opts.ctx, "ai");
+  await rateLimitUser(opts.ctx, "ai", opts.path);
   return opts.next();
 });
 

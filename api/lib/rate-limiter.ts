@@ -1,5 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { connectRedis, isRedisConfigured } from "./redis";
+import { env } from "./env";
+import { logInfo } from "./logger";
 import type { TrpcContext } from "../context";
 
 // Tier-based rate limits
@@ -95,12 +97,34 @@ export async function rateLimitPublic(
   }
 }
 
+// Test-only helper to avoid order-dependent failures caused by in-memory counters.
+export function clearRateLimitStateForTests(): void {
+  devCounters.clear();
+}
+
 // Middleware for authenticated routes (per-user, tier-based)
 export async function rateLimitUser(
   ctx: TrpcContext,
-  type: "api" | "ai" | "publish"
+  type: "api" | "ai" | "publish",
+  route?: string
 ): Promise<void> {
   if (!ctx.user) return;
+
+  // Safe admin/test bypass for AI actions: only when the env flag is enabled and
+  // the authenticated user has the admin role. Customer rate limits are unchanged.
+  if (
+    type === "ai" &&
+    env.enableAdminRateLimitBypass &&
+    (ctx.user as any).role === "admin"
+  ) {
+    logInfo("[rate-limiter] admin AI rate limit bypass", {
+      userId: ctx.user.id,
+      role: (ctx.user as any).role,
+      route: route ?? "unknown",
+      reason: "admin_rate_limit_bypass",
+    });
+    return;
+  }
 
   const tierSlug = (ctx.user as any).tierSlug ?? "free";
   const limits = TIER_RATE_LIMITS[tierSlug] ?? DEFAULT_LIMITS;
