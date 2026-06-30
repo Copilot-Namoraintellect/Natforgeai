@@ -2051,7 +2051,14 @@ Include:
           <div className="xl:col-span-1 space-y-5">
             <Card className="border-slate-200">
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">Leaflet Details</CardTitle>
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="text-base">Leaflet Details</CardTitle>
+                  {isFailedAttempt(content) && (
+                    <Badge variant="outline" className="text-[10px] h-6 border-amber-200 text-amber-700 bg-amber-50">
+                      Previous successful version
+                    </Badge>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="space-y-3.5 text-sm">
                 <div className="space-y-1">

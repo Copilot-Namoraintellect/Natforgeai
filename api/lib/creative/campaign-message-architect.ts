@@ -809,10 +809,161 @@ export interface RefineMessagePackOptions {
   maxAttempts?: number;
 }
 
-function refinementPrompt(ctx: ValidationContext, existingPack: CampaignMessagePack, instruction: string, platforms: string[]): string {
+/**
+ * Parse a refinement instruction that may contain explicit structured sections
+ * such as Headline, Subheadline, Benefits, CTA and Footer. This lets users
+ * supply a complete message pack as the source of truth instead of hoping the
+ * AI keeps their wording.
+ *
+ * Supports common formats:
+ *   Headline: ...
+ *   **Headline**: ...
+ *   ## Headline
+ *   - Benefit: ...
+ *   1. Benefit: ...
+ */
+export function parseStructuredRefinementInstruction(
+  instruction: string,
+  existingPack: CampaignMessagePack
+): Partial<CampaignMessagePack> | null {
+  if (!instruction || typeof instruction !== "string") return null;
+
+  const lines = instruction.split(/\r?\n/);
+  const result: Partial<CampaignMessagePack> = {};
+  let currentSection: string | null = null;
+  const bullets: string[] = [];
+  const proofPoints: string[] = [];
+
+  const sectionAliases: Record<string, string> = {
+    headline: "headline",
+    "head line": "headline",
+    subheadline: "subheadline",
+    "sub-headline": "subheadline",
+    "sub headline": "subheadline",
+    benefits: "benefits",
+    "benefit bullets": "benefits",
+    "benefit cards": "benefits",
+    "benefit points": "benefits",
+    "key benefits": "benefits",
+    cta: "cta",
+    "call to action": "cta",
+    "call-to-action": "cta",
+    footer: "footer",
+    "footer contact": "footer",
+    "contact details": "footer",
+    "proof points": "proofPoints",
+    "trust signals": "proofPoints",
+    "proof points / trust signals": "proofPoints",
+  };
+
+  function normaliseSection(value: string): string | null {
+    const cleaned = value.toLowerCase().replace(/[^a-z0-9\s/-]/g, "").trim();
+    return sectionAliases[cleaned] || null;
+  }
+
+  function stripLabel(line: string, section: string): string {
+    // Remove markdown bold, leading bullets/numbers, and the section label.
+    return line
+      .replace(/^\s*[-*•\d]+\.?\s*/, "")
+      .replace(/^\*\*|\*\*$/g, "")
+      .replace(new RegExp(`^\\s*${section}\\s*[:\-—]\\s*`, "i"), "")
+      .replace(/^\s*[:\-—]\s*/, "")
+      .trim();
+  }
+
+  function detectSection(line: string): { section: string; content: string } | null {
+    // Match lines like "Headline: my headline", "**Headline**", "## Headline",
+    // "- Headline:", or just "Headline".
+    const contentMatch = line.match(
+      /^\s*(?:#{1,4}\s+|[-*•\d]+\.?\s*)?(?:\*\*)?\s*([A-Za-z0-9\s/-]+?)\s*(?:\*\*)?\s*[:\-—]\s+(.+)$/
+    );
+    if (contentMatch) {
+      const section = normaliseSection(contentMatch[1]);
+      if (section) return { section, content: contentMatch[2].trim() };
+    }
+    const headingMatch = line.match(
+      /^\s*(?:#{1,4}\s+|[-*•\d]+\.?\s*)?(?:\*\*)?\s*([A-Za-z0-9\s/-]+?)\s*(?:\*\*)?\s*[:\-—]?\s*$/
+    );
+    if (headingMatch) {
+      const section = normaliseSection(headingMatch[1]);
+      if (section) return { section, content: "" };
+    }
+    return null;
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      currentSection = null;
+      continue;
+    }
+
+    const detected = detectSection(line);
+    if (detected) {
+      currentSection = detected.section;
+      const content = detected.content || "";
+      if (content && detected.section !== "benefits" && detected.section !== "proofPoints") {
+        if (detected.section === "headline") result.headline = content;
+        else if (detected.section === "subheadline") result.subheadline = content;
+        else if (detected.section === "cta") result.cta = content;
+      }
+      continue;
+    }
+
+    if (currentSection === "benefits") {
+      const bullet = stripLabel(line, "benefit");
+      if (bullet) bullets.push(bullet);
+    } else if (currentSection === "proofPoints") {
+      const point = stripLabel(line, "proof");
+      if (point) proofPoints.push(point);
+    } else if (currentSection && line) {
+      const content = stripLabel(line, currentSection);
+      if (content) {
+        if (currentSection === "headline" && !result.headline) result.headline = content;
+        else if (currentSection === "subheadline" && !result.subheadline) result.subheadline = content;
+        else if (currentSection === "cta" && !result.cta) result.cta = content;
+      }
+    }
+  }
+
+  if (bullets.length > 0) result.benefitBullets = bullets;
+  if (proofPoints.length > 0) result.proofPoints = proofPoints;
+
+  // If the instruction only contains free-form text without any recognised
+  // sections, return null so the AI treats it as a normal refinement request.
+  const hasAnyField = result.headline || result.subheadline || result.benefitBullets?.length || result.cta || result.proofPoints?.length;
+  if (!hasAnyField) return null;
+
+  // Fill missing fields from the existing approved pack so the partial pack is
+  // complete enough to validate and compare.
+  return {
+    headline: result.headline || existingPack.headline,
+    subheadline: result.subheadline || existingPack.subheadline,
+    benefitBullets: result.benefitBullets?.length ? result.benefitBullets : existingPack.benefitBullets,
+    cta: result.cta || existingPack.cta,
+    footerContact: existingPack.footerContact,
+    platformCaptions: existingPack.platformCaptions,
+    proofPoints: result.proofPoints?.length ? result.proofPoints : existingPack.proofPoints,
+    validation: existingPack.validation,
+  };
+}
+
+function refinementPrompt(ctx: ValidationContext, existingPack: CampaignMessagePack, instruction: string, platforms: string[], userPack?: CampaignMessagePack): string {
   const category = detectBusinessCategory(ctx);
   const categoryCtas = expectedCtasForCategory(category).join('", "');
   const explicitOffer = hasExplicitOffer(ctx) ? ctx.offerDetails : "None — do NOT invent offers, discounts, free trials, free assessments, guarantees, same-day service, limited-time deals, loans, BNPL or loyalty programmes.";
+
+  const userPackBlock = userPack
+    ? `
+USER-PROVIDED STRUCTURED COPY — THIS IS THE SOURCE OF TRUTH. YOU MAY POLISH WORDING BUT YOU MUST NOT REPLACE IT WITH GENERIC PHRASES LIKE "YOUR BUSINESS", "TRANSFORM YOUR BUSINESS", OR "UNLOCK SUCCESS".
+- Headline: ${userPack.headline}
+- Subheadline: ${userPack.subheadline}
+- Benefits: ${userPack.benefitBullets.join(" | ")}
+- CTA: ${userPack.cta}
+- Footer/Contact: ${JSON.stringify(userPack.footerContact)}
+- Proof Points: ${(userPack.proofPoints || []).join(" | ") || "None"}
+`
+    : "";
 
   return `You are a senior conversion copywriter for NatForgeAI. Refine an existing campaign message pack using the user's specific instruction below.
 
@@ -841,7 +992,7 @@ EXISTING APPROVED MESSAGE PACK (preserve what works, only change what the instru
 - CTA: ${existingPack.cta}
 - Footer/Contact: ${JSON.stringify(existingPack.footerContact)}
 - Proof Points: ${(existingPack.proofPoints || []).join(" | ") || "None"}
-
+${userPackBlock}
 USER REFINEMENT INSTRUCTION (apply precisely; do not ignore):
 ${instruction}
 
@@ -859,8 +1010,9 @@ COPY RULES:
 - NEVER invent offers, discounts, free items, loans, BNPL, guarantees, same-day service, or limited-time deals unless the explicit offer above includes them.
 - ALWAYS explain what the business does, who it helps, and why the customer should act.
 - ALWAYS ground claims in the business evidence and brief above.
-- NEVER use placeholders like [Your Business], YourBrandName, [Company] or [Product].
+- NEVER use placeholders like [Your Business], YourBrandName, [Company] or [Product]. NEVER output "your business", "your company" or "your brand".
 - Respect the user's refinement instruction above all else, unless it conflicts with the offer/exclusion rules.
+- If the user provided structured copy above, keep its meaning, target customer language and pain-point language intact. You may only tighten wording.
 
 Return strict JSON matching the provided schema. Every field must be present. Use null for missing optional values.`;
 }
@@ -887,9 +1039,30 @@ export async function refineApprovedMessagePack(
     .map((p: string) => p.trim())
     .filter(Boolean);
 
+  // 1. If the user supplied explicit structured copy (Headline, Subheadline,
+  // Benefits, CTA, Footer), extract it deterministically and treat it as the
+  // source of truth. The AI may polish wording but must not replace it with
+  // generic placeholder language.
+  const parsedUserPack = parseStructuredRefinementInstruction(refinementInstruction, existingPack);
+  let userPack: CampaignMessagePack | undefined;
+  if (parsedUserPack) {
+    userPack = {
+      headline: parsedUserPack.headline || existingPack.headline,
+      subheadline: parsedUserPack.subheadline || existingPack.subheadline,
+      benefitBullets: parsedUserPack.benefitBullets?.length ? parsedUserPack.benefitBullets : existingPack.benefitBullets,
+      cta: parsedUserPack.cta || existingPack.cta,
+      footerContact: parsedUserPack.footerContact || existingPack.footerContact,
+      platformCaptions: parsedUserPack.platformCaptions?.length ? parsedUserPack.platformCaptions : existingPack.platformCaptions,
+      proofPoints: parsedUserPack.proofPoints?.length ? parsedUserPack.proofPoints : existingPack.proofPoints,
+      validation: { passed: false, score: 0, rejections: [], warnings: [] },
+    };
+    userPack.validation = validateCampaignCopy(userPack, ctx);
+  }
+
   let attempt = 0;
   let lastPack: CampaignMessagePack | undefined;
-  let prompt = refinementPrompt(ctx, existingPack, refinementInstruction, platforms);
+  let placeholderRetryUsed = false;
+  let prompt = refinementPrompt(ctx, existingPack, refinementInstruction, platforms, userPack);
 
   while (attempt < maxAttempts) {
     attempt++;
@@ -898,6 +1071,7 @@ export async function refineApprovedMessagePack(
       userId,
       attempt,
       skipBilling: !!skipBilling,
+      hasUserProvidedPack: !!userPack,
     });
 
     let raw: any;
@@ -921,7 +1095,6 @@ export async function refineApprovedMessagePack(
         error: err.message,
       });
       if (attempt === maxAttempts) {
-        lastPack = existingPack;
         break;
       }
       continue;
@@ -947,11 +1120,45 @@ export async function refineApprovedMessagePack(
       warnings: pack.validation.warnings,
     });
 
+    // Auto-retry once specifically for placeholder/generic language without
+    // consuming a user-visible retry click.
+    const hasPlaceholderIssue = pack.validation.rejections.some((r) =>
+      /placeholder|your business|your company|your brand|generic phrase/i.test(r)
+    );
+    if (hasPlaceholderIssue && !placeholderRetryUsed && userPack) {
+      placeholderRetryUsed = true;
+      prompt = `${refinementPrompt(
+        ctx,
+        existingPack,
+        refinementInstruction,
+        platforms,
+        userPack
+      )}\n\nCRITICAL: Your previous output contained generic placeholder language. Use the USER-PROVIDED STRUCTURED COPY above as the source of truth. Do not replace it with "your business", "your company", "transform your business", or similar generic phrases.`;
+      // We do not increment attempt here because this is the automatic
+      // placeholder-recovery retry; instead, continue the loop normally.
+      continue;
+    }
+
     if (attempt < maxAttempts) {
       prompt = `${prompt}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${pack.validation.rejections
         .map((r) => `- ${r}`)
         .join("\n")}\n\nAlso address warnings where possible. Never invent offers or use generic phrases.`;
     }
+  }
+
+  // 4. Fallback: if the AI-refined pack failed validation but the user-provided
+  // structured pack passes validation, use the user-provided pack.
+  if (lastPack && !lastPack.validation.passed && userPack && userPack.validation.passed) {
+    logInfo("[CampaignMessageArchitect] falling back to user-provided structured pack", {
+      campaignId,
+      userId,
+      aiRejections: lastPack.validation.rejections,
+    });
+    return userPack;
+  }
+
+  if (!lastPack && userPack && userPack.validation.passed) {
+    return userPack;
   }
 
   if (!lastPack) {

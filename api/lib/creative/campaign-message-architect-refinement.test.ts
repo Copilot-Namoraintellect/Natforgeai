@@ -9,7 +9,7 @@ vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
 }));
 
-import { refineApprovedMessagePack, type CampaignMessagePack } from "./campaign-message-architect";
+import { refineApprovedMessagePack, parseStructuredRefinementInstruction, type CampaignMessagePack } from "./campaign-message-architect";
 
 function createMockDb({ runAgentOutput }: { runAgentOutput?: any } = {}) {
   return {
@@ -26,8 +26,8 @@ function createMockDb({ runAgentOutput }: { runAgentOutput?: any } = {}) {
                   businessId: 20,
                   name: "Spring Campaign",
                   productOrService: "Residential electrical repairs",
-                  targetBuyer: "Homeowners in Centurion",
-                  mainPainPoint: "Electrical faults cause safety risks",
+                  targetBuyer: "Homeowners",
+                  mainPainPoint: "Electrical faults",
                   offerDetails: "",
                   excludedOffers: "",
                   preferredCta: "Request a Quote",
@@ -81,6 +81,27 @@ const basePack: CampaignMessagePack = {
   ],
   validation: { passed: true, score: 100, rejections: [], warnings: [] },
 };
+
+describe("parseStructuredRefinementInstruction", () => {
+  it("extracts headline, subheadline, benefits, cta and footer", () => {
+    const instruction = `
+Headline: Fast electrical repairs for Centurion homes
+Subheadline: We fix faults fast so homeowners avoid safety risks.
+Benefits:
+- Local electricians who arrive within the hour
+- Upfront quotes with no hidden fees
+- Safety inspections on every call-out
+CTA: Request a Quote
+Footer: Centurion
+`;
+    const parsed = parseStructuredRefinementInstruction(instruction, basePack);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.headline).toBe("Fast electrical repairs for Centurion homes");
+    expect(parsed?.subheadline).toBe("We fix faults fast so homeowners avoid safety risks.");
+    expect(parsed?.benefitBullets).toHaveLength(3);
+    expect(parsed?.cta).toBe("Request a Quote");
+  });
+});
 
 describe("refineApprovedMessagePack", () => {
   beforeEach(() => {
@@ -187,5 +208,194 @@ describe("refineApprovedMessagePack", () => {
 
     expect(refined.headline).toBe(basePack.headline);
     expect(refined.validation.passed).toBe(true);
+  });
+
+  it("parses explicit structured copy from the refinement instruction and preserves it", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runAgent } = await import("../agents/runner");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb() as any);
+    // The LLM tries to replace the user's explicit copy with generic wording.
+    vi.mocked(runAgent).mockResolvedValue({
+      runId: 125,
+      output: {
+        headline: "Transform your business today",
+        subheadline: "Unlock success with our revolutionary service.",
+        benefitBullets: ["Quality service", "Professional team", "Great results"],
+        cta: "Learn more",
+        footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Centurion" },
+        proofPoints: null,
+        platformCaptions: [],
+      },
+    });
+
+    const userInstruction = `
+Headline: Fast electrical repairs for Centurion homes
+Subheadline: We fix faults fast so homeowners avoid safety risks.
+Benefits:
+- Local electricians who arrive within the hour
+- Upfront quotes with no hidden fees
+- Safety inspections on every call-out
+CTA: Request a Quote
+Footer: Centurion
+`;
+
+    const refined = await refineApprovedMessagePack({
+      userId: 10,
+      campaignId: 1,
+      existingPack: basePack,
+      refinementInstruction: userInstruction,
+      skipBilling: true,
+      maxAttempts: 1,
+    });
+
+    // Because the AI output is generic and invalid, the fallback should use the
+    // user-provided structured pack.
+    expect(refined.validation.passed).toBe(true);
+    expect(refined.headline).toBe("Fast electrical repairs for Centurion homes");
+    expect(refined.benefitBullets).toContain("Local electricians who arrive within the hour");
+    expect(refined.cta).toBe("Request a Quote");
+    // The prompt should have included the structured copy block.
+    const prompt = (runAgent as any).mock.calls[0][0].prompt;
+    expect(prompt).toContain("USER-PROVIDED STRUCTURED COPY");
+    expect(prompt).toContain("Fast electrical repairs for Centurion homes");
+  });
+
+  it("preserves target customer and pain-point language from structured refinement", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runAgent } = await import("../agents/runner");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb() as any);
+    vi.mocked(runAgent).mockResolvedValue({
+      runId: 126,
+      output: {
+        headline: "Help your business avoid electrical downtime",
+        subheadline: "We support your business with reliable electrical work.",
+        benefitBullets: ["Fast service", "Clear pricing", "Local team"],
+        cta: "Request a Quote",
+        footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Centurion" },
+        proofPoints: null,
+        platformCaptions: [],
+      },
+    });
+
+    const userInstruction = `
+Headline: Keep Centurion homeowners safe from electrical faults
+Subheadline: Faulty wiring and tripped boards are electrical faults we fix fast.
+Benefits:
+- Fast electrical repairs for homeowners in Centurion
+- Clear fault finding for electrical safety risks
+- Upfront quotes before any electrical repairs start
+CTA: Request a Quote
+`;
+
+    const refined = await refineApprovedMessagePack({
+      userId: 10,
+      campaignId: 1,
+      existingPack: basePack,
+      refinementInstruction: userInstruction,
+      skipBilling: true,
+      maxAttempts: 1,
+    });
+
+    // The AI drifted into generic "your business" language, so fallback to the
+    // user pack which contains explicit target customer and pain-point language.
+    expect(refined.validation.passed).toBe(true);
+    expect(refined.headline.toLowerCase()).toContain("homeowners");
+    expect(refined.subheadline.toLowerCase()).toContain("faulty wiring");
+    expect(refined.subheadline.toLowerCase()).toContain("electrical faults");
+  });
+
+  it("auto-retries once when the first refined pack contains placeholder language", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runAgent } = await import("../agents/runner");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb() as any);
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce({
+        runId: 128,
+        output: {
+          headline: "The best choice for your business",
+          subheadline: "We help your business grow and succeed.",
+          benefitBullets: ["Quality service", "Professional team", "Great results"],
+          cta: "Learn more",
+          footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Centurion" },
+          proofPoints: null,
+          platformCaptions: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        runId: 129,
+        output: {
+          headline: "Centurion homeowners trust our electrical repairs",
+          subheadline: "Faulty wiring and tripped boards fixed fast by local electricians.",
+          benefitBullets: [
+            "Fast electrical repairs for Centurion homes.",
+            "Upfront quotes before any work starts.",
+            "Safety-first workmanship on every call-out.",
+          ],
+          cta: "Request a Quote",
+          footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Centurion" },
+          proofPoints: null,
+          platformCaptions: [],
+        },
+      });
+
+    const refined = await refineApprovedMessagePack({
+      userId: 10,
+      campaignId: 1,
+      existingPack: basePack,
+      refinementInstruction: "Make it more local and homeowner-focused",
+      skipBilling: true,
+      maxAttempts: 2,
+    });
+
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(refined.validation.passed).toBe(true);
+    expect(refined.headline.toLowerCase()).toContain("homeowners");
+    expect(refined.subheadline.toLowerCase()).toContain("faulty wiring");
+  });
+
+  it("rejects placeholder wording such as 'your business' and falls back to valid user copy", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runAgent } = await import("../agents/runner");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb() as any);
+    // The LLM returns generic placeholder copy that should be rejected.
+    vi.mocked(runAgent).mockResolvedValue({
+      runId: 127,
+      output: {
+        headline: "The best choice for your business",
+        subheadline: "We help your business grow and succeed.",
+        benefitBullets: ["Quality service", "Professional team", "Great results"],
+        cta: "Learn more",
+        footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Centurion" },
+        proofPoints: null,
+        platformCaptions: [],
+      },
+    });
+
+    const userInstruction = `
+Headline: Centurion electrical repairs for busy homeowners
+Subheadline: Faulty boards and tripped circuits are electrical faults we sort fast.
+Benefits:
+- Local electrical repairs in Centurion
+- Upfront quotes for every repair
+- Safety-first workmanship for homeowners
+CTA: Request a Quote
+`;
+
+    const refined = await refineApprovedMessagePack({
+      userId: 10,
+      campaignId: 1,
+      existingPack: basePack,
+      refinementInstruction: userInstruction,
+      skipBilling: true,
+      maxAttempts: 1,
+    });
+
+    expect(refined.validation.passed).toBe(true);
+    expect(refined.headline).toBe("Centurion electrical repairs for busy homeowners");
+    expect(refined.cta).toBe("Request a Quote");
   });
 });
