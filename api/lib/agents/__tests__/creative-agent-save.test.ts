@@ -219,6 +219,40 @@ function mockRunAgentResponse(opts: { prompt: string }, runId: number): { runId:
   if (opts.prompt.includes("supplementary")) {
     return { runId: runId + 1, output: buildAssetsOutput() };
   }
+  if (opts.prompt.includes("APPROVED CAMPAIGN MESSAGE PACK")) {
+    return { runId, output: buildPackOutput() };
+  }
+  if (opts.prompt.toLowerCase().includes("campaign message pack")) {
+    return {
+      runId,
+      output: {
+        headline: "Payout platform for small businesses in Randburg",
+        subheadline: "Move staff earnings faster and cut manual payout admin.",
+        benefitBullets: [
+          "Automated tip and commission payouts.",
+          "Less admin time for owners.",
+          "Staff get paid faster and more reliably.",
+        ],
+        cta: "Book a demo",
+        footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Randburg" },
+        proofPoints: null,
+        platformCaptions: [
+          {
+            platform: "Instagram",
+            caption: "Stop losing staff to slow manual payouts. Zutohub moves earnings faster.",
+            cta: "Book a demo",
+            hashtags: ["#fintech", "#smallbiz"],
+          },
+          {
+            platform: "Facebook",
+            caption: "Randburg small businesses: cut payout admin and keep staff happy.",
+            cta: "Book a demo",
+            hashtags: ["#fintech", "#smallbiz"],
+          },
+        ],
+      },
+    };
+  }
   return { runId, output: buildPackOutput() };
 }
 

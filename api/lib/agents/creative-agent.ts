@@ -5,6 +5,12 @@ import { getDb } from "../../queries/connection";
 import { campaigns, contentPosts, campaignAssets, businesses, agentRuns } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { logInfo, logError, logWarn } from "../logger";
+import {
+  ensureApprovedMessagePack,
+  validateCampaignCopy,
+  type CampaignMessagePack,
+  type ValidationContext,
+} from "../creative/campaign-message-architect";
 
 // Valid content_posts.type enum values from db/schema.ts
 const CONTENT_POST_TYPES = new Set([
@@ -510,6 +516,65 @@ const OFFER_PATTERNS = [
   /loyalty\s+program/i,
 ];
 
+function buildValidationContextFromCampaign(
+  campaign: any,
+  business: any
+): ValidationContext {
+  const evidence = (business?.websiteEvidence || {}) as any;
+  return {
+    businessName: String(business?.name ?? ""),
+    campaignName: String(campaign?.name ?? ""),
+    productOrService: String(campaign?.productOrService || business?.productOrService || ""),
+    targetCustomer: String(campaign?.targetBuyer || business?.targetCustomer || business?.targetAudience || ""),
+    mainPainPoint: String(campaign?.mainPainPoint || ""),
+    offerDetails: String(campaign?.offerDetails || ""),
+    excludedOffers: String(campaign?.excludedOffers || business?.avoidWords || ""),
+    preferredCta: String(campaign?.preferredCta || campaign?.ctaStrategy || ""),
+    location: String(campaign?.location || business?.location || evidence?.location || ""),
+    industry: String(business?.industry || evidence?.businessCategory || ""),
+    websiteEvidence: {
+      businessCategory: evidence?.businessCategory,
+      productsServices: evidence?.productsServices || [],
+      targetCustomers: evidence?.targetCustomers || [],
+      location: evidence?.location,
+    },
+  };
+}
+
+function validatePackAgainstArchitect(
+  pack: any,
+  ctx: ValidationContext
+): { passed: boolean; issues: string[] } {
+  const masterPost = pack.socialPosts?.[0];
+  const platformCaptions = (pack.platformAdaptations || []).map((a: any) => ({
+    platform: String(a.platform ?? ""),
+    caption: String(a.adaptedCaption ?? ""),
+    cta: String(a.adaptedCta ?? ""),
+    hashtags: Array.isArray(a.adaptedHashtags) ? a.adaptedHashtags.map(String) : [],
+  }));
+
+  const messagePack: CampaignMessagePack = {
+    headline: String(masterPost?.hook || masterPost?.title || ""),
+    subheadline: String(masterPost?.caption || "").slice(0, 160),
+    benefitBullets: [
+      String(masterPost?.caption || "").slice(0, 120),
+      String(masterPost?.salesAngle || ""),
+      String(masterPost?.transformation || ""),
+    ].filter(Boolean),
+    cta: String(masterPost?.cta || ""),
+    footerContact: {},
+    proofPoints: [],
+    platformCaptions,
+    validation: { passed: false, score: 0, rejections: [], warnings: [] },
+  };
+
+  const result = validateCampaignCopy(messagePack, ctx);
+  return {
+    passed: result.passed,
+    issues: [...result.rejections, ...result.warnings],
+  };
+}
+
 function assessPackQuality(
   pack: any,
   hasExplicitOffer: boolean,
@@ -668,9 +733,11 @@ export async function runCreativeAgent({
     targetCustomers?: string[];
     location?: string;
   } | null = null;
+  let business: any = null;
   if (campaign.businessId) {
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
     if (biz) {
+      business = biz;
       location = location || biz.location || null;
       industry = industry || biz.industry || null;
       businessEvidence = (biz.websiteEvidence || null) as any;
@@ -685,8 +752,64 @@ export async function runCreativeAgent({
     industry: industry || "none",
   });
 
-  // Step 1: Generate Hero Campaign Pack
+  // Step 0: Build / reuse approved campaign message pack
+  let approvedMessagePack: CampaignMessagePack | null = null;
+  try {
+    approvedMessagePack = await ensureApprovedMessagePack({
+      userId,
+      campaignId,
+      skipBilling: true,
+      maxAttempts: 2,
+    });
+
+    if (!approvedMessagePack.validation.passed) {
+      logError("[CreativeAgent] approved message pack failed validation", {
+        campaignId,
+        userId,
+        stage: "message_architect",
+        rejections: approvedMessagePack.validation.rejections,
+        warnings: approvedMessagePack.validation.warnings,
+      });
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Campaign copy did not meet quality standards: ${approvedMessagePack.validation.rejections.join("; ")}`,
+      });
+    }
+
+    logInfo("[CreativeAgent] approved message pack loaded", {
+      campaignId,
+      userId,
+      stage: "message_architect",
+      headline: approvedMessagePack.headline,
+      score: approvedMessagePack.validation.score,
+    });
+  } catch (architectErr: any) {
+    logError("[CreativeAgent] message architect failed", {
+      campaignId,
+      userId,
+      stage: "message_architect",
+      error: architectErr.message,
+    });
+    if (architectErr instanceof TRPCError) throw architectErr;
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Failed to build approved campaign copy. Please retry.",
+    });
+  }
+
+  // Step 1: Generate Hero Campaign Pack (seeded with approved message pack)
   const packPrompt = `You are an elite creative director for a premium marketing agency. You build tight, high-performing Hero Campaign Packs — not content factories. Approved strategy becomes one strong campaign idea, then platform adaptations and supporting assets.
+
+APPROVED CAMPAIGN MESSAGE PACK — USE THIS AS THE SOURCE OF TRUTH FOR ALL COPY:
+- Headline: ${approvedMessagePack.headline}
+- Subheadline: ${approvedMessagePack.subheadline}
+- Benefit Bullets: ${approvedMessagePack.benefitBullets.join(" | ")}
+- CTA: ${approvedMessagePack.cta}
+- Footer/Contact: ${JSON.stringify(approvedMessagePack.footerContact)}
+- Proof Points: ${(approvedMessagePack.proofPoints || []).join(" | ") || "None"}
+- Platform Captions: ${approvedMessagePack.platformCaptions.map((c) => `${c.platform}: ${c.caption}`).join(" | ")}
+
+CRITICAL: The Master Campaign Post headline, hook and CTA must derive from the Approved Message Pack above. Do not invent a different headline or CTA. Do not use the campaign name as the headline.
 
 CAMPAIGN DETAILS:
 - Name: ${campaign.name}
@@ -696,7 +819,7 @@ CAMPAIGN DETAILS:
 - Main Pain Point: ${brief.mainPainPoint || "Not specified"}
 - Product/Service Being Promoted: ${brief.productOrService || strategyContext?.valueProposition || coreMessage || "Not specified"}
 - Explicit Offer (only use this): ${brief.offerDetails || (offers && offers.length > 0 ? JSON.stringify(offers) : "None — do not invent offers")}
-- Preferred CTA: ${brief.preferredCta || ctaStrategy || "Not specified"}
+- Preferred CTA: ${brief.preferredCta || ctaStrategy || approvedMessagePack.cta}
 - What NOT to say / excluded offers: ${brief.excludedOffers || "None specified"}
 - Reference Style / Example: ${brief.referenceStyle || strategyContext?.campaignTheme || "Not specified"}
 - Preferred Content Style: ${brief.contentStyle || "Not specified"}
@@ -719,7 +842,7 @@ PRODUCT EXPERIENCE RULES — YOU MUST FOLLOW THESE EXACTLY:
 - Output exactly ONE Master Campaign Post and ONE Master Video Ad as the primary assets.
 - Personas guide the message, tone and angle. DO NOT create a separate post for each persona by default.
 - DO NOT invent offers, discounts, free trials, limited spots, loyalty programmes, free e-books or lead magnets unless they are explicitly listed in the approved strategy above.
-- If the user did not provide an offer, use neutral CTAs only: "Book a demo", "Speak to us", "See how it works", "Request a payout workflow assessment", "Request a walkthrough", "Start your listing", "Join the platform" or "Let us show you the payout flow".
+- If the user did not provide an offer, use the CTA from the Approved Message Pack: "${approvedMessagePack.cta}".
 - Ground every claim in the approved strategy. Do not invent statistics, testimonials, prices or locations.
 
 COPY QUALITY RULES — YOU MUST FOLLOW THESE EXACTLY:
@@ -897,17 +1020,21 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
 
   // Quality gate: check for invented offers and generic copy
   const quality = assessPackQuality(pack, hasExplicitOffer, brief);
-  if (!quality.passed) {
+  const architectQuality = validatePackAgainstArchitect(pack, buildValidationContextFromCampaign(campaign, business));
+  const combinedIssues = quality.passed ? architectQuality.issues : [...quality.issues, ...architectQuality.issues];
+  const combinedPassed = quality.passed && architectQuality.passed;
+
+  if (!combinedPassed) {
     logWarn("[CreativeAgent] quality gate failed", {
       campaignId,
       userId,
       stage: "quality_gate",
       provider: "openai",
-      issues: quality.issues,
+      issues: combinedIssues,
     });
     // One regeneration attempt with stricter instructions
     try {
-      const retryPrompt = `${packPrompt}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${quality.issues.map((i) => `- ${i}`).join("\n")}\n\nDo not invent offers. Do not use generic motivational language. Ground every line in the campaign brief above.`;
+      const retryPrompt = `${packPrompt}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${combinedIssues.map((i) => `- ${i}`).join("\n")}\n\nDo not invent offers. Do not use generic motivational language. Ground every line in the campaign brief above. Crucially, the Master Campaign Post must use the Approved Message Pack headline and CTA.`;
       const retryResult = await runAgent({
         userId,
         campaignId,
@@ -915,21 +1042,23 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         prompt: retryPrompt,
         schema: PremiumCampaignPackSchema,
         system:
-          "You are an elite creative director. Your previous output was rejected for being generic or inventing offers. Regenerate a tight, premium Hero Campaign Pack that is specific to the business and campaign brief. Do not invent discounts or offers. Use neutral CTAs if no offer exists. Every word must earn its place.",
+          "You are an elite creative director. Your previous output was rejected for being generic or inventing offers. Regenerate a tight, premium Hero Campaign Pack that is specific to the business and campaign brief. Do not invent discounts or offers. Use the approved headline and CTA. Every word must earn its place.",
       });
       pack = normalisePremiumPack(retryResult.output);
       const retryQuality = assessPackQuality(pack, hasExplicitOffer, brief);
-      if (!retryQuality.passed) {
+      const retryArchitectQuality = validatePackAgainstArchitect(pack, buildValidationContextFromCampaign(campaign, business));
+      if (!retryQuality.passed || !retryArchitectQuality.passed) {
+        const retryIssues = [...retryQuality.issues, ...retryArchitectQuality.issues];
         logError("[CreativeAgent] quality gate failed after retry", {
           campaignId,
           userId,
           stage: "quality_gate",
           provider: "openai",
-          issues: retryQuality.issues,
+          issues: retryIssues,
         });
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Generated content did not meet quality standards: ${retryQuality.issues.join("; ")}`,
+          message: `Generated content did not meet quality standards: ${retryIssues.join("; ")}`,
         });
       }
     } catch (err: any) {

@@ -10,6 +10,14 @@ import { enforceCostControl } from "../billing/cost-control";
 import { createAlert } from "../alerts";
 import { TRPCError } from "@trpc/server";
 
+export function isTestMode(): boolean {
+  return (
+    process.env.NATFORGE_TEST_MODE === "true" ||
+    process.env.VITEST === "true" ||
+    process.env.NODE_ENV === "test"
+  );
+}
+
 function isInsufficientQuotaError(err: any): boolean {
   if (!err) return false;
   const statusCode = err.statusCode ?? err.status ?? err.response?.status;
@@ -59,9 +67,12 @@ export async function runAgent<TOutput>({
 }: AgentRunOptions<TOutput>): Promise<AgentRunResult<TOutput>> {
   const db = getDb();
 
+  // In test mode, never charge a live wallet unless explicitly requested.
+  const shouldSkipBilling = skipBilling ?? isTestMode();
+
   // Pre-flight billing check with cost control enforcement
   let creditsDeducted = 0;
-  if (!skipBilling) {
+  if (!shouldSkipBilling) {
     const estimatedCost = getEstimatedAgentCost(agentType);
 
     // Enforce daily/monthly limits
@@ -126,7 +137,7 @@ export async function runAgent<TOutput>({
     );
 
     // Record AI usage
-    if (!skipBilling) {
+    if (!shouldSkipBilling) {
       await recordAiUsage({
         userId,
         campaignId,
@@ -178,7 +189,7 @@ export async function runAgent<TOutput>({
 
     const isQuotaError = isInsufficientQuotaError(error);
 
-    if ((isSchemaError || isProviderError) && creditsDeducted > 0 && !skipBilling) {
+    if ((isSchemaError || isProviderError) && creditsDeducted > 0 && !shouldSkipBilling) {
       // Refund credits for internal failures
       try {
         await adminAdjustCredits({

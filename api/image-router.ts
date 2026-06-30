@@ -230,6 +230,7 @@ export const imageRouter = createRouter({
         creativeGuidance: z.string().optional(),
         refinementInstruction: z.string().optional(),
         allowNoLogo: z.boolean().optional(),
+        regenerate: z.boolean().default(false),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -292,6 +293,7 @@ export const imageRouter = createRouter({
         creativeGuidance: z.string().optional(),
         refinementInstruction: z.string().optional(),
         allowNoLogo: z.boolean().optional(),
+        regenerate: z.boolean().default(false),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -306,6 +308,7 @@ export const imageRouter = createRouter({
         creativeGuidance: input.creativeGuidance,
         refinementInstruction: input.refinementInstruction,
         allowNoLogo: input.allowNoLogo,
+        regenerate: input.regenerate,
       });
 
       if (result.status === "failed") {

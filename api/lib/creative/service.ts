@@ -37,6 +37,12 @@ import type {
   ProviderStatus,
 } from "./types";
 import { validateAiLeafletQuality, qualityTierLabel, type LeafletQualityResult } from "./quality";
+import {
+  ensureApprovedMessagePack,
+  loadApprovedMessagePack,
+  validateCampaignCopy,
+  type CampaignMessagePack,
+} from "./campaign-message-architect";
 import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendererResult } from "./providers/template-renderer";
 import {
   resolveProviderTemplateId,
@@ -221,11 +227,14 @@ async function loadCaptionPackSummary(campaignId: number | null | undefined): Pr
 interface NormalizedLeafletInputs {
   formattedOffer: string;
   leafletHeadline: string;
+  leafletSubheadline: string;
   leafletCta: string;
+  serviceBullets: string[];
   selectedTemplate: TemplateId;
   brandPalette: any;
   hasLogo: boolean;
   aspectRatio: string;
+  approvedMessagePack?: CampaignMessagePack;
 }
 
 async function normalizeLeafletInputs({
@@ -250,7 +259,6 @@ async function normalizeLeafletInputs({
   const brandPalette = await resolveBrandPalette({ ...business, brandColors });
   const hasLogo = !!business?.logo;
   const formattedOffer = renderOffer(campaign.offerDetails, business.name);
-  const leafletHeadline = offerToHeadline(campaign.offerDetails);
   const selectedTemplate = selectTemplate({ business, campaign, creativeType, templateId, creativeGuidance, refinementInstruction });
   const businessCategory = (
     business?.websiteEvidence?.businessCategory ||
@@ -258,17 +266,32 @@ async function normalizeLeafletInputs({
     business?.productOrService ||
     ""
   ).toString();
-  const leafletCta = normalizeCta(campaign.preferredCta || post.cta, businessCategory);
+
+  // Prefer the approved Campaign Message Architect pack for headline/subheadline/CTA.
+  let approvedMessagePack: CampaignMessagePack | undefined;
+  if (campaign?.id) {
+    approvedMessagePack = (await loadApprovedMessagePack(campaign.id)) || undefined;
+  }
+
+  const leafletHeadline = approvedMessagePack?.headline || offerToHeadline(campaign.offerDetails) || campaign.primaryOutcome || post?.title || business.name;
+  const leafletSubheadline = approvedMessagePack?.subheadline || campaign.mainPainPoint || campaign.coreMessage || post?.hook || "";
+  const leafletCta = approvedMessagePack?.cta || normalizeCta(campaign.preferredCta || post.cta, businessCategory);
+  const serviceBullets = approvedMessagePack?.benefitBullets?.length
+    ? approvedMessagePack.benefitBullets
+    : defaultServiceBullets(business, campaign);
   const aspectRatio = getImageAspectRatio(creativeType, post.platform || "Instagram");
 
   return {
     formattedOffer,
     leafletHeadline,
+    leafletSubheadline,
     leafletCta,
+    serviceBullets,
     selectedTemplate,
     brandPalette,
     hasLogo,
     aspectRatio,
+    approvedMessagePack,
   };
 }
 
@@ -328,7 +351,9 @@ export async function generateBasicDraftLeaflet({
     const {
       formattedOffer,
       leafletHeadline,
+      leafletSubheadline,
       leafletCta,
+      serviceBullets,
       selectedTemplate,
       brandPalette,
       aspectRatio,
@@ -346,7 +371,8 @@ export async function generateBasicDraftLeaflet({
       offer: formattedOffer,
       cta: leafletCta,
       headline: formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
-      subheadline: campaign.mainPainPoint || campaign.coreMessage || post?.hook || "",
+      subheadline: leafletSubheadline,
+      serviceBullets,
       palette: brandPalette,
       creativeGuidance,
       refinementInstruction,
@@ -516,6 +542,7 @@ export async function generatePremiumLeaflet({
   creativeGuidance,
   refinementInstruction,
   allowNoLogo = false,
+  regenerate = false,
 }: {
   userId: number;
   contentPostId: number;
@@ -527,16 +554,48 @@ export async function generatePremiumLeaflet({
   creativeGuidance?: string;
   refinementInstruction?: string;
   allowNoLogo?: boolean;
+  regenerate?: boolean;
 }): Promise<ImageResult> {
   const { post, campaign, business } = await loadPostCampaignBusiness({ userId, contentPostId });
   const db = getDb();
   const currentMeta = (post.metadata || {}) as any;
   const allPreviousImages = await db
-    .select({ id: generatedImages.id, metadata: generatedImages.metadata })
+    .select({
+      id: generatedImages.id,
+      url: generatedImages.url,
+      provider: generatedImages.provider,
+      providerJobId: generatedImages.providerJobId,
+      metadata: generatedImages.metadata,
+      createdAt: generatedImages.createdAt,
+    })
     .from(generatedImages)
     .where(eq(generatedImages.contentPostId, post.id));
   const generationRunId = newGenerationRunId("premium");
   const iterationNumber = getNextIterationNumber(currentMeta, allPreviousImages);
+
+  // ─── Idempotency: reuse existing valid premium leaflet unless explicitly regenerating ───
+  if (!regenerate && post.campaignId) {
+    const existingPack = await loadApprovedMessagePack(post.campaignId);
+    const existingImage = allPreviousImages
+      .filter((img) => img.metadata && (img.metadata as any).assetTier === "premium")
+      .sort((a, b) => Number(new Date(b.createdAt || 0)) - Number(new Date(a.createdAt || 0)))[0];
+    if (existingPack?.validation?.passed && existingImage) {
+      const meta = existingImage.metadata as any;
+      console.log(`[PremiumLeaflet] Reusing existing valid asset | userId=${userId} | contentPostId=${contentPostId}`);
+      return {
+        jobId: meta?.renderRequest?.providerJobId || existingImage.providerJobId || "premium",
+        provider: existingImage.provider || "premium",
+        status: "completed",
+        imageUrl: existingImage.url,
+        extension: "png",
+        creditsCharged: 0,
+        qualityTier: meta?.qualityTier || "premium",
+        qualityLabel: meta?.qualityLabel || "Premium Marketing Leaflet",
+        isDraft: false,
+        usingFallback: false,
+      };
+    }
+  }
 
   const isAiProvider = provider === "ai";
   const isExternalProvider = provider === "external";
@@ -570,6 +629,8 @@ export async function generatePremiumLeaflet({
     : isExternalProvider
     ? getPremiumImageExternalCredits()
     : getPremiumImageInternalCredits();
+
+  // Pre-flight credit check only — no deduction until copy + image are validated.
   await assertCanAfford(userId, cost, "Premium Marketing Leaflet");
 
   await setPostImageStatus(contentPostId, { imageStatus: "generating", imageError: null });
@@ -582,10 +643,29 @@ export async function generatePremiumLeaflet({
       return { status: "failed", jobId: "", errorMessage: message };
     }
 
+    // ─── Ensure approved message pack exists before rendering ───
+    let approvedMessagePack: CampaignMessagePack | undefined;
+    if (post.campaignId) {
+      approvedMessagePack = await ensureApprovedMessagePack({
+        userId,
+        campaignId: post.campaignId,
+        skipBilling: true,
+        maxAttempts: 2,
+      });
+      if (!approvedMessagePack.validation.passed) {
+        const message = `Campaign copy did not pass quality validation: ${approvedMessagePack.validation.rejections.join("; ")}`;
+        console.error(`[PremiumLeaflet] Copy validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
+        await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+        return { status: "failed", jobId: "", errorMessage: message };
+      }
+    }
+
     const {
       formattedOffer,
       leafletHeadline,
+      leafletSubheadline,
       leafletCta,
+      serviceBullets,
       selectedTemplate,
       brandPalette,
       aspectRatio,
@@ -610,13 +690,48 @@ export async function generatePremiumLeaflet({
 
     const captionPackSummary = await loadCaptionPackSummary(post.campaignId);
 
-    // Optional OpenAI copy refinement when stronger brand fit is requested.
-    // Prefer a proper headline so the offer pill does not duplicate the headline text.
+    // Rendering must consume the approved structured copy. It may only refine
+    // wording; it may not invent a new headline or CTA.
     let headline = leafletHeadline || formattedOffer || campaign.primaryOutcome || post?.title || business.name;
     let offer = formattedOffer;
-    const subheadline = campaign.mainPainPoint || campaign.coreMessage || post?.hook || "";
+    const subheadline = leafletSubheadline || campaign.mainPainPoint || campaign.coreMessage || post?.hook || "";
     let cta = leafletCta;
-    let services = defaultServiceBullets(business, campaign);
+    let services = serviceBullets;
+
+    // Validate the render inputs against the architect rules one more time.
+    if (approvedMessagePack) {
+      const renderCopyValidation = validateCampaignCopy(
+        {
+          headline,
+          subheadline,
+          benefitBullets: services,
+          cta,
+          footerContact: approvedMessagePack.footerContact,
+          platformCaptions: approvedMessagePack.platformCaptions,
+          validation: { passed: false, score: 0, rejections: [], warnings: [] },
+        },
+        {
+          businessName: business.name,
+          campaignName: campaign.name,
+          productOrService: campaign.productOrService || business.productOrService,
+          targetCustomer: campaign.targetBuyer || business.targetCustomer,
+          mainPainPoint: campaign.mainPainPoint,
+          offerDetails: campaign.offerDetails,
+          excludedOffers: campaign.excludedOffers || business.avoidWords,
+          preferredCta: campaign.preferredCta,
+          location: business.location,
+          industry: business.industry,
+          websiteEvidence: business.websiteEvidence,
+        }
+      );
+      if (!renderCopyValidation.passed) {
+        const message = `Rendered copy failed quality validation: ${renderCopyValidation.rejections.join("; ")}`;
+        console.error(`[PremiumLeaflet] Render copy validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
+        await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+        return { status: "failed", jobId: "", errorMessage: message };
+      }
+    }
+
     if (strongerBrandFit && env.openaiApiKey) {
       try {
         const refined = await refineLeafletCopy({
@@ -1095,6 +1210,7 @@ export async function generateMasterImage({
   creativeGuidance,
   refinementInstruction,
   allowNoLogo = false,
+  regenerate = false,
 }: {
   userId: number;
   contentPostId: number;
@@ -1105,6 +1221,7 @@ export async function generateMasterImage({
   creativeGuidance?: string;
   refinementInstruction?: string;
   allowNoLogo?: boolean;
+  regenerate?: boolean;
 }): Promise<ImageResult> {
   if (env.enablePremiumTemplateProvider) {
     return generatePremiumLeaflet({
@@ -1117,6 +1234,7 @@ export async function generateMasterImage({
       creativeGuidance,
       refinementInstruction,
       allowNoLogo,
+      regenerate,
     });
   }
 

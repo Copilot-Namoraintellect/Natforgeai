@@ -1,4 +1,5 @@
 import { safeText } from "./brand-palette";
+import { detectBusinessCategory, expectedCtasForCategory } from "./campaign-message-architect";
 
 /**
  * Marketing text formatting helpers for leaflets.
@@ -187,23 +188,33 @@ const WEAK_CTA_PATTERNS = [
 ];
 
 /**
+ * Map a free-form business category string to the best default CTA.
+ */
+function defaultCtaForCategory(businessCategory?: string): string {
+  if (!businessCategory) return STRONG_CTAS[0];
+  const category = detectBusinessCategory({
+    businessName: "",
+    campaignName: "",
+    productOrService: businessCategory,
+    industry: businessCategory,
+  });
+  return expectedCtasForCategory(category)[0];
+}
+
+/**
  * Normalise a CTA. If the provided CTA is vague, too long, or ends with an
- * ellipsis, replace it with a strong default.
+ * ellipsis, replace it with a category-aware strong default.
  */
 export function normalizeCta(cta?: string | null, businessCategory?: string): string {
   const clean = sanitize(cta);
-  if (!clean) return "Request a Quote Today";
+  if (!clean) return defaultCtaForCategory(businessCategory);
 
   const isWeak = WEAK_CTA_PATTERNS.some((p) => p.test(clean));
   const tooLong = clean.length > 35;
 
   if (!isWeak && !tooLong) return clean;
 
-  if (businessCategory?.match(/print|copy|branding|courier/i)) {
-    return "Request a Quote Today";
-  }
-
-  return STRONG_CTAS[0];
+  return defaultCtaForCategory(businessCategory);
 }
 
 /**

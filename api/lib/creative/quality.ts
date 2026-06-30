@@ -622,6 +622,23 @@ export async function validateAiLeafletQuality(opts: {
   };
 }
 
+// ─── Campaign copy validation re-exports ───
+// The canonical copy-quality rules live in campaign-message-architect so the
+// architect, renderer and tests all share one source of truth.
+export {
+  GENERIC_PHRASES,
+  INVENTED_OFFER_PATTERNS,
+  GENERIC_CTA_PATTERNS,
+  GENERIC_PLACEHOLDERS,
+  detectBusinessCategory,
+  expectedCtasForCategory,
+  validateCampaignCopy,
+  type CampaignMessagePack,
+  type CopyValidationResult,
+  type ValidationContext,
+  type BusinessCategory,
+} from "./campaign-message-architect";
+
 export async function detectFakeBranding(imageBuffer: Buffer, business: any): Promise<FakeBrandingResult> {
   const safeResult: FakeBrandingResult = { hasText: false, hasLogo: false, hasBusinessName: false, details: "Vision check skipped." };
   try {

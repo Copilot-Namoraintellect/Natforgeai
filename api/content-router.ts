@@ -5,6 +5,10 @@ import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegra
 import { eq, and, desc, count, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
+import {
+  ensureApprovedMessagePack,
+  saveApprovedMessagePack,
+} from "./lib/creative/campaign-message-architect";
 import { env } from "./lib/env";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
 import { logInfo, logError } from "./lib/logger";
@@ -96,7 +100,7 @@ export const contentRouter = createRouter({
     }),
 
   generateForCampaign: aiActionQuery
-    .input(z.object({ campaignId: z.number() }))
+    .input(z.object({ campaignId: z.number(), regenerate: z.boolean().default(false) }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const { campaignId } = input;
@@ -194,9 +198,9 @@ export const contentRouter = createRouter({
         workflowState: campaign.workflowState,
       });
 
-      // Idempotency + repair guard: if the campaign already has saved posts, do not
-      // charge credits or rerun the creative agent. Repair a stuck creatives_generating
-      // state back to creatives_ready automatically.
+      // Idempotency + repair guard: if the campaign already has saved posts and a
+      // valid approved message pack, do not charge credits or rerun unless regenerate
+      // is explicitly requested.
       const [existingPostCountResult] = await db
         .select({ value: count() })
         .from(contentPosts)
@@ -208,7 +212,25 @@ export const contentRouter = createRouter({
         );
       const existingPostCount = existingPostCountResult?.value ?? 0;
 
-      if (existingPostCount > 0) {
+      const [existingMessagePack] = existingPostCount > 0
+        ? await db
+            .select({ metadata: campaignAssets.metadata })
+            .from(campaignAssets)
+            .where(
+              and(
+                eq(campaignAssets.userId, userId),
+                eq(campaignAssets.campaignId, campaignId),
+                eq(campaignAssets.assetType, "message_pack" as any)
+              )
+            )
+            .orderBy(desc(campaignAssets.createdAt))
+            .limit(1)
+        : [null];
+      const hasValidMessagePack =
+        existingMessagePack?.metadata &&
+        (existingMessagePack.metadata as any)?.passed === true;
+
+      if (existingPostCount > 0 && !input.regenerate) {
         if (campaign.workflowState === "creatives_generating") {
           await db
             .update(campaigns)
@@ -236,9 +258,31 @@ export const contentRouter = createRouter({
             userId,
             stage: "idempotency_guard",
             postCount: existingPostCount,
+            hasValidMessagePack,
           });
         }
         return { success: true, postCount: existingPostCount, idempotent: true };
+      }
+
+      // If regenerating, ensure the message pack is also rebuilt.
+      if (input.regenerate && campaign.businessId) {
+        try {
+          const freshPack = await ensureApprovedMessagePack({
+            userId,
+            campaignId,
+            skipBilling: true,
+            maxAttempts: 2,
+          });
+          if (freshPack.validation.passed) {
+            await saveApprovedMessagePack(userId, campaignId, freshPack);
+          }
+        } catch (regenErr: any) {
+          logError("[content.generateForCampaign] failed to regenerate message pack", {
+            campaignId,
+            userId,
+            error: regenErr.message,
+          });
+        }
       }
 
       let result: Awaited<ReturnType<typeof runCreativeAgent>>;
