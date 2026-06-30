@@ -600,6 +600,7 @@ export const campaignAssets = mysqlTable("campaign_assets", {
     "whatsapp_promo",
     "lead_gen_ad",
     "launch_pack",
+    "message_pack",
   ]).notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   url: text("url"),

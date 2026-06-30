@@ -1,0 +1,1 @@
+ALTER TABLE `campaign_assets` MODIFY COLUMN `assetType` enum('image','video_script','carousel','ad_copy','caption','caption_adaptation','caption_pack','hashtag_set','cta_variant','email_copy','whatsapp_copy','video_concept','reel_script','carousel_ad','whatsapp_promo','lead_gen_ad','launch_pack','message_pack') NOT NULL;
