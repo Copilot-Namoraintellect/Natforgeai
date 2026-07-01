@@ -12,7 +12,7 @@ import { TRPCError } from "@trpc/server";
 import { runAgent } from "../agents/runner";
 import { getDb } from "../../queries/connection";
 import { campaigns, campaignAssets, businesses } from "@db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, asc } from "drizzle-orm";
 import { logInfo, logWarn, logError } from "../logger";
 import { safeText } from "./brand-palette";
 
@@ -33,6 +33,15 @@ export interface PlatformCaption {
   hashtags: string[];
 }
 
+export type MessagePackSource =
+  | "user_structured_copy"
+  | "ai_refined_pack"
+  | "fallback_user_pack"
+  | "fallback_deterministic"
+  | "latest_message_pack"
+  | "stale_metadata"
+  | "manual_restore";
+
 export interface CampaignMessagePack {
   headline: string;
   subheadline: string;
@@ -42,6 +51,14 @@ export interface CampaignMessagePack {
   proofPoints?: string[];
   platformCaptions: PlatformCaption[];
   validation: CopyValidationResult;
+  /** Where this pack came from. Used when ranking multiple saved packs. */
+  messagePackSource?: MessagePackSource;
+  /** True if the headline/CTA contain generic marketing filler. */
+  isGeneric?: boolean;
+  /** Higher is more specific/business-focused. */
+  specificityScore?: number;
+  /** Set when a newer, better pack replaces this one. */
+  supersededBy?: number;
 }
 
 export interface CopyValidationResult {
@@ -126,6 +143,56 @@ export const GENERIC_CTA_PATTERNS = [
   /^details$/i,
   /^contact us$/i,
 ];
+
+export const GENERIC_HEADLINE_PATTERNS = [
+  /seamless\s+\w+\s+solutions?/i,
+  /modern\s+\w+\s+solutions?/i,
+  /financial\s+solutions?/i,
+  /solutions?\s+for\s+modern\s+businesses?/i,
+  /transform\s+your\s+business/i,
+  /transform\s+how\s+you/i,
+  /unlock\s+success/i,
+  /unlock\s+your\s+potential/i,
+  /unlock\s+new\s+possibilities/i,
+  /best\s+choice\s+for\s+your\s+business/i,
+  /empower\s+your\s+business/i,
+  /elevate\s+your\s+business/i,
+  /your\s+business\s+with/i,
+  /your\s+business\s+to/i,
+  /for\s+modern\s+businesses?/i,
+];
+
+export function isGenericHeadline(headline: string): boolean {
+  if (!headline) return true;
+  return GENERIC_HEADLINE_PATTERNS.some((p) => p.test(headline));
+}
+
+export function isGenericCta(cta: string): boolean {
+  if (!cta) return true;
+  return GENERIC_CTA_PATTERNS.some((p) => p.test(cta));
+}
+
+export function specificityScore(pack: CampaignMessagePack): number {
+  const allCopy = [pack.headline, pack.subheadline, ...pack.benefitBullets, pack.cta].join(" ");
+  let score = 0;
+  // Reward length and concrete long words.
+  score += allCopy.length / 8;
+  score += (allCopy.match(/\b\w{6,}\b/g) || []).length * 2;
+  score += pack.benefitBullets.length * 4;
+  // Penalise generic marketing filler.
+  if (isGenericHeadline(pack.headline)) score -= 50;
+  if (isGenericCta(pack.cta)) score -= 35;
+  for (const phrase of GENERIC_PHRASES) {
+    if (allCopy.toLowerCase().includes(phrase)) score -= 12;
+  }
+  // Reward business-specific punctuation-free specificity: numbers, Rand, times.
+  score += (allCopy.match(/\b(R\d+|\d+\s*(min|minutes|hours|days|%))\b/gi) || []).length * 8;
+  return Math.max(0, Math.round(score));
+}
+
+export function isGenericPack(pack: CampaignMessagePack): boolean {
+  return isGenericHeadline(pack.headline) || isGenericCta(pack.cta);
+}
 
 export const INVENTED_OFFER_PATTERNS = [
   /\b\d{1,2}%\s*off\b/i,
@@ -728,6 +795,7 @@ export async function buildApprovedMessagePack(
 
   let attempt = 0;
   let lastPack: CampaignMessagePack | undefined;
+  let usedDeterministicFallback = false;
   let prompt = architectPrompt(ctx, platforms);
 
   while (attempt < maxAttempts) {
@@ -761,6 +829,7 @@ export async function buildApprovedMessagePack(
       });
       if (attempt === maxAttempts) {
         // Fallback to deterministic pack
+        usedDeterministicFallback = true;
         lastPack = buildDeterministicMessagePack(ctx);
         break;
       }
@@ -795,51 +864,161 @@ export async function buildApprovedMessagePack(
   }
 
   if (!lastPack) {
+    usedDeterministicFallback = true;
     lastPack = buildDeterministicMessagePack(ctx);
   }
 
+  lastPack.messagePackSource = usedDeterministicFallback ? "fallback_deterministic" : "ai_refined_pack";
   // Even if validation still fails, we return the pack but callers should check validation.passed.
   return lastPack;
 }
 
 // ─── Storage / retrieval helpers ───
 
-export async function loadApprovedMessagePack(campaignId: number): Promise<CampaignMessagePack | null> {
+export function enrichMessagePackMetadata(pack: CampaignMessagePack): CampaignMessagePack {
+  return {
+    ...pack,
+    isGeneric: isGenericPack(pack),
+    specificityScore: specificityScore(pack),
+  };
+}
+
+export async function loadAllApprovedMessagePacks(
+  campaignId: number
+): Promise<Array<{ pack: CampaignMessagePack; assetId: number; createdAt: Date }>> {
   const db = getDb();
-  const [asset] = await db
-    .select({ metadata: campaignAssets.metadata })
+  const rows = await db
+    .select({ id: campaignAssets.id, metadata: campaignAssets.metadata, createdAt: campaignAssets.createdAt })
     .from(campaignAssets)
     .where(and(eq(campaignAssets.campaignId, campaignId), eq(campaignAssets.assetType, "message_pack" as any)))
     .orderBy(desc(campaignAssets.createdAt))
-    .limit(1);
+    .limit(1000);
 
-  if (!asset?.metadata) return null;
-  const meta = asset.metadata as any;
-  if (meta?.approvedMessagePack) {
-    return meta.approvedMessagePack as CampaignMessagePack;
+  return rows
+    .map((row) => {
+      const meta = (row.metadata || {}) as any;
+      const pack = meta?.approvedMessagePack as CampaignMessagePack | undefined;
+      if (!pack) return null;
+      return {
+        pack: enrichMessagePackMetadata({
+          ...pack,
+          messagePackSource: pack.messagePackSource || meta.messagePackSource || "ai_refined_pack",
+        }),
+        assetId: row.id,
+        createdAt: new Date(row.createdAt || Date.now()),
+      };
+    })
+    .filter(Boolean) as Array<{ pack: CampaignMessagePack; assetId: number; createdAt: Date }>;
+}
+
+const SOURCE_RANK: Record<MessagePackSource, number> = {
+  user_structured_copy: 1,
+  fallback_user_pack: 2,
+  manual_restore: 3,
+  ai_refined_pack: 4,
+  fallback_deterministic: 5,
+  latest_message_pack: 6,
+  stale_metadata: 7,
+};
+
+export function selectBestApprovedMessagePack(
+  items: Array<{ pack: CampaignMessagePack; assetId: number; createdAt: Date }>
+): CampaignMessagePack | null {
+  if (!items.length) return null;
+
+  const scored = items.map((item) => {
+    const pack = item.pack;
+    const sourceRank = SOURCE_RANK[pack.messagePackSource || "ai_refined_pack"] ?? 99;
+    const genericPenalty = pack.isGeneric ? 10_000 : 0;
+    const passedBonus = pack.validation?.passed ? 0 : 5_000;
+    const score = pack.validation?.score ?? 0;
+    const specificity = pack.specificityScore ?? 0;
+    const total = genericPenalty + passedBonus + sourceRank * 100 - score - specificity * 2;
+    return { item, pack, total };
+  });
+
+  scored.sort((a, b) => {
+    if (a.total !== b.total) return a.total - b.total;
+    // Tie-break: newer first, then higher specificity.
+    const dateDiff = b.item.createdAt.getTime() - a.item.createdAt.getTime();
+    if (dateDiff !== 0) return dateDiff;
+    return (b.pack.specificityScore ?? 0) - (a.pack.specificityScore ?? 0);
+  });
+
+  return scored[0].pack;
+}
+
+export async function loadApprovedMessagePack(campaignId: number): Promise<CampaignMessagePack | null> {
+  const items = await loadAllApprovedMessagePacks(campaignId);
+  const best = selectBestApprovedMessagePack(items);
+  if (best) {
+    logInfo("[CampaignMessageArchitect] selected best approved message pack", {
+      campaignId,
+      source: best.messagePackSource,
+      isGeneric: best.isGeneric,
+      specificityScore: best.specificityScore,
+      validationScore: best.validation?.score,
+    });
   }
-  return null;
+  return best;
 }
 
 export async function saveApprovedMessagePack(
   userId: number,
   campaignId: number,
   pack: CampaignMessagePack
-): Promise<void> {
+): Promise<number> {
   const db = getDb();
-  await db.insert(campaignAssets).values({
+  const enriched = enrichMessagePackMetadata({
+    ...pack,
+    messagePackSource: pack.messagePackSource || "ai_refined_pack",
+  });
+
+  const [{ insertId }] = await db.insert(campaignAssets).values({
     userId,
     campaignId,
     assetType: "message_pack" as any,
     title: "Approved Campaign Message Pack",
     status: "ready",
     metadata: {
-      approvedMessagePack: pack,
+      approvedMessagePack: enriched,
       generatedAt: new Date().toISOString(),
-      score: pack.validation.score,
-      passed: pack.validation.passed,
+      score: enriched.validation.score,
+      passed: enriched.validation.passed,
+      messagePackSource: enriched.messagePackSource,
+      isGeneric: enriched.isGeneric,
+      specificityScore: enriched.specificityScore,
     } as any,
   });
+
+  // Mark previous generic message packs as superseded by this newer, better pack.
+  const previous = await db
+    .select({ id: campaignAssets.id, metadata: campaignAssets.metadata })
+    .from(campaignAssets)
+    .where(and(eq(campaignAssets.campaignId, campaignId), eq(campaignAssets.assetType, "message_pack" as any)))
+    .orderBy(asc(campaignAssets.createdAt))
+    .limit(1000);
+
+  for (const row of previous) {
+    if (row.id === insertId) continue;
+    const meta = (row.metadata || {}) as any;
+    const previousPack = meta?.approvedMessagePack as CampaignMessagePack | undefined;
+    if (previousPack && (previousPack.isGeneric || isGenericPack(previousPack)) && !meta.supersededBy) {
+      await db
+        .update(campaignAssets)
+        .set({
+          metadata: {
+            ...meta,
+            approvedMessagePack: {
+              ...previousPack,
+              supersededBy: insertId,
+            },
+            supersededBy: insertId,
+          } as any,
+        })
+        .where(eq(campaignAssets.id, row.id));
+    }
+  }
 
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
   if (campaign) {
@@ -849,12 +1028,40 @@ export async function saveApprovedMessagePack(
       .set({
         workflowContext: {
           ...workflowContext,
-          approvedMessagePack: pack,
+          approvedMessagePack: enriched,
           approvedMessagePackAt: new Date().toISOString(),
         } as any,
       })
       .where(eq(campaigns.id, campaignId));
   }
+
+  return insertId;
+}
+
+/**
+ * One-time helper to restore a specific, non-generic approved message pack and
+ * mark any existing generic packs as superseded. Useful for recovering campaigns
+ * that received a weak AI-refined pack before the generic-ranking logic existed.
+ */
+export async function restorePreferredMessagePackForCampaign(
+  campaignId: number,
+  userId: number,
+  pack: CampaignMessagePack
+): Promise<number> {
+  const enriched = enrichMessagePackMetadata({
+    ...pack,
+    messagePackSource: "manual_restore",
+  });
+
+  logInfo("[CampaignMessageArchitect] restoring preferred message pack", {
+    campaignId,
+    userId,
+    headline: enriched.headline,
+    isGeneric: enriched.isGeneric,
+    specificityScore: enriched.specificityScore,
+  });
+
+  return saveApprovedMessagePack(userId, campaignId, enriched);
 }
 
 export interface RefineMessagePackOptions {
@@ -1305,6 +1512,7 @@ export async function refineApprovedMessagePack(
       source: "fallback_user_pack",
       aiRejections: lastPack.validation.rejections,
     });
+    userPack.messagePackSource = "fallback_user_pack";
     return userPack;
   }
 
@@ -1312,8 +1520,9 @@ export async function refineApprovedMessagePack(
     logInfo("[CampaignMessageArchitect] using user-provided structured pack (no AI output)", {
       campaignId,
       userId,
-      source: "user_pack_only",
+      source: "user_structured_copy",
     });
+    userPack.messagePackSource = "user_structured_copy";
     return userPack;
   }
 
@@ -1321,12 +1530,13 @@ export async function refineApprovedMessagePack(
     lastPack = existingPack;
   }
 
-  const finalSource =
+  const finalSource: MessagePackSource =
     lastPack === userPack
-      ? "user_structured_pack"
+      ? "user_structured_copy"
       : lastPack === existingPack
-      ? "existing_pack"
+      ? "latest_message_pack"
       : "ai_refined_pack";
+  lastPack.messagePackSource = finalSource;
   logInfo("[CampaignMessageArchitect] refinement resolved", {
     campaignId,
     userId,

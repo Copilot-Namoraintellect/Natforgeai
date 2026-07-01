@@ -219,7 +219,7 @@ describe("generatePremiumLeaflet OpenAI fallback", () => {
 
     vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(approvedPack);
     vi.mocked(architect.loadApprovedMessagePack).mockResolvedValue(approvedPack);
-    vi.mocked(architect.saveApprovedMessagePack).mockResolvedValue(undefined);
+    vi.mocked(architect.saveApprovedMessagePack).mockResolvedValue(1);
     vi.mocked(architect.refineApprovedMessagePack).mockResolvedValue(approvedPack);
   });
 

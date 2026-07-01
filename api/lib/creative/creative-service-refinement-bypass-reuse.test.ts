@@ -239,7 +239,7 @@ describe("generatePremiumLeaflet refinement bypasses existing asset reuse", () =
 
     vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(refinedPack);
     vi.mocked(architect.loadApprovedMessagePack).mockResolvedValue(refinedPack);
-    vi.mocked(architect.saveApprovedMessagePack).mockResolvedValue(undefined);
+    vi.mocked(architect.saveApprovedMessagePack).mockResolvedValue(1);
     vi.mocked(architect.refineApprovedMessagePack).mockResolvedValue(refinedPack);
 
     // AI quality fails twice due to readable text.

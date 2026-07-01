@@ -46,6 +46,7 @@ import {
   parseStructuredRefinementInstruction,
   isDesignOnlyRefinementInstruction,
   type CampaignMessagePack,
+  type MessagePackSource,
 } from "./campaign-message-architect";
 import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendererResult } from "./providers/template-renderer";
 import {
@@ -117,7 +118,7 @@ function buildVideoRequest(opts: {
     duration: meta.duration,
     style: meta.visualStyle || campaign.contentStyle,
     title: post.title,
-    businessName: business.name,
+    businessName: (business.displayName as string) || business.name,
     productName: business.productOrService || campaign.productOrService,
     offer: campaign.offerDetails,
     cta: campaign.preferredCta || post.cta,
@@ -736,7 +737,7 @@ export async function generatePremiumLeaflet({
     // ─── Resolve approved message pack before rendering ───
     let approvedMessagePack: CampaignMessagePack | undefined;
     let refinementInstructionType: "none" | "design_only" | "structured_copy" | "mixed" = "none";
-    let messagePackSource: "latest_message_pack" | "structured_user_copy" | "ai_refined_pack" | "stale_metadata" = "latest_message_pack";
+    let messagePackSource: MessagePackSource = "latest_message_pack";
     let copyRewriteSkippedReason: string | undefined;
     let visualInstructionPassedToRenderer = false;
 
@@ -796,7 +797,7 @@ export async function generatePremiumLeaflet({
         approvedMessagePack = basePack;
         copyRewriteSkippedReason = "design_only_refinement";
         visualInstructionPassedToRenderer = true;
-        messagePackSource = "latest_message_pack";
+        messagePackSource = basePack.messagePackSource || "latest_message_pack";
       }
 
       // 1. If the user supplied explicit structured copy, parse and validate it
@@ -821,7 +822,7 @@ export async function generatePremiumLeaflet({
 
         if (parsed) {
           const validationCtx = {
-            businessName: business.name,
+            businessName: (business.displayName as string) || business.name,
             campaignName: campaign.name,
             productOrService: campaign.productOrService || business.productOrService,
             targetCustomer: campaign.targetBuyer || business.targetCustomer,
@@ -850,7 +851,7 @@ export async function generatePremiumLeaflet({
             });
             await saveApprovedMessagePack(userId, post.campaignId, candidatePack);
             approvedMessagePack = candidatePack;
-            messagePackSource = "structured_user_copy";
+            messagePackSource = "user_structured_copy";
           }
         }
       }
@@ -893,7 +894,7 @@ export async function generatePremiumLeaflet({
           // structured pack validated, prefer the user pack.
           if (!refinedPack.validation.passed && userStructuredPack?.validation.passed) {
             approvedMessagePack = userStructuredPack;
-            messagePackSource = "structured_user_copy";
+            messagePackSource = "user_structured_copy";
           } else if (!refinedPack.validation.passed) {
             const failedCopy = JSON.stringify(
               {
@@ -999,7 +1000,7 @@ export async function generatePremiumLeaflet({
           validation: { passed: false, score: 0, rejections: [], warnings: [] },
         },
         {
-          businessName: business.name,
+          businessName: (business.displayName as string) || business.name,
           campaignName: campaign.name,
           productOrService: campaign.productOrService || business.productOrService,
           targetCustomer: campaign.targetBuyer || business.targetCustomer,
@@ -1026,7 +1027,7 @@ export async function generatePremiumLeaflet({
       format: "leaflet",
       outputFormat: "png",
       aspectRatio,
-      businessName: business.name,
+      businessName: (business.displayName as string) || business.name,
       logoUrl: business.logo,
       brandColors: [
         brandPalette.primary,
@@ -2279,7 +2280,7 @@ export async function renderBasicDraftVideo({
     duration: meta.duration,
     style: meta.visualStyle,
     title: post.title,
-    businessName: business.name,
+    businessName: (business.displayName as string) || business.name,
     productName: business.productOrService || campaign.productOrService,
     offer: campaign.offerDetails,
     cta: campaign.preferredCta || post.cta,
