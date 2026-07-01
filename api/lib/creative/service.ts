@@ -5,7 +5,7 @@ import { getDb } from "../../queries/connection";
 import { contentPosts, campaigns, businesses, generatedImages, videoRenderJobs, campaignAssets } from "@db/schema";
 import { checkCredits, deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
-import { logInfo } from "../logger";
+import { logInfo, logError } from "../logger";
 import {
   getPremiumVideoProvider,
   getBasicVideoProvider,
@@ -44,6 +44,7 @@ import {
   saveApprovedMessagePack,
   validateCampaignCopy,
   parseStructuredRefinementInstruction,
+  isDesignOnlyRefinementInstruction,
   type CampaignMessagePack,
 } from "./campaign-message-architect";
 import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendererResult } from "./providers/template-renderer";
@@ -734,22 +735,42 @@ export async function generatePremiumLeaflet({
 
     // ─── Resolve approved message pack before rendering ───
     let approvedMessagePack: CampaignMessagePack | undefined;
+    let refinementInstructionType: "none" | "design_only" | "structured_copy" | "mixed" = "none";
+    let messagePackSource: "latest_message_pack" | "structured_user_copy" | "ai_refined_pack" | "stale_metadata" = "latest_message_pack";
+    let copyRewriteSkippedReason: string | undefined;
+    let visualInstructionPassedToRenderer = false;
+
     if (post.campaignId) {
       const trimmedInstruction = refinementInstruction?.trim();
+      const isDesignOnly =
+        !!trimmedInstruction &&
+        isDesignOnlyRefinementInstruction(trimmedInstruction);
+      const parsedStructured = trimmedInstruction
+        ? parseStructuredRefinementInstruction(trimmedInstruction, {
+            headline: "",
+            subheadline: "",
+            benefitBullets: [],
+            cta: "",
+            footerContact: {},
+            platformCaptions: [],
+            validation: { passed: false, score: 0, rejections: [], warnings: [] },
+          })
+        : null;
 
-      console.log(
-        JSON.stringify({
-          timestamp: new Date().toISOString(),
-          level: "info",
-          message: "[PremiumLeaflet] resolving message pack",
-          userId,
-          contentPostId,
-          campaignId: post.campaignId,
-          hasRefinementInstruction: !!trimmedInstruction,
-          refinementInstructionLength: trimmedInstruction?.length ?? 0,
-          selectedInputFieldName: "refinementInstruction",
-        })
-      );
+      if (!trimmedInstruction) refinementInstructionType = "none";
+      else if (parsedStructured) refinementInstructionType = "structured_copy";
+      else if (isDesignOnly) refinementInstructionType = "design_only";
+      else refinementInstructionType = "mixed";
+
+      logInfo("[PremiumLeaflet] resolving message pack", {
+        userId,
+        contentPostId,
+        campaignId: post.campaignId,
+        hasRefinementInstruction: !!trimmedInstruction,
+        refinementInstructionLength: trimmedInstruction?.length ?? 0,
+        refinementInstructionType,
+        selectedInputFieldName: "refinementInstruction",
+      });
 
       // Always start from the latest approved / generated base pack. If it fails
       // validation, a valid user-provided refinement may still rescue the render.
@@ -760,10 +781,28 @@ export async function generatePremiumLeaflet({
         maxAttempts: 2,
       });
 
+      // Design-only refinements must preserve the approved copy. We still bypass
+      // old image reuse above, so a new visual is generated using the same pack.
+      if (refinementInstructionType === "design_only" && basePack.validation?.passed) {
+        logInfo("[PremiumLeaflet] design-only refinement detected; preserving approved copy", {
+          userId,
+          contentPostId,
+          campaignId: post.campaignId,
+          instructionLength: trimmedInstruction!.length,
+          usedApprovedMessagePack: true,
+          copyRewriteSkippedReason: "design_only_refinement",
+          visualInstructionPassedToRenderer: true,
+        });
+        approvedMessagePack = basePack;
+        copyRewriteSkippedReason = "design_only_refinement";
+        visualInstructionPassedToRenderer = true;
+        messagePackSource = "latest_message_pack";
+      }
+
       // 1. If the user supplied explicit structured copy, parse and validate it
       // first. When it passes, use it directly and skip the LLM rewrite.
       let userStructuredPack: CampaignMessagePack | undefined;
-      if (trimmedInstruction) {
+      if (!approvedMessagePack && trimmedInstruction) {
         const parsed = parseStructuredRefinementInstruction(trimmedInstruction, basePack);
         const parsedFields = {
           parsedStructuredCopy: !!parsed,
@@ -773,17 +812,12 @@ export async function generatePremiumLeaflet({
           parsedCtaPresent: !!parsed?.cta,
           parsedFooterPresent: !!parsed?.footerContact,
         };
-        console.log(
-          JSON.stringify({
-            timestamp: new Date().toISOString(),
-            level: "info",
-            message: "[PremiumLeaflet] parsed refinement instruction",
-            userId,
-            contentPostId,
-            campaignId: post.campaignId,
-            ...parsedFields,
-          })
-        );
+        logInfo("[PremiumLeaflet] parsed refinement instruction", {
+          userId,
+          contentPostId,
+          campaignId: post.campaignId,
+          ...parsedFields,
+        });
 
         if (parsed) {
           const validationCtx = {
@@ -808,19 +842,15 @@ export async function generatePremiumLeaflet({
           userStructuredPack = candidatePack;
 
           if (candidatePack.validation.passed) {
-            console.log(
-              JSON.stringify({
-                timestamp: new Date().toISOString(),
-                level: "info",
-                message: "[PremiumLeaflet] using user-provided structured pack directly",
-                userId,
-                contentPostId,
-                campaignId: post.campaignId,
-                source: "user_structured_copy",
-              })
-            );
+            logInfo("[PremiumLeaflet] using user-provided structured pack directly", {
+              userId,
+              contentPostId,
+              campaignId: post.campaignId,
+              source: "user_structured_copy",
+            });
             await saveApprovedMessagePack(userId, post.campaignId, candidatePack);
             approvedMessagePack = candidatePack;
+            messagePackSource = "structured_user_copy";
           }
         }
       }
@@ -831,7 +861,7 @@ export async function generatePremiumLeaflet({
       if (!approvedMessagePack) {
         if (!basePack.validation.passed && !trimmedInstruction) {
           const message = `Campaign copy did not pass quality validation: ${basePack.validation.rejections.join("; ")}`;
-          console.error(`[PremiumLeaflet] Copy validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
+          logError("[PremiumLeaflet] Copy validation failed", { userId, contentPostId, error: message });
           await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
           return { status: "failed", jobId: "", errorMessage: message };
         }
@@ -847,27 +877,23 @@ export async function generatePremiumLeaflet({
             maxAttempts: 2,
           });
 
-          console.log(
-            JSON.stringify({
-              timestamp: new Date().toISOString(),
-              level: "info",
-              message: "[PremiumLeaflet] refinement result",
-              userId,
-              contentPostId,
-              campaignId: post.campaignId,
-              source: refinedPack.validation.passed
-                ? "ai_refined_pack"
-                : userStructuredPack
-                ? "fallback_user_pack"
-                : "stale_metadata",
-              passed: refinedPack.validation.passed,
-            })
-          );
+          logInfo("[PremiumLeaflet] refinement result", {
+            userId,
+            contentPostId,
+            campaignId: post.campaignId,
+            source: refinedPack.validation.passed
+              ? "ai_refined_pack"
+              : userStructuredPack
+              ? "fallback_user_pack"
+              : "stale_metadata",
+            passed: refinedPack.validation.passed,
+          });
 
           // Fallback: if the AI-refined pack failed but the user-provided
           // structured pack validated, prefer the user pack.
           if (!refinedPack.validation.passed && userStructuredPack?.validation.passed) {
             approvedMessagePack = userStructuredPack;
+            messagePackSource = "structured_user_copy";
           } else if (!refinedPack.validation.passed) {
             const failedCopy = JSON.stringify(
               {
@@ -880,11 +906,12 @@ export async function generatePremiumLeaflet({
               2
             );
             const message = `Refined copy failed quality validation:\n${refinedPack.validation.rejections.join("; ")}\n\nGenerated copy that failed:\n${failedCopy}`;
-            console.error(`[PremiumLeaflet] Refinement validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
+            logError("[PremiumLeaflet] Refinement validation failed", { userId, contentPostId, error: message });
             await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
             return { status: "failed", jobId: "", errorMessage: message };
           } else {
             approvedMessagePack = refinedPack;
+            messagePackSource = "ai_refined_pack";
           }
 
           // Persist the approved pack so future renders use the latest copy.
@@ -893,6 +920,7 @@ export async function generatePremiumLeaflet({
           }
         } else {
           approvedMessagePack = basePack;
+          messagePackSource = "latest_message_pack";
         }
       }
     }
@@ -935,7 +963,7 @@ export async function generatePremiumLeaflet({
     let cta = leafletCta;
     let services = serviceBullets;
 
-    if (strongerBrandFit && env.openaiApiKey) {
+    if (strongerBrandFit && env.openaiApiKey && refinementInstructionType !== "design_only") {
       try {
         const refined = await refineLeafletCopy({
           business,
@@ -1026,6 +1054,9 @@ export async function generatePremiumLeaflet({
       campaignPrimaryService: campaign.productOrService || undefined,
       captionPackSummary,
       creativeGuidance,
+      visualStyle: business.visualStyle || undefined,
+      refinementInstruction:
+        refinementInstructionType === "design_only" ? refinementInstruction : undefined,
     };
 
     let renderResult: TemplateRendererResult;
@@ -1357,7 +1388,23 @@ export async function generatePremiumLeaflet({
       console.error(`[PremiumLeaflet] Caption pack async error | userId=${userId} | contentPostId=${post.id} | error="${err.message}"`);
     });
 
-    console.log(`[PremiumLeaflet] Ready | userId=${userId} | contentPostId=${contentPostId} | provider=${finalProviderName} | url=${stored.publicUrl} | credits=${cost}${fallbackMeta ? " | fallback=" + fallbackMeta.fallbackReason : ""}`);
+    logInfo("[PremiumLeaflet] completed", {
+      userId,
+      contentPostId,
+      provider: finalProviderName,
+      providerTemplateId: finalProviderTemplateId,
+      url: stored.publicUrl,
+      finalApiStatus: "completed",
+      creditsDeducted: cost,
+      creditsReason: fallbackMeta?.creditsReason,
+      fallbackProviderUsed: fallbackMeta?.provider,
+      fallbackReason: fallbackMeta?.fallbackReason,
+      refinementInstructionType,
+      messagePackSource,
+      copyRewriteSkippedReason,
+      visualInstructionPassedToRenderer,
+      usingFallback: !!fallbackMeta,
+    });
 
     return {
       jobId: renderResult.providerJobId || "premium",

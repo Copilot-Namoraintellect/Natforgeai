@@ -60,6 +60,10 @@ export interface TemplateRendererRequest {
   captionPackSummary?: string;
   /** Optional creative direction passed through to the provider if supported. */
   creativeGuidance?: string;
+  /** Optional visual/design refinement instruction (e.g. "darker background"). */
+  refinementInstruction?: string;
+  /** Optional business visual style profile (e.g. "modern", "luxury"). */
+  visualStyle?: string;
   /** Optional OpenAI-generated background/hero image URL. */
   backgroundImageUrl?: string;
   /** Hint that this is a retry attempt (provider-specific). */

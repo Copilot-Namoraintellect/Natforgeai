@@ -20,6 +20,9 @@ export interface InternalTemplateRenderContext {
     email?: string;
     location?: string;
   };
+  creativeGuidance?: string;
+  refinementInstruction?: string;
+  visualHints?: import("../composition").LayoutHints;
 }
 
 export interface InternalTemplateLayout {

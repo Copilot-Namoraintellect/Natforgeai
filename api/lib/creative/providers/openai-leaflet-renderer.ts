@@ -75,7 +75,8 @@ export class OpenAiLeafletRenderer implements TemplateRendererProvider {
       format: req.format,
       aspectRatio: req.aspectRatio,
       creativeGuidance: req.creativeGuidance,
-      refinementInstruction: undefined,
+      visualStyle: req.visualStyle,
+      refinementInstruction: req.refinementInstruction,
       isRetry: req.isRetry,
     };
 

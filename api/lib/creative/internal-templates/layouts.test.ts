@@ -128,4 +128,51 @@ describe("internal premium leaflet layouts", () => {
       .toBuffer();
     expect(meanBrightness(bottomRegion)).toBeLessThan(245);
   });
+
+  const allTemplates: PremiumTemplateId[] = [
+    "service_business_promo",
+    "retail_product_promo",
+    "offer_discount_campaign",
+    "corporate_professional",
+    "local_store_promo",
+  ];
+
+  it.each(allTemplates)("%s keeps long copy, services and CTA inside the safe area", async (templateId) => {
+    const layout = getInternalTemplateLayout(templateId);
+    const ctx = baseContext(templateId);
+    ctx.headline =
+      "Instant payouts for restaurants, delivery platforms, frontline teams and market stalls across South Africa";
+    ctx.offer =
+      "Pay approved tips, commissions, supplier invoices and driver bonuses faster than ever before";
+    ctx.subheadline =
+      "Stop waiting for weekly settlement, manual reconciliation and delayed bank transfers that slow down your business.";
+    ctx.cta = "Book your free personalised consultation and demo today";
+    if (templateId === "local_store_promo") {
+      ctx.services = [
+        "Payouts for restaurants, delivery platforms and frontline teams across the country",
+        "Automated tips, commissions and supplier payouts with one click",
+        "Approved delivery orders settled without any manual reconciliation work",
+      ];
+    }
+
+    const buffer = await layout.render(ctx);
+
+    const meta = await sharp(buffer).metadata();
+    expect(meta.width).toBe(1080);
+    expect(meta.height).toBe(1350);
+
+    // The bottom 180px must contain real content (footer / CTA), not empty white canvas.
+    const bottomRegion = await sharp(buffer)
+      .extract({ left: 0, top: 1350 - 180, width: 1080, height: 180 })
+      .raw()
+      .toBuffer();
+    expect(meanBrightness(bottomRegion)).toBeLessThan(245);
+
+    // The very bottom edge should still be filled by the footer band.
+    const bottomRow = await sharp(buffer)
+      .extract({ left: 540 - 10, top: 1349, width: 20, height: 1 })
+      .raw()
+      .toBuffer();
+    expect(meanBrightness(bottomRow)).toBeLessThan(230);
+  });
 });

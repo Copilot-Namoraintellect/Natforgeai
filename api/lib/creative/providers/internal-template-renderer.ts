@@ -9,6 +9,7 @@ import { resolveBrandPalette } from "../brand-palette";
 import { getBestTemplateForCampaign, getPremiumTemplate, type PremiumTemplateId } from "../template-catalogue";
 import { getInternalTemplateLayout } from "../internal-templates/layouts";
 import type { InternalTemplateRenderContext } from "../internal-templates/types";
+import { parseLayoutHints } from "../composition";
 
 function randomJobId(): string {
   return `nf-internal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -100,6 +101,8 @@ export class InternalTemplateRenderer implements TemplateRendererProvider {
 
       const logoBuffer = await loadLogoBuffer(req.logoUrl);
 
+      const hints = parseLayoutHints(`${req.creativeGuidance || ""} ${req.refinementInstruction || ""}`);
+
       const ctx: InternalTemplateRenderContext = {
         templateId,
         width,
@@ -119,6 +122,9 @@ export class InternalTemplateRenderer implements TemplateRendererProvider {
           email: req.contact.email,
           location: req.contact.location,
         },
+        creativeGuidance: req.creativeGuidance,
+        refinementInstruction: req.refinementInstruction,
+        visualHints: hints,
       };
 
       const buffer = await layout.render(ctx);

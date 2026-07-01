@@ -527,6 +527,14 @@ export default function ContentStudio() {
     { campaignId: numericCampaignId },
     { enabled: hasCampaignId }
   );
+  const { data: generatedImages } = trpc.image.list.useQuery(
+    { campaignId: numericCampaignId },
+    { enabled: hasCampaignId }
+  );
+  const allImageRecords = useMemo(
+    () => [...(campaignAssets || []), ...(generatedImages || [])],
+    [campaignAssets, generatedImages]
+  );
   const campaignIterations = useMemo(
     () => computeCampaignIterations(contents || [], campaignAssets || []),
     [contents, campaignAssets]
@@ -1476,6 +1484,13 @@ Include:
 
   function isFailedAttempt(content: any): boolean {
     const meta = (content.metadata || {}) as any;
+    const contentPostId = asNumber(content.id) ?? asNumber(meta?.contentPostId);
+    // A newer ready image asset overrides any stale failed metadata.
+    const latestReadyImageAsset = getLatestReadyImageAsset(
+      allImageRecords,
+      contentPostId != null ? { contentPostId } : undefined
+    );
+    if (latestReadyImageAsset) return false;
     return meta?.imageStatus === "failed" || meta?.videoStatus === "failed";
   }
 
@@ -1483,7 +1498,7 @@ Include:
     const metadata = (content.metadata || {}) as any;
     const contentPostId = asNumber(content.id) ?? asNumber(metadata?.contentPostId);
     const latestReadyImageAsset = getLatestReadyImageAsset(
-      campaignAssets,
+      allImageRecords,
       contentPostId != null ? { contentPostId } : undefined
     );
     const latestAssetMeta = (latestReadyImageAsset?.metadata as any) || {};
@@ -1493,7 +1508,7 @@ Include:
       displayMeta?.imageUrl ||
       displayMeta?.url ||
       content?.url ||
-      getCampaignImageAssetUrl(campaignAssets, contentPostId != null ? { contentPostId } : undefined);
+      getCampaignImageAssetUrl(allImageRecords, contentPostId != null ? { contentPostId } : undefined);
     const imageStatus = displayMeta?.imageStatus ?? metadata?.imageStatus;
     const isGeneratingBasic = isPending(content.id, "basic");
     const isGeneratingPremium = isPending(content.id, "premium");
@@ -1678,6 +1693,11 @@ Include:
                       className={`w-full object-contain rounded-lg max-h-[260px] ${imageLoading ? "opacity-0" : "opacity-100"}`}
                       onLoad={() => {
                         setLoadingImageIds((prev) => {
+                          const next = new Set(prev);
+                          next.delete(content.id);
+                          return next;
+                        });
+                        setBrokenImageIds((prev) => {
                           const next = new Set(prev);
                           next.delete(content.id);
                           return next;
@@ -1911,6 +1931,11 @@ Include:
                   className={`w-full object-contain rounded-xl ${hero ? "max-h-[800px] min-h-[420px]" : "max-h-[640px]"} ${imageLoading ? "opacity-0" : "opacity-100"}`}
                   onLoad={() => {
                     setLoadingImageIds((prev) => {
+                      const next = new Set(prev);
+                      next.delete(content.id);
+                      return next;
+                    });
+                    setBrokenImageIds((prev) => {
                       const next = new Set(prev);
                       next.delete(content.id);
                       return next;
@@ -2271,7 +2296,7 @@ Include:
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-semibold text-purple-900 flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                    {isBasicDraftAsset ? "Draft Refinement" : "Premium Refinement"}
+                    {isBasicDraftAsset ? "Design Refinement" : "Premium Refinement"}
                   </h4>
                   <Badge variant="outline" className="text-[10px] h-5">
                     {internalCost} credits
@@ -2311,7 +2336,7 @@ Include:
                     disabled={isGenerating || !refinementInstruction.trim()}
                   >
                     {isGeneratingBasic ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
-                    Refine Basic Draft
+                    Design Refinement
                   </Button>
                   <Button
                     size="sm"

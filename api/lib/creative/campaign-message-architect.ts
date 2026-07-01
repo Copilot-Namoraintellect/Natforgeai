@@ -1005,6 +1005,99 @@ export function parseStructuredRefinementInstruction(
   };
 }
 
+const DESIGN_ONLY_KEYWORDS = [
+  "visual",
+  "design",
+  "layout",
+  "look",
+  "feel",
+  "style",
+  "theme",
+  "background",
+  "colour",
+  "color",
+  "font",
+  "typography",
+  "template",
+  "image",
+  "picture",
+  "premium",
+  "professional",
+  "modern",
+  "clean",
+  "minimal",
+  "luxury",
+  "corporate",
+  "restaurant",
+  "fintech",
+  "brighter",
+  "darker",
+  "larger text",
+  "bigger text",
+  "smaller text",
+  "more spacing",
+  "more space",
+  "spread out",
+  "less clutter",
+  "simpler",
+  "center",
+  "centre",
+  "centered",
+  "aligned",
+  "vertical",
+  "horizontal",
+  "polish",
+  "improve",
+  "better",
+  "make it look",
+  "visual appeal",
+  "readability",
+  "brand colours",
+  "brand colors",
+  "brand fit",
+];
+
+const COPY_SECTION_KEYWORDS = [
+  "headline",
+  "subheadline",
+  "sub-headline",
+  "sub headline",
+  "benefits",
+  "benefit bullets",
+  "benefit cards",
+  "benefit points",
+  "key benefits",
+  "cta",
+  "call to action",
+  "call-to-action",
+  "copy",
+  "wording",
+  "text",
+  "message",
+  "tagline",
+  "footer",
+  "footer contact",
+  "contact details",
+  "proof points",
+  "trust signals",
+];
+
+/**
+ * Detect whether a refinement instruction is purely about visual/design/style
+ * and does not attempt to change copy fields.
+ */
+export function isDesignOnlyRefinementInstruction(instruction: string): boolean {
+  if (!instruction || typeof instruction !== "string") return false;
+  const lower = instruction.toLowerCase();
+
+  // If the user names explicit copy sections, treat it as structured/mixed.
+  const hasCopySection = COPY_SECTION_KEYWORDS.some((kw) => lower.includes(kw));
+  if (hasCopySection) return false;
+
+  const hasDesignKeyword = DESIGN_ONLY_KEYWORDS.some((kw) => lower.includes(kw));
+  return hasDesignKeyword;
+}
+
 function refinementPrompt(ctx: ValidationContext, existingPack: CampaignMessagePack, instruction: string, platforms: string[], userPack?: CampaignMessagePack): string {
   const category = detectBusinessCategory(ctx);
   const categoryCtas = expectedCtasForCategory(category).join('", "');

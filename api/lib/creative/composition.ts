@@ -52,7 +52,7 @@ export interface LayoutHints {
   centerOffer?: boolean;
 }
 
-function parseLayoutHints(text?: string): LayoutHints {
+export function parseLayoutHints(text?: string): LayoutHints {
   if (!text) return {};
   const lower = text.toLowerCase();
   return {

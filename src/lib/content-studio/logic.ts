@@ -33,7 +33,18 @@ export function getLatestReadyImageAsset(
       (typeof asset?.url === "string" && asset.url) ||
       (typeof meta?.url === "string" && meta.url) ||
       (typeof meta?.imageUrl === "string" && meta.imageUrl);
-    if (asset?.assetType !== "image" || asset?.status !== "ready" || !url) return false;
+    if (!url) return false;
+
+    const isImageLike =
+      asset?.assetType === "image" ||
+      meta?.assetType === "image" ||
+      meta?.assetType === "leaflet" ||
+      meta?.assetKind === "master_campaign_post" ||
+      typeof asset?.provider === "string";
+
+    const isReady = asset?.status === "ready" || asset?.status === "completed";
+    if (!isImageLike || !isReady) return false;
+
     if (opts?.contentPostId == null) return true;
     return (
       asNumber(asset.contentPostId) === opts.contentPostId ||
