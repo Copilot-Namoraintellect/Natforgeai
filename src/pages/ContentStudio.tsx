@@ -1520,6 +1520,7 @@ Include:
         creativeGuidance: creativeGuidance.trim() || undefined,
         refinementInstruction: refinementInstruction.trim() || undefined,
         allowNoLogo,
+        forceRegenerate: !!refinementInstruction.trim() || strongerBrandFit,
       });
 
     const generatePremiumInternal = (strongerBrandFit = false) =>
@@ -1531,6 +1532,7 @@ Include:
         creativeGuidance: creativeGuidance.trim() || undefined,
         refinementInstruction: refinementInstruction.trim() || undefined,
         allowNoLogo,
+        forceRegenerate: !!refinementInstruction.trim() || strongerBrandFit,
       });
 
     const generatePremiumExternal = (strongerBrandFit = false) =>
@@ -1542,6 +1544,7 @@ Include:
         creativeGuidance: creativeGuidance.trim() || undefined,
         refinementInstruction: refinementInstruction.trim() || undefined,
         allowNoLogo,
+        forceRegenerate: !!refinementInstruction.trim() || strongerBrandFit,
       });
 
     const statusBadge = () => {

@@ -5,6 +5,7 @@ import { getDb } from "../../queries/connection";
 import { contentPosts, campaigns, businesses, generatedImages, videoRenderJobs, campaignAssets } from "@db/schema";
 import { checkCredits, deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
+import { logInfo } from "../logger";
 import {
   getPremiumVideoProvider,
   getBasicVideoProvider,
@@ -548,6 +549,7 @@ export async function generatePremiumLeaflet({
   refinementInstruction,
   allowNoLogo = false,
   regenerate = false,
+  forceRegenerate = false,
 }: {
   userId: number;
   contentPostId: number;
@@ -560,6 +562,7 @@ export async function generatePremiumLeaflet({
   refinementInstruction?: string;
   allowNoLogo?: boolean;
   regenerate?: boolean;
+  forceRegenerate?: boolean;
 }): Promise<ImageResult> {
   const { post, campaign, business } = await loadPostCampaignBusiness({ userId, contentPostId });
   const db = getDb();
@@ -578,15 +581,77 @@ export async function generatePremiumLeaflet({
   const generationRunId = newGenerationRunId("premium");
   const iterationNumber = getNextIterationNumber(currentMeta, allPreviousImages);
 
-  // ─── Idempotency: reuse existing valid premium leaflet unless explicitly regenerating ───
-  if (!regenerate && post.campaignId) {
+  // ─── Idempotency: reuse existing valid premium leaflet only when no explicit new attempt is requested ───
+  const hasRefinementInstruction = !!refinementInstruction?.trim();
+  const isExplicitRegenerate = regenerate || forceRegenerate;
+
+  if (post.campaignId) {
     const existingPack = await loadApprovedMessagePack(post.campaignId);
     const existingImage = allPreviousImages
       .filter((img) => img.metadata && (img.metadata as any).assetTier === "premium")
       .sort((a, b) => Number(new Date(b.createdAt || 0)) - Number(new Date(a.createdAt || 0)))[0];
-    if (existingPack?.validation?.passed && existingImage) {
+
+    logInfo("[PremiumLeaflet] idempotency check", {
+      userId,
+      contentPostId,
+      campaignId: post.campaignId,
+      existingAssetFound: !!existingImage,
+      existingPackValid: !!existingPack?.validation?.passed,
+      hasRefinementInstruction,
+      strongerBrandFit,
+      regenerate,
+      forceRegenerate,
+      generationRunId,
+      iterationNumber,
+    });
+
+    const canReuseExisting =
+      !isExplicitRegenerate &&
+      !hasRefinementInstruction &&
+      !strongerBrandFit;
+
+    if (canReuseExisting && existingPack?.validation?.passed && existingImage) {
       const meta = existingImage.metadata as any;
-      console.log(`[PremiumLeaflet] Reusing existing valid asset | userId=${userId} | contentPostId=${contentPostId}`);
+      logInfo("[PremiumLeaflet] reusing existing valid asset", {
+        userId,
+        contentPostId,
+        campaignId: post.campaignId,
+        existingImageId: existingImage.id,
+        provider: existingImage.provider,
+        generationRunId: meta?.generationRunId,
+        iterationNumber: meta?.iterationNumber,
+      });
+
+      // Ensure the content post reflects the reused asset as ready so the UI
+      // does not stay stuck in a previous failed/generating state.
+      await db
+        .update(contentPosts)
+        .set({
+          metadata: {
+            ...currentMeta,
+            currentVersionId: existingImage.id,
+            imageCurrentVersionId: existingImage.id,
+            imageUrl: existingImage.url,
+            imageProvider: existingImage.provider || "premium",
+            imageJobId: existingImage.providerJobId || "premium",
+            imageStatus: "ready",
+            imageError: null,
+            imageCreditsCharged: 0,
+            imageExtension: "png",
+            imageSource: "premium",
+            source: "premium",
+            imageQualityScore: meta?.qualityScore ?? null,
+            qualityScore: meta?.qualityScore ?? null,
+            imageQualityTier: meta?.qualityTier ?? null,
+            qualityTier: meta?.qualityTier ?? null,
+            imageQualityLabel: meta?.qualityLabel ?? null,
+            qualityLabel: meta?.qualityLabel ?? null,
+            imageIsDraft: false,
+            isDraft: false,
+          },
+        })
+        .where(eq(contentPosts.id, post.id));
+
       return {
         jobId: meta?.renderRequest?.providerJobId || existingImage.providerJobId || "premium",
         provider: existingImage.provider || "premium",
@@ -599,6 +664,24 @@ export async function generatePremiumLeaflet({
         isDraft: false,
         usingFallback: false,
       };
+    }
+
+    if (existingImage) {
+      let reuseSkippedReason: string;
+      if (hasRefinementInstruction) reuseSkippedReason = "refinement_instruction_present";
+      else if (strongerBrandFit) reuseSkippedReason = "stronger_brand_fit";
+      else if (isExplicitRegenerate) reuseSkippedReason = "force_regenerate";
+      else reuseSkippedReason = "template_or_settings_changed";
+
+      logInfo("[PremiumLeaflet] skipping existing asset reuse", {
+        userId,
+        contentPostId,
+        campaignId: post.campaignId,
+        existingImageId: existingImage.id,
+        reuseSkippedReason,
+        generationRunId,
+        iterationNumber,
+      });
     }
   }
 

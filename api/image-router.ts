@@ -294,6 +294,7 @@ export const imageRouter = createRouter({
         refinementInstruction: z.string().optional(),
         allowNoLogo: z.boolean().optional(),
         regenerate: z.boolean().default(false),
+        forceRegenerate: z.boolean().default(false),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -309,6 +310,7 @@ export const imageRouter = createRouter({
         refinementInstruction: input.refinementInstruction,
         allowNoLogo: input.allowNoLogo,
         regenerate: input.regenerate,
+        forceRegenerate: input.forceRegenerate,
       });
 
       if (result.status === "failed") {
