@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
@@ -97,6 +97,7 @@ import { generatePremiumLeaflet } from "./service";
 import * as architect from "./campaign-message-architect";
 import * as creditEngine from "../billing/credit-engine";
 import * as quality from "./quality";
+import { env } from "../env";
 
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string | undefined;
@@ -228,6 +229,7 @@ describe("generatePremiumLeaflet refinement bypasses existing asset reuse", () =
     vi.clearAllMocks();
     openAiRenderMock.mockClear();
     internalRenderMock.mockClear();
+    env.freeAiLeafletFallback = false;
 
     vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(refinedPack);
     vi.mocked(architect.loadApprovedMessagePack).mockResolvedValue(refinedPack);
@@ -242,6 +244,10 @@ describe("generatePremiumLeaflet refinement bypasses existing asset reuse", () =
       warnings: [],
       qualityTier: "failed",
     });
+  });
+
+  afterEach(() => {
+    env.freeAiLeafletFallback = false;
   });
 
   it("does not reuse an existing premium asset when a refinementInstruction is present", async () => {
@@ -287,6 +293,9 @@ Footer: South Africa
     expect(deductCalls).toHaveLength(1);
     expect(deductCalls[0][0].amount).toBe(5);
 
+    // Ensure the free-fallback env flag from the VPS .env did not leak in.
+    expect(env.freeAiLeafletFallback).toBe(false);
+
     // A new generated_images row should be created.
     const generatedRecords = mockDb._inserted.filter((r) => r.tableName === "generated_images");
     expect(generatedRecords.length).toBe(1);
@@ -304,5 +313,43 @@ Footer: South Africa
     expect(finalUpdate.data.metadata.imageFallbackMessage).toBe(
       "OpenAI background included readable text, so NatForgeAI generated a clean premium fallback layout instead."
     );
+  });
+
+  it("charges 0 credits and records admin_test_fallback when free fallback is enabled", async () => {
+    env.freeAiLeafletFallback = true;
+    const { getDb } = await import("../../queries/connection");
+    const mockDb = createMockDb();
+    vi.mocked(getDb).mockReturnValue(mockDb as any);
+
+    const refinementInstruction = `
+Headline: Free-test refined headline
+Subheadline: Free-test refined subheadline.
+Benefits:
+- Benefit one
+- Benefit two
+CTA: Book a demo
+Footer: South Africa
+    `;
+
+    const result = await generatePremiumLeaflet({
+      userId: 18,
+      contentPostId: 125,
+      provider: "ai",
+      refinementInstruction,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.creditsCharged).toBe(0);
+    expect(creditEngine.deductCredits).not.toHaveBeenCalled();
+
+    const generatedRecord = mockDb._inserted.find((r) => r.tableName === "generated_images");
+    expect(generatedRecord).toBeTruthy();
+    expect(generatedRecord!.data.creditsCharged).toBe(0);
+    expect(generatedRecord!.data.metadata.fallback.creditsReason).toBe("admin_test_fallback");
+
+    const contentPostUpdates = mockDb._updated.filter((r) => r.tableName === "content_posts");
+    const finalUpdate = contentPostUpdates[contentPostUpdates.length - 1];
+    expect(finalUpdate.data.metadata.imageStatus).toBe("ready");
+    expect(finalUpdate.data.metadata.imageCreditsCharged).toBe(0);
   });
 });
