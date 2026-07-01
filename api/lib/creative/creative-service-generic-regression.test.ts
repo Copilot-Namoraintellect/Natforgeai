@@ -85,6 +85,83 @@ const genericPack: CampaignMessagePack = {
   messagePackSource: "ai_refined_pack",
 };
 
+function createMockDbWithNullRootFields(approvedPack: CampaignMessagePack) {
+  return {
+    select: vi.fn(() => ({
+      from: vi.fn((table: any) => {
+        const tableName = (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string;
+        const rowsByTable: Record<string, any[]> = {
+          content_posts: [
+            {
+              id: 100,
+              userId: 10,
+              campaignId: 28,
+              title: null,
+              hook: null,
+              cta: null,
+              platform: "Instagram",
+              metadata: {},
+            },
+          ],
+          campaigns: [
+            {
+              id: 28,
+              userId: 10,
+              businessId: 24,
+              name: "Zuto Campaign",
+              productOrService: null,
+              targetBuyer: null,
+              mainPainPoint: null,
+              offerDetails: null,
+              excludedOffers: null,
+              preferredCta: null,
+              platforms: "Instagram, Facebook",
+              primaryOutcome: null,
+              coreMessage: null,
+              workflowContext: {},
+            },
+          ],
+          businesses: [
+            {
+              id: 24,
+              userId: 10,
+              name: "Zuto",
+              displayName: "Zuto Hub",
+              logo: "https://example.com/logo.png",
+              industry: "Fintech",
+              location: null,
+              websiteEvidence: null,
+            },
+          ],
+          generated_images: [],
+          campaign_assets: [
+            {
+              id: 457,
+              metadata: {
+                approvedMessagePack: approvedPack,
+                messagePackSource: approvedPack.messagePackSource,
+                isGeneric: false,
+                specificityScore: 104,
+              },
+              createdAt: new Date("2026-07-03T00:00:00Z"),
+            },
+          ],
+        };
+        const rows = rowsByTable[tableName] || [];
+        return {
+          where: vi.fn(() => ({
+            then: (resolve: (value: any[]) => void) => resolve(rows),
+            limit: vi.fn(async () => rows),
+            orderBy: vi.fn(() => ({ limit: vi.fn(async () => rows) })),
+          })),
+        };
+      }),
+    })),
+    insert: vi.fn(() => ({ values: vi.fn(async () => [{ insertId: 1 }]) })),
+    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => []) })) })),
+  };
+}
+
 function createMockDb() {
   return {
     select: vi.fn(() => ({
@@ -217,6 +294,38 @@ describe("generatePremiumLeaflet generic regression", () => {
     expect(inputs).not.toContain("learn more");
     expect(inputs).not.toContain("your business");
     expect(inputs).not.toContain("transform your business");
+  });
+
+  it("design-only refinement uses approvedMessagePack fields when campaign/post root fields are null", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const manualRestorePack: CampaignMessagePack = {
+      ...specificPack,
+      messagePackSource: "manual_restore",
+    };
+    const db = createMockDbWithNullRootFields(manualRestorePack);
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const result = await generatePremiumLeaflet({
+      userId: 10,
+      contentPostId: 100,
+      provider: "internal",
+      refinementInstruction: "Use a darker background and larger logo",
+    });
+
+    expect(result.status).toBe("completed");
+
+    expect(renderMock).toHaveBeenCalledTimes(1);
+    const renderReq = renderMock.mock.calls[0][0];
+    expect(renderReq.headline).toBe(manualRestorePack.headline);
+    expect(renderReq.subheadline).toBe(manualRestorePack.subheadline);
+    expect(renderReq.cta).toBe(manualRestorePack.cta);
+    expect(renderReq.services).toEqual(manualRestorePack.benefitBullets);
+    expect(renderReq.contact.location).toBe(manualRestorePack.footerContact.location);
+
+    // If the renderer had fallen back to stale root fields it would receive the
+    // generic business name or empty strings instead of the approved pack.
+    expect(renderReq.headline).not.toBe("Zuto");
+    expect(renderReq.cta).not.toBe("");
   });
 
   it("selectBestApprovedMessagePack still ranks the specific pack highest when it is not the newest", () => {

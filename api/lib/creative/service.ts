@@ -960,9 +960,18 @@ export async function generatePremiumLeaflet({
     // wording; it may not invent a new headline or CTA.
     let headline = leafletHeadline || formattedOffer || campaign.primaryOutcome || post?.title || business.name;
     let offer = formattedOffer;
-    const subheadline = leafletSubheadline || campaign.mainPainPoint || campaign.coreMessage || post?.hook || "";
+    let subheadline = leafletSubheadline || campaign.mainPainPoint || campaign.coreMessage || post?.hook || "";
     let cta = leafletCta;
     let services = serviceBullets;
+
+    // Once an approved message pack is selected, the renderer MUST consume the
+    // exact approved copy. Normalized fallback variables must not override it.
+    if (approvedMessagePack) {
+      headline = approvedMessagePack.headline || headline;
+      subheadline = approvedMessagePack.subheadline || subheadline;
+      services = approvedMessagePack.benefitBullets?.length ? approvedMessagePack.benefitBullets : services;
+      cta = approvedMessagePack.cta || cta;
+    }
 
     if (strongerBrandFit && env.openaiApiKey && refinementInstructionType !== "design_only") {
       try {
@@ -1045,7 +1054,11 @@ export async function generatePremiumLeaflet({
         whatsapp: business.whatsapp || undefined,
         website: business.website || undefined,
         email: business.email || undefined,
-        location: business.address || business.location || undefined,
+        location:
+          approvedMessagePack?.footerContact?.location ||
+          business.address ||
+          business.location ||
+          undefined,
       },
       campaignObjective: campaign.primaryOutcome || campaign.goal || undefined,
       campaignProduct: campaign.productOrService || undefined,
