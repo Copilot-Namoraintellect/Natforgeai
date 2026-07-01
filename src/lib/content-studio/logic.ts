@@ -21,19 +21,40 @@ export function getContentMeta(c: unknown): Record<string, unknown> {
   return ((c as Record<string, unknown>)?.metadata as Record<string, unknown>) || {};
 }
 
-export function getCampaignImageAssetUrl(assets: unknown[] | undefined): string | undefined {
+export function getLatestReadyImageAsset(
+  assets: unknown[] | undefined,
+  opts?: { contentPostId?: number }
+): Record<string, unknown> | undefined {
   if (!assets?.length) return undefined;
-  const image = assets.find((a) => {
+  const candidates = (assets || []).filter((a) => {
     const asset = a as Record<string, unknown>;
     const meta = getContentMeta(asset);
     const url =
       (typeof asset?.url === "string" && asset.url) ||
       (typeof meta?.url === "string" && meta.url) ||
       (typeof meta?.imageUrl === "string" && meta.imageUrl);
-    return asset?.assetType === "image" && asset?.status === "ready" && url;
+    if (asset?.assetType !== "image" || asset?.status !== "ready" || !url) return false;
+    if (opts?.contentPostId == null) return true;
+    return (
+      asNumber(asset.contentPostId) === opts.contentPostId ||
+      asNumber(meta.contentPostId) === opts.contentPostId
+    );
   });
-  if (!image) return undefined;
-  const asset = image as Record<string, unknown>;
+  if (!candidates.length) return undefined;
+  candidates.sort(
+    (a, b) =>
+      new Date(((b as Record<string, unknown>).createdAt as string) || 0).getTime() -
+      new Date(((a as Record<string, unknown>).createdAt as string) || 0).getTime()
+  );
+  return candidates[0] as Record<string, unknown>;
+}
+
+export function getCampaignImageAssetUrl(
+  assets: unknown[] | undefined,
+  opts?: { contentPostId?: number }
+): string | undefined {
+  const asset = getLatestReadyImageAsset(assets, opts);
+  if (!asset) return undefined;
   const meta = getContentMeta(asset);
   return (
     (typeof asset.url === "string" && asset.url) ||

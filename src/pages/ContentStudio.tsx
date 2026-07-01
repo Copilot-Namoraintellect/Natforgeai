@@ -114,6 +114,7 @@ import {
   getContentMeta,
   getImageUrl,
   getCampaignImageAssetUrl,
+  getLatestReadyImageAsset,
   isCaptionPackAsset,
   findLeafletCandidate,
   campaignNeedsRecoveryDecision,
@@ -1480,17 +1481,26 @@ Include:
 
   function renderMasterImageSection(content: any, compact = false, showCaptionPack = true, hero = false) {
     const metadata = (content.metadata || {}) as any;
+    const contentPostId = asNumber(content.id) ?? asNumber(metadata?.contentPostId);
+    const latestReadyImageAsset = getLatestReadyImageAsset(
+      campaignAssets,
+      contentPostId != null ? { contentPostId } : undefined
+    );
+    const latestAssetMeta = (latestReadyImageAsset?.metadata as any) || {};
+    const displayMeta = { ...metadata, ...latestAssetMeta };
+
     const imageUrl =
-      metadata?.imageUrl ||
-      metadata?.url ||
+      displayMeta?.imageUrl ||
+      displayMeta?.url ||
       content?.url ||
-      getCampaignImageAssetUrl(campaignAssets);
-    const imageStatus = metadata?.imageStatus;
+      getCampaignImageAssetUrl(campaignAssets, contentPostId != null ? { contentPostId } : undefined);
+    const imageStatus = displayMeta?.imageStatus ?? metadata?.imageStatus;
     const isGeneratingBasic = isPending(content.id, "basic");
     const isGeneratingPremium = isPending(content.id, "premium");
     const isGenerating = imageStatus === "generating" || isGeneratingBasic || isGeneratingPremium;
     const isPremiumReady = premiumTemplateStatus?.ready === true;
-    const isBasicDraftAsset = metadata?.imageSource === "draft" || (metadata?.imageCreditsCharged ?? 0) === 0;
+    const isBasicDraftAsset =
+      displayMeta?.imageSource === "draft" || (displayMeta?.imageCreditsCharged ?? 0) === 0;
     const isFailed = imageStatus === "failed";
     const isReady = !!imageUrl;
     const imageLoading = loadingImageIds.has(content.id);
@@ -1498,8 +1508,20 @@ Include:
     const captionPack = campaignAssets?.find(
       (a) => a.assetType === "caption_pack" && (a.metadata as any)?.contentPostId === content.id
     );
+    const approvedMessagePack = (campaignAssets?.find(
+      (a) => a.assetType === "message_pack" && a.campaignId === content.campaignId
+    )?.metadata as any)?.approvedMessagePack;
+    const leafletHeadline = approvedMessagePack?.headline || content.title || campaignForContext?.goal || "—";
+    const leafletCta = approvedMessagePack?.cta || content.cta || campaignForContext?.preferredCta || "—";
+
     const creativeGuidance = creativeGuidanceById[content.id] || "";
     const refinementInstruction = refinementById[content.id] || "";
+
+    const isPremiumFallback =
+      displayMeta?.imageProvider === "internal-premium-fallback" ||
+      displayMeta?.imageFallback?.provider === "internal-premium-fallback";
+    const isFreeAdminFallback =
+      isPremiumFallback && displayMeta?.imageFallback?.creditsReason === "admin_test_fallback";
     const allowNoLogo = !!allowNoLogoById[content.id];
 
     const generateBasicDraft = () =>
@@ -1592,29 +1614,35 @@ Include:
               <Badge
                 variant="outline"
                 className={`text-[10px] h-6 ${
-                  metadata?.imageQualityTier === "draft" || metadata?.imageQualityTier === "failed"
+                  isPremiumFallback
+                    ? "border-blue-200 text-blue-700 bg-blue-50"
+                    : displayMeta?.imageQualityTier === "draft" || displayMeta?.imageQualityTier === "failed"
                     ? "border-amber-300 text-amber-700 bg-amber-50"
-                    : metadata?.imageQualityTier === "premium"
+                    : displayMeta?.imageQualityTier === "premium"
                     ? "border-emerald-200 text-emerald-700 bg-emerald-50"
                     : "border-blue-200 text-blue-700 bg-blue-50"
                 }`}
               >
-                {metadata?.imageQualityLabel ||
-                  (metadata?.imageSource === "draft" || metadata?.imageFallbackUsed
-                    ? "Basic Draft"
-                    : metadata?.imageSource === "openai" || metadata?.imageProvider === "openai-leaflet"
-                    ? "Premium AI"
-                    : metadata?.imageSource === "premium"
-                    ? "Premium Marketing Leaflet"
-                    : "Generated")}
+                {isPremiumFallback
+                  ? "Premium fallback"
+                  : displayMeta?.imageQualityLabel ||
+                    (displayMeta?.imageSource === "draft" || displayMeta?.imageFallbackUsed
+                      ? "Basic Draft"
+                      : displayMeta?.imageSource === "openai" || displayMeta?.imageProvider === "openai-leaflet"
+                      ? "Premium AI"
+                      : displayMeta?.imageSource === "premium"
+                      ? "Premium Marketing Leaflet"
+                      : "Generated")}
               </Badge>
             )}
             <Badge variant="outline" className="text-[10px] h-6">
               {isFailed || imageBroken
                 ? "No credits deducted"
-                : (metadata?.imageCreditsCharged ?? 0) === 0
+                : isFreeAdminFallback
+                ? "0 credits — Premium fallback test"
+                : (displayMeta?.imageCreditsCharged ?? 0) === 0
                 ? "Free draft"
-                : `${metadata.imageCreditsCharged} credits`}
+                : `${displayMeta.imageCreditsCharged} credits`}
             </Badge>
           </div>
         </div>
@@ -1679,42 +1707,54 @@ Include:
               <div className="space-y-3">
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">Headline</span>
-                  <p className="font-medium text-sm line-clamp-2">{content.title || campaignForContext?.goal || "—"}</p>
+                  <p className="font-medium text-sm line-clamp-2">
+                    {approvedMessagePack?.headline || content.title || campaignForContext?.goal || "—"}
+                  </p>
                 </div>
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">CTA</span>
-                  <p className="font-medium text-sm line-clamp-2">{content.cta || campaignForContext?.preferredCta || "—"}</p>
+                  <p className="font-medium text-sm line-clamp-2">
+                    {approvedMessagePack?.cta || content.cta || campaignForContext?.preferredCta || "—"}
+                  </p>
                 </div>
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">Template</span>
                   <p className="font-medium text-sm">
-                    {LEAFLET_TEMPLATE_OPTIONS.find((o) => o.value === (metadata?.imageTemplateId || "auto"))?.label || "Auto-detect"}
+                    {LEAFLET_TEMPLATE_OPTIONS.find((o) => o.value === (displayMeta?.imageTemplateId || "auto"))?.label || "Auto-detect"}
                   </p>
                 </div>
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">Credits charged</span>
                   <p className="font-medium text-sm">
-                    {(metadata?.imageCreditsCharged ?? 0) === 0 ? "0 (Basic Draft)" : `${metadata?.imageCreditsCharged} credits`}
+                    {isFreeAdminFallback
+                      ? "0 credits — Premium fallback test"
+                      : (displayMeta?.imageCreditsCharged ?? 0) === 0
+                      ? "0 (Basic Draft)"
+                      : `${displayMeta?.imageCreditsCharged} credits`}
                   </p>
                 </div>
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">Source / Quality</span>
                   <p className={`font-medium text-sm ${
-                    metadata?.imageQualityTier === "draft" || metadata?.imageQualityTier === "failed"
+                    isPremiumFallback
+                      ? "text-blue-700"
+                      : displayMeta?.imageQualityTier === "draft" || displayMeta?.imageQualityTier === "failed"
                       ? "text-amber-700"
-                      : metadata?.imageSource === "premium"
+                      : displayMeta?.imageSource === "premium"
                       ? "text-emerald-700"
                       : "text-slate-700"
                   }`}>
-                    {metadata?.imageQualityLabel ||
-                      (metadata?.imageSource === "draft" || metadata?.imageFallbackUsed
-                        ? "Basic Draft"
-                        : metadata?.imageSource === "openai" || metadata?.imageProvider === "openai-leaflet"
-                        ? "Premium AI"
-                        : metadata?.imageSource === "premium"
-                        ? "Premium Marketing Leaflet"
-                        : "Not generated")}
-                    {typeof metadata?.imageQualityScore === "number" && ` · ${metadata.imageQualityScore}/100`}
+                    {isPremiumFallback
+                      ? "Premium fallback"
+                      : displayMeta?.imageQualityLabel ||
+                        (displayMeta?.imageSource === "draft" || displayMeta?.imageFallbackUsed
+                          ? "Basic Draft"
+                          : displayMeta?.imageSource === "openai" || displayMeta?.imageProvider === "openai-leaflet"
+                          ? "Premium AI"
+                          : displayMeta?.imageSource === "premium"
+                          ? "Premium Marketing Leaflet"
+                          : "Not generated")}
+                    {typeof displayMeta?.imageQualityScore === "number" && ` · ${displayMeta.imageQualityScore}/100`}
                   </p>
                 </div>
 
@@ -1734,7 +1774,7 @@ Include:
                       onClick={() => {
                         const a = document.createElement("a");
                         a.href = imageUrl;
-                        a.download = `${content.title || "campaign"}-image.${metadata?.imageExtension || "png"}`;
+                        a.download = `${content.title || "campaign"}-image.${displayMeta?.imageExtension || "png"}`;
                         a.click();
                       }}
                     >
@@ -1825,9 +1865,9 @@ Include:
                 <p className="text-sm text-red-600 mt-1 max-w-md">
                   No credits were deducted. Please try again, or contact support if the issue continues.
                 </p>
-                {metadata?.imageError && typeof metadata.imageError === "string" && (
+                {displayMeta?.imageError && typeof displayMeta.imageError === "string" && (
                   <p className="text-[10px] text-red-600 mt-3 font-mono bg-red-100/60 px-3 py-1.5 rounded max-w-full truncate">
-                    {metadata.imageError}
+                    {displayMeta.imageError}
                   </p>
                 )}
                 <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
@@ -1853,10 +1893,10 @@ Include:
               </div>
             ) : isReady ? (
               <div className="relative group overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-2">
-                {metadata?.imageFallbackMessage && typeof metadata.imageFallbackMessage === "string" && (
+                {displayMeta?.imageFallbackMessage && typeof displayMeta.imageFallbackMessage === "string" && (
                   <div className="mb-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 flex items-start gap-2">
                     <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-                    <p className="text-xs text-blue-800">{metadata.imageFallbackMessage}</p>
+                    <p className="text-xs text-blue-800">{displayMeta.imageFallbackMessage}</p>
                   </div>
                 )}
                 {imageLoading && (
@@ -1894,7 +1934,7 @@ Include:
                     onClick={() => {
                       const a = document.createElement("a");
                       a.href = imageUrl;
-                      a.download = `${content.title || "campaign"}-image.${metadata?.imageExtension || "png"}`;
+                      a.download = `${content.title || "campaign"}-image.${displayMeta?.imageExtension || "png"}`;
                       a.click();
                     }}
                   >
@@ -2073,11 +2113,11 @@ Include:
               <CardContent className="space-y-3.5 text-sm">
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">Headline</span>
-                  <p className="font-medium text-sm line-clamp-2">{content.title || campaignForContext?.goal || "—"}</p>
+                  <p className="font-medium text-sm line-clamp-2">{leafletHeadline}</p>
                 </div>
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">CTA</span>
-                  <p className="font-medium text-sm line-clamp-2">{content.cta || campaignForContext?.preferredCta || "—"}</p>
+                  <p className="font-medium text-sm line-clamp-2">{leafletCta}</p>
                 </div>
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">Business</span>
@@ -2102,60 +2142,72 @@ Include:
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">Template</span>
                   <p className="font-medium text-sm">
-                    {LEAFLET_TEMPLATE_OPTIONS.find((o) => o.value === (metadata?.imageTemplateId || "auto"))?.label || "Auto-detect"}
+                    {LEAFLET_TEMPLATE_OPTIONS.find((o) => o.value === (displayMeta?.imageTemplateId || "auto"))?.label || "Auto-detect"}
                   </p>
                 </div>
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">Credits charged</span>
                   <p className="font-medium text-sm">
-                    {(metadata?.imageCreditsCharged ?? 0) === 0 ? "0 (Basic Draft)" : `${metadata?.imageCreditsCharged} credits`}
+                    {isFreeAdminFallback
+                      ? "0 credits — Premium fallback test"
+                      : (displayMeta?.imageCreditsCharged ?? 0) === 0
+                      ? "0 (Basic Draft)"
+                      : `${displayMeta?.imageCreditsCharged} credits`}
                   </p>
                 </div>
                 <div className="space-y-1">
                   <span className="text-xs text-slate-500">Source</span>
-                  <p className={`font-medium text-sm ${
-                    metadata?.imageQualityTier === "draft" || metadata?.imageQualityTier === "failed"
-                      ? "text-amber-700"
-                      : metadata?.imageSource === "premium"
-                      ? "text-emerald-700"
-                      : "text-slate-700"
-                  }`}>
-                    {metadata?.imageQualityLabel ||
-                      (metadata?.imageSource === "draft" || metadata?.imageFallbackUsed
-                        ? "Basic Draft"
-                        : metadata?.imageSource === "openai" || metadata?.imageProvider === "openai-leaflet"
-                        ? "Premium AI"
-                        : metadata?.imageSource === "premium"
-                        ? "Premium Marketing Leaflet"
-                        : "Generated")}
+                  <p
+                    className={`font-medium text-sm ${
+                      isPremiumFallback
+                        ? "text-blue-700"
+                        : displayMeta?.imageQualityTier === "draft" || displayMeta?.imageQualityTier === "failed"
+                        ? "text-amber-700"
+                        : displayMeta?.imageSource === "premium"
+                        ? "text-emerald-700"
+                        : "text-slate-700"
+                    }`}
+                  >
+                    {isPremiumFallback
+                      ? "Premium fallback"
+                      : displayMeta?.imageQualityLabel ||
+                        (displayMeta?.imageSource === "draft" || displayMeta?.imageFallbackUsed
+                          ? "Basic Draft"
+                          : displayMeta?.imageSource === "openai" || displayMeta?.imageProvider === "openai-leaflet"
+                          ? "Premium AI"
+                          : displayMeta?.imageSource === "premium"
+                          ? "Premium Marketing Leaflet"
+                          : "Generated")}
                   </p>
                 </div>
-                {typeof metadata?.imageQualityScore === "number" && (
+                {typeof displayMeta?.imageQualityScore === "number" && (
                   <div className="space-y-1">
                     <span className="text-xs text-slate-500">Quality score</span>
                     <p className={`font-medium text-sm ${
-                      metadata.imageQualityTier === "premium"
+                      isPremiumFallback
+                        ? "text-blue-700"
+                        : displayMeta.imageQualityTier === "premium"
                         ? "text-emerald-700"
-                        : metadata.imageQualityTier === "acceptable"
+                        : displayMeta.imageQualityTier === "acceptable"
                         ? "text-blue-700"
                         : "text-amber-700"
                     }`}>
-                      {metadata.imageQualityScore}/100 — {metadata.imageQualityLabel || "Draft"}
+                      {displayMeta.imageQualityScore}/100 — {displayMeta.imageQualityLabel || "Draft"}
                     </p>
                   </div>
                 )}
-                {metadata?.imageGeneratedAt && (
+                {displayMeta?.imageGeneratedAt && (
                   <div className="space-y-1">
                     <span className="text-xs text-slate-500">Generated</span>
                     <p className="font-medium text-sm">
-                      {new Date(metadata.imageGeneratedAt).toLocaleString()}
+                      {new Date(displayMeta.imageGeneratedAt).toLocaleString()}
                     </p>
                   </div>
                 )}
               </CardContent>
             </Card>
 
-            {Array.isArray(metadata?.imageAttempts) && metadata.imageAttempts.length > 0 && (
+            {Array.isArray(displayMeta?.imageAttempts) && displayMeta.imageAttempts.length > 0 && (
               <details className="rounded-lg border border-slate-200 bg-slate-50 text-xs group">
                 <summary className="cursor-pointer list-none px-3 py-2.5 flex items-center justify-between select-none">
                   <span className="font-medium text-slate-700">Generation attempts</span>
@@ -2164,7 +2216,7 @@ Include:
                   </span>
                 </summary>
                 <div className="px-3 pb-3 space-y-2 border-t border-slate-100 pt-2">
-                  {metadata.imageAttempts.map((attempt: any, idx: number) => (
+                  {displayMeta.imageAttempts.map((attempt: any, idx: number) => (
                     <div key={idx} className="rounded-md bg-white border border-slate-200 p-2.5">
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <span className="font-medium text-slate-800">
@@ -2282,7 +2334,7 @@ Include:
                   onClick={() => {
                     const a = document.createElement("a");
                     a.href = imageUrl;
-                    a.download = `${content.title || "campaign"}-image.${metadata?.imageExtension || "png"}`;
+                    a.download = `${content.title || "campaign"}-image.${displayMeta?.imageExtension || "png"}`;
                     a.click();
                   }}
                 >

@@ -137,75 +137,81 @@ function createMockDb(existingImages: any[] = [existingPremiumImage]) {
   const insertedRecords: Array<{ tableName: string | undefined; data: any }> = [];
   const updatedRecords: Array<{ tableName: string | undefined; data: any }> = [];
 
+  function getTableRows(table: any): any[] {
+    const tableName = getTableName(table);
+    if (tableName === "content_posts") {
+      return [
+        {
+          id: 125,
+          userId: 18,
+          campaignId: 28,
+          title: "Marketing Leaflet",
+          hook: "Old hook",
+          cta: "Old CTA",
+          platform: "Instagram",
+          metadata: { imageStatus: "failed", imageError: "Previous attempt failed" },
+        },
+      ];
+    }
+    if (tableName === "campaigns") {
+      return [
+        {
+          id: 28,
+          userId: 18,
+          businessId: 24,
+          name: "Zutohub Marketing Campaign",
+          productOrService: "Payout platform",
+          targetBuyer: "Small business owner",
+          mainPainPoint: "Manual payouts",
+          offerDetails: "",
+          excludedOffers: "",
+          preferredCta: "Book a demo",
+          platforms: "Instagram, Facebook",
+          primaryOutcome: "Leads",
+          coreMessage: "Empower your workforce",
+          workflowContext: {},
+        },
+      ];
+    }
+    if (tableName === "businesses") {
+      return [
+        {
+          id: 24,
+          userId: 18,
+          name: "Zutohub",
+          logo: "https://example.com/logo.png",
+          industry: "Fintech",
+          location: "Randburg",
+          websiteEvidence: {
+            businessCategory: "Financial services",
+            productsServices: ["Payouts"],
+            targetCustomers: ["Small businesses"],
+          },
+        },
+      ];
+    }
+    if (tableName === "generated_images") {
+      return existingImages;
+    }
+    if (tableName === "campaign_assets") {
+      return [];
+    }
+    return [];
+  }
+
   return {
     select: vi.fn(() => ({
-      from: vi.fn((table: any) => ({
-        where: vi.fn(() => ({
-          then: (resolve: (value: any[]) => void) => resolve([]),
-          limit: vi.fn(async () => {
-            const tableName = getTableName(table);
-            if (tableName === "content_posts") {
-              return [
-                {
-                  id: 125,
-                  userId: 18,
-                  campaignId: 28,
-                  title: "Marketing Leaflet",
-                  hook: "Old hook",
-                  cta: "Old CTA",
-                  platform: "Instagram",
-                  metadata: { imageStatus: "failed", imageError: "Previous attempt failed" },
-                },
-              ];
-            }
-            if (tableName === "campaigns") {
-              return [
-                {
-                  id: 28,
-                  userId: 18,
-                  businessId: 24,
-                  name: "Zutohub Marketing Campaign",
-                  productOrService: "Payout platform",
-                  targetBuyer: "Small business owner",
-                  mainPainPoint: "Manual payouts",
-                  offerDetails: "",
-                  excludedOffers: "",
-                  preferredCta: "Book a demo",
-                  platforms: "Instagram, Facebook",
-                  primaryOutcome: "Leads",
-                  coreMessage: "Empower your workforce",
-                  workflowContext: {},
-                },
-              ];
-            }
-            if (tableName === "businesses") {
-              return [
-                {
-                  id: 24,
-                  userId: 18,
-                  name: "Zutohub",
-                  logo: "https://example.com/logo.png",
-                  industry: "Fintech",
-                  location: "Randburg",
-                  websiteEvidence: {
-                    businessCategory: "Financial services",
-                    productsServices: ["Payouts"],
-                    targetCustomers: ["Small businesses"],
-                  },
-                },
-              ];
-            }
-            if (tableName === "generated_images") {
-              return existingImages;
-            }
-            if (tableName === "campaign_assets") {
-              return [];
-            }
-            return [];
-          }),
-          orderBy: vi.fn(() => ({ limit: vi.fn(async () => []) })),
-        })),
-      })),
+      from: vi.fn((table: any) => {
+        const rows = getTableRows(table);
+        return {
+          where: vi.fn(() => ({
+            then: (resolve: (value: any[]) => void, reject?: (reason?: unknown) => unknown) =>
+              Promise.resolve(rows).then(resolve, reject),
+            limit: vi.fn(async () => rows),
+            orderBy: vi.fn(() => ({ limit: vi.fn(async () => []) })),
+          })),
+        };
+      }),
     })),
     insert: vi.fn((table: any) => ({
       values: vi.fn((data: any) => {
@@ -351,5 +357,31 @@ Footer: South Africa
     const finalUpdate = contentPostUpdates[contentPostUpdates.length - 1];
     expect(finalUpdate.data.metadata.imageStatus).toBe("ready");
     expect(finalUpdate.data.metadata.imageCreditsCharged).toBe(0);
+  });
+
+  it("reuses an existing premium asset and marks the content post ready when no refinement is requested", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const mockDb = createMockDb();
+    vi.mocked(getDb).mockReturnValue(mockDb as any);
+
+    const result = await generatePremiumLeaflet({
+      userId: 18,
+      contentPostId: 125,
+      provider: "ai",
+    });
+
+    // Should return the existing asset (no new render attempts).
+    expect(result.status).toBe("completed");
+    expect(result.imageUrl).toBe(existingPremiumImage.url);
+    expect(openAiRenderMock).not.toHaveBeenCalled();
+    expect(internalRenderMock).not.toHaveBeenCalled();
+
+    // Content post should be refreshed to ready so the UI does not stay failed.
+    const contentPostUpdates = mockDb._updated.filter((r) => r.tableName === "content_posts");
+    expect(contentPostUpdates.length).toBeGreaterThan(0);
+    const finalUpdate = contentPostUpdates[contentPostUpdates.length - 1];
+    expect(finalUpdate.data.metadata.imageStatus).toBe("ready");
+    expect(finalUpdate.data.metadata.imageError).toBeNull();
+    expect(finalUpdate.data.metadata.imageUrl).toBe(existingPremiumImage.url);
   });
 });

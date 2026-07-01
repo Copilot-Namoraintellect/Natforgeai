@@ -101,10 +101,6 @@ async function renderServiceBusinessPromo(ctx: InternalTemplateRenderContext): P
   const accent = brandPalette.accent;
   const headerTextColor = contrastTextColor(primary);
 
-  const headerH = Math.round(height * 0.18);
-  const logoAreaW = Math.round(width * 0.34);
-  const logoMax = Math.min(logoAreaW - 40, headerH - 40);
-
   const safeName = escapeXml(businessName);
   const safeHeadline = escapeXml(headline);
   const safeOffer = escapeXml(offer);
@@ -112,49 +108,88 @@ async function renderServiceBusinessPromo(ctx: InternalTemplateRenderContext): P
   const safeCta = escapeXml(cta);
   const safeServices = services.slice(0, 4).map(escapeXml);
 
-  const headlineSize = fitFontSize(safeHeadline, Math.round(width * 0.82), Math.round(width / 14), 34);
-  const offerSize = fitFontSize(safeOffer, Math.round(width * 0.78), Math.round(width / 12), 32);
-  const subSize = Math.max(22, Math.round(width / 30));
-  const ctaSize = Math.max(26, Math.round(width / 18));
-  const serviceSize = Math.max(20, Math.round(width / 42));
+  // ── Layout grid: fixed header/footer, CTA above footer, content flows between ──
+  const headerH = Math.round(height * 0.14);
+  const footerH = 90;
+  const footerY = height - footerH;
+  const ctaH = 68;
+  const ctaMargin = 28;
+  const ctaY = footerY - ctaH - ctaMargin;
+  const contentBottomMax = ctaY - ctaMargin;
+
+  // ── CTA slot (defined early so font sizing can fit to it) ──
+  const ctaRectX = Math.round(width * 0.12);
+  const ctaRectW = Math.round(width * 0.76);
+
+  // ── Logo: larger but still contained in the header ──
+  const logoAreaW = Math.round(width * 0.34);
+  const logoMax = Math.min(logoAreaW - 16, headerH - 16);
+
+  // ── Font sizes ──
+  const nameSize = fitFontSize(safeName, width - logoAreaW - 56, Math.max(22, Math.round(width / 28)), 20);
+  const headlineSize = fitFontSize(safeHeadline, Math.round(width * 0.82), Math.round(width / 13), 34);
+  const offerSize = fitFontSize(safeOffer, Math.round(width * 0.78), Math.round(width / 14), 28);
+  const subSize = Math.max(22, Math.round(width / 32));
+  const ctaSize = fitFontSize(safeCta, ctaRectW - 48, Math.round(width / 18), 26);
+  const serviceSize = Math.max(20, Math.round(width / 44));
   const contactSize = Math.max(16, Math.round(width / 52));
 
   const headlineLines = wrapText(safeHeadline, Math.round((width * 0.82) / (headlineSize * 0.55)));
   const offerLines = wrapText(safeOffer, Math.round((width * 0.78) / (offerSize * 0.55)));
   const subLines = safeSub ? wrapText(safeSub, Math.round((width * 0.82) / (subSize * 0.55))) : [];
 
+  // ── Build content top-to-bottom, then center it vertically in the safe area ──
+  const contentTopBase = headerH + 24;
+  let cursorY = contentTopBase;
+
   const headlineBlocks = headlineLines
     .map(
       (line, i) =>
-        `<text x="${width / 2}" y="${headerH + 60 + (i + 1) * (headlineSize + 8)}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="900" fill="#0F172A" text-anchor="middle">${line}</text>`
+        `<text x="${width / 2}" y="${cursorY + (i + 1) * (headlineSize + 10)}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="900" fill="#0F172A" text-anchor="middle">${line}</text>`
     )
     .join("");
+  cursorY += headlineLines.length * (headlineSize + 10) + 14;
+
+  const offerCardY = cursorY - 10;
+  const offerCardH =
+    30 +
+    offerLines.length * (offerSize + 8) +
+    (subLines.length ? subLines.length * (subSize + 8) + 20 : 0);
 
   const offerBlocks = offerLines
     .map(
       (line, i) =>
-        `<text x="${width / 2}" y="${headerH + 70 + headlineLines.length * (headlineSize + 8) + 30 + (i + 1) * (offerSize + 6)}" font-family="Arial, Helvetica, sans-serif" font-size="${offerSize}" font-weight="900" fill="${primary}" text-anchor="middle">${line}</text>`
+        `<text x="${width / 2}" y="${cursorY + 16 + (i + 1) * (offerSize + 8)}" font-family="Arial, Helvetica, sans-serif" font-size="${offerSize}" font-weight="900" fill="${primary}" text-anchor="middle">${line}</text>`
     )
     .join("");
+  cursorY += offerLines.length * (offerSize + 8) + 8;
 
   const subBlocks = subLines
     .map(
       (line, i) =>
-        `<text x="${width / 2}" y="${
-          headerH +
-          70 +
-          headlineLines.length * (headlineSize + 8) +
-          40 +
-          offerLines.length * (offerSize + 6) +
-          (i + 1) * (subSize + 6)
-        }" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="600" fill="#475569" text-anchor="middle">${line}</text>`
+        `<text x="${width / 2}" y="${cursorY + (i + 1) * (subSize + 8)}" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="600" fill="#475569" text-anchor="middle">${line}</text>`
     )
     .join("");
+  cursorY += subLines.length ? subLines.length * (subSize + 8) + 24 : 12;
 
-  const serviceCardW = Math.round((width - 80) / 2);
-  const serviceCardH = 110;
-  const serviceGap = 16;
-  const serviceStartY = headerH + 70 + headlineLines.length * (headlineSize + 8) + 40 + offerLines.length * (offerSize + 6) + (subLines.length ? subLines.length * (subSize + 6) + 40 : 20);
+  // ── Services: shrink slightly if they would collide with the CTA ──
+  let serviceCardW = Math.round((width - 80) / 2);
+  let serviceCardH = 100;
+  let serviceGap = 14;
+  let serviceStartY = cursorY;
+  let rows = Math.ceil(safeServices.length / 2);
+  let servicesEndY = safeServices.length
+    ? serviceStartY + rows * (serviceCardH + serviceGap) - serviceGap
+    : serviceStartY;
+
+  // If content is too tall, compact the service cards so the CTA/footer stay safe.
+  if (servicesEndY > contentBottomMax && safeServices.length > 0) {
+    const available = contentBottomMax - serviceStartY;
+    const minCardH = 64;
+    const targetRowH = Math.max(minCardH, Math.floor(available / rows));
+    serviceCardH = Math.min(serviceCardH, targetRowH - serviceGap);
+    servicesEndY = serviceStartY + rows * (serviceCardH + serviceGap) - serviceGap;
+  }
 
   const serviceBlocks: string[] = [];
   safeServices.forEach((svc, i) => {
@@ -162,21 +197,48 @@ async function renderServiceBusinessPromo(ctx: InternalTemplateRenderContext): P
     const row = Math.floor(i / 2);
     const x = 32 + col * (serviceCardW + serviceGap);
     const y = serviceStartY + row * (serviceCardH + serviceGap);
-    const lines = wrapText(svc, Math.round((serviceCardW - 48) / (serviceSize * 0.55)));
-    serviceBlocks.push(`<rect x="${x}" y="${y}" width="${serviceCardW}" height="${serviceCardH}" rx="16" fill="#FFFFFF" stroke="${primary}" stroke-width="2" stroke-opacity="0.18"/>`);
+    const lines = wrapText(svc, Math.round((serviceCardW - 36) / (serviceSize * 0.55)));
+    serviceBlocks.push(
+      `<rect x="${x}" y="${y}" width="${serviceCardW}" height="${serviceCardH}" rx="14" fill="#FFFFFF" stroke="${primary}" stroke-width="2" stroke-opacity="0.18"/>`
+    );
     lines.forEach((line, li) => {
       serviceBlocks.push(
-        `<text x="${x + 24}" y="${y + 38 + li * (serviceSize + 8)}" font-family="Arial, Helvetica, sans-serif" font-size="${serviceSize}" font-weight="700" fill="#0F172A">${line}</text>`
+        `<text x="${x + 18}" y="${y + 32 + li * (serviceSize + 8)}" font-family="Arial, Helvetica, sans-serif" font-size="${serviceSize}" font-weight="700" fill="#0F172A">${line}</text>`
       );
     });
   });
 
-  const footerY = height - 140;
-  const contactItems = contactIconAndText(contact).slice(0, 3);
+  // Center the whole content block vertically between header and CTA for better balance.
+  const contentHeight = servicesEndY - contentTopBase;
+  const availableContentHeight = contentBottomMax - contentTopBase;
+  const verticalOffset =
+    contentHeight > 0 && availableContentHeight > contentHeight
+      ? Math.round((availableContentHeight - contentHeight) / 2)
+      : 0;
+
+  function shiftY(svgFragment: string, dy: number): string {
+    return svgFragment.replace(/y="(-?\d+(?:\.\d+)?)"/g, (_, y) => `y="${Math.round(Number(y) + dy)}"`);
+  }
+
+  const contentBlocks = [
+    headlineBlocks,
+    `<rect x="${Math.round(width * 0.05)}" y="${offerCardY}" width="${Math.round(width * 0.9)}" height="${offerCardH}" rx="18" fill="#FFFFFF" stroke="${accent}" stroke-width="3" stroke-opacity="0.35"/>`,
+    offerBlocks,
+    subBlocks,
+    serviceBlocks.join(""),
+  ].join("");
+  const shiftedContentBlocks = verticalOffset > 0 ? shiftY(contentBlocks, verticalOffset) : contentBlocks;
+
+  // ── CTA: fixed slot above footer, fully inside canvas ──
+  const ctaTextY = ctaY + ctaH / 2 + Math.round(ctaSize * 0.35);
+
+  // ── Footer: compact band with up to 2 contact lines ──
+  const contactItems = contactIconAndText(contact).slice(0, 2);
+  const contactStartY = footerY + (footerH - contactItems.length * (contactSize + 10)) / 2 + contactSize;
   const contactBlocks = contactItems
     .map(
       (item, i) =>
-        `<text x="${width / 2}" y="${footerY + 30 + i * (contactSize + 14)}" font-family="Arial, Helvetica, sans-serif" font-size="${contactSize}" font-weight="600" fill="${headerTextColor}" text-anchor="middle">${item.icon} ${escapeXml(item.text)}</text>`
+        `<text x="${width / 2}" y="${contactStartY + i * (contactSize + 10)}" font-family="Arial, Helvetica, sans-serif" font-size="${contactSize}" font-weight="600" fill="${headerTextColor}" text-anchor="middle">${item.icon} ${escapeXml(item.text)}</text>`
     )
     .join("");
 
@@ -185,7 +247,7 @@ async function renderServiceBusinessPromo(ctx: InternalTemplateRenderContext): P
   <defs>
     <linearGradient id="svcBg" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" style="stop-color:${primary};stop-opacity:0.10" />
-      <stop offset="30%" style="stop-color:#F8FAFC;stop-opacity:1" />
+      <stop offset="35%" style="stop-color:#F8FAFC;stop-opacity:1" />
       <stop offset="100%" style="stop-color:${secondary};stop-opacity:0.12" />
     </linearGradient>
   </defs>
@@ -194,36 +256,21 @@ async function renderServiceBusinessPromo(ctx: InternalTemplateRenderContext): P
   <rect x="0" y="${headerH}" width="${width}" height="8" fill="${accent}"/>
 
   <!-- logo placeholder area (logo composited via Sharp) -->
-  <rect x="20" y="20" width="${logoAreaW}" height="${headerH - 40}" rx="16" fill="${primary}" opacity="0.0"/>
+  <rect x="20" y="12" width="${logoAreaW}" height="${headerH - 24}" rx="14" fill="${primary}" opacity="0.0"/>
 
   <!-- business name -->
-  <text x="${logoAreaW + 32}" y="${headerH / 2 + 10}" font-family="Arial, Helvetica, sans-serif" font-size="${Math.max(
-    22,
-    Math.round(width / 28)
-  )}" font-weight="800" fill="${headerTextColor}">${safeName}</text>
+  <text x="${logoAreaW + 32}" y="${headerH / 2 + 8}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="800" fill="${headerTextColor}">${safeName}</text>
 
-  <!-- headline -->
-  ${headlineBlocks}
+  <!-- content (headline, offer card, services) -->
+  ${shiftedContentBlocks}
 
-  <!-- offer -->
-  <rect x="${Math.round(width * 0.05)}" y="${headerH + 50 + headlineLines.length * (headlineSize + 8)}" width="${Math.round(
-    width * 0.9
-  )}" height="${50 + offerLines.length * (offerSize + 6) + (subLines.length ? subLines.length * (subSize + 6) + 20 : 0)}" rx="20" fill="#FFFFFF" stroke="${accent}" stroke-width="3" stroke-opacity="0.35"/>
-  ${offerBlocks}
-  ${subBlocks}
-
-  <!-- services -->
-  ${serviceBlocks.join("")}
+  <!-- CTA button (above footer) -->
+  <rect x="${ctaRectX}" y="${ctaY}" width="${ctaRectW}" height="${ctaH}" rx="${Math.round(ctaH / 2)}" fill="${accent}"/>
+  <text x="${width / 2}" y="${ctaTextY}" font-family="Arial, Helvetica, sans-serif" font-size="${ctaSize}" font-weight="900" fill="${contrastTextColor(accent)}" text-anchor="middle">${safeCta}</text>
 
   <!-- footer -->
-  <rect x="0" y="${footerY}" width="${width}" height="${height - footerY}" fill="${primary}"/>
+  <rect x="0" y="${footerY}" width="${width}" height="${footerH}" fill="${primary}"/>
   ${contactBlocks}
-  <rect x="${Math.round(width * 0.15)}" y="${footerY + 88}" width="${Math.round(
-    width * 0.7
-  )}" height="56" rx="28" fill="${accent}"/>
-  <text x="${width / 2}" y="${footerY + 124}" font-family="Arial, Helvetica, sans-serif" font-size="${ctaSize}" font-weight="900" fill="${contrastTextColor(
-    accent
-  )}" text-anchor="middle">${safeCta}</text>
 </svg>`;
 
   const background = await svgToPng(svg);
@@ -460,7 +507,8 @@ async function renderCorporateProfessional(ctx: InternalTemplateRenderContext): 
   const headlineSize = fitFontSize(safeHeadline, Math.round(width * 0.82), Math.round(width / 14), 34);
   const offerSize = fitFontSize(safeOffer, Math.round(width * 0.7), Math.round(width / 16), 28);
   const subSize = Math.max(22, Math.round(width / 30));
-  const ctaSize = Math.max(26, Math.round(width / 18));
+  // CTA button is 240px wide in the footer; keep the text inside it.
+  const ctaSize = fitFontSize(safeCta, 220, Math.round(width / 18), 22);
   const serviceSize = Math.max(20, Math.round(width / 44));
   const contactSize = Math.max(16, Math.round(width / 52));
 
@@ -603,14 +651,20 @@ async function renderLocalStorePromo(ctx: InternalTemplateRenderContext): Promis
     .join("");
 
   const serviceY = subY + (subLines.length ? subLines.length * (subSize + 8) + 30 : 10);
+  const serviceBoxH = 96;
   const serviceBlocks: string[] = [];
   safeServices.forEach((svc, i) => {
     const x = 60 + i * Math.round((width - 120) / Math.max(safeServices.length, 1));
     const w = Math.round((width - 120) / Math.max(safeServices.length, 1)) - 16;
-    serviceBlocks.push(`<rect x="${x}" y="${serviceY}" width="${w}" height="64" rx="16" fill="${secondary}" opacity="0.18" stroke="${primary}" stroke-width="2" stroke-opacity="0.20"/>`);
-    serviceBlocks.push(
-      `<text x="${x + w / 2}" y="${serviceY + 38}" font-family="Arial, Helvetica, sans-serif" font-size="${serviceSize}" font-weight="700" fill="#0F172A" text-anchor="middle">${svc}</text>`
-    );
+    serviceBlocks.push(`<rect x="${x}" y="${serviceY}" width="${w}" height="${serviceBoxH}" rx="16" fill="${secondary}" opacity="0.18" stroke="${primary}" stroke-width="2" stroke-opacity="0.20"/>`);
+    const lines = wrapText(svc, Math.round((w - 24) / (serviceSize * 0.55))).slice(0, 3);
+    const textBlockH = lines.length * (serviceSize + 6);
+    const startTy = serviceY + (serviceBoxH - textBlockH) / 2 + serviceSize;
+    lines.forEach((line, li) => {
+      serviceBlocks.push(
+        `<text x="${x + w / 2}" y="${startTy + li * (serviceSize + 6)}" font-family="Arial, Helvetica, sans-serif" font-size="${serviceSize}" font-weight="700" fill="#0F172A" text-anchor="middle">${line}</text>`
+      );
+    });
   });
 
   const location = contact.location || contact.website || "";
