@@ -4,6 +4,29 @@
  * loading JSX or tRPC hooks.
  */
 
+export interface ApprovedMessagePackLike {
+  headline?: string;
+  subheadline?: string;
+  cta?: string;
+  benefitBullets?: string[];
+  footerContact?: { location?: string };
+  messagePackSource?: string;
+  isGeneric?: boolean;
+  specificityScore?: number;
+  validation?: { passed?: boolean; score?: number };
+  supersededBy?: number;
+}
+
+const MESSAGE_PACK_SOURCE_RANK: Record<string, number> = {
+  user_structured_copy: 1,
+  fallback_user_pack: 2,
+  manual_restore: 3,
+  ai_refined_pack: 4,
+  fallback_deterministic: 5,
+  latest_message_pack: 6,
+  stale_metadata: 7,
+};
+
 export function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -164,4 +187,73 @@ export function campaignNeedsRecoveryDecision(
   if (latestStrategyFailed && workflowState === "strategy_generated") return true;
 
   return false;
+}
+
+export function isSupersededMessagePack(asset: unknown): boolean {
+  const meta = getContentMeta(asset);
+  const pack = (meta.approvedMessagePack || meta) as ApprovedMessagePackLike | undefined;
+  return !!meta.supersededBy || !!pack?.supersededBy;
+}
+
+export function selectBestApprovedMessagePack(
+  assets: unknown[] | undefined
+): ApprovedMessagePackLike | undefined {
+  if (!assets?.length) return undefined;
+
+  const rows = (assets as unknown[])
+    .map((a) => {
+      const asset = a as Record<string, unknown>;
+      if (asset.assetType !== "message_pack") return null;
+      if (isSupersededMessagePack(asset)) return null;
+      const meta = getContentMeta(asset);
+      const pack = (meta.approvedMessagePack || meta) as ApprovedMessagePackLike | undefined;
+      if (!pack) return null;
+      return {
+        pack,
+        createdAt: new Date((asset.createdAt as string) || 0),
+      };
+    })
+    .filter(Boolean) as { pack: ApprovedMessagePackLike; createdAt: Date }[];
+
+  if (!rows.length) return undefined;
+
+  const scored = rows.map((r) => {
+    const pack = r.pack;
+    const isGeneric = pack.isGeneric ?? false;
+    const sourceRank = MESSAGE_PACK_SOURCE_RANK[pack.messagePackSource || "ai_refined_pack"] ?? 99;
+    const passed = pack.validation?.passed ? 0 : 1;
+    const specificity = pack.specificityScore ?? 0;
+    const score = pack.validation?.score ?? 0;
+    return { ...r, isGeneric, sourceRank, passed, specificity, score };
+  });
+
+  scored.sort((a, b) => {
+    if (a.isGeneric !== b.isGeneric) return a.isGeneric ? 1 : -1;
+    if (a.sourceRank !== b.sourceRank) return a.sourceRank - b.sourceRank;
+    if (a.passed !== b.passed) return a.passed - b.passed;
+    if (a.specificity !== b.specificity) return b.specificity - a.specificity;
+    if (a.score !== b.score) return b.score - a.score;
+    return b.createdAt.getTime() - a.createdAt.getTime();
+  });
+
+  return scored[0]?.pack;
+}
+
+export function getApprovedMessagePackForDetails(
+  assets: unknown[] | undefined,
+  opts?: { contentPostId?: number }
+): ApprovedMessagePackLike | undefined {
+  const latestReady = getLatestReadyImageAsset(assets, opts);
+  const latestMeta = getContentMeta(latestReady);
+  const fromImage = latestMeta?.approvedMessagePack as ApprovedMessagePackLike | undefined;
+  if (fromImage) return fromImage;
+  return selectBestApprovedMessagePack(assets);
+}
+
+export function getActiveGenerationRunId(
+  assets: unknown[] | undefined,
+  opts?: { contentPostId?: number }
+): string | null {
+  const latestReady = getLatestReadyImageAsset(assets, opts);
+  return asString(getContentMeta(latestReady).generationRunId) || null;
 }

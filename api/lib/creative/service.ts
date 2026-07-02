@@ -365,6 +365,7 @@ export async function generateBasicDraftLeaflet({
       selectedTemplate,
       brandPalette,
       aspectRatio,
+      approvedMessagePack: draftApprovedMessagePack,
     } = await normalizeLeafletInputs({ business, campaign, post, brandColors, creativeType, templateId, creativeGuidance, refinementInstruction });
 
     console.log(`[BasicDraftLeaflet] Generating draft | userId=${userId} | contentPostId=${contentPostId} | template=${selectedTemplate}`);
@@ -458,6 +459,7 @@ export async function generateBasicDraftLeaflet({
         iterationNumber,
         assetType: "leaflet",
         assetTier: "basic",
+        approvedMessagePack: draftApprovedMessagePack,
       },
     });
 
@@ -1378,6 +1380,7 @@ export async function generatePremiumLeaflet({
         iterationNumber,
         assetType: "leaflet",
         assetTier: "premium",
+        approvedMessagePack,
         ...(aiAttempts ? { attempts: aiAttempts } : {}),
         ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
         ...(fallbackMessage ? { fallbackMessage } : {}),

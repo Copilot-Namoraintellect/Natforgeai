@@ -115,6 +115,8 @@ import {
   getImageUrl,
   getCampaignImageAssetUrl,
   getLatestReadyImageAsset,
+  getApprovedMessagePackForDetails,
+  getActiveGenerationRunId,
   isCaptionPackAsset,
   findLeafletCandidate,
   campaignNeedsRecoveryDecision,
@@ -1106,13 +1108,22 @@ Include:
     // Respect an explicit user selection that already carries a leaflet image.
     if (selected && hasLeafletImage(selected)) return selected;
 
+    // Align the default selection with the latest ready rendered leaflet so the
+    // iteration dropdown, main image, download button, and details panel all
+    // point to the same active generationRunId.
+    const activeRunId = getActiveGenerationRunId(allImageRecords);
+    if (activeRunId) {
+      const activeIteration = displayIterations.find((i) => i.runId === activeRunId && hasLeafletImage(i));
+      if (activeIteration) return activeIteration;
+    }
+
     // Default to the newest iteration that has a leaflet image.
     const newestWithImage = displayIterations.find((i) => hasLeafletImage(i));
     if (newestWithImage) return newestWithImage;
 
     // Final fallback: explicit selection, then the newest iteration.
     return selected || displayIterations[0];
-  }, [campaignIterations, selectedIterationId]);
+  }, [campaignIterations, selectedIterationId, allImageRecords]);
 
   const legacyIteration = useMemo(
     () => campaignIterations.find((i) => i.isLegacy),
@@ -1523,9 +1534,10 @@ Include:
     const captionPack = campaignAssets?.find(
       (a) => a.assetType === "caption_pack" && (a.metadata as any)?.contentPostId === content.id
     );
-    const approvedMessagePack = (campaignAssets?.find(
-      (a) => a.assetType === "message_pack" && a.campaignId === content.campaignId
-    )?.metadata as any)?.approvedMessagePack;
+    const approvedMessagePack = getApprovedMessagePackForDetails(
+      allImageRecords,
+      contentPostId != null ? { contentPostId } : undefined
+    );
     const leafletHeadline = approvedMessagePack?.headline || content.title || campaignForContext?.goal || "—";
     const leafletCta = approvedMessagePack?.cta || content.cta || campaignForContext?.preferredCta || "—";
 
@@ -1869,9 +1881,9 @@ Include:
             )}
           </>
         ) : (
-          <div className={`p-5 grid grid-cols-1 gap-6 ${hero ? "xl:grid-cols-4" : "xl:grid-cols-3"}`}>
+          <div className={`p-5 grid grid-cols-1 gap-6 ${hero ? "xl:grid-cols-5" : "xl:grid-cols-4"}`}>
           {/* Main column: visual asset + caption pack */}
-          <div className={hero ? "xl:col-span-3 space-y-6" : "xl:col-span-2 space-y-6"}>
+          <div className={hero ? "xl:col-span-3 space-y-6" : "xl:col-span-2 space-y-6 xl:pr-4"}>
             {isGenerating ? (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center min-h-[380px] text-center px-6">
                 <Loader2 className="w-10 h-10 text-[#00D4FF] animate-spin mb-3" />
@@ -2123,7 +2135,7 @@ Include:
           </div>
 
           {/* Sidebar: leaflet details, attempts, refinement, actions */}
-          <div className="xl:col-span-1 space-y-5">
+          <div className={hero ? "xl:col-span-2 space-y-5" : "xl:col-span-2 space-y-5"}>
             <Card className="border-slate-200">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between gap-2">
@@ -2327,11 +2339,11 @@ Include:
                     setRefinementById((prev) => ({ ...prev, [content.id]: e.target.value }))
                   }
                 />
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
                     variant="outline"
-                    className="flex-1 h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                    className="flex-1 min-w-[140px] h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
                     onClick={() => generateBasicDraft()}
                     disabled={isGenerating || !refinementInstruction.trim()}
                   >
@@ -2340,7 +2352,7 @@ Include:
                   </Button>
                   <Button
                     size="sm"
-                    className="flex-1 h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
+                    className="flex-1 min-w-[140px] h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
                     onClick={() => generatePremiumAi(true)}
                     disabled={isGenerating || !refinementInstruction.trim() || !openAiLeafletStatus?.configured}
                   >

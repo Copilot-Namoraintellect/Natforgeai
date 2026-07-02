@@ -5,6 +5,10 @@ import {
   asNumber,
   asString,
   getImageUrl,
+  getApprovedMessagePackForDetails,
+  selectBestApprovedMessagePack,
+  getActiveGenerationRunId,
+  isSupersededMessagePack,
 } from "../../lib/content-studio/logic";
 
 describe("campaignNeedsRecoveryDecision", () => {
@@ -216,5 +220,144 @@ describe("getImageUrl", () => {
       { assetType: "image", status: "pending", url: "https://example.com/pending.png" },
     ];
     expect(getImageUrl({}, assets)).toBeUndefined();
+  });
+});
+
+const specificPack = {
+  headline: "Instant payouts for restaurants, delivery platforms and frontline teams",
+  subheadline: "Stop waiting for weekly settlement and reconciliation.",
+  benefitBullets: [
+    "Payouts for restaurants, delivery platforms and frontline teams",
+    "Automated tips, commissions and supplier payouts",
+    "Approved delivery orders settled without manual reconciliation",
+  ],
+  cta: "Book a Zuto Hub Demo",
+  footerContact: { location: "South Africa" },
+  platformCaptions: [],
+  validation: { passed: true, score: 90, rejections: [], warnings: [] },
+  messagePackSource: "manual_restore",
+  isGeneric: false,
+  specificityScore: 104,
+};
+
+const genericPack = {
+  headline: "Seamless Financial Solutions for Modern Businesses",
+  subheadline: "Transform your business with our modern solutions.",
+  benefitBullets: ["Quality service", "Professional team", "Great results"],
+  cta: "Schedule a Consultation",
+  footerContact: { location: "South Africa" },
+  platformCaptions: [],
+  validation: { passed: true, score: 60, rejections: [], warnings: [] },
+  messagePackSource: "ai_refined_pack",
+  isGeneric: true,
+  specificityScore: 10,
+};
+
+describe("approved message pack selection", () => {
+  it("ignores superseded message_pack assets", () => {
+    const assets = [
+      {
+        id: 454,
+        assetType: "message_pack",
+        status: "ready",
+        createdAt: "2026-07-01T00:00:00Z",
+        metadata: { approvedMessagePack: genericPack, supersededBy: 457, isGeneric: true },
+      },
+      {
+        id: 457,
+        assetType: "message_pack",
+        status: "ready",
+        createdAt: "2026-07-02T00:00:00Z",
+        metadata: { approvedMessagePack: specificPack, isGeneric: false },
+      },
+    ];
+    const best = selectBestApprovedMessagePack(assets);
+    expect(best?.headline).toBe(specificPack.headline);
+    expect(best?.messagePackSource).toBe("manual_restore");
+  });
+
+  it("isSupersededMessagePack detects supersededBy at metadata or pack level", () => {
+    expect(isSupersededMessagePack({ metadata: { supersededBy: 1 } })).toBe(true);
+    expect(isSupersededMessagePack({ metadata: { approvedMessagePack: { supersededBy: 1 } } })).toBe(true);
+    expect(isSupersededMessagePack({ metadata: { approvedMessagePack: {} } })).toBe(false);
+  });
+
+  it("getApprovedMessagePackForDetails prefers the latest ready image asset metadata", () => {
+    const assets = [
+      {
+        id: 1,
+        contentPostId: 100,
+        provider: "openai",
+        status: "completed",
+        createdAt: "2026-07-01T00:00:00Z",
+        url: "https://cdn.example.com/failed.png",
+        metadata: {
+          assetType: "leaflet",
+          assetTier: "premium",
+          source: "premium",
+          imageStatus: "failed",
+          approvedMessagePack: genericPack,
+        },
+      },
+      {
+        id: 2,
+        contentPostId: 100,
+        provider: "internal",
+        status: "completed",
+        createdAt: "2026-07-03T00:00:00Z",
+        url: "https://cdn.example.com/ready.png",
+        metadata: {
+          assetType: "leaflet",
+          assetTier: "premium",
+          source: "premium",
+          imageStatus: "ready",
+          approvedMessagePack: specificPack,
+          generationRunId: "premium-run-2",
+        },
+      },
+      {
+        id: 454,
+        assetType: "message_pack",
+        status: "ready",
+        createdAt: "2026-07-01T00:00:00Z",
+        metadata: { approvedMessagePack: genericPack, supersededBy: 457 },
+      },
+      {
+        id: 457,
+        assetType: "message_pack",
+        status: "ready",
+        createdAt: "2026-07-02T00:00:00Z",
+        metadata: { approvedMessagePack: specificPack },
+      },
+    ];
+
+    const pack = getApprovedMessagePackForDetails(assets, { contentPostId: 100 });
+    expect(pack?.headline).toBe(specificPack.headline);
+    expect(pack?.cta).toBe(specificPack.cta);
+    expect(getActiveGenerationRunId(assets, { contentPostId: 100 })).toBe("premium-run-2");
+  });
+
+  it("getApprovedMessagePackForDetails falls back to ranked message_pack when image metadata lacks approvedMessagePack", () => {
+    const assets = [
+      {
+        id: 2,
+        contentPostId: 100,
+        provider: "internal",
+        status: "completed",
+        createdAt: "2026-07-03T00:00:00Z",
+        url: "https://cdn.example.com/ready.png",
+        metadata: { assetType: "leaflet", assetTier: "premium", source: "premium", imageStatus: "ready" },
+      },
+      {
+        id: 457,
+        assetType: "message_pack",
+        status: "ready",
+        createdAt: "2026-07-02T00:00:00Z",
+        metadata: { approvedMessagePack: specificPack },
+      },
+    ];
+
+    const pack = getApprovedMessagePackForDetails(assets, { contentPostId: 100 });
+    expect(pack?.headline).toBe(specificPack.headline);
   });
 });
