@@ -11,6 +11,7 @@ import {
   isPlatformConfigurable,
   getPlatformPublishStatus,
   buildIntegrationsReturnUrl,
+  getPublishResultToast,
 } from "./logic";
 
 describe("content-studio logic", () => {
@@ -210,5 +211,155 @@ describe("publishing platform detection", () => {
     );
     expect(buildIntegrationsReturnUrl(null)).toBe("/integrations");
     expect(buildIntegrationsReturnUrl("")).toBe("/integrations");
+  });
+});
+
+describe("publish dialog UX", () => {
+  // These tests mirror the modal decisions in ContentStudio.tsx so the
+  // publishing flow can be verified without a browser/DOM test environment.
+  function getDialogState(
+    platformsCsv: string,
+    integrations: Parameters<typeof getCampaignPlatformStatuses>[1],
+    config: Parameters<typeof getCampaignPlatformStatuses>[2]
+  ) {
+    const statuses = getCampaignPlatformStatuses(platformsCsv, integrations, config);
+    return {
+      hasConnected: hasConnectedPublishPlatform(statuses),
+      statuses,
+      integrationsUrl: buildIntegrationsReturnUrl(28),
+    };
+  }
+
+  it("detects no connected platforms and shows setup + manual posting actions", () => {
+    const { hasConnected, statuses, integrationsUrl } = getDialogState(
+      "facebook, instagram, linkedin",
+      [],
+      { metaConfigured: true, linkedinConfigured: true }
+    );
+    expect(hasConnected).toBe(false);
+    expect(statuses.every((s) => s.status === "not_connected")).toBe(true);
+    expect(integrationsUrl).toBe("/integrations?returnTo=%2Fcontent%3FcampaignId%3D28");
+  });
+
+  it("keeps the connected-platform flow unchanged when platforms are connected", () => {
+    const { hasConnected, statuses } = getDialogState(
+      "facebook, instagram",
+      [{ platform: "facebook", status: "connected", ready: true }],
+      { metaConfigured: true }
+    );
+    expect(hasConnected).toBe(true);
+    expect(statuses).toContainEqual({ platform: "facebook", status: "connected" });
+    expect(statuses).toContainEqual({ platform: "instagram", status: "not_connected" });
+  });
+
+  it("treats manual-only platforms as not connected for auto-publish decision", () => {
+    const { hasConnected, statuses } = getDialogState(
+      "tiktok, email",
+      [],
+      undefined
+    );
+    expect(hasConnected).toBe(false);
+    expect(statuses).toContainEqual({ platform: "tiktok", status: "manual" });
+    expect(statuses).toContainEqual({ platform: "email", status: "manual" });
+  });
+
+  it("still offers manual posting when no platforms are selected for the campaign", () => {
+    const { hasConnected, statuses } = getDialogState("", [], undefined);
+    expect(hasConnected).toBe(false);
+    expect(statuses).toEqual([]);
+  });
+
+  it("preserves campaign context in the integrations return URL for any campaign id", () => {
+    expect(buildIntegrationsReturnUrl(1)).toBe(
+      "/integrations?returnTo=%2Fcontent%3FcampaignId%3D1"
+    );
+    expect(buildIntegrationsReturnUrl(999)).toBe(
+      "/integrations?returnTo=%2Fcontent%3FcampaignId%3D999"
+    );
+  });
+});
+
+
+describe("business-scoped integration matching", () => {
+  const integration = (platform: string, businessId: number | null, ready = true) => ({
+    platform,
+    status: "connected" as const,
+    ready,
+    businessId,
+  });
+
+  it("ignores a connected integration that belongs to a different business", () => {
+    const integrations = [integration("instagram", 99)];
+    expect(isPlatformConnected("instagram", integrations, 24)).toBe(false);
+    expect(
+      getCampaignPlatformStatuses("instagram", integrations, { metaConfigured: true }, 24)
+    ).toEqual([{ platform: "instagram", status: "not_connected" }]);
+  });
+
+  it("matches a connected integration that belongs to the same business", () => {
+    const integrations = [integration("instagram", 24)];
+    expect(isPlatformConnected("instagram", integrations, 24)).toBe(true);
+    expect(
+      getCampaignPlatformStatuses("instagram", integrations, { metaConfigured: true }, 24)
+    ).toEqual([{ platform: "instagram", status: "connected" }]);
+  });
+
+  it("treats legacy integrations with no businessId as valid for any business", () => {
+    const integrations = [integration("facebook", null)];
+    expect(isPlatformConnected("facebook", integrations, 24)).toBe(true);
+    expect(
+      getCampaignPlatformStatuses("facebook", integrations, { metaConfigured: true }, 24)
+    ).toEqual([{ platform: "facebook", status: "connected" }]);
+  });
+
+  it("falls back to no-business scoping when campaign businessId is not provided", () => {
+    const integrations = [integration("instagram", 99)];
+    expect(isPlatformConnected("instagram", integrations)).toBe(true);
+    expect(
+      getCampaignPlatformStatuses("instagram", integrations, { metaConfigured: true })
+    ).toEqual([{ platform: "instagram", status: "connected" }]);
+  });
+});
+
+describe("publish result toast messages", () => {
+  it("shows manual posting message when no connected platforms were eligible", () => {
+    const toast = getPublishResultToast({ manualPosting: true, manualCount: 3 });
+    expect(toast.type).toBe("success");
+    expect(toast.message).toBe("Marked for manual posting. 3 item(s) ready.");
+  });
+
+  it("shows published success when all platforms published", () => {
+    const toast = getPublishResultToast({ publishedCount: 2, failedCount: 0, skippedCount: 0 });
+    expect(toast.type).toBe("success");
+    expect(toast.message).toBe("Campaign pack published. 2 platform(s) published.");
+  });
+
+  it("shows partial success when some platforms failed or skipped", () => {
+    const toast = getPublishResultToast({ publishedCount: 1, failedCount: 1, skippedCount: 0 });
+    expect(toast.type).toBe("success");
+    expect(toast.message).toBe("1 platform(s) published. 1 failed, 0 skipped.");
+  });
+
+  it("shows warning when every platform was skipped", () => {
+    const toast = getPublishResultToast({ publishedCount: 0, failedCount: 0, skippedCount: 2 });
+    expect(toast.type).toBe("warning");
+    expect(toast.message).toBe("Publishing skipped: 2 platform(s) not ready.");
+  });
+
+  it("shows error with the first result error when nothing published", () => {
+    const toast = getPublishResultToast({
+      publishedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      results: [{ status: "failed", error: "Token expired" }],
+    });
+    expect(toast.type).toBe("error");
+    expect(toast.message).toBe("Token expired");
+  });
+
+  it("shows a generic error when no results are returned", () => {
+    const toast = getPublishResultToast({ publishedCount: 0, failedCount: 0, skippedCount: 0 });
+    expect(toast.type).toBe("error");
+    expect(toast.message).toBe("Publishing failed. Check platform connections and try again.");
   });
 });

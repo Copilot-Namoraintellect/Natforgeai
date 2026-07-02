@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations } from "@db/schema";
-import { eq, and, desc, count, inArray } from "drizzle-orm";
+import { eq, and, or, desc, count, inArray, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import {
@@ -693,11 +693,29 @@ export const contentRouter = createRouter({
         .map((p) => p.trim().toLowerCase())
         .filter(Boolean);
 
-      // Load connected integrations
+      const campaignBusinessId = campaign.businessId ?? null;
+
+      // Load connected integrations scoped to this user and, when known, this business.
+      // Integrations with no businessId are treated as legacy/global connections and remain
+      // valid for all businesses, but newly-connected accounts should be tied to a business.
+      const businessFilter =
+        campaignBusinessId == null
+          ? isNull(socialIntegrations.businessId)
+          : or(
+              isNull(socialIntegrations.businessId),
+              eq(socialIntegrations.businessId, campaignBusinessId)
+            );
+
       const integrations = await db
         .select()
         .from(socialIntegrations)
-        .where(and(eq(socialIntegrations.userId, ctx.user.id), eq(socialIntegrations.status, "connected")));
+        .where(
+          and(
+            eq(socialIntegrations.userId, ctx.user.id),
+            eq(socialIntegrations.status, "connected"),
+            businessFilter
+          )
+        );
 
       const connectedPlatforms = new Set(integrations.map((i) => i.platform));
       const autoPublishPlatforms = ["facebook", "instagram", "linkedin", "twitter", "tiktok", "email"];
@@ -708,9 +726,10 @@ export const contentRouter = createRouter({
       console.log("[PublishCampaignPack] Starting publish", {
         campaignId: input.campaignId,
         userId: ctx.user.id,
+        businessId: campaignBusinessId,
         platforms: campaignPlatforms,
         publishablePlatforms,
-        integrationIds: integrations.map((i) => ({ platform: i.platform, id: i.id })),
+        integrationIds: integrations.map((i) => ({ platform: i.platform, id: i.id, businessId: i.businessId })),
       });
 
       // Refresh approved social posts after updates
@@ -719,6 +738,46 @@ export const contentRouter = createRouter({
         const meta = (p.metadata || {}) as any;
         return meta.approved === true || p.status === "published";
       });
+
+      // No eligible connected platform for this campaign/business: mark content as ready for
+      // manual posting instead of pretending it was published successfully.
+      if (publishablePlatforms.length === 0) {
+        let manualCount = 0;
+        for (const post of posts) {
+          if (post.type !== "social_post") continue;
+          if (post.status === "published" || post.status === "archived") continue;
+          const meta = (post.metadata || {}) as any;
+          await db
+            .update(contentPosts)
+            .set({
+              status: "published",
+              publishedAt: new Date(),
+              metadata: {
+                ...meta,
+                publishMode: "manual",
+                manuallyPostedAt: new Date().toISOString(),
+              },
+            })
+            .where(and(eq(contentPosts.id, post.id), eq(contentPosts.userId, ctx.user.id)));
+          manualCount++;
+        }
+
+        console.log("[PublishCampaignPack] No connected platforms for campaign; marked as manual posting", {
+          campaignId: input.campaignId,
+          manualCount,
+        });
+
+        return {
+          success: true,
+          manualPosting: true,
+          manualCount,
+          approvedCount: posts.filter((p) => p.status !== "published" && p.status !== "archived").length,
+          publishedCount: 0,
+          failedCount: 0,
+          skippedCount: 0,
+          results: [],
+        };
+      }
 
       const results: Array<{
         platform: string;
@@ -731,37 +790,6 @@ export const contentRouter = createRouter({
       for (const platform of publishablePlatforms) {
         const integration = integrations.find((i) => i.platform === platform);
         if (!integration) continue;
-
-        // Facebook readiness check
-        if (platform === "facebook" && !isFacebookPublishingReady(integration)) {
-          console.log("[PublishCampaignPack] Facebook integration not publishing-ready", {
-            campaignId: input.campaignId,
-            integrationId: integration.id,
-          });
-          results.push({
-            platform,
-            queueItemId: 0,
-            status: "skipped",
-            error: "Facebook integration is not publishing-ready. Reconnect to grant pages_manage_posts.",
-          });
-          continue;
-        }
-
-        // Instagram readiness check
-        if (platform === "instagram" && !isInstagramPublishingReady(integration)) {
-          console.log("[PublishCampaignPack] Instagram integration not publishing-ready", {
-            campaignId: input.campaignId,
-            integrationId: integration.id,
-          });
-          results.push({
-            platform,
-            queueItemId: 0,
-            status: "skipped",
-            error:
-              "Instagram publishing is not ready. Ensure your Facebook Page has a linked Instagram professional account and that the Instagram content publishing permission is granted.",
-          });
-          continue;
-        }
 
         // Find best content post for this platform
         let post = publishablePosts.find((p) => p.platform?.toLowerCase() === platform);
@@ -802,14 +830,31 @@ export const contentRouter = createRouter({
             pageId: platform === "facebook" ? integration.pageId : undefined,
           });
         } else {
-          // Create publishing queue item
+          // Publishing readiness checks determine the initial queue status: a connected but
+          // not-yet-ready account gets a queue row so the UI never says "published successfully"
+          // when nothing was actually queued, but it is marked failed rather than attempted.
+          let queueStatus: "approved" | "failed" = "approved";
+          let queueError: string | undefined;
+
+          if (platform === "facebook" && !isFacebookPublishingReady(integration)) {
+            queueStatus = "failed";
+            queueError =
+              "Facebook integration is not publishing-ready. Reconnect to grant pages_manage_posts.";
+          } else if (platform === "instagram" && !isInstagramPublishingReady(integration)) {
+            queueStatus = "failed";
+            queueError =
+              "Instagram publishing is not ready. Ensure your Facebook Page has a linked Instagram professional account and that the Instagram content publishing permission is granted.";
+          }
+
+          // Create publishing queue item for every publishable content post / platform.
           const [queueResult] = await db.insert(publishingQueue).values({
             userId: ctx.user.id,
             campaignId: input.campaignId,
             contentPostId: post.id,
             integrationId: integration.id,
             platform,
-            status: "approved",
+            status: queueStatus,
+            lastError: queueError ?? null,
             approvalRequired: false,
             scheduledAt: null,
           });
@@ -821,8 +866,19 @@ export const contentRouter = createRouter({
             contentPostId: post.id,
             queueItemId,
             integrationId: integration.id,
+            status: queueStatus,
             pageId: platform === "facebook" ? integration.pageId : undefined,
           });
+
+          if (queueStatus === "failed") {
+            results.push({
+              platform,
+              queueItemId,
+              status: "failed",
+              error: queueError,
+            });
+            continue;
+          }
         }
 
         // Attempt immediate publish

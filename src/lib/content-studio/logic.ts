@@ -264,6 +264,7 @@ export interface ConnectedIntegrationLike {
   platform: string;
   status: string;
   ready?: boolean;
+  businessId?: number | null;
   instagramBusinessAccountId?: string | null;
   permissions?: unknown[];
   pageAccessTokenEncrypted?: string | null;
@@ -274,16 +275,30 @@ export interface PlatformConfigStatusLike {
   linkedinConfigured?: boolean;
 }
 
+function integrationMatchesBusiness(
+  integration: ConnectedIntegrationLike,
+  campaignBusinessId?: number | null
+): boolean {
+  if (campaignBusinessId == null) return true;
+  if (integration.businessId == null) return true;
+  return integration.businessId === campaignBusinessId;
+}
+
 export function isPlatformConnected(
   platform: string | null | undefined,
-  integrations: ConnectedIntegrationLike[]
+  integrations: ConnectedIntegrationLike[],
+  campaignBusinessId?: number | null
 ): boolean {
   if (!platform) return false;
   const normalized = platform.toLowerCase().trim();
   const connectable = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
   if (!connectable.includes(normalized)) return true;
   return integrations.some(
-    (i) => i.platform.toLowerCase() === normalized && i.status === "connected" && i.ready
+    (i) =>
+      i.platform.toLowerCase() === normalized &&
+      i.status === "connected" &&
+      i.ready &&
+      integrationMatchesBusiness(i, campaignBusinessId)
   );
 }
 
@@ -330,7 +345,8 @@ export function isPlatformConfigurable(
 export function getPlatformPublishStatus(
   platform: string,
   integrations: ConnectedIntegrationLike[],
-  config: PlatformConfigStatusLike | undefined
+  config: PlatformConfigStatusLike | undefined,
+  campaignBusinessId?: number | null
 ): PlatformPublishStatus {
   const normalized = platform.toLowerCase().trim();
 
@@ -340,7 +356,7 @@ export function getPlatformPublishStatus(
 
   const autoPublishPlatforms = ["facebook", "instagram", "linkedin"];
   const isAutoPublishPlatform = autoPublishPlatforms.includes(normalized);
-  const connected = isPlatformConnected(normalized, integrations);
+  const connected = isPlatformConnected(normalized, integrations, campaignBusinessId);
   const configurable = isPlatformConfigurable(normalized, config);
 
   if (isAutoPublishPlatform) {
@@ -355,13 +371,68 @@ export function getPlatformPublishStatus(
 export function getCampaignPlatformStatuses(
   platformsCsv: string,
   integrations: ConnectedIntegrationLike[],
-  config: PlatformConfigStatusLike | undefined
+  config: PlatformConfigStatusLike | undefined,
+  campaignBusinessId?: number | null
 ): { platform: string; status: PlatformPublishStatus }[] {
   const selected = platformsCsv
     .split(/[,;]+/)
     .map((p) => p.trim())
     .filter(Boolean);
-  return selected.map((p) => ({ platform: p, status: getPlatformPublishStatus(p, integrations, config) }));
+  return selected.map((p) => ({
+    platform: p,
+    status: getPlatformPublishStatus(p, integrations, config, campaignBusinessId),
+  }));
+}
+
+export interface PublishResultToastInput {
+  manualPosting?: boolean;
+  manualCount?: number;
+  publishedCount?: number;
+  failedCount?: number;
+  skippedCount?: number;
+  results?: Array<{ status: string; error?: string }>;
+}
+
+export function getPublishResultToast(
+  data: PublishResultToastInput
+): { type: "success" | "warning" | "error"; message: string } {
+  if (data.manualPosting) {
+    return {
+      type: "success",
+      message: `Marked for manual posting. ${data.manualCount || 0} item(s) ready.`,
+    };
+  }
+
+  const published = data.publishedCount || 0;
+  const failed = data.failedCount || 0;
+  const skipped = data.skippedCount || 0;
+
+  if (failed === 0 && skipped === 0 && published > 0) {
+    return {
+      type: "success",
+      message: `Campaign pack published. ${published} platform(s) published.`,
+    };
+  }
+
+  if (published > 0) {
+    return {
+      type: "success",
+      message: `${published} platform(s) published. ${failed} failed, ${skipped} skipped.`,
+    };
+  }
+
+  if (skipped > 0) {
+    return {
+      type: "warning",
+      message: `Publishing skipped: ${skipped} platform(s) not ready.`,
+    };
+  }
+
+  const firstError = (data.results || []).find((r) => r.error)?.error;
+  return {
+    type: "error",
+    message: firstError || "Publishing failed. Check platform connections and try again.",
+  };
 }
 
 export function hasConnectedPublishPlatform(

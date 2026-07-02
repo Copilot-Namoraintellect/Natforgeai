@@ -1,0 +1,1 @@
+ALTER TABLE `social_integrations` ADD `businessId` bigint unsigned;

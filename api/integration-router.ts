@@ -48,6 +48,7 @@ export const integrationRouter = createRouter({
         provider: socialIntegrations.platform,
         providerAccountName: socialIntegrations.accountName,
         status: socialIntegrations.status,
+        businessId: socialIntegrations.businessId,
         permissions: socialIntegrations.permissions,
         pageId: socialIntegrations.pageId,
         pageAccessTokenEncrypted: socialIntegrations.pageAccessTokenEncrypted,

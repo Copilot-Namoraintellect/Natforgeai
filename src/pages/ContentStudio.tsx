@@ -128,6 +128,7 @@ import {
   getCampaignPlatformStatuses,
   hasConnectedPublishPlatform,
   buildIntegrationsReturnUrl,
+  getPublishResultToast,
   asNumber,
   asString,
 } from "../lib/content-studio/logic";
@@ -617,6 +618,7 @@ export default function ContentStudio() {
         accountName: i.providerAccountName,
         status: i.status,
         ready: i.ready,
+        businessId: i.businessId,
         instagramBusinessAccountId: i.instagramBusinessAccountId,
         permissions: i.permissions as unknown[],
         pageAccessTokenEncrypted: i.pageAccessTokenEncrypted,
@@ -1161,18 +1163,13 @@ Include:
     onSuccess: (data) => {
       utils.content.list.invalidate();
       refetchPublishingQueue();
-      const published = data.publishedCount || 0;
-      const failed = data.failedCount || 0;
-      const skipped = data.skippedCount || 0;
-      if (failed === 0 && skipped === 0) {
-        toast.success(`Campaign pack published. ${published} platform(s) published.`);
-      } else if (published > 0) {
-        toast.success(`${published} platform(s) published. ${failed} failed, ${skipped} skipped.`);
-      } else if (skipped > 0) {
-        toast.warning(`Publishing skipped: ${skipped} platform(s) not ready.`);
+      const { type, message } = getPublishResultToast(data);
+      if (type === "success") {
+        toast.success(message);
+      } else if (type === "warning") {
+        toast.warning(message);
       } else {
-        const firstError = (data.results || []).find((r) => r.error)?.error;
-        toast.error(firstError || "Publishing failed. Check platform connections and try again.");
+        toast.error(message);
       }
       setPublishDialogOpen(false);
     },
@@ -3075,7 +3072,8 @@ Include:
     return getCampaignPlatformStatuses(
       campaignForContext?.platforms || "",
       connectedIntegrations,
-      platformConfigStatus
+      platformConfigStatus,
+      campaignForContext?.businessId ?? null
     );
   }
 
@@ -3742,22 +3740,18 @@ Include:
                     <DialogDescription>
                       {hasConnected
                         ? isRepublish
-                          ? "This campaign is already live. Publishing again will create new posts on the connected platforms below. This action cannot be undone."
-                          : "This will immediately post the approved campaign content to each connected platform below. This action cannot be undone."
-                        : statuses.length === 0
-                        ? "No publishing channels are selected for this campaign. You can connect platforms now, or continue and mark this campaign pack as ready for manual posting."
-                        : "No publishing platforms are connected yet. You can connect platforms now, or continue and mark this campaign pack as ready for manual posting."}
+                          ? "This campaign is already live. Publishing again will create new posts on the connected channels. This action cannot be undone."
+                          : "This will publish to connected channels."
+                        : "No connected platform is available for this campaign. Connect the correct business platform or continue as manual posting."}
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4 mt-2">
                     <div className="space-y-3">
                       {!hasConnected && (
                         <div className="p-3 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800">
-                          <p className="font-medium">
-                            {statuses.length === 0 ? "No platforms selected" : "No platforms connected"}
-                          </p>
+                          <p className="font-medium">No connected platform is available</p>
                           <p className="text-amber-700/80 mt-0.5">
-                            Connect Facebook, Instagram, LinkedIn or other channels from Integrations, or continue and mark this pack as ready for manual posting.
+                            No connected platform is available for this campaign. Connect the correct business platform or continue as manual posting.
                           </p>
                         </div>
                       )}

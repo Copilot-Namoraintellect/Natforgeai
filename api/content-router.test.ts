@@ -5,6 +5,15 @@ vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock("./lib/workflow/publishing-runner", () => ({
+  publishSinglePost: vi.fn(),
+}));
+
+vi.mock("./lib/integrations/platforms", () => ({
+  isFacebookPublishingReady: vi.fn(() => true),
+  isInstagramPublishingReady: vi.fn(() => true),
+}));
+
 vi.mock("./lib/agents/creative-agent", () => ({
   runCreativeAgent: vi.fn(),
 }));
@@ -34,6 +43,20 @@ function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string | undefined;
 }
 
+function makeChainable(rows: unknown[]) {
+  const limitResult = rows;
+  return {
+    limit: vi.fn(async () => limitResult),
+    orderBy: vi.fn(() => ({
+      limit: vi.fn(async () => []),
+    })),
+    then: (resolve: (value: unknown[]) => unknown, reject?: (reason?: unknown) => unknown) =>
+      Promise.resolve(limitResult).then(resolve, reject),
+  };
+}
+
+
+
 interface MockDb {
   select: () => {
     from: (table: unknown) => {
@@ -48,13 +71,30 @@ interface MockDb {
   delete: () => { where: () => Promise<unknown[]> };
 }
 
+interface MockDbConfig {
+  campaign?: Record<string, unknown>;
+  postCount?: number;
+  posts?: Record<string, unknown>[];
+  integrations?: Record<string, unknown>[];
+  queue?: Record<string, unknown>[];
+  assets?: Record<string, unknown>[];
+  insertId?: number;
+}
+
 function createMockDb({
   campaign,
   postCount = 0,
-}: {
-  campaign?: Record<string, unknown>;
-  postCount?: number;
-} = {}): MockDb {
+  posts,
+  integrations = [],
+  queue = [],
+  assets = [],
+  insertId = 123,
+}: MockDbConfig = {}): MockDb & {
+  insertValuesSpies: Map<unknown, ReturnType<typeof vi.fn>>;
+  insertValuesByTableName: Map<string, ReturnType<typeof vi.fn>>;
+  updateSetSpies: Map<unknown, ReturnType<typeof vi.fn>>;
+  updateSetByTableName: Map<string, ReturnType<typeof vi.fn>>;
+} {
   const resolvedCampaign = campaign ?? {
     id: 28,
     userId: 18,
@@ -65,6 +105,11 @@ function createMockDb({
     coreMessage: "Empower your workforce",
   };
 
+  const insertValuesSpies = new Map<unknown, ReturnType<typeof vi.fn>>();
+  const insertValuesByTableName = new Map<string, ReturnType<typeof vi.fn>>();
+  const updateSetSpies = new Map<unknown, ReturnType<typeof vi.fn>>();
+  const updateSetByTableName = new Map<string, ReturnType<typeof vi.fn>>();
+
   const whereResult = (table: unknown) => {
     const tableName = getTableName(table);
     let limitResult: unknown[] = [];
@@ -72,19 +117,22 @@ function createMockDb({
     if (tableName === "campaigns") {
       limitResult = [resolvedCampaign];
     } else if (tableName === "content_posts") {
-      // count() query returns [{ value: N }]
-      limitResult = [{ value: postCount }];
+      limitResult = posts ?? [{ value: postCount }];
+    } else if (tableName === "social_integrations") {
+      // Mirror the backend business-scoping filter used by publishCampaignPack.
+      const campaignBusinessId = resolvedCampaign.businessId;
+      limitResult = integrations.filter(
+        (row) =>
+          (row as Record<string, unknown>).businessId == null ||
+          (row as Record<string, unknown>).businessId === campaignBusinessId
+      );
+    } else if (tableName === "publishing_queue") {
+      limitResult = queue;
+    } else if (tableName === "campaign_assets") {
+      limitResult = assets;
     }
 
-    const chainable = {
-      limit: vi.fn(async () => limitResult),
-      orderBy: vi.fn(() => ({
-        limit: vi.fn(async () => []),
-      })),
-      then: (resolve: (value: unknown[]) => unknown, reject?: (reason?: unknown) => unknown) =>
-        Promise.resolve(limitResult).then(resolve, reject),
-    };
-    return chainable;
+    return makeChainable(limitResult);
   };
 
   return {
@@ -93,18 +141,30 @@ function createMockDb({
         where: vi.fn(() => whereResult(table)),
       })),
     })) as unknown as MockDb["select"],
-    insert: vi.fn(() => ({
-      values: vi.fn(async () => [{ insertId: 123 }]),
-    })) as unknown as MockDb["insert"],
-    update: vi.fn(() => ({
-      set: vi.fn(() => ({
+    insert: vi.fn((table: unknown) => {
+      const valuesSpy = vi.fn(async () => [{ insertId }]);
+      insertValuesSpies.set(table, valuesSpy);
+      const tableName = getTableName(table);
+      if (tableName) insertValuesByTableName.set(tableName, valuesSpy);
+      return { values: valuesSpy };
+    }) as unknown as MockDb["insert"],
+    update: vi.fn((table: unknown) => {
+      const setSpy = vi.fn(() => ({
         where: vi.fn(async () => []),
-      })),
-    })) as unknown as MockDb["update"],
+      }));
+      updateSetSpies.set(table, setSpy);
+      const tableName = getTableName(table);
+      if (tableName) updateSetByTableName.set(tableName, setSpy);
+      return { set: setSpy };
+    }) as unknown as MockDb["update"],
     delete: vi.fn(() => ({
       where: vi.fn(async () => []),
     })) as unknown as MockDb["delete"],
-  };
+    insertValuesSpies,
+    insertValuesByTableName,
+    updateSetSpies,
+    updateSetByTableName,
+  } as any;
 }
 
 function buildCtx(userId = 18) {
@@ -302,5 +362,180 @@ describe("contentRouter.generateForCampaign", () => {
       (call) => call[0]?.workflowState === "creatives_ready"
     );
     expect(stateUpdate).toBeTruthy();
+  });
+});
+
+
+describe("contentRouter.publishCampaignPack", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const baseCampaign = {
+    id: 28,
+    userId: 18,
+    businessId: 24,
+    status: "draft",
+    workflowState: "creatives_ready",
+    platforms: "instagram",
+  };
+
+  const basePost = {
+    id: 125,
+    userId: 18,
+    campaignId: 28,
+    type: "social_post",
+    platform: "Instagram",
+    status: "draft",
+    metadata: { approved: true },
+  };
+
+  const baseIntegration = {
+    id: 7,
+    userId: 18,
+    businessId: 24,
+    platform: "instagram",
+    status: "connected",
+    accountName: "3at1newmarketmall",
+    instagramBusinessAccountId: "ig-123",
+    pageAccessTokenEncrypted: "encrypted-token",
+    permissions: ["instagram_content_publishing"],
+  };
+
+  const captionAsset = {
+    id: 1,
+    userId: 18,
+    campaignId: 28,
+    assetType: "caption_adaptation",
+  };
+
+  it("creates a publishing_queue row when a connected Instagram integration exists", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 123,
+      status: "published",
+      platform: "instagram",
+      postId: "ext-125",
+    } as any);
+
+    const mockDb = createMockDb({
+      campaign: baseCampaign,
+      posts: [basePost],
+      integrations: [baseIntegration],
+      assets: [captionAsset],
+      queue: [],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.publishCampaignPack({ campaignId: 28 });
+
+    expect(result.manualPosting).toBeFalsy();
+    expect(result.publishedCount).toBe(1);
+
+    const insertValuesSpy = mockDb.insertValuesByTableName.get("publishing_queue");
+    expect(insertValuesSpy).toHaveBeenCalledTimes(1);
+    const inserted = insertValuesSpy!.mock.calls[0][0];
+    expect(inserted).toMatchObject({
+      userId: 18,
+      campaignId: 28,
+      contentPostId: 125,
+      integrationId: 7,
+      platform: "instagram",
+      status: "approved",
+    });
+
+    expect(publishSinglePost).toHaveBeenCalledWith(123);
+  });
+
+  it("marks content for manual posting when no connected platform exists", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({
+      campaign: baseCampaign,
+      posts: [basePost],
+      integrations: [],
+      assets: [captionAsset],
+      queue: [],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.publishCampaignPack({ campaignId: 28 });
+
+    expect(result.manualPosting).toBe(true);
+    expect(result.manualCount).toBe(1);
+    expect(result.publishedCount).toBe(0);
+
+    const updateSetSpy = mockDb.updateSetByTableName.get("content_posts");
+    expect(updateSetSpy).toHaveBeenCalledTimes(1);
+    const update = updateSetSpy!.mock.calls[0][0];
+    expect(update.status).toBe("published");
+    expect(update.metadata.publishMode).toBe("manual");
+    expect(update.metadata.manuallyPostedAt).toBeTruthy();
+
+    expect(mockDb.insertValuesByTableName.has("publishing_queue")).toBe(false);
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-publish to an integration that belongs to a different business", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    const wrongBusinessIntegration = {
+      ...baseIntegration,
+      businessId: 99,
+    };
+
+    const mockDb = createMockDb({
+      campaign: baseCampaign,
+      posts: [basePost],
+      integrations: [wrongBusinessIntegration],
+      assets: [captionAsset],
+      queue: [],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.publishCampaignPack({ campaignId: 28 });
+
+    expect(result.manualPosting).toBe(true);
+    expect(result.publishedCount).toBe(0);
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
+
+  it("creates a failed queue row when the integration is connected but not publishing-ready", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { isInstagramPublishingReady } = await import("./lib/integrations/platforms");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(isInstagramPublishingReady).mockReturnValue(false);
+
+    const mockDb = createMockDb({
+      campaign: baseCampaign,
+      posts: [basePost],
+      integrations: [baseIntegration],
+      assets: [captionAsset],
+      queue: [],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.publishCampaignPack({ campaignId: 28 });
+
+    expect(result.publishedCount).toBe(0);
+    expect(result.failedCount).toBe(1);
+
+    const insertValuesSpy = mockDb.insertValuesByTableName.get("publishing_queue");
+    expect(insertValuesSpy).toHaveBeenCalledTimes(1);
+    const inserted = insertValuesSpy!.mock.calls[0][0];
+    expect(inserted.status).toBe("failed");
+    expect(inserted.lastError).toContain("Instagram publishing is not ready");
   });
 });

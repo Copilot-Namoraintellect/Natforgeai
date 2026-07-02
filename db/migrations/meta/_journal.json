@@ -92,6 +92,13 @@
       "when": 1782834565471,
       "tag": "0012_add_message_pack_asset_type",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1783021494761,
+      "tag": "0013_add_social_integrations_business_id",
+      "breakpoints": true
     }
   ]
 }

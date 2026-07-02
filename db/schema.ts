@@ -651,31 +651,35 @@ export const publishingQueue = mysqlTable("publishing_queue", {
 export type PublishingQueueItem = typeof publishingQueue.$inferSelect;
 
 // ─── Social Integrations ───
-export const socialIntegrations = mysqlTable("social_integrations", {
-  id: serial("id").primaryKey(),
-  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-  platform: mysqlEnum("platform", [
-    "facebook",
-    "instagram",
-    "linkedin",
-    "tiktok",
-    "twitter",
-    "whatsapp",
-    "email",
-  ]).notNull(),
-  accountName: varchar("accountName", { length: 255 }),
-  accessTokenEncrypted: text("accessTokenEncrypted"),
-  refreshTokenEncrypted: text("refreshTokenEncrypted"),
-  pageId: varchar("pageId", { length: 255 }),
-  pageAccessTokenEncrypted: text("pageAccessTokenEncrypted"),
-  instagramBusinessAccountId: varchar("instagramBusinessAccountId", { length: 255 }),
-  permissions: json("permissions"),
-  status: mysqlEnum("status", ["connected", "expired", "disconnected"])
-    .default("disconnected")
-    .notNull(),
-  lastSyncAt: timestamp("lastSyncAt"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+export const socialIntegrations = mysqlTable(
+  "social_integrations",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    platform: mysqlEnum("platform", [
+      "facebook",
+      "instagram",
+      "linkedin",
+      "tiktok",
+      "twitter",
+      "whatsapp",
+      "email",
+    ]).notNull(),
+    accountName: varchar("accountName", { length: 255 }),
+    accessTokenEncrypted: text("accessTokenEncrypted"),
+    refreshTokenEncrypted: text("refreshTokenEncrypted"),
+    pageId: varchar("pageId", { length: 255 }),
+    pageAccessTokenEncrypted: text("pageAccessTokenEncrypted"),
+    instagramBusinessAccountId: varchar("instagramBusinessAccountId", { length: 255 }),
+    permissions: json("permissions"),
+    status: mysqlEnum("status", ["connected", "expired", "disconnected"])
+      .default("disconnected")
+      .notNull(),
+    lastSyncAt: timestamp("lastSyncAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  }
+);
 
 export type SocialIntegration = typeof socialIntegrations.$inferSelect;
 
