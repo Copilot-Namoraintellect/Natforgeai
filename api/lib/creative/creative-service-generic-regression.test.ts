@@ -51,7 +51,6 @@ vi.mock("./campaign-message-architect", async () => {
       throw new Error("LLM copy rewrite must not be called for design-only refinement");
     }),
     saveApprovedMessagePack: vi.fn(async () => 999),
-    validateCampaignCopy: vi.fn(() => ({ passed: true, score: 85, rejections: [], warnings: [] })),
   };
 });
 
@@ -109,9 +108,9 @@ function createMockDbWithNullRootFields(approvedPack: CampaignMessagePack) {
               userId: 10,
               businessId: 24,
               name: "Zuto Campaign",
-              productOrService: null,
-              targetBuyer: null,
-              mainPainPoint: null,
+              productOrService: "Instant payouts",
+              targetBuyer: "Restaurant and delivery platform owners",
+              mainPainPoint: "Waiting; settlements",
               offerDetails: null,
               excludedOffers: null,
               preferredCta: null,
@@ -130,7 +129,11 @@ function createMockDbWithNullRootFields(approvedPack: CampaignMessagePack) {
               logo: "https://example.com/logo.png",
               industry: "Fintech",
               location: null,
-              websiteEvidence: null,
+              websiteEvidence: {
+                businessCategory: "Fintech",
+                productsServices: ["Instant payouts"],
+                targetCustomers: ["Restaurant and delivery platform owners"],
+              },
             },
           ],
           generated_images: [],
@@ -186,9 +189,9 @@ function createMockDb() {
               userId: 10,
               businessId: 24,
               name: "Zuto Campaign",
-              productOrService: "Instant payout platform",
-              targetBuyer: "Restaurant and delivery owners",
-              mainPainPoint: "Waiting days for card payouts",
+              productOrService: "Instant payouts",
+              targetBuyer: "Restaurants, delivery platforms and frontline teams",
+              mainPainPoint: "Waiting; payouts",
               offerDetails: "Same-night settlement for restaurants and delivery platforms",
               excludedOffers: "",
               preferredCta: "Book a Zuto Hub Demo",
@@ -209,8 +212,8 @@ function createMockDb() {
               location: "South Africa",
               websiteEvidence: {
                 businessCategory: "Fintech",
-                productsServices: ["Instant payout platform"],
-                targetCustomers: ["Restaurant and delivery owners"],
+                productsServices: ["Instant payouts"],
+                targetCustomers: ["Restaurants", "Delivery platforms", "Frontline teams"],
               },
             },
           ],

@@ -998,6 +998,38 @@ export async function generatePremiumLeaflet({
     // This must happen AFTER any refinement so stale or invented copy is caught
     // before credits are spent.
     if (approvedMessagePack) {
+      const validationCtx = {
+        businessName: (business.displayName as string) || business.name,
+        campaignName: campaign.name,
+        productOrService: campaign.productOrService || business.productOrService,
+        targetCustomer: campaign.targetBuyer || business.targetCustomer,
+        mainPainPoint: campaign.mainPainPoint,
+        offerDetails: campaign.offerDetails,
+        excludedOffers: campaign.excludedOffers || business.avoidWords,
+        preferredCta: campaign.preferredCta,
+        location: business.location,
+        industry: business.industry,
+        websiteEvidence: business.websiteEvidence,
+        refinementInstruction,
+      };
+
+      logInfo("[PremiumLeaflet] render copy validation inputs", {
+        userId,
+        contentPostId,
+        campaignId: post.campaignId,
+        headline,
+        subheadline,
+        services,
+        cta,
+        messagePackSource: approvedMessagePack.messagePackSource,
+        approvedValidation: approvedMessagePack.validation,
+        productOrService: validationCtx.productOrService,
+        targetCustomer: validationCtx.targetCustomer,
+        mainPainPoint: validationCtx.mainPainPoint,
+        websiteEvidenceTargetCustomers: validationCtx.websiteEvidence?.targetCustomers,
+        websiteEvidenceProductsServices: validationCtx.websiteEvidence?.productsServices,
+      });
+
       const renderCopyValidation = validateCampaignCopy(
         {
           headline,
@@ -1008,26 +1040,40 @@ export async function generatePremiumLeaflet({
           platformCaptions: approvedMessagePack.platformCaptions,
           validation: { passed: false, score: 0, rejections: [], warnings: [] },
         },
-        {
-          businessName: (business.displayName as string) || business.name,
-          campaignName: campaign.name,
-          productOrService: campaign.productOrService || business.productOrService,
-          targetCustomer: campaign.targetBuyer || business.targetCustomer,
-          mainPainPoint: campaign.mainPainPoint,
-          offerDetails: campaign.offerDetails,
-          excludedOffers: campaign.excludedOffers || business.avoidWords,
-          preferredCta: campaign.preferredCta,
-          location: business.location,
-          industry: business.industry,
-          websiteEvidence: business.websiteEvidence,
-          refinementInstruction,
-        }
+        validationCtx
       );
-      if (!renderCopyValidation.passed) {
+
+      const trustedApprovedSources: MessagePackSource[] = [
+        "manual_restore",
+        "user_structured_copy",
+        "fallback_user_pack",
+      ];
+      const isTrustedApprovedSource =
+        approvedMessagePack.validation?.passed === true &&
+        trustedApprovedSources.includes(approvedMessagePack.messagePackSource || "ai_refined_pack");
+
+      const isContextSensitiveRejection = (rejection: string) =>
+        /does not reference the specific product\/service/i.test(rejection) ||
+        /does not reference the target customer or their pain point/i.test(rejection);
+
+      const contextSensitiveRejections = renderCopyValidation.rejections.filter(isContextSensitiveRejection);
+      const hardRejections = renderCopyValidation.rejections.filter((r) => !isContextSensitiveRejection(r));
+
+      if (hardRejections.length > 0 || (!isTrustedApprovedSource && renderCopyValidation.rejections.length > 0)) {
         const message = `Rendered copy failed quality validation: ${renderCopyValidation.rejections.join("; ")}`;
         console.error(`[PremiumLeaflet] Render copy validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
         await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
         return { status: "failed", jobId: "", errorMessage: message };
+      }
+
+      if (contextSensitiveRejections.length > 0) {
+        logInfo("[PremiumLeaflet] ignoring context-sensitive rejection for trusted approved pack", {
+          userId,
+          contentPostId,
+          campaignId: post.campaignId,
+          messagePackSource: approvedMessagePack.messagePackSource,
+          ignoredRejections: contextSensitiveRejections,
+        });
       }
     }
 
