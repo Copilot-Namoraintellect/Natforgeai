@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { randomBytes } from "crypto";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { socialIntegrations } from "@db/schema";
 import { eq, and } from "drizzle-orm";
@@ -71,7 +71,7 @@ export const integrationRouter = createRouter({
   }),
 
   initiateConnection: authedQuery
-    .input(z.object({ provider: z.enum(["meta", "linkedin"]) }))
+    .input(z.object({ provider: z.enum(["meta", "linkedin"]), businessId: z.number().optional() }))
     .mutation(async ({ ctx, input }) => {
       if (input.provider === "meta") {
         if (!env.metaAppId || !env.metaAppSecret || !env.metaRedirectUri) {
@@ -83,7 +83,7 @@ export const integrationRouter = createRouter({
         }
 
         const state = generateOAuthState();
-        await setOAuthState(state, { userId: ctx.user.id, platform: input.provider });
+        await setOAuthState(state, { userId: ctx.user.id, platform: input.provider, businessId: input.businessId });
 
         const scopes = getMetaOAuthScopes();
         const authUrl =
@@ -105,7 +105,7 @@ export const integrationRouter = createRouter({
       }
 
       const state = generateOAuthState();
-      await setOAuthState(state, { userId: ctx.user.id, platform: input.provider });
+      await setOAuthState(state, { userId: ctx.user.id, platform: input.provider, businessId: input.businessId });
 
       const authUrl =
         `https://www.linkedin.com/oauth/v2/authorization?` +
@@ -148,6 +148,7 @@ export const integrationRouter = createRouter({
           "whatsapp",
           "email",
         ]),
+        businessId: z.number().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -160,7 +161,7 @@ export const integrationRouter = createRouter({
       }
 
       const state = `${input.platform}_${ctx.user.id}_${Date.now()}`;
-      await setOAuthState(state, { userId: ctx.user.id, platform: input.platform });
+      await setOAuthState(state, { userId: ctx.user.id, platform: input.platform, businessId: input.businessId });
 
       const url = getOAuthUrl(config, state);
       return { url, state };
@@ -231,6 +232,7 @@ export const integrationRouter = createRouter({
           "email",
         ]),
         authCode: z.string(),
+        businessId: z.number().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -249,6 +251,7 @@ export const integrationRouter = createRouter({
       const db = getDb();
       await db.insert(socialIntegrations).values({
         userId: ctx.user.id,
+        businessId: input.businessId ?? null,
         platform: input.platform,
         accessTokenEncrypted: encryptToken(tokens.accessToken),
         refreshTokenEncrypted: tokens.refreshToken ? encryptToken(tokens.refreshToken) : null,
@@ -256,6 +259,40 @@ export const integrationRouter = createRouter({
         status: "connected",
         lastSyncAt: new Date(),
       });
+
+      return { success: true };
+    }),
+
+  assignIntegrationBusiness: adminQuery
+    .input(
+      z.object({
+        id: z.number(),
+        businessId: z.number().nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const [integration] = await db
+        .select({ id: socialIntegrations.id, userId: socialIntegrations.userId })
+        .from(socialIntegrations)
+        .where(eq(socialIntegrations.id, input.id))
+        .limit(1);
+
+      if (!integration) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Integration not found" });
+      }
+
+      if (integration.userId !== ctx.user.id) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You can only assign integrations in your own workspace",
+        });
+      }
+
+      await db
+        .update(socialIntegrations)
+        .set({ businessId: input.businessId })
+        .where(eq(socialIntegrations.id, input.id));
 
       return { success: true };
     }),

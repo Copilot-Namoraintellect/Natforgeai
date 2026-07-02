@@ -154,6 +154,39 @@ describe("processMetaOAuthConnection", () => {
     expect(igInsert.values.status).toBe("connected");
   });
 
+  it("persists businessId on newly connected Facebook and Instagram rows", async () => {
+    const mockDb = createMockDb();
+    vi.mocked(getFacebookGrantedPermissions).mockResolvedValue([
+      "email",
+      "pages_manage_posts",
+      "instagram_basic",
+      "instagram_content_publish",
+    ]);
+    vi.mocked(fetchFacebookPages).mockResolvedValue({
+      ok: true,
+      status: 200,
+      pages: [{ id: "page_123", name: "Test Page", access_token: "page_token" }],
+    });
+    vi.mocked(fetchInstagramBusinessAccount).mockResolvedValue({
+      id: "ig_123",
+      username: "testbrand",
+    });
+
+    await processMetaOAuthConnection(
+      mockDb,
+      { userId: 1, platform: "facebook", businessId: 42 },
+      { accessToken: "user_token" }
+    );
+
+    const fbInsert = mockDb.inserts.find((i: any) => i.values?.platform === "facebook");
+    expect(fbInsert).toBeDefined();
+    expect(fbInsert.values.businessId).toBe(42);
+
+    const igInsert = mockDb.inserts.find((i: any) => i.values?.platform === "instagram");
+    expect(igInsert).toBeDefined();
+    expect(igInsert.values.businessId).toBe(42);
+  });
+
   it("skips the Instagram row with a clear reason when required permissions are missing", async () => {
     const mockDb = createMockDb();
     vi.mocked(getFacebookGrantedPermissions).mockResolvedValue(["email", "pages_manage_posts"]);

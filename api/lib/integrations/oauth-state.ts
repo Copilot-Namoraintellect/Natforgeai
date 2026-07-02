@@ -6,6 +6,7 @@ const OAUTH_STATE_TTL_SECONDS = 15 * 60; // 15 minutes
 interface OAuthState {
   userId: number;
   platform: string;
+  businessId?: number | null;
 }
 
 // Fallback in-memory store for development without Redis

@@ -4,11 +4,29 @@ import { trpc } from "@/providers/trpc";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  getIntegrationForBusiness,
+  getBusinessNameMap,
+  type ConnectedIntegration,
+} from "@/lib/integrations/logic";
 import {
   Plug,
   Facebook,
@@ -26,7 +44,10 @@ import {
   AlertCircle,
 } from "lucide-react";
 
-const platformConfig: Record<string, { icon: any; name: string; description: string; capabilities: string[]; setupUrl?: string }> = {
+const platformConfig: Record<
+  string,
+  { icon: React.ElementType; name: string; description: string; capabilities: string[]; setupUrl?: string }
+> = {
   facebook: {
     icon: Facebook,
     name: "Facebook Page",
@@ -77,14 +98,31 @@ const platformConfig: Record<string, { icon: any; name: string; description: str
   },
 };
 
-const statusConfig: Record<string, { color: string; icon: any; label: string }> = {
+const statusConfig: Record<string, { color: string; icon: React.ElementType; label: string }> = {
   connected: { color: "bg-emerald-500/10 text-emerald-600", icon: CheckCircle, label: "Connected" },
   expired: { color: "bg-amber-500/10 text-amber-600", icon: Clock, label: "Expired" },
   disconnected: { color: "bg-gray-500/10 text-gray-600", icon: XCircle, label: "Disconnected" },
 };
 
+function parseCampaignIdFromReturnTo(returnTo?: string | null): number | null {
+  if (!returnTo) return null;
+  try {
+    const decoded = decodeURIComponent(returnTo);
+    const query = decoded.split("?")[1] || "";
+    const params = new URLSearchParams(query);
+    const id = params.get("campaignId");
+    return id ? Number(id) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Integrations() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const returnTo = searchParams.get("returnTo") || undefined;
+  const businessIdParam = searchParams.get("businessId");
+
+  const [selectedBusinessId, setSelectedBusinessId] = useState<number | null>(null);
   const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
   const [emailConfigOpen, setEmailConfigOpen] = useState(false);
   const [explainPlatform, setExplainPlatform] = useState<string | null>(null);
@@ -101,10 +139,39 @@ export default function Integrations() {
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+
   const { data: connectedPlatforms } = trpc.integration.getConnectedPlatforms.useQuery();
   const { data: platformConfigStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
+  const { data: businesses } = trpc.business.list.useQuery();
+  const businessNameMap = useMemo(() => getBusinessNameMap(businesses), [businesses]);
 
-  const integrations = useMemo(
+  const returnToCampaignId = useMemo(() => parseCampaignIdFromReturnTo(returnTo), [returnTo]);
+  const { data: returnToCampaign } = trpc.campaign.get.useQuery(
+    { id: returnToCampaignId! },
+    { enabled: returnToCampaignId != null }
+  );
+
+  const contextBusinessId = useMemo(() => {
+    if (businessIdParam) return Number(businessIdParam);
+    if (returnToCampaign?.businessId) return returnToCampaign.businessId;
+    return null;
+  }, [businessIdParam, returnToCampaign]);
+
+  useEffect(() => {
+    if (contextBusinessId != null) {
+      setSelectedBusinessId(contextBusinessId);
+    }
+  }, [contextBusinessId]);
+
+  useEffect(() => {
+    setSelectedBusinessId((prev) => {
+      if (prev != null) return prev;
+      if (businesses && businesses.length > 0) return businesses[0].id;
+      return null;
+    });
+  }, [businesses]);
+
+  const integrations = useMemo<ConnectedIntegration[]>(
     () =>
       connectedPlatforms?.map((i) => ({
         id: i.id,
@@ -112,14 +179,33 @@ export default function Integrations() {
         accountName: i.providerAccountName,
         status: i.status,
         ready: i.ready,
+        businessId: i.businessId,
         createdAt: i.createdAt,
       })) ?? [],
     [connectedPlatforms]
   );
 
+  const selectedBusinessName = selectedBusinessId
+    ? businessNameMap.get(selectedBusinessId)
+    : null;
+  const contextBusinessName = contextBusinessId
+    ? businessNameMap.get(contextBusinessId)
+    : null;
+
   const hasPublishingReadyPlatform = useMemo(
-    () => integrations.some((i) => i.status === "connected" && i.ready),
-    [integrations]
+    () =>
+      integrations.some((i) => {
+        const { status } = getIntegrationForBusiness(
+          i.platform,
+          integrations,
+          selectedBusinessId
+        );
+        return (
+          i.ready &&
+          (status === "connected_for_business" || status === "connected_unassigned")
+        );
+      }),
+    [integrations, selectedBusinessId]
   );
 
   const platformStatus = useMemo(
@@ -135,43 +221,53 @@ export default function Integrations() {
     [platformConfigStatus]
   );
 
-  // Handle OAuth callback results
   useEffect(() => {
     const success = searchParams.get("success");
     const error = searchParams.get("error");
 
     if (success) {
       toast.success(`${platformConfig[success]?.name || success} connected successfully!`);
-      setSearchParams({}, { replace: true });
+      const clean = new URLSearchParams(searchParams);
+      clean.delete("success");
+      clean.delete("error");
+      setSearchParams(clean, { replace: true });
       utils.integration.getConnectedPlatforms.invalidate();
     }
 
     if (error) {
       toast.error(`Connection failed: ${decodeURIComponent(error)}`);
-      setSearchParams({}, { replace: true });
+      const clean = new URLSearchParams(searchParams);
+      clean.delete("success");
+      clean.delete("error");
+      setSearchParams(clean, { replace: true });
     }
-  }, [searchParams]);
+  }, [searchParams, setSearchParams, utils.integration.getConnectedPlatforms]);
+
   const disconnectMutation = trpc.integration.disconnectPlatform.useMutation({
     onSuccess: () => {
       toast.success("Platform disconnected");
       utils.integration.getConnectedPlatforms.invalidate();
     },
   });
+
+  const assignMutation = trpc.integration.assignIntegrationBusiness.useMutation({
+    onSuccess: (_, variables) => {
+      toast.success(
+        variables.businessId == null
+          ? "Integration unassigned"
+          : "Integration assigned to business"
+      );
+      utils.integration.getConnectedPlatforms.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   const testMutation = trpc.integration.testConnection.useMutation({
     onSuccess: () => {
       toast.success(`Connection test passed!`);
     },
     onError: (err) => toast.error(err.message),
   });
-
-  const getIntegrationStatus = (platform: string) => {
-    const integration = integrations?.find((i) => i.platform === platform);
-    return integration?.status || "disconnected";
-  };
-
-  const getIntegration = (platform: string) => {
-    return integrations?.find((i) => i.platform === platform);
-  };
 
   const handleConnect = async (platform: string) => {
     if (platform === "email") {
@@ -182,13 +278,23 @@ export default function Integrations() {
     setConnectingPlatform(platform);
     try {
       const { url } = await utils.integration.getOAuthUrl.fetch({
-        platform: platform as "facebook" | "instagram" | "linkedin" | "tiktok" | "twitter" | "whatsapp" | "email",
+        platform: platform as
+          | "facebook"
+          | "instagram"
+          | "linkedin"
+          | "tiktok"
+          | "twitter"
+          | "whatsapp"
+          | "email",
+        businessId: selectedBusinessId ?? undefined,
       });
 
       if (url) {
         window.location.href = url;
       } else {
-        toast.info(`${platformConfig[platform].name} integration requires API credentials. Set environment variables to enable.`);
+        toast.info(
+          `${platformConfig[platform].name} integration requires API credentials. Set environment variables to enable.`
+        );
       }
     } catch (err: any) {
       toast.error(err.message || "Failed to initiate connection");
@@ -222,21 +328,50 @@ export default function Integrations() {
             <Plug className="w-6 h-6 text-[#00D4FF]" />
             Integrations
           </h1>
-          <Badge variant="outline" className="text-[10px] text-[#00D4FF] border-[#00D4FF]/30">Premium</Badge>
+          <Badge variant="outline" className="text-[10px] text-[#00D4FF] border-[#00D4FF]/30">
+            Premium
+          </Badge>
         </div>
         <p className="text-slate-600 mt-1">
           Connect your social media, messaging, and email platforms for autonomous publishing.
         </p>
       </div>
 
+      {/* Context banner */}
+      {contextBusinessName && (
+        <Card className="bg-emerald-500/5 border-emerald-500/20">
+          <CardContent className="p-4 flex items-start gap-3">
+            <CheckCircle className="w-5 h-5 text-emerald-500 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm text-emerald-700 font-medium">
+                Setting up integrations for {contextBusinessName}
+              </p>
+              {returnTo && (
+                <p className="text-xs text-emerald-600/80 mt-1">
+                  <a
+                    href={returnTo}
+                    className="underline hover:text-emerald-700"
+                  >
+                    Return to campaign
+                  </a>
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Page-level explanation */}
       <Card className="bg-blue-500/5 border-blue-500/20">
         <CardContent className="p-4 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-blue-500 mt-0.5 shrink-0" />
           <div>
-            <p className="text-sm text-blue-700 font-medium">Integrations are only required for automatic publishing and inbox management</p>
+            <p className="text-sm text-blue-700 font-medium">
+              Integrations are only required for automatic publishing and inbox management
+            </p>
             <p className="text-xs text-blue-600/80 mt-1">
-              You can still generate strategy and content without connecting platforms. Connect integrations when you are ready to publish automatically or manage replies.
+              You can still generate strategy and content without connecting platforms. Connect
+              integrations when you are ready to publish automatically or manage replies.
             </p>
           </div>
         </CardContent>
@@ -250,8 +385,40 @@ export default function Integrations() {
             <div>
               <p className="text-sm text-amber-700 font-medium">Publishing Setup Required</p>
               <p className="text-xs text-amber-600/80 mt-1">
-                Social platform publishing is not yet connected. You can continue creating campaigns and generating content. Platform connections will be available once your workspace is configured.
+                {selectedBusinessName
+                  ? `No publishing-ready platform is connected for ${selectedBusinessName}.`
+                  : "Social platform publishing is not yet connected."}{" "}
+                You can continue creating campaigns and generating content. Platform connections
+                will be available once your workspace is configured.
               </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Business selector */}
+      {businesses && businesses.length > 0 && (
+        <Card className="bg-[#1E293B] border-[#334155]">
+          <CardContent className="p-4">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <Label className="text-sm text-gray-300 whitespace-nowrap">
+                Manage integrations for
+              </Label>
+              <Select
+                value={selectedBusinessId != null ? String(selectedBusinessId) : ""}
+                onValueChange={(value) => setSelectedBusinessId(Number(value))}
+              >
+                <SelectTrigger className="w-full sm:w-64 bg-[#0F172A] border-[#334155] text-white">
+                  <SelectValue placeholder="Select a business" />
+                </SelectTrigger>
+                <SelectContent className="bg-[#1E293B] border-[#334155] text-white">
+                  {businesses.map((b) => (
+                    <SelectItem key={b.id} value={String(b.id)}>
+                      {b.name || `Business ${b.id}`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </CardContent>
         </Card>
@@ -298,12 +465,45 @@ export default function Integrations() {
       {/* Platform Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {Object.entries(platformConfig).map(([platform, config]) => {
-          const status = getIntegrationStatus(platform);
-          const statusInfo = statusConfig[status];
+          const { status, integration } = getIntegrationForBusiness(
+            platform,
+            integrations,
+            selectedBusinessId
+          );
+
+          const statusInfo =
+            status === "connected_for_business"
+              ? { color: "bg-emerald-500/10 text-emerald-600", icon: CheckCircle, label: "Connected" }
+              : status === "connected_unassigned"
+              ? {
+                  color: "bg-blue-500/10 text-blue-600",
+                  icon: AlertCircle,
+                  label: "Connected (Unassigned)",
+                }
+              : status === "connected_other_business"
+              ? {
+                  color: "bg-amber-500/10 text-amber-600",
+                  icon: AlertCircle,
+                  label: "Connected (Other business)",
+                }
+              : statusConfig[status] || statusConfig.disconnected;
+
           const StatusIcon = statusInfo.icon;
           const PlatformIcon = config.icon;
-          const isConnected = status === "connected";
-          const integration = getIntegration(platform);
+          const isConnected = status !== "disconnected";
+
+          const assignedBusinessName = integration?.businessId
+            ? businessNameMap.get(integration.businessId) || `Business ${integration.businessId}`
+            : null;
+
+          const canAssign =
+            isAdmin &&
+            integration != null &&
+            selectedBusinessId != null &&
+            (integration.businessId !== selectedBusinessId || integration.businessId == null);
+
+          const canUnassign =
+            isAdmin && integration != null && integration.businessId != null;
 
           return (
             <Card
@@ -315,8 +515,16 @@ export default function Integrations() {
               <CardContent className="p-5">
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center gap-3">
-                    <div className={`p-2.5 rounded-xl ${isConnected ? "bg-emerald-500/10" : "bg-[#0F172A]"}`}>
-                      <PlatformIcon className={`w-6 h-6 ${isConnected ? "text-emerald-400" : "text-[#00D4FF]"}`} />
+                    <div
+                      className={`p-2.5 rounded-xl ${
+                        isConnected ? "bg-emerald-500/10" : "bg-[#0F172A]"
+                      }`}
+                    >
+                      <PlatformIcon
+                        className={`w-6 h-6 ${
+                          isConnected ? "text-emerald-400" : "text-[#00D4FF]"
+                        }`}
+                      />
                     </div>
                     <div>
                       <h3 className="font-semibold text-white">{config.name}</h3>
@@ -333,6 +541,19 @@ export default function Integrations() {
                 {integration?.accountName && (
                   <p className="text-xs text-gray-500 mb-2">
                     Account: {integration.accountName}
+                  </p>
+                )}
+
+                {assignedBusinessName && (
+                  <p className="text-xs text-gray-500 mb-2">
+                    Linked business: {assignedBusinessName}
+                  </p>
+                )}
+
+                {status === "connected_other_business" && integration?.businessId != null && (
+                  <p className="text-xs text-amber-500/80 mb-3">
+                    This account is assigned to {assignedBusinessName}. It will not be used for{" "}
+                    {selectedBusinessName || "the selected business"}.
                   </p>
                 )}
 
@@ -357,7 +578,11 @@ export default function Integrations() {
                         onClick={() => testMutation.mutate({ platform: platform as any })}
                         disabled={testMutation.isPending}
                       >
-                        {testMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Test"}
+                        {testMutation.isPending ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          "Test"
+                        )}
                       </Button>
                       <Button
                         variant="outline"
@@ -385,11 +610,7 @@ export default function Integrations() {
                             Not Available
                           </Button>
                           {config.setupUrl && isAdmin && (
-                            <a
-                              href={config.setupUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
+                            <a href={config.setupUrl} target="_blank" rel="noopener noreferrer">
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -414,14 +635,11 @@ export default function Integrations() {
                             ) : (
                               <Plug className="w-4 h-4 mr-2" />
                             )}
-                            {isConnected ? "Reconnect" : "Connect"}
+                            Connect
+                            {selectedBusinessName ? ` for ${selectedBusinessName}` : ""}
                           </Button>
                           {config.setupUrl && isAdmin && (
-                            <a
-                              href={config.setupUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
+                            <a href={config.setupUrl} target="_blank" rel="noopener noreferrer">
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -437,6 +655,44 @@ export default function Integrations() {
                     </>
                   )}
                 </div>
+
+                {/* Business assignment controls */}
+                {integration && (canAssign || canUnassign) && (
+                  <div className="mt-4 pt-4 border-t border-[#334155] flex flex-wrap gap-2">
+                    {canAssign && selectedBusinessId != null && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                        onClick={() =>
+                          assignMutation.mutate({
+                            id: integration.id,
+                            businessId: selectedBusinessId,
+                          })
+                        }
+                        disabled={assignMutation.isPending}
+                      >
+                        {assignMutation.isPending ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                        ) : null}
+                        Assign to {selectedBusinessName || "selected business"}
+                      </Button>
+                    )}
+                    {canUnassign && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-gray-500/30 text-gray-400 hover:bg-gray-500/10"
+                        onClick={() =>
+                          assignMutation.mutate({ id: integration.id, businessId: null })
+                        }
+                        disabled={assignMutation.isPending}
+                      >
+                        Unassign
+                      </Button>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           );
@@ -468,7 +724,8 @@ export default function Integrations() {
                 : "Platform setup is not enabled for this workspace yet. You can still generate content and publish manually."}
             </p>
             <p className="text-gray-500">
-              Integrations are only required for automatic publishing and inbox management. Strategy and content generation work without any platform connected.
+              Integrations are only required for automatic publishing and inbox management. Strategy
+              and content generation work without any platform connected.
             </p>
           </div>
         </DialogContent>
@@ -479,9 +736,7 @@ export default function Integrations() {
         <DialogContent className="bg-[#1E293B] border-[#334155] text-white">
           <DialogHeader>
             <DialogTitle>Email Provider Configuration</DialogTitle>
-            <DialogDescription>
-              Enter your SMTP settings to send marketing emails.
-            </DialogDescription>
+            <DialogDescription>Enter your SMTP settings to send marketing emails.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">

@@ -40,7 +40,7 @@ export interface MetaOAuthConnectionResult {
  */
 export async function processMetaOAuthConnection(
   db: any,
-  pending: { userId: number; platform: string },
+  pending: { userId: number; platform: string; businessId?: number | null },
   tokens: { accessToken: string; refreshToken?: string }
 ): Promise<MetaOAuthConnectionResult> {
   const isMetaPlatform = pending.platform === "facebook" || pending.platform === "instagram";
@@ -159,6 +159,7 @@ export async function processMetaOAuthConnection(
       ? encryptToken(pageAccessToken)
       : existing?.pageAccessTokenEncrypted || null,
     accountName: accountName || existing?.accountName || null,
+    businessId: pending.businessId ?? existing?.businessId ?? null,
     permissions: permissions as any,
     status: "connected" as const,
     lastSyncAt: new Date(),
@@ -210,6 +211,7 @@ export async function processMetaOAuthConnection(
       pageAccessTokenEncrypted: encryptToken(pageAccessToken),
       instagramBusinessAccountId,
       accountName: instagramAccountName || "Instagram Business",
+      businessId: pending.businessId ?? existingInstagram?.businessId ?? null,
       permissions: permissions as any,
       status: "connected" as const,
       lastSyncAt: new Date(),
