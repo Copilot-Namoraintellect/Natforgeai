@@ -257,3 +257,121 @@ export function getActiveGenerationRunId(
   const latestReady = getLatestReadyImageAsset(assets, opts);
   return asString(getContentMeta(latestReady).generationRunId) || null;
 }
+
+export type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
+
+export interface ConnectedIntegrationLike {
+  platform: string;
+  status: string;
+  ready?: boolean;
+  instagramBusinessAccountId?: string | null;
+  permissions?: unknown[];
+  pageAccessTokenEncrypted?: string | null;
+}
+
+export interface PlatformConfigStatusLike {
+  metaConfigured?: boolean;
+  linkedinConfigured?: boolean;
+}
+
+export function isPlatformConnected(
+  platform: string | null | undefined,
+  integrations: ConnectedIntegrationLike[]
+): boolean {
+  if (!platform) return false;
+  const normalized = platform.toLowerCase().trim();
+  const connectable = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
+  if (!connectable.includes(normalized)) return true;
+  return integrations.some(
+    (i) => i.platform.toLowerCase() === normalized && i.status === "connected" && i.ready
+  );
+}
+
+export function getInstagramReadinessError(
+  platform: string | null | undefined,
+  integrations: ConnectedIntegrationLike[]
+): string | null {
+  if (platform?.toLowerCase().trim() !== "instagram") return null;
+  const integration = integrations.find((i) => i.platform.toLowerCase() === "instagram");
+  if (!integration || integration.status !== "connected") return null;
+  if (!integration.instagramBusinessAccountId) {
+    return "No Instagram professional account is linked to the connected Facebook Page.";
+  }
+  const perms = Array.isArray(integration.permissions) ? integration.permissions : [];
+  const hasPublishingPermission =
+    perms.includes("instagram_content_publishing") || perms.includes("instagram_content_publish");
+  if (!hasPublishingPermission) {
+    return "Instagram content publishing permission is missing. Reconnect Meta to grant it.";
+  }
+  if (!integration.pageAccessTokenEncrypted) {
+    return "Instagram page token is missing. Reconnect Meta to refresh it.";
+  }
+  return null;
+}
+
+export function isPlatformConfigurable(
+  platform: string | null | undefined,
+  config: PlatformConfigStatusLike | undefined
+): boolean {
+  if (!platform) return true;
+  if (!config) return true;
+  const normalized = platform.toLowerCase().trim();
+  const connectable = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
+  if (!connectable.includes(normalized)) return true;
+  if (normalized === "facebook" || normalized === "instagram") {
+    return config?.metaConfigured === true;
+  }
+  if (normalized === "linkedin") {
+    return config?.linkedinConfigured === true;
+  }
+  return true;
+}
+
+export function getPlatformPublishStatus(
+  platform: string,
+  integrations: ConnectedIntegrationLike[],
+  config: PlatformConfigStatusLike | undefined
+): PlatformPublishStatus {
+  const normalized = platform.toLowerCase().trim();
+
+  if (normalized === "google ads" || normalized === "google_ads") {
+    return "not_supported";
+  }
+
+  const autoPublishPlatforms = ["facebook", "instagram", "linkedin"];
+  const isAutoPublishPlatform = autoPublishPlatforms.includes(normalized);
+  const connected = isPlatformConnected(normalized, integrations);
+  const configurable = isPlatformConfigurable(normalized, config);
+
+  if (isAutoPublishPlatform) {
+    if (connected && configurable) return "connected";
+    if (connected && !configurable) return "manual";
+    return "not_connected";
+  }
+
+  return "manual";
+}
+
+export function getCampaignPlatformStatuses(
+  platformsCsv: string,
+  integrations: ConnectedIntegrationLike[],
+  config: PlatformConfigStatusLike | undefined
+): { platform: string; status: PlatformPublishStatus }[] {
+  const selected = platformsCsv
+    .split(/[,;]+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return selected.map((p) => ({ platform: p, status: getPlatformPublishStatus(p, integrations, config) }));
+}
+
+export function hasConnectedPublishPlatform(
+  statuses: { status: PlatformPublishStatus }[]
+): boolean {
+  return statuses.some((s) => s.status === "connected");
+}
+
+export function buildIntegrationsReturnUrl(campaignId: number | string | null | undefined): string {
+  const base = "/integrations";
+  if (campaignId == null || campaignId === "") return base;
+  return `${base}?returnTo=${encodeURIComponent(`/content?campaignId=${campaignId}`)}`;
+}

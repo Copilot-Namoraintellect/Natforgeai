@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { useSearchParams, Link } from "react-router";
+import { useSearchParams, useNavigate, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -121,6 +121,13 @@ import {
   findLeafletCandidate,
   campaignNeedsRecoveryDecision,
   campaignHasGeneratedContent,
+  isPlatformConnected,
+  isPlatformConfigurable,
+  getInstagramReadinessError,
+  getPlatformPublishStatus,
+  getCampaignPlatformStatuses,
+  hasConnectedPublishPlatform,
+  buildIntegrationsReturnUrl,
   asNumber,
   asString,
 } from "../lib/content-studio/logic";
@@ -428,6 +435,7 @@ function LeafletVersionHistory({ contentPostId, metadata }: { contentPostId: num
 
 export default function ContentStudio() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const urlCampaignId = searchParams.get("campaignId");
   const [createOpen, setCreateOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
@@ -610,7 +618,7 @@ export default function ContentStudio() {
         status: i.status,
         ready: i.ready,
         instagramBusinessAccountId: i.instagramBusinessAccountId,
-        permissions: i.permissions,
+        permissions: i.permissions as unknown[],
         pageAccessTokenEncrypted: i.pageAccessTokenEncrypted,
       })) ?? [],
     [connectedPlatforms]
@@ -750,45 +758,8 @@ export default function ContentStudio() {
     archived: "bg-gray-500/10 text-gray-600 border-gray-200",
   };
 
-  function isPlatformConnected(platform?: string | null) {
-    if (!platform) return false;
-    const connectable = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
-    if (!connectable.includes(platform)) return true;
-    return connectedIntegrations?.some(
-      (i) => i.platform === platform && i.status === "connected" && i.ready
-    );
-  }
-
-  function getInstagramReadinessError(platform?: string | null) {
-    if (platform !== "instagram") return null;
-    const integration = connectedIntegrations?.find((i) => i.platform === "instagram");
-    if (!integration || integration.status !== "connected") return null;
-    if (!integration.instagramBusinessAccountId) {
-      return "No Instagram professional account is linked to the connected Facebook Page.";
-    }
-    const perms = Array.isArray(integration.permissions) ? integration.permissions : [];
-    const hasPublishingPermission =
-      perms.includes("instagram_content_publishing") || perms.includes("instagram_content_publish");
-    if (!hasPublishingPermission) {
-      return "Instagram content publishing permission is missing. Reconnect Meta to grant it.";
-    }
-    if (!integration.pageAccessTokenEncrypted) {
-      return "Instagram page token is missing. Reconnect Meta to refresh it.";
-    }
-    return null;
-  }
-
-  function isPlatformConfigurable(platform?: string | null) {
-    if (!platform) return true;
-    const connectable = ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"];
-    if (!connectable.includes(platform)) return true;
-    if (platform === "facebook" || platform === "instagram") {
-      return platformConfigStatus?.metaConfigured === true;
-    }
-    if (platform === "linkedin") {
-      return platformConfigStatus?.linkedinConfigured === true;
-    }
-    return true;
+  function getInstagramReadinessErrorLocal(platform?: string | null) {
+    return getInstagramReadinessError(platform, connectedIntegrations);
   }
 
   async function generateWithAI() {
@@ -983,7 +954,7 @@ Include:
     }
 
     // Open the campaign-level publish dialog; individual captions are published as part of the pack.
-    const status = getPlatformPublishStatus(content.platform);
+    const status = getPlatformPublishStatus(content.platform, connectedIntegrations, platformConfigStatus);
     if (status === "not_supported") {
       toast.error("Publishing is not supported for this platform yet.");
       return;
@@ -2691,7 +2662,7 @@ Include:
 
   function renderContentActions(content: any) {
     const approved = getApprovalState(content);
-    const connected = isPlatformConnected(content.platform);
+    const connected = isPlatformConnected(content.platform, connectedIntegrations);
     const captionText = getCaptionText(content);
     const platformRequiresConnection = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform);
     const showConnectGuard = platformRequiresConnection && !connected;
@@ -2794,7 +2765,8 @@ Include:
 
   function renderContentCard(content: any) {
     const approved = getApprovalState(content);
-    const showConnectGuard = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform) && !isPlatformConnected(content.platform);
+    const showConnectGuard = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform) && !isPlatformConnected(content.platform, connectedIntegrations);
+    const integrationsUrl = buildIntegrationsReturnUrl(numericCampaignId);
     const isMasterCampaignPost = (content.metadata as any)?.assetKind === "master_campaign_post";
 
     return (
@@ -2942,8 +2914,8 @@ Include:
                   Connect {content.platform} in Integrations to publish automatically, or mark as manually posted.
                 </p>
                 <div className="mt-2 flex gap-2">
-                  {isPlatformConfigurable(content.platform) ? (
-                    <Link to="/integrations">
+                  {isPlatformConfigurable(content.platform, platformConfigStatus) ? (
+                    <Link to={integrationsUrl}>
                       <Button size="sm" variant="outline" className="h-7 text-xs">
                         <ExternalLink className="w-3 h-3 mr-1" />
                         Connect {content.platform}
@@ -3099,35 +3071,12 @@ Include:
 
   type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
-  function getPlatformPublishStatus(platform: string): PlatformPublishStatus {
-    const normalized = platform.toLowerCase().trim();
-
-    if (normalized === "google ads" || normalized === "google_ads") {
-      return "not_supported";
-    }
-
-    const autoPublishPlatforms = ["facebook", "instagram", "linkedin"];
-    const isAutoPublishPlatform = autoPublishPlatforms.includes(normalized);
-    const connected = isPlatformConnected(normalized);
-    const configurable = isPlatformConfigurable(normalized);
-
-    if (isAutoPublishPlatform) {
-      if (connected && configurable) return "connected";
-      if (connected && !configurable) return "manual";
-      return "not_connected";
-    }
-
-    // TikTok, X/Twitter, WhatsApp, Email, Blog, etc.
-    return "manual";
-  }
-
-  function getCampaignPlatformStatuses(): { platform: string; status: PlatformPublishStatus }[] {
-    const raw = campaignForContext?.platforms || "";
-    const selected = raw
-      .split(/[,;]+/)
-      .map((p) => p.trim())
-      .filter(Boolean);
-    return selected.map((p) => ({ platform: p, status: getPlatformPublishStatus(p) }));
+  function getCampaignPlatformStatusesLocal(): { platform: string; status: PlatformPublishStatus }[] {
+    return getCampaignPlatformStatuses(
+      campaignForContext?.platforms || "",
+      connectedIntegrations,
+      platformConfigStatus
+    );
   }
 
   function handlePublishPack() {
@@ -3766,129 +3715,162 @@ Include:
         {/* Publish Dialog */}
         <Dialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
           <DialogContent className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>
-                {isRepublish ? "Confirm Publish Again" : "Confirm Publish to Connected Channels"}
-              </DialogTitle>
-              <DialogDescription>
-                {isRepublish
-                  ? "This campaign is already live. Publishing again will create new posts on the connected platforms below. This action cannot be undone."
-                  : "This will immediately post the approved campaign content to each connected platform below. This action cannot be undone."}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 mt-2">
-              {(() => {
-                const statuses = getCampaignPlatformStatuses();
-                const groups: Record<PlatformPublishStatus, typeof statuses> = {
-                  connected: [],
-                  not_connected: [],
-                  manual: [],
-                  not_supported: [],
-                };
-                for (const s of statuses) groups[s.status].push(s);
+            {(() => {
+              const statuses = getCampaignPlatformStatusesLocal();
+              const groups: Record<PlatformPublishStatus, typeof statuses> = {
+                connected: [],
+                not_connected: [],
+                manual: [],
+                not_supported: [],
+              };
+              for (const s of statuses) groups[s.status].push(s);
+              const hasConnected = hasConnectedPublishPlatform(statuses);
+              const integrationsUrl = buildIntegrationsReturnUrl(numericCampaignId);
 
-                return (
-                  <div className="space-y-3">
-                    {groups.connected.length > 0 && (
-                      <div>
-                        <p className="text-xs font-medium text-emerald-700 uppercase tracking-wide mb-1">Connected</p>
-                        <div className="flex flex-wrap gap-2">
-                          {groups.connected.map((s) => (
-                            <Badge key={s.platform} className="bg-emerald-50 text-emerald-700 border-emerald-200 capitalize">
-                              <CheckCircle2 className="w-3 h-3 mr-1" />
-                              {s.platform}
-                            </Badge>
-                          ))}
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>
+                      {hasConnected
+                        ? isRepublish
+                          ? "Confirm Publish Again"
+                          : "Confirm Publish to Connected Channels"
+                        : isRepublish
+                        ? "Confirm Manual Posting Again"
+                        : "No Platforms Connected"}
+                    </DialogTitle>
+                    <DialogDescription>
+                      {hasConnected
+                        ? isRepublish
+                          ? "This campaign is already live. Publishing again will create new posts on the connected platforms below. This action cannot be undone."
+                          : "This will immediately post the approved campaign content to each connected platform below. This action cannot be undone."
+                        : statuses.length === 0
+                        ? "No publishing channels are selected for this campaign. You can connect platforms now, or continue and mark this campaign pack as ready for manual posting."
+                        : "No publishing platforms are connected yet. You can connect platforms now, or continue and mark this campaign pack as ready for manual posting."}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 mt-2">
+                    <div className="space-y-3">
+                      {!hasConnected && (
+                        <div className="p-3 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                          <p className="font-medium">
+                            {statuses.length === 0 ? "No platforms selected" : "No platforms connected"}
+                          </p>
+                          <p className="text-amber-700/80 mt-0.5">
+                            Connect Facebook, Instagram, LinkedIn or other channels from Integrations, or continue and mark this pack as ready for manual posting.
+                          </p>
                         </div>
-                        <p className="text-xs text-muted-foreground mt-1">These will attempt automatic publishing.</p>
-                      </div>
-                    )}
-                    {groups.not_connected.length > 0 && (
-                      <div>
-                        <p className="text-xs font-medium text-red-700 uppercase tracking-wide mb-1">Not connected</p>
-                        <div className="flex flex-wrap gap-2">
-                          {groups.not_connected.map((s) => (
-                            <Badge key={s.platform} variant="outline" className="text-red-700 border-red-200 bg-red-50 capitalize">
-                              <AlertCircle className="w-3 h-3 mr-1" />
-                              {s.platform}
-                            </Badge>
-                          ))}
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-1">Connect this platform in Integrations to auto-publish, or post manually.</p>
-                        {groups.not_connected.some((s) => getInstagramReadinessError(s.platform)) && (
-                          <div className="mt-2 p-2 rounded-md bg-red-50 border border-red-200 text-xs text-red-700 space-y-1">
-                            {groups.not_connected.map((s) => {
-                              const err = getInstagramReadinessError(s.platform);
-                              return err ? <p key={s.platform}>{err}</p> : null;
-                            })}
+                      )}
+                      {groups.connected.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-emerald-700 uppercase tracking-wide mb-1">Connected</p>
+                          <div className="flex flex-wrap gap-2">
+                            {groups.connected.map((s) => (
+                              <Badge key={s.platform} className="bg-emerald-50 text-emerald-700 border-emerald-200 capitalize">
+                                <CheckCircle2 className="w-3 h-3 mr-1" />
+                                {s.platform}
+                              </Badge>
+                            ))}
                           </div>
+                          <p className="text-xs text-muted-foreground mt-1">These will attempt automatic publishing.</p>
+                        </div>
+                      )}
+                      {groups.not_connected.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-red-700 uppercase tracking-wide mb-1">Not connected</p>
+                          <div className="flex flex-wrap gap-2">
+                            {groups.not_connected.map((s) => (
+                              <Badge key={s.platform} variant="outline" className="text-red-700 border-red-200 bg-red-50 capitalize">
+                                <AlertCircle className="w-3 h-3 mr-1" />
+                                {s.platform}
+                              </Badge>
+                            ))}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">Connect this platform in Integrations to auto-publish, or post manually.</p>
+                          {groups.not_connected.some((s) => getInstagramReadinessErrorLocal(s.platform)) && (
+                            <div className="mt-2 p-2 rounded-md bg-red-50 border border-red-200 text-xs text-red-700 space-y-1">
+                              {groups.not_connected.map((s) => {
+                                const err = getInstagramReadinessErrorLocal(s.platform);
+                                return err ? <p key={s.platform}>{err}</p> : null;
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {groups.manual.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-amber-700 uppercase tracking-wide mb-1">Manual publishing only</p>
+                          <div className="flex flex-wrap gap-2">
+                            {groups.manual.map((s) => (
+                              <Badge key={s.platform} variant="outline" className="text-amber-700 border-amber-200 bg-amber-50 capitalize">
+                                <AlertCircle className="w-3 h-3 mr-1" />
+                                {s.platform}
+                              </Badge>
+                            ))}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">These will be approved and marked as &quot;manually posted&quot;. Copy the content and post on each platform.</p>
+                        </div>
+                      )}
+                      {groups.not_supported.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-slate-700 uppercase tracking-wide mb-1">Not supported yet</p>
+                          <div className="flex flex-wrap gap-2">
+                            {groups.not_supported.map((s) => (
+                              <Badge key={s.platform} variant="outline" className="text-slate-700 border-slate-200 bg-slate-50 capitalize">
+                                <AlertCircle className="w-3 h-3 mr-1" />
+                                {s.platform}
+                              </Badge>
+                            ))}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">Automatic publishing is not available for this platform yet.</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      <Button
+                        variant="outline"
+                        className="flex-1 min-w-[120px]"
+                        onClick={() => setPublishDialogOpen(false)}
+                        disabled={publishCampaignPackMutation.isPending}
+                      >
+                        Cancel
+                      </Button>
+                      {!hasConnected && (
+                        <Button
+                          variant="outline"
+                          className="flex-1 min-w-[140px] border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                          onClick={() => navigate(integrationsUrl)}
+                          disabled={publishCampaignPackMutation.isPending}
+                        >
+                          <ExternalLink className="w-4 h-4 mr-2" />
+                          Set up platforms
+                        </Button>
+                      )}
+                      <Button
+                        className="flex-1 min-w-[140px] bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
+                        onClick={executePublishPack}
+                        disabled={publishCampaignPackMutation.isPending}
+                      >
+                        {publishCampaignPackMutation.isPending ? (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        ) : (
+                          <Upload className="w-4 h-4 mr-2" />
                         )}
-                      </div>
-                    )}
-                    {groups.manual.length > 0 && (
-                      <div>
-                        <p className="text-xs font-medium text-amber-700 uppercase tracking-wide mb-1">Manual publishing only</p>
-                        <div className="flex flex-wrap gap-2">
-                          {groups.manual.map((s) => (
-                            <Badge key={s.platform} variant="outline" className="text-amber-700 border-amber-200 bg-amber-50 capitalize">
-                              <AlertCircle className="w-3 h-3 mr-1" />
-                              {s.platform}
-                            </Badge>
-                          ))}
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-1">These will be approved and marked as &quot;manually posted&quot;. Copy the content and post on each platform.</p>
-                      </div>
-                    )}
-                    {groups.not_supported.length > 0 && (
-                      <div>
-                        <p className="text-xs font-medium text-slate-700 uppercase tracking-wide mb-1">Not supported yet</p>
-                        <div className="flex flex-wrap gap-2">
-                          {groups.not_supported.map((s) => (
-                            <Badge key={s.platform} variant="outline" className="text-slate-700 border-slate-200 bg-slate-50 capitalize">
-                              <AlertCircle className="w-3 h-3 mr-1" />
-                              {s.platform}
-                            </Badge>
-                          ))}
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-1">Automatic publishing is not available for this platform yet.</p>
-                      </div>
-                    )}
-                    {statuses.length === 0 && (
-                      <div className="p-3 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800">
-                        <p className="font-medium">No platforms detected</p>
-                        <p className="text-amber-700/80 mt-0.5">All content will be approved and marked for manual posting.</p>
-                      </div>
-                    )}
+                        {publishCampaignPackMutation.isPending
+                          ? "Publishing..."
+                          : isRepublish
+                          ? hasConnected
+                            ? "Publish again"
+                            : "Post manually again"
+                          : hasConnected
+                          ? "Confirm Publish"
+                          : "Confirm Manual Posting"}
+                      </Button>
+                    </div>
                   </div>
-                );
-              })()}
-              <div className="flex gap-2 pt-2">
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  onClick={() => setPublishDialogOpen(false)}
-                  disabled={publishCampaignPackMutation.isPending}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  className="flex-1 bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
-                  onClick={executePublishPack}
-                  disabled={publishCampaignPackMutation.isPending}
-                >
-                  {publishCampaignPackMutation.isPending ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  ) : (
-                    <Upload className="w-4 h-4 mr-2" />
-                  )}
-                  {publishCampaignPackMutation.isPending
-                    ? "Publishing..."
-                    : isRepublish
-                    ? "Publish again"
-                    : "Confirm Publish"}
-                </Button>
-              </div>
-            </div>
+                </>
+              );
+            })()}
           </DialogContent>
         </Dialog>
       </div>

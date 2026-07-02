@@ -5,6 +5,12 @@ import {
   getCampaignImageAssetUrl,
   getImageUrl,
   findLeafletCandidate,
+  getCampaignPlatformStatuses,
+  hasConnectedPublishPlatform,
+  isPlatformConnected,
+  isPlatformConfigurable,
+  getPlatformPublishStatus,
+  buildIntegrationsReturnUrl,
 } from "./logic";
 
 describe("content-studio logic", () => {
@@ -142,5 +148,67 @@ describe("content-studio logic", () => {
     it("ignores caption pack assets", () => {
       expect(findLeafletCandidate([{ metadata: { assetType: "caption_pack", imageUrl: "x.png" } }])).toBeUndefined();
     });
+  });
+});
+
+
+describe("publishing platform detection", () => {
+  it("detects a connected Facebook integration", () => {
+    expect(isPlatformConnected("facebook", [])).toBe(false);
+    expect(isPlatformConnected("facebook", [{ platform: "facebook", status: "connected", ready: true }])).toBe(true);
+    expect(isPlatformConnected("facebook", [{ platform: "facebook", status: "connected", ready: false }])).toBe(false);
+  });
+
+  it("treats non-connectable platforms as always connected", () => {
+    expect(isPlatformConnected("email", [])).toBe(true);
+    expect(isPlatformConnected("blog", [])).toBe(true);
+  });
+
+  it("checks platform configurability from config status", () => {
+    expect(isPlatformConfigurable("facebook", undefined)).toBe(true);
+    expect(isPlatformConfigurable("facebook", { metaConfigured: false })).toBe(false);
+    expect(isPlatformConfigurable("facebook", { metaConfigured: true })).toBe(true);
+    expect(isPlatformConfigurable("linkedin", { linkedinConfigured: true })).toBe(true);
+  });
+
+  it("classifies platform publish statuses", () => {
+    const connected = [{ platform: "facebook", status: "connected", ready: true }];
+    expect(getPlatformPublishStatus("facebook", connected, { metaConfigured: true })).toBe("connected");
+    expect(getPlatformPublishStatus("facebook", connected, { metaConfigured: false })).toBe("manual");
+    expect(getPlatformPublishStatus("facebook", [], { metaConfigured: true })).toBe("not_connected");
+    expect(getPlatformPublishStatus("instagram", [], undefined)).toBe("not_connected");
+    expect(getPlatformPublishStatus("tiktok", [], undefined)).toBe("manual");
+    expect(getPlatformPublishStatus("google ads", [], undefined)).toBe("not_supported");
+  });
+
+  it("groups campaign platform statuses and detects connected platforms", () => {
+    const statuses = getCampaignPlatformStatuses(
+      "facebook, instagram, tiktok",
+      [{ platform: "facebook", status: "connected", ready: true }],
+      { metaConfigured: true }
+    );
+    expect(statuses).toEqual([
+      { platform: "facebook", status: "connected" },
+      { platform: "instagram", status: "not_connected" },
+      { platform: "tiktok", status: "manual" },
+    ]);
+    expect(hasConnectedPublishPlatform(statuses)).toBe(true);
+  });
+
+  it("returns no connected platforms when none are connected", () => {
+    const statuses = getCampaignPlatformStatuses(
+      "facebook, instagram",
+      [],
+      { metaConfigured: true }
+    );
+    expect(hasConnectedPublishPlatform(statuses)).toBe(false);
+  });
+
+  it("builds integrations URL with returnTo campaign context", () => {
+    expect(buildIntegrationsReturnUrl(28)).toBe(
+      "/integrations?returnTo=%2Fcontent%3FcampaignId%3D28"
+    );
+    expect(buildIntegrationsReturnUrl(null)).toBe("/integrations");
+    expect(buildIntegrationsReturnUrl("")).toBe("/integrations");
   });
 });
