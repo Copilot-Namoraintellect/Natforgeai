@@ -698,8 +698,46 @@ describe("contentRouter.ensurePublishEligibility", () => {
     const approvalInsertSpy = mockDb.insertValuesByTableName.get("approval_requests");
     expect(approvalInsertSpy).toBeUndefined();
   });
-});
 
+  it("draft social_post with ready image and approved launch approval is publishable (does not require metadata.approved)", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const draftPost = {
+      id: 110,
+      userId: 14,
+      campaignId: 23,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: { imageStatus: "ready" },
+    };
+
+    const mockDb = createMockDb({
+      campaign: campaign23,
+      posts: [draftPost],
+      integrations: [facebookIntegration, instagramIntegration],
+      assets: [captionAsset],
+      approvals: [
+        {
+          id: 99,
+          userId: 14,
+          campaignId: 23,
+          approvalType: "campaign_launch",
+          status: "approved",
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtxForCampaign23());
+    const result = await caller.ensurePublishEligibility({ campaignId: 23 });
+
+    expect(result.canPublish).toBe(true);
+    expect(result.unavailableReason).toBe("ready");
+    expect(result.publishablePostCount).toBe(1);
+    expect(result.launchApproved).toBe(true);
+  });
 
   it("generic campaign with connected platform but missing launch approval returns launch approval required (not hardcoded to Campaign #23)", async () => {
     const { getDb } = await import("./queries/connection");
@@ -723,7 +761,7 @@ describe("contentRouter.ensurePublishEligibility", () => {
       type: "social_post",
       platform: "LinkedIn",
       status: "draft",
-      metadata: { approved: true },
+      metadata: { imageStatus: "ready" },
     };
 
     const genericIntegration = {
@@ -749,6 +787,7 @@ describe("contentRouter.ensurePublishEligibility", () => {
 
     expect(result.canPublish).toBe(false);
     expect(result.unavailableReason).toBe("launch_approval_required");
+    expect(result.unavailableReason).not.toBe("no_publishable_content");
     expect(result.unavailableReason).not.toBe("no_connected_platforms");
     expect(result.connectedIntegrationsFound).toBe(1);
     expect(result.publishablePostCount).toBe(1);
@@ -765,3 +804,4 @@ describe("contentRouter.ensurePublishEligibility", () => {
       status: "pending",
     });
   });
+});

@@ -623,11 +623,11 @@ export const contentRouter = createRouter({
         .where(and(eq(approvalRequests.userId, ctx.user.id), eq(approvalRequests.campaignId, input.campaignId)));
 
       const socialPosts = posts.filter((p) => p.type === "social_post");
-      const approvedSocial = socialPosts.filter((p) => {
-        const meta = (p.metadata || {}) as any;
-        return meta.approved === true || p.status === "published";
-      });
-      const publishablePostCount = approvedSocial.length;
+      // A generated social_post is publishable when it is not already published or archived.
+      // publishCampaignPack will auto-approve draft/scheduled posts before queueing them.
+      const publishablePostCount = socialPosts.filter(
+        (p) => p.status !== "published" && p.status !== "archived"
+      ).length;
 
       const postStrategyStates = new Set([
         "strategy_approved",
@@ -664,9 +664,7 @@ export const contentRouter = createRouter({
         | "strategy_approval_required"
         | "launch_approval_required" = "ready";
 
-      if (publishablePostCount === 0) {
-        unavailableReason = "no_publishable_content";
-      } else if (hasAutoPublishPlatform && connectedForCampaign.length === 0) {
+      if (hasAutoPublishPlatform && connectedForCampaign.length === 0) {
         unavailableReason = "no_connected_platforms";
       } else if (!strategyApproved) {
         unavailableReason = "strategy_approval_required";
@@ -694,6 +692,8 @@ export const contentRouter = createRouter({
             });
           }
         }
+      } else if (publishablePostCount === 0) {
+        unavailableReason = "no_publishable_content";
       }
 
       const debug = {
@@ -750,16 +750,22 @@ export const contentRouter = createRouter({
           )
         );
 
-      // Guard: at least one approved social post must exist
+      // Guard: at least one publishable social post must exist. Draft/scheduled posts are
+      // publishable because publishCampaignPack auto-approves them before queueing.
       const socialPosts = posts.filter((p) => p.type === "social_post");
-      const approvedSocial = socialPosts.filter((p) => {
-        const meta = (p.metadata || {}) as any;
-        return meta.approved === true || p.status === "published";
-      });
-      if (approvedSocial.length === 0 && socialPosts.length > 0) {
+      const publishableSocial = socialPosts.filter(
+        (p) => p.status !== "published" && p.status !== "archived"
+      );
+      if (socialPosts.length === 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "At least one social post must be approved before publishing the campaign pack.",
+          message: "At least one social post must exist before publishing the campaign pack.",
+        });
+      }
+      if (publishableSocial.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "All social posts are already published or archived.",
         });
       }
 
