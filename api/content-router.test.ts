@@ -705,10 +705,10 @@ describe("contentRouter.ensurePublishEligibility", () => {
     expect(result.launchApproved).toBe(true);
     expect(result.pendingApprovalCount).toBe(0);
 
-    const fbStatus = result.platformStatuses.find((s) => s.platform.toLowerCase() === "facebook")?.status;
-    const igStatus = result.platformStatuses.find((s) => s.platform.toLowerCase() === "instagram")?.status;
-    expect(fbStatus).toBe("connected");
-    expect(igStatus).toBe("connected");
+    expect(result.platformStatuses).toEqual([
+      { platform: "Facebook", status: "connected" },
+      { platform: "Instagram", status: "connected" },
+    ]);
     expect(result.platformStatuses.some((s) => s.status === "manual")).toBe(false);
 
     const approvalInsertSpy = mockDb.insertValuesByTableName.get("approval_requests");
@@ -754,10 +754,10 @@ describe("contentRouter.ensurePublishEligibility", () => {
     expect(result.publishablePostCount).toBe(1);
     expect(result.launchApproved).toBe(true);
 
-    const fbStatus = result.platformStatuses.find((s) => s.platform.toLowerCase() === "facebook")?.status;
-    const igStatus = result.platformStatuses.find((s) => s.platform.toLowerCase() === "instagram")?.status;
-    expect(fbStatus).toBe("connected");
-    expect(igStatus).toBe("connected");
+    expect(result.platformStatuses).toEqual([
+      { platform: "Facebook", status: "connected" },
+      { platform: "Instagram", status: "connected" },
+    ]);
     expect(result.platformStatuses.some((s) => s.status === "manual")).toBe(false);
   });
 

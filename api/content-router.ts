@@ -769,13 +769,13 @@ export const contentRouter = createRouter({
         pendingApprovalCount,
         publishablePostCount,
         unavailableReason,
+        platformStatuses,
       };
 
       logInfo("[PublishEligibility] Computed publish eligibility", debug);
 
       return {
         canPublish: unavailableReason === "ready",
-        platformStatuses,
         ...debug,
       };
     }),
