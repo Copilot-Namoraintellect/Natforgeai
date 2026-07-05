@@ -546,8 +546,18 @@ describe("contentRouter.publishCampaignPack", () => {
 
 
 describe("contentRouter.ensurePublishEligibility", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    const { isFacebookPublishingReady, isInstagramPublishingReady } = await import("./lib/integrations/platforms");
+    vi.mocked(isFacebookPublishingReady).mockReturnValue(true);
+    vi.mocked(isInstagramPublishingReady).mockReturnValue(true);
+    const { env } = await import("./lib/env");
+    env.metaAppId = "test-meta-app-id";
+    env.metaAppSecret = "test-meta-secret";
+    env.metaRedirectUri = "http://localhost/callback";
+    env.linkedinClientId = "test-linkedin-id";
+    env.linkedinClientSecret = "test-linkedin-secret";
+    env.linkedinRedirectUri = "http://localhost/callback";
   });
 
   const campaign23 = {
@@ -695,6 +705,12 @@ describe("contentRouter.ensurePublishEligibility", () => {
     expect(result.launchApproved).toBe(true);
     expect(result.pendingApprovalCount).toBe(0);
 
+    const fbStatus = result.platformStatuses.find((s) => s.platform.toLowerCase() === "facebook")?.status;
+    const igStatus = result.platformStatuses.find((s) => s.platform.toLowerCase() === "instagram")?.status;
+    expect(fbStatus).toBe("connected");
+    expect(igStatus).toBe("connected");
+    expect(result.platformStatuses.some((s) => s.status === "manual")).toBe(false);
+
     const approvalInsertSpy = mockDb.insertValuesByTableName.get("approval_requests");
     expect(approvalInsertSpy).toBeUndefined();
   });
@@ -737,6 +753,12 @@ describe("contentRouter.ensurePublishEligibility", () => {
     expect(result.unavailableReason).toBe("ready");
     expect(result.publishablePostCount).toBe(1);
     expect(result.launchApproved).toBe(true);
+
+    const fbStatus = result.platformStatuses.find((s) => s.platform.toLowerCase() === "facebook")?.status;
+    const igStatus = result.platformStatuses.find((s) => s.platform.toLowerCase() === "instagram")?.status;
+    expect(fbStatus).toBe("connected");
+    expect(igStatus).toBe("connected");
+    expect(result.platformStatuses.some((s) => s.status === "manual")).toBe(false);
   });
 
   it("generic campaign with connected platform but missing launch approval returns launch approval required (not hardcoded to Campaign #23)", async () => {

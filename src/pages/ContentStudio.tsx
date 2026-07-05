@@ -125,7 +125,6 @@ import {
   isPlatformConfigurable,
   getInstagramReadinessError,
   getPlatformPublishStatus,
-  getCampaignPlatformStatuses,
   hasConnectedPublishPlatform,
   buildIntegrationsReturnUrl,
   getPublishResultToast,
@@ -480,6 +479,7 @@ export default function ContentStudio() {
     launchApproved: boolean;
     pendingApprovalCount: number;
     publishablePostCount: number;
+    platformStatuses: Array<{ platform: string; status: PlatformPublishStatus }>;
   } | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["masterVisual", "masterVideo"]));
   const [selectedIterationId, setSelectedIterationId] = useState<string | null>(null);
@@ -3179,15 +3179,6 @@ Include:
 
   type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
-  function getCampaignPlatformStatusesLocal(): { platform: string; status: PlatformPublishStatus }[] {
-    return getCampaignPlatformStatuses(
-      campaignForContext?.platforms || "",
-      connectedIntegrations,
-      platformConfigStatus,
-      campaignForContext?.businessId ?? null
-    );
-  }
-
   async function handlePublishPack() {
     const publishable = filtered?.filter((c) => c.status !== "published" && c.status !== "archived") || [];
     if (publishable.length === 0) {
@@ -3850,7 +3841,7 @@ Include:
 
               if (!eligibility) return null;
 
-              const statuses = getCampaignPlatformStatusesLocal();
+              const statuses = eligibility.platformStatuses;
               const groups: Record<PlatformPublishStatus, typeof statuses> = {
                 connected: [],
                 not_connected: [],

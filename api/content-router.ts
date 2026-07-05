@@ -16,6 +16,65 @@ import { logInfo, logError } from "./lib/logger";
 import { publishSinglePost } from "./lib/workflow/publishing-runner";
 import { isFacebookPublishingReady, isInstagramPublishingReady } from "./lib/integrations/platforms";
 
+type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
+
+function integrationMatchesBusiness(
+  integrationBusinessId: number | null | undefined,
+  campaignBusinessId: number | null
+): boolean {
+  if (campaignBusinessId == null) return true;
+  if (integrationBusinessId == null) return true;
+  return integrationBusinessId === campaignBusinessId;
+}
+
+function isIntegrationPublishingReady(integration: any, platform: string): boolean {
+  if (integration.status !== "connected") return false;
+  if (platform === "facebook") return isFacebookPublishingReady(integration);
+  if (platform === "instagram") return isInstagramPublishingReady(integration);
+  return true;
+}
+
+function getCampaignPlatformStatusesFromDb(
+  platformsCsv: string,
+  integrations: any[],
+  campaignBusinessId: number | null
+): { platform: string; status: PlatformPublishStatus }[] {
+  const metaConfigured = !!(env.metaAppId && env.metaAppSecret && env.metaRedirectUri);
+  const linkedinConfigured = !!(env.linkedinClientId && env.linkedinClientSecret && env.linkedinRedirectUri);
+
+  const selected = platformsCsv
+    .split(/[,;]+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  return selected.map((platform) => {
+    const normalized = platform.toLowerCase();
+    if (normalized === "google ads" || normalized === "google_ads") {
+      return { platform, status: "not_supported" as PlatformPublishStatus };
+    }
+
+    const autoPublishPlatforms = ["facebook", "instagram", "linkedin"];
+    const isAutoPublish = autoPublishPlatforms.includes(normalized);
+
+    const connected = integrations.some(
+      (i) =>
+        i.platform.toLowerCase() === normalized &&
+        isIntegrationPublishingReady(i, normalized) &&
+        integrationMatchesBusiness(i.businessId, campaignBusinessId)
+    );
+
+    let configurable = true;
+    if (normalized === "facebook" || normalized === "instagram") configurable = metaConfigured;
+    else if (normalized === "linkedin") configurable = linkedinConfigured;
+
+    if (!isAutoPublish) return { platform, status: "manual" as PlatformPublishStatus };
+
+    if (connected && configurable) return { platform, status: "connected" as PlatformPublishStatus };
+    if (connected && !configurable) return { platform, status: "manual" as PlatformPublishStatus };
+    return { platform, status: "not_connected" as PlatformPublishStatus };
+  });
+}
+
 export const contentRouter = createRouter({
   list: authedQuery
     .input(
@@ -696,6 +755,12 @@ export const contentRouter = createRouter({
         unavailableReason = "no_publishable_content";
       }
 
+      const platformStatuses = getCampaignPlatformStatusesFromDb(
+        campaign.platforms || "",
+        integrations,
+        campaignBusinessId
+      );
+
       const debug = {
         campaignId: input.campaignId,
         ctxUserId: ctx.user.id,
@@ -713,6 +778,7 @@ export const contentRouter = createRouter({
 
       return {
         canPublish: unavailableReason === "ready",
+        platformStatuses,
         ...debug,
       };
     }),
