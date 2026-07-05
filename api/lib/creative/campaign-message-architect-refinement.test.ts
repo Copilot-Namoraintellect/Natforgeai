@@ -442,3 +442,10 @@ describe("isDesignOnlyRefinementInstruction", () => {
     expect(isDesignOnlyRefinementInstruction(instruction)).toBe(true);
   });
 });
+
+
+  it("classifies a generic business design-only instruction as design-only (not hardcoded to Campaign #23)", () => {
+    const instruction =
+      "Keep the approved Sparky Pros copy exactly. Do not rewrite the headline, CTA, subheadline, or benefits. Redesign the leaflet only: move the logo to the top-right corner, use a cleaner layout, make the text more readable, and add a compact services section with these labels only: electrical repairs, safety inspections, fault finding, upfront quotes.";
+    expect(isDesignOnlyRefinementInstruction(instruction)).toBe(true);
+  });

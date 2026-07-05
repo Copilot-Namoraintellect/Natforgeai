@@ -699,3 +699,69 @@ describe("contentRouter.ensurePublishEligibility", () => {
     expect(approvalInsertSpy).toBeUndefined();
   });
 });
+
+
+  it("generic campaign with connected platform but missing launch approval returns launch approval required (not hardcoded to Campaign #23)", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const genericCampaign = {
+      id: 99,
+      userId: 55,
+      businessId: 77,
+      status: "draft",
+      workflowState: "creatives_ready",
+      platforms: "LinkedIn",
+      name: "Generic Test Campaign",
+      aiGenerated: true,
+    };
+
+    const genericPost = {
+      id: 201,
+      userId: 55,
+      campaignId: 99,
+      type: "social_post",
+      platform: "LinkedIn",
+      status: "draft",
+      metadata: { approved: true },
+    };
+
+    const genericIntegration = {
+      id: 101,
+      userId: 55,
+      businessId: 77,
+      platform: "linkedin",
+      status: "connected",
+      accountName: "generic-business",
+    };
+
+    const mockDb = createMockDb({
+      campaign: genericCampaign,
+      posts: [genericPost],
+      integrations: [genericIntegration],
+      assets: [{ id: 2, userId: 55, campaignId: 99, assetType: "caption_pack" }],
+      approvals: [],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx(55));
+    const result = await caller.ensurePublishEligibility({ campaignId: 99 });
+
+    expect(result.canPublish).toBe(false);
+    expect(result.unavailableReason).toBe("launch_approval_required");
+    expect(result.unavailableReason).not.toBe("no_connected_platforms");
+    expect(result.connectedIntegrationsFound).toBe(1);
+    expect(result.publishablePostCount).toBe(1);
+    expect(result.campaignUserId).toBe(55);
+    expect(result.businessId).toBe(77);
+
+    const approvalInsertSpy = mockDb.insertValuesByTableName.get("approval_requests");
+    expect(approvalInsertSpy).toHaveBeenCalledTimes(1);
+    const approvalInsert = approvalInsertSpy!.mock.calls[0][0];
+    expect(approvalInsert).toMatchObject({
+      userId: 55,
+      campaignId: 99,
+      approvalType: "campaign_launch",
+      status: "pending",
+    });
+  });
