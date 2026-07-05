@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { approvalRequests, campaigns, contentPosts } from "@db/schema";
-import { eq, and, desc, count } from "drizzle-orm";
+import { approvalRequests, campaigns, contentPosts, socialIntegrations } from "@db/schema";
+import { eq, and, or, desc, count, inArray, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { onApprovalResolved } from "./lib/workflow/triggers";
 import { createApprovalRequest } from "./lib/workflow/engine";
@@ -207,6 +207,65 @@ async function syncPendingApprovals(userId: number) {
           aiRecommendation: "Based on the generated strategy and content, this campaign is ready to go live. Expected reach aligns with budget allocation.",
           riskLevel: "low",
         });
+      }
+    }
+
+    // Repair missing campaign_launch approvals for campaigns that are content-ready
+    // but still in the creatives_ready state (e.g. Campaign #23).
+    if (state === "creatives_ready") {
+      const alreadyHasLaunchRequest = await db
+        .select()
+        .from(approvalRequests)
+        .where(
+          and(
+            eq(approvalRequests.campaignId, campaign.id),
+            eq(approvalRequests.userId, userId),
+            eq(approvalRequests.approvalType, "campaign_launch"),
+            inArray(approvalRequests.status, ["approved", "edited", "pending"])
+          )
+        )
+        .limit(1);
+
+      if (alreadyHasLaunchRequest.length === 0) {
+        const campaignPlatforms = (campaign.platforms || "")
+          .split(/[,;]+/)
+          .map((p) => p.trim().toLowerCase())
+          .filter(Boolean);
+        const autoPublishPlatforms = ["facebook", "instagram", "linkedin", "twitter", "tiktok", "email"];
+
+        const hasConnectedAutoPlatform = await (async () => {
+          const hasAutoPublishPlatform = campaignPlatforms.some((p) => autoPublishPlatforms.includes(p));
+          if (!hasAutoPublishPlatform) return false;
+
+          const campaignBusinessId = campaign.businessId ?? null;
+          const businessFilter =
+            campaignBusinessId == null
+              ? isNull(socialIntegrations.businessId)
+              : or(isNull(socialIntegrations.businessId), eq(socialIntegrations.businessId, campaignBusinessId));
+
+          const connectedIntegrations = await db
+            .select()
+            .from(socialIntegrations)
+            .where(and(eq(socialIntegrations.userId, userId), eq(socialIntegrations.status, "connected"), businessFilter));
+
+          const connectedPlatforms = new Set(connectedIntegrations.map((i) => i.platform));
+          return campaignPlatforms.some(
+            (p) => autoPublishPlatforms.includes(p) && connectedPlatforms.has(p as any)
+          );
+        })();
+
+        if (hasConnectedAutoPlatform) {
+          await createApprovalRequest({
+            userId,
+            campaignId: campaign.id,
+            approvalType: "campaign_launch",
+            title: `Approve Launch: ${campaign.name}`,
+            description: `The campaign "${campaign.name}" is ready to launch. Review and approve the launch to publish to connected channels.`,
+            aiRecommendation: "All strategy and creative assets are ready. Approve the launch to go live.",
+            riskLevel: "low",
+          });
+          console.log(`[ApprovalRepair] Created missing launch approval for creatives_ready campaign ${campaign.id}`);
+        }
       }
     }
   }

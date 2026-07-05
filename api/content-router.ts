@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations } from "@db/schema";
+import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations, approvalRequests } from "@db/schema";
 import { eq, and, or, desc, count, inArray, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
@@ -11,6 +11,7 @@ import {
 } from "./lib/creative/campaign-message-architect";
 import { env } from "./lib/env";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
+import { createApprovalRequest } from "./lib/workflow/engine";
 import { logInfo, logError } from "./lib/logger";
 import { publishSinglePost } from "./lib/workflow/publishing-runner";
 import { isFacebookPublishingReady, isInstagramPublishingReady } from "./lib/integrations/platforms";
@@ -568,6 +569,152 @@ export const contentRouter = createRouter({
           )
         );
       return { success: true };
+    }),
+
+  ensurePublishEligibility: authedQuery
+    .input(z.object({ campaignId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+
+      const [campaign] = await db
+        .select()
+        .from(campaigns)
+        .where(and(eq(campaigns.userId, ctx.user.id), eq(campaigns.id, input.campaignId)))
+        .limit(1);
+
+      if (!campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
+      const campaignBusinessId = campaign.businessId ?? null;
+      const campaignPlatforms = (campaign.platforms || "")
+        .split(/[,;]+/)
+        .map((p) => p.trim().toLowerCase())
+        .filter(Boolean);
+
+      const autoPublishPlatforms = ["facebook", "instagram", "linkedin", "twitter", "tiktok", "email"];
+      const hasAutoPublishPlatform = campaignPlatforms.some((p) => autoPublishPlatforms.includes(p));
+
+      // Load connected integrations scoped to this user and, when known, this business.
+      const businessFilter =
+        campaignBusinessId == null
+          ? isNull(socialIntegrations.businessId)
+          : or(isNull(socialIntegrations.businessId), eq(socialIntegrations.businessId, campaignBusinessId));
+
+      const integrations = await db
+        .select()
+        .from(socialIntegrations)
+        .where(and(eq(socialIntegrations.userId, ctx.user.id), eq(socialIntegrations.status, "connected"), businessFilter));
+
+      const connectedPlatforms = new Set(integrations.map((i) => i.platform));
+      const connectedForCampaign = campaignPlatforms.filter(
+        (p) => autoPublishPlatforms.includes(p) && connectedPlatforms.has(p as any)
+      );
+
+      // Load posts and approvals
+      const posts = await db
+        .select()
+        .from(contentPosts)
+        .where(and(eq(contentPosts.userId, ctx.user.id), eq(contentPosts.campaignId, input.campaignId)));
+
+      const approvals = await db
+        .select()
+        .from(approvalRequests)
+        .where(and(eq(approvalRequests.userId, ctx.user.id), eq(approvalRequests.campaignId, input.campaignId)));
+
+      const socialPosts = posts.filter((p) => p.type === "social_post");
+      const approvedSocial = socialPosts.filter((p) => {
+        const meta = (p.metadata || {}) as any;
+        return meta.approved === true || p.status === "published";
+      });
+      const publishablePostCount = approvedSocial.length;
+
+      const postStrategyStates = new Set([
+        "strategy_approved",
+        "creatives_generating",
+        "creatives_ready",
+        "audience_generating",
+        "audience_ready",
+        "schedule_generated",
+        "launch_approval_required",
+        "campaign_live",
+        "engagement_active",
+        "leads_converting",
+        "optimisation_active",
+        "completed",
+      ]);
+
+      const strategyApproved =
+        postStrategyStates.has(campaign.workflowState) ||
+        approvals.some(
+          (a) => a.approvalType === "strategy_review" && (a.status === "approved" || a.status === "edited")
+        );
+
+      const launchApproved = approvals.some(
+        (a) => a.approvalType === "campaign_launch" && (a.status === "approved" || a.status === "edited")
+      );
+      const pendingApprovalCount = approvals.filter(
+        (a) => a.approvalType === "campaign_launch" && a.status === "pending"
+      ).length;
+
+      let unavailableReason:
+        | "ready"
+        | "no_publishable_content"
+        | "no_connected_platforms"
+        | "strategy_approval_required"
+        | "launch_approval_required" = "ready";
+
+      if (publishablePostCount === 0) {
+        unavailableReason = "no_publishable_content";
+      } else if (hasAutoPublishPlatform && connectedForCampaign.length === 0) {
+        unavailableReason = "no_connected_platforms";
+      } else if (!strategyApproved) {
+        unavailableReason = "strategy_approval_required";
+      } else if (!launchApproved) {
+        unavailableReason = "launch_approval_required";
+        const existingLaunchRequest = approvals.some(
+          (a) => a.approvalType === "campaign_launch" && ["pending", "approved", "edited"].includes(a.status)
+        );
+        if (!existingLaunchRequest) {
+          try {
+            await createApprovalRequest({
+              userId: ctx.user.id,
+              campaignId: input.campaignId,
+              approvalType: "campaign_launch",
+              title: `Approve Launch: ${campaign.name}`,
+              description: `The campaign "${campaign.name}" is ready to launch. Review and approve the launch to publish to connected channels.`,
+              aiRecommendation: "All strategy and creative assets are ready. Approve the launch to go live.",
+              riskLevel: "low",
+            });
+          } catch (err: any) {
+            logError("[PublishEligibility] Failed to create launch approval request", {
+              campaignId: input.campaignId,
+              userId: ctx.user.id,
+              error: err.message,
+            });
+          }
+        }
+      }
+
+      const debug = {
+        campaignId: input.campaignId,
+        ctxUserId: ctx.user.id,
+        campaignUserId: campaign.userId,
+        businessId: campaignBusinessId,
+        connectedIntegrationsFound: integrations.length,
+        strategyApproved,
+        launchApproved,
+        pendingApprovalCount,
+        publishablePostCount,
+        unavailableReason,
+      };
+
+      logInfo("[PublishEligibility] Computed publish eligibility", debug);
+
+      return {
+        canPublish: unavailableReason === "ready",
+        ...debug,
+      };
     }),
 
   publishCampaignPack: authedQuery

@@ -78,6 +78,7 @@ interface MockDbConfig {
   integrations?: Record<string, unknown>[];
   queue?: Record<string, unknown>[];
   assets?: Record<string, unknown>[];
+  approvals?: Record<string, unknown>[];
   insertId?: number;
 }
 
@@ -88,6 +89,7 @@ function createMockDb({
   integrations = [],
   queue = [],
   assets = [],
+  approvals = [],
   insertId = 123,
 }: MockDbConfig = {}): MockDb & {
   insertValuesSpies: Map<unknown, ReturnType<typeof vi.fn>>;
@@ -130,6 +132,8 @@ function createMockDb({
       limitResult = queue;
     } else if (tableName === "campaign_assets") {
       limitResult = assets;
+    } else if (tableName === "approval_requests") {
+      limitResult = approvals;
     }
 
     return makeChainable(limitResult);
@@ -537,5 +541,161 @@ describe("contentRouter.publishCampaignPack", () => {
     const inserted = insertValuesSpy!.mock.calls[0][0];
     expect(inserted.status).toBe("failed");
     expect(inserted.lastError).toContain("Instagram publishing is not ready");
+  });
+});
+
+
+describe("contentRouter.ensurePublishEligibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const campaign23 = {
+    id: 23,
+    userId: 14,
+    businessId: 20,
+    status: "draft",
+    workflowState: "creatives_ready",
+    platforms: "Facebook, Instagram",
+    name: "3@1 Newmarket Campaign",
+    aiGenerated: true,
+  };
+
+  const approvedPost = {
+    id: 108,
+    userId: 14,
+    campaignId: 23,
+    type: "social_post",
+    platform: "Instagram",
+    status: "draft",
+    metadata: { approved: true },
+  };
+
+  const captionAsset = {
+    id: 1,
+    userId: 14,
+    campaignId: 23,
+    assetType: "caption_adaptation",
+  };
+
+  const facebookIntegration = {
+    id: 9,
+    userId: 14,
+    businessId: 20,
+    platform: "facebook",
+    status: "connected",
+    accountName: "3at1newmarketmall",
+    pageId: "fb-page-123",
+    pageAccessTokenEncrypted: "encrypted-token",
+    permissions: ["pages_manage_posts"],
+  };
+
+  const instagramIntegration = {
+    id: 10,
+    userId: 14,
+    businessId: 20,
+    platform: "instagram",
+    status: "connected",
+    accountName: "3at1newmarketmall",
+    instagramBusinessAccountId: "ig-123",
+    pageAccessTokenEncrypted: "encrypted-token",
+    permissions: ["instagram_content_publishing"],
+  };
+
+  function buildCtxForCampaign23() {
+    return buildCtx(14);
+  }
+
+  it("Campaign #23 with connected FB/IG but missing campaign_launch approval returns launch approval required and creates the approval", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({
+      campaign: campaign23,
+      posts: [approvedPost],
+      integrations: [facebookIntegration, instagramIntegration],
+      assets: [captionAsset],
+      approvals: [],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtxForCampaign23());
+    const result = await caller.ensurePublishEligibility({ campaignId: 23 });
+
+    expect(result.canPublish).toBe(false);
+    expect(result.unavailableReason).toBe("launch_approval_required");
+    expect(result.unavailableReason).not.toBe("no_connected_platforms");
+    expect(result.connectedIntegrationsFound).toBe(2);
+    expect(result.publishablePostCount).toBe(1);
+    expect(result.strategyApproved).toBe(true);
+    expect(result.launchApproved).toBe(false);
+
+    const approvalInsertSpy = mockDb.insertValuesByTableName.get("approval_requests");
+    expect(approvalInsertSpy).toHaveBeenCalledTimes(1);
+    const approvalInsert = approvalInsertSpy!.mock.calls[0][0];
+    expect(approvalInsert).toMatchObject({
+      userId: 14,
+      campaignId: 23,
+      approvalType: "campaign_launch",
+      status: "pending",
+      riskLevel: "low",
+    });
+  });
+
+  it("returns no_connected_platforms when there are no connected integrations", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({
+      campaign: campaign23,
+      posts: [approvedPost],
+      integrations: [],
+      assets: [captionAsset],
+      approvals: [],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtxForCampaign23());
+    const result = await caller.ensurePublishEligibility({ campaignId: 23 });
+
+    expect(result.canPublish).toBe(false);
+    expect(result.unavailableReason).toBe("no_connected_platforms");
+    expect(result.connectedIntegrationsFound).toBe(0);
+
+    const approvalInsertSpy = mockDb.insertValuesByTableName.get("approval_requests");
+    expect(approvalInsertSpy).toBeUndefined();
+  });
+
+  it("returns ready when an approved campaign_launch approval exists", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({
+      campaign: campaign23,
+      posts: [approvedPost],
+      integrations: [facebookIntegration, instagramIntegration],
+      assets: [captionAsset],
+      approvals: [
+        {
+          id: 99,
+          userId: 14,
+          campaignId: 23,
+          approvalType: "campaign_launch",
+          status: "approved",
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtxForCampaign23());
+    const result = await caller.ensurePublishEligibility({ campaignId: 23 });
+
+    expect(result.canPublish).toBe(true);
+    expect(result.unavailableReason).toBe("ready");
+    expect(result.launchApproved).toBe(true);
+    expect(result.pendingApprovalCount).toBe(0);
+
+    const approvalInsertSpy = mockDb.insertValuesByTableName.get("approval_requests");
+    expect(approvalInsertSpy).toBeUndefined();
   });
 });
