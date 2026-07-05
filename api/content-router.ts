@@ -18,61 +18,25 @@ import { isFacebookPublishingReady, isInstagramPublishingReady } from "./lib/int
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
-function integrationMatchesBusiness(
-  integrationBusinessId: number | null | undefined,
-  campaignBusinessId: number | null
-): boolean {
-  if (campaignBusinessId == null) return true;
-  if (integrationBusinessId == null) return true;
-  return integrationBusinessId === campaignBusinessId;
+function toDisplayPlatformName(platform: string): string {
+  if (!platform) return platform;
+  return platform.charAt(0).toUpperCase() + platform.slice(1).toLowerCase();
 }
 
-function isIntegrationPublishingReady(integration: any, platform: string): boolean {
-  if (integration.status !== "connected") return false;
-  if (platform === "facebook") return isFacebookPublishingReady(integration);
-  if (platform === "instagram") return isInstagramPublishingReady(integration);
-  return true;
-}
-
-function getCampaignPlatformStatusesFromDb(
-  platformsCsv: string,
-  integrations: any[],
-  campaignBusinessId: number | null
+function buildPlatformStatusesFromIntegrations(
+  integrations: any[]
 ): { platform: string; status: PlatformPublishStatus }[] {
-  const metaConfigured = !!(env.metaAppId && env.metaAppSecret && env.metaRedirectUri);
-  const linkedinConfigured = !!(env.linkedinClientId && env.linkedinClientSecret && env.linkedinRedirectUri);
+  const seen = new Set<string>();
+  const statuses: { platform: string; status: PlatformPublishStatus }[] = [];
 
-  const selected = platformsCsv
-    .split(/[,;]+/)
-    .map((p) => p.trim())
-    .filter(Boolean);
+  for (const integration of integrations) {
+    const normalized = String(integration.platform || "").trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    statuses.push({ platform: toDisplayPlatformName(normalized), status: "connected" });
+  }
 
-  return selected.map((platform) => {
-    const normalized = platform.toLowerCase();
-    if (normalized === "google ads" || normalized === "google_ads") {
-      return { platform, status: "not_supported" as PlatformPublishStatus };
-    }
-
-    const autoPublishPlatforms = ["facebook", "instagram", "linkedin"];
-    const isAutoPublish = autoPublishPlatforms.includes(normalized);
-
-    const connected = integrations.some(
-      (i) =>
-        i.platform.toLowerCase() === normalized &&
-        isIntegrationPublishingReady(i, normalized) &&
-        integrationMatchesBusiness(i.businessId, campaignBusinessId)
-    );
-
-    let configurable = true;
-    if (normalized === "facebook" || normalized === "instagram") configurable = metaConfigured;
-    else if (normalized === "linkedin") configurable = linkedinConfigured;
-
-    if (!isAutoPublish) return { platform, status: "manual" as PlatformPublishStatus };
-
-    if (connected && configurable) return { platform, status: "connected" as PlatformPublishStatus };
-    if (connected && !configurable) return { platform, status: "manual" as PlatformPublishStatus };
-    return { platform, status: "not_connected" as PlatformPublishStatus };
-  });
+  return statuses;
 }
 
 export const contentRouter = createRouter({
@@ -646,13 +610,6 @@ export const contentRouter = createRouter({
       }
 
       const campaignBusinessId = campaign.businessId ?? null;
-      const campaignPlatforms = (campaign.platforms || "")
-        .split(/[,;]+/)
-        .map((p) => p.trim().toLowerCase())
-        .filter(Boolean);
-
-      const autoPublishPlatforms = ["facebook", "instagram", "linkedin", "twitter", "tiktok", "email"];
-      const hasAutoPublishPlatform = campaignPlatforms.some((p) => autoPublishPlatforms.includes(p));
 
       // Load connected integrations scoped to this user and, when known, this business.
       const businessFilter =
@@ -665,13 +622,10 @@ export const contentRouter = createRouter({
         .from(socialIntegrations)
         .where(and(eq(socialIntegrations.userId, ctx.user.id), eq(socialIntegrations.status, "connected"), businessFilter));
 
-      const platformStatuses = getCampaignPlatformStatusesFromDb(
-        campaign.platforms || "",
-        integrations,
-        campaignBusinessId
-      );
-      const connectedPlatformCount = platformStatuses.filter((s) => s.status === "connected").length;
-      const hasConnectedAutoPublishPlatform = connectedPlatformCount > 0;
+      // Build platform statuses directly from the actual connected integrations returned for
+      // this campaign/business/user. This must never be empty when integrations were found.
+      const platformStatuses = buildPlatformStatusesFromIntegrations(integrations);
+      const hasConnectedPlatformStatus = platformStatuses.some((p) => p.status === "connected");
 
       // Load posts and approvals
       const posts = await db
@@ -726,7 +680,11 @@ export const contentRouter = createRouter({
         | "strategy_approval_required"
         | "launch_approval_required" = "ready";
 
-      if (hasAutoPublishPlatform && !hasConnectedAutoPublishPlatform) {
+      if (integrations.length > 0 && platformStatuses.length === 0) {
+        // Defensive guard: integrations were found but we could not build any usable platform
+        // status. This is the production failure mode we must never report as "ready".
+        unavailableReason = "no_connected_platforms";
+      } else if (!hasConnectedPlatformStatus) {
         unavailableReason = "no_connected_platforms";
       } else if (!strategyApproved) {
         unavailableReason = "strategy_approval_required";
@@ -758,7 +716,8 @@ export const contentRouter = createRouter({
         unavailableReason = "no_publishable_content";
       }
 
-      const debug = {
+      const response = {
+        canPublish: unavailableReason === "ready",
         campaignId: input.campaignId,
         ctxUserId: ctx.user.id,
         campaignUserId: campaign.userId,
@@ -772,12 +731,9 @@ export const contentRouter = createRouter({
         platformStatuses,
       };
 
-      logInfo("[PublishEligibility] Computed publish eligibility", debug);
+      logInfo("[PublishEligibility] Computed publish eligibility", response);
 
-      return {
-        canPublish: unavailableReason === "ready",
-        ...debug,
-      };
+      return response;
     }),
 
   publishCampaignPack: authedQuery

@@ -826,4 +826,70 @@ describe("contentRouter.ensurePublishEligibility", () => {
       status: "pending",
     });
   });
+
+  it("does not return ready when connectedIntegrationsFound > 0 but platformStatuses is empty (production guard)", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({
+      campaign: campaign23,
+      posts: [approvedPost],
+      integrations: [
+        { ...facebookIntegration, platform: "" },
+        { ...instagramIntegration, platform: "" },
+      ],
+      assets: [captionAsset],
+      approvals: [
+        {
+          id: 99,
+          userId: 14,
+          campaignId: 23,
+          approvalType: "campaign_launch",
+          status: "approved",
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtxForCampaign23());
+    const result = await caller.ensurePublishEligibility({ campaignId: 23 });
+
+    expect(result.connectedIntegrationsFound).toBe(2);
+    expect(result.platformStatuses).toEqual([]);
+    expect(result.unavailableReason).not.toBe("ready");
+    expect(result.canPublish).toBe(false);
+  });
+
+  it("returns the exact ready payload with connected Facebook and Instagram platform statuses", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({
+      campaign: campaign23,
+      posts: [approvedPost],
+      integrations: [facebookIntegration, instagramIntegration],
+      assets: [captionAsset],
+      approvals: [
+        {
+          id: 99,
+          userId: 14,
+          campaignId: 23,
+          approvalType: "campaign_launch",
+          status: "approved",
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtxForCampaign23());
+    const result = await caller.ensurePublishEligibility({ campaignId: 23 });
+
+    expect(result.canPublish).toBe(true);
+    expect(result.unavailableReason).toBe("ready");
+    expect(result.platformStatuses).toEqual([
+      { platform: "Facebook", status: "connected" },
+      { platform: "Instagram", status: "connected" },
+    ]);
+    expect(result.platformStatuses.some((s) => s.status === "connected")).toBe(true);
+  });
 });
