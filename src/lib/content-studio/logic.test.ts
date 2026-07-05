@@ -13,6 +13,7 @@ import {
   buildIntegrationsReturnUrl,
   getPublishResultToast,
   getLeafletActions,
+  getPublishDialogButtonLabel,
 } from "./logic";
 
 describe("content-studio logic", () => {
@@ -416,5 +417,53 @@ describe("getLeafletActions", () => {
     const actions = getLeafletActions({ isFailed: true });
     expect(actions.failure).toEqual(["tryAgain", "safeTemplate", "contactSupport"]);
     expect(actions.advanced).toEqual([]);
+  });
+});
+
+describe("getPublishDialogButtonLabel", () => {
+  it("returns Confirm Publish when ready and connected platforms exist", () => {
+    const label = getPublishDialogButtonLabel({
+      isPending: false,
+      unavailableReason: "ready",
+      isRepublish: false,
+    });
+    expect(label).toBe("Confirm Publish");
+    expect(label).not.toBe("Confirm Manual Posting");
+  });
+
+  it("returns Publish again when ready and republishing", () => {
+    const label = getPublishDialogButtonLabel({
+      isPending: false,
+      unavailableReason: "ready",
+      isRepublish: true,
+    });
+    expect(label).toBe("Publish again");
+    expect(label).not.toBe("Post manually again");
+  });
+
+  it("never returns Confirm Manual Posting for a ready campaign", () => {
+    const reasons: Array<"ready" | "no_publishable_content" | "strategy_approval_required" | "launch_approval_required"> = [
+      "ready",
+      "no_publishable_content",
+      "strategy_approval_required",
+      "launch_approval_required",
+    ];
+    for (const unavailableReason of reasons) {
+      const label = getPublishDialogButtonLabel({
+        isPending: false,
+        unavailableReason,
+        isRepublish: false,
+      });
+      expect(label).not.toBe("Confirm Manual Posting");
+    }
+  });
+
+  it("returns Confirm Manual Posting only for no_connected_platforms", () => {
+    const label = getPublishDialogButtonLabel({
+      isPending: false,
+      unavailableReason: "no_connected_platforms",
+      isRepublish: false,
+    });
+    expect(label).toBe("Confirm Manual Posting");
   });
 });

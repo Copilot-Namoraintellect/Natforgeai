@@ -665,10 +665,13 @@ export const contentRouter = createRouter({
         .from(socialIntegrations)
         .where(and(eq(socialIntegrations.userId, ctx.user.id), eq(socialIntegrations.status, "connected"), businessFilter));
 
-      const connectedPlatforms = new Set(integrations.map((i) => i.platform));
-      const connectedForCampaign = campaignPlatforms.filter(
-        (p) => autoPublishPlatforms.includes(p) && connectedPlatforms.has(p as any)
+      const platformStatuses = getCampaignPlatformStatusesFromDb(
+        campaign.platforms || "",
+        integrations,
+        campaignBusinessId
       );
+      const connectedPlatformCount = platformStatuses.filter((s) => s.status === "connected").length;
+      const hasConnectedAutoPublishPlatform = connectedPlatformCount > 0;
 
       // Load posts and approvals
       const posts = await db
@@ -723,7 +726,7 @@ export const contentRouter = createRouter({
         | "strategy_approval_required"
         | "launch_approval_required" = "ready";
 
-      if (hasAutoPublishPlatform && connectedForCampaign.length === 0) {
+      if (hasAutoPublishPlatform && !hasConnectedAutoPublishPlatform) {
         unavailableReason = "no_connected_platforms";
       } else if (!strategyApproved) {
         unavailableReason = "strategy_approval_required";
@@ -754,12 +757,6 @@ export const contentRouter = createRouter({
       } else if (publishablePostCount === 0) {
         unavailableReason = "no_publishable_content";
       }
-
-      const platformStatuses = getCampaignPlatformStatusesFromDb(
-        campaign.platforms || "",
-        integrations,
-        campaignBusinessId
-      );
 
       const debug = {
         campaignId: input.campaignId,

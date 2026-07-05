@@ -521,3 +521,36 @@ export function buildIntegrationsReturnUrl(campaignId: number | string | null | 
   if (campaignId == null || campaignId === "") return base;
   return `${base}?returnTo=${encodeURIComponent(`/content?campaignId=${campaignId}`)}`;
 }
+
+
+export type PublishEligibilityUnavailableReason =
+  | "ready"
+  | "no_publishable_content"
+  | "no_connected_platforms"
+  | "strategy_approval_required"
+  | "launch_approval_required";
+
+export function getPublishDialogButtonLabel({
+  isPending,
+  unavailableReason,
+  isRepublish,
+}: {
+  isPending: boolean;
+  unavailableReason: PublishEligibilityUnavailableReason;
+  isRepublish: boolean;
+}): string {
+  if (isPending) return "Publishing...";
+
+  // When the backend says ready, we always publish to connected channels.
+  // "Confirm Manual Posting" is only allowed for the explicit no-platforms path.
+  if (unavailableReason === "ready") {
+    return isRepublish ? "Publish again" : "Confirm Publish";
+  }
+
+  if (unavailableReason === "no_connected_platforms") {
+    return isRepublish ? "Post manually again" : "Confirm Manual Posting";
+  }
+
+  // Approval-required or contract-error states should not trigger a publish action.
+  return "Confirm Publish";
+}

@@ -125,8 +125,8 @@ import {
   isPlatformConfigurable,
   getInstagramReadinessError,
   getPlatformPublishStatus,
-  hasConnectedPublishPlatform,
   buildIntegrationsReturnUrl,
+  getPublishDialogButtonLabel,
   getPublishResultToast,
   getLeafletActions,
   asNumber,
@@ -3849,7 +3849,6 @@ Include:
                 not_supported: [],
               };
               for (const s of statuses) groups[s.status].push(s);
-              const hasConnected = hasConnectedPublishPlatform(statuses);
               const integrationsUrl = buildIntegrationsReturnUrl(numericCampaignId);
 
               const platformGroups = (
@@ -3996,6 +3995,31 @@ Include:
               }
 
               const isNoConnected = eligibility.unavailableReason === "no_connected_platforms";
+              const hasConnected = statuses.some((s) => s.status === "connected");
+
+
+              // Contract safety: a ready response must include at least one connected platform.
+              if (eligibility.unavailableReason === "ready" && !hasConnected) {
+                return (
+                  <>
+                    <DialogHeader>
+                      <DialogTitle>Connected platform data missing</DialogTitle>
+                      <DialogDescription>
+                        The server reported the campaign is ready but did not return any connected platforms. Please refresh and try again.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="flex flex-wrap gap-2 pt-4">
+                      <Button
+                        variant="outline"
+                        className="flex-1 min-w-[120px]"
+                        onClick={() => setPublishDialogOpen(false)}
+                      >
+                        Close
+                      </Button>
+                    </div>
+                  </>
+                );
+              }
 
               return (
                 <>
@@ -4057,15 +4081,11 @@ Include:
                         ) : (
                           <Upload className="w-4 h-4 mr-2" />
                         )}
-                        {publishCampaignPackMutation.isPending
-                          ? "Publishing..."
-                          : isRepublish
-                          ? hasConnected
-                            ? "Publish again"
-                            : "Post manually again"
-                          : hasConnected
-                          ? "Confirm Publish"
-                          : "Confirm Manual Posting"}
+                        {getPublishDialogButtonLabel({
+                          isPending: publishCampaignPackMutation.isPending,
+                          unavailableReason: eligibility.unavailableReason,
+                          isRepublish,
+                        })}
                       </Button>
                     </div>
                   </div>
