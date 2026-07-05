@@ -12,6 +12,7 @@ import {
   getPlatformPublishStatus,
   buildIntegrationsReturnUrl,
   getPublishResultToast,
+  getLeafletActions,
 } from "./logic";
 
 describe("content-studio logic", () => {
@@ -361,5 +362,59 @@ describe("publish result toast messages", () => {
     const toast = getPublishResultToast({ publishedCount: 0, failedCount: 0, skippedCount: 0 });
     expect(toast.type).toBe("error");
     expect(toast.message).toBe("Publishing failed. Check platform connections and try again.");
+  });
+});
+
+describe("getLeafletActions", () => {
+  it("shows a primary generate action when no leaflet exists", () => {
+    const actions = getLeafletActions({});
+    expect(actions.primary.action).toBe("generate");
+    expect(actions.secondary).toBeUndefined();
+    expect(actions.failure).toEqual([]);
+  });
+
+  it("shows a primary improve action and download secondary when a leaflet is ready", () => {
+    const actions = getLeafletActions({ imageUrl: "https://example.com/leaflet.png" });
+    expect(actions.primary.action).toBe("improve");
+    expect(actions.secondary?.action).toBe("download");
+    expect(actions.advanced).toContain("basicDraft");
+    expect(actions.advanced).toContain("internalTemplate");
+    expect(actions.advanced).toContain("viewHistory");
+  });
+
+  it("includes regenerate with AI only when OpenAI is configured", () => {
+    const withoutAi = getLeafletActions({ imageUrl: "https://example.com/leaflet.png" });
+    expect(withoutAi.advanced).not.toContain("regenerateAi");
+
+    const withAi = getLeafletActions({
+      imageUrl: "https://example.com/leaflet.png",
+      openAiConfigured: true,
+    });
+    expect(withAi.advanced).toContain("regenerateAi");
+  });
+
+  it("includes apply layout changes only when a refinement instruction is present", () => {
+    const noInstruction = getLeafletActions({ imageUrl: "https://example.com/leaflet.png" });
+    expect(noInstruction.advanced).not.toContain("applyLayoutChanges");
+
+    const withInstruction = getLeafletActions({
+      imageUrl: "https://example.com/leaflet.png",
+      hasRefinementInstruction: true,
+    });
+    expect(withInstruction.advanced).toContain("applyLayoutChanges");
+  });
+
+  it("disables the primary action when a logo is required but missing", () => {
+    const actions = getLeafletActions({ hasLogo: false, allowNoLogo: false });
+    expect(actions.primary.disabled).toBe(true);
+
+    const allowed = getLeafletActions({ hasLogo: false, allowNoLogo: true });
+    expect(allowed.primary.disabled).toBe(false);
+  });
+
+  it("shows failure actions when generation failed", () => {
+    const actions = getLeafletActions({ isFailed: true });
+    expect(actions.failure).toEqual(["tryAgain", "safeTemplate", "contactSupport"]);
+    expect(actions.advanced).toEqual([]);
   });
 });

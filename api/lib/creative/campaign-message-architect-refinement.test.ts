@@ -9,7 +9,12 @@ vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
 }));
 
-import { refineApprovedMessagePack, parseStructuredRefinementInstruction, type CampaignMessagePack } from "./campaign-message-architect";
+import {
+  refineApprovedMessagePack,
+  parseStructuredRefinementInstruction,
+  isDesignOnlyRefinementInstruction,
+  type CampaignMessagePack,
+} from "./campaign-message-architect";
 
 function createMockDb({ runAgentOutput }: { runAgentOutput?: any } = {}) {
   return {
@@ -397,5 +402,37 @@ CTA: Request a Quote
     expect(refined.validation.passed).toBe(true);
     expect(refined.headline).toBe("Centurion electrical repairs for busy homeowners");
     expect(refined.cta).toBe("Request a Quote");
+  });
+});
+
+describe("isDesignOnlyRefinementInstruction", () => {
+  it("returns true for layout-only instructions", () => {
+    expect(isDesignOnlyRefinementInstruction("Move logo to top-right and make text bigger")).toBe(true);
+    expect(isDesignOnlyRefinementInstruction("Use a darker background and cleaner layout")).toBe(true);
+    expect(isDesignOnlyRefinementInstruction("Add more spacing")).toBe(true);
+  });
+
+  it("treats service labels and compact services sections as design-only", () => {
+    expect(
+      isDesignOnlyRefinementInstruction("Add a compact services section with service labels")
+    ).toBe(true);
+    expect(isDesignOnlyRefinementInstruction("Show services as labels only")).toBe(true);
+  });
+
+  it("treats copy-preservation + layout changes as design-only", () => {
+    const instruction =
+      "Keep the approved campaign copy and CTA. Remove the title, move the logo to the top-right, add a compact services section.";
+    expect(isDesignOnlyRefinementInstruction(instruction)).toBe(true);
+  });
+
+  it("returns false when the user explicitly asks to rewrite copy", () => {
+    expect(isDesignOnlyRefinementInstruction("Change the headline to something punchier")).toBe(false);
+    expect(isDesignOnlyRefinementInstruction("Rewrite the CTA")).toBe(false);
+    expect(isDesignOnlyRefinementInstruction("Update the benefits")).toBe(false);
+  });
+
+  it("returns false for unstructured copy-only requests", () => {
+    expect(isDesignOnlyRefinementInstruction("Make the copy more urgent")).toBe(false);
+    expect(isDesignOnlyRefinementInstruction("Improve the wording")).toBe(false);
   });
 });

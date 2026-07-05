@@ -129,6 +129,7 @@ import {
   hasConnectedPublishPlatform,
   buildIntegrationsReturnUrl,
   getPublishResultToast,
+  getLeafletActions,
   asNumber,
   asString,
 } from "../lib/content-studio/logic";
@@ -329,7 +330,7 @@ function LeafletVersionHistory({ contentPostId, metadata }: { contentPostId: num
   });
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+    <div id={`leaflet-version-history-${contentPostId}`} className="rounded-lg border border-slate-200 bg-white overflow-hidden">
       <button
         type="button"
         className="w-full px-3 py-2.5 flex items-center justify-between bg-slate-50 hover:bg-slate-100 transition-colors"
@@ -1493,8 +1494,6 @@ Include:
     const isGeneratingPremium = isPending(content.id, "premium");
     const isGenerating = imageStatus === "generating" || isGeneratingBasic || isGeneratingPremium;
     const isPremiumReady = premiumTemplateStatus?.ready === true;
-    const isBasicDraftAsset =
-      displayMeta?.imageSource === "draft" || (displayMeta?.imageCreditsCharged ?? 0) === 0;
     const isFailed = imageStatus === "failed";
     const isReady = !!imageUrl;
     const imageLoading = loadingImageIds.has(content.id);
@@ -1563,6 +1562,30 @@ Include:
         allowNoLogo,
         forceRegenerate: !!refinementInstruction.trim() || strongerBrandFit,
       });
+
+    const handleImproveLeaflet = () => {
+      if (openAiLeafletStatus?.configured) {
+        generatePremiumAi(false);
+      } else {
+        generatePremiumInternal(false);
+      }
+    };
+    const handleApplyLayoutChanges = () => generateBasicDraft();
+    const handleUseBasicDraft = () => generateBasicDraft();
+    const handleUseInternalTemplate = () => generatePremiumInternal(false);
+    const handleRegenerateWithAi = () => generatePremiumAi(false);
+    const handleTryAgain = () => handleImproveLeaflet();
+    const handleSafeTemplate = () => generatePremiumInternal(false);
+
+    const leafletActions = getLeafletActions({
+      imageUrl,
+      isFailed,
+      hasLogo: !!businessForLeaflet?.logo,
+      allowNoLogo,
+      openAiConfigured: !!openAiLeafletStatus?.configured,
+      hasRefinementInstruction: !!refinementInstruction.trim(),
+      isGenerating,
+    });
 
     const statusBadge = () => {
       if (isGenerating || imageLoading) {
@@ -1871,24 +1894,30 @@ Include:
                   </p>
                 )}
                 <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
-                  <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white" onClick={() => generateBasicDraft()} disabled={isGenerating}>
-                    {isGeneratingBasic ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-                    Retry Basic Draft
+                  <Button
+                    size="sm"
+                    className="bg-red-600 hover:bg-red-700 text-white"
+                    onClick={handleTryAgain}
+                    disabled={isGenerating}
+                  >
+                    {isGenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                    Try Again
                   </Button>
-                  <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremiumAi(false)} disabled={isGenerating || !openAiLeafletStatus?.configured}>
-                    {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                    Retry Premium AI
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-red-300 text-red-700 hover:bg-red-50"
+                    onClick={handleSafeTemplate}
+                    disabled={isGenerating}
+                  >
+                    Use Safe Template
                   </Button>
-                  <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremiumInternal(false)} disabled={isGenerating}>
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Retry Internal
-                  </Button>
-                  {isPremiumReady && (
-                    <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-50" onClick={() => generatePremiumExternal(false)} disabled={isGenerating}>
-                      <Sparkles className="w-4 h-4 mr-2" />
-                      Retry External
-                    </Button>
-                  )}
+                  <a
+                    href="mailto:support@natforgeai.com?subject=Leaflet%20generation%20failed"
+                    className="text-xs text-red-700 underline hover:text-red-800"
+                  >
+                    Contact Support
+                  </a>
                 </div>
               </div>
             ) : isReady ? (
@@ -1931,22 +1960,7 @@ Include:
                     console.error(`[PremiumLeaflet] Failed to load image preview | contentPostId=${content.id} | url=${imageUrl}`);
                   }}
                 />
-                <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    className="h-8 text-[11px]"
-                    onClick={() => {
-                      const a = document.createElement("a");
-                      a.href = imageUrl;
-                      a.download = `${content.title || "campaign"}-image.${displayMeta?.imageExtension || "png"}`;
-                      a.click();
-                    }}
-                  >
-                    <ExternalLink className="w-3 h-3 mr-1" />
-                    Download Leaflet
-                  </Button>
-                </div>
+
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 flex flex-col items-center min-h-[380px] px-6 py-8">
@@ -1954,8 +1968,7 @@ Include:
                   <Image className="w-12 h-12 text-slate-300 mb-3 mx-auto" />
                   <p className="text-base font-medium text-slate-800">Marketing leaflet not created yet</p>
                   <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                    Generate a Premium AI Leaflet ({aiCost} credits) for a polished, customer-ready visual, or start with a Basic Draft (0 credits) for a quick preview.
-                    {isPremiumReady && ` External provider premium is also available (${externalCost} credits).`}
+                    Generate a polished, customer-ready marketing leaflet. No credits are deducted until the image is ready.
                   </p>
                 </div>
 
@@ -2055,46 +2068,78 @@ Include:
                     />
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-center gap-3">
+                  <div className="space-y-3">
                     <Button
                       size="sm"
-                      variant="outline"
-                      className="border-slate-300 text-slate-700 hover:bg-slate-50"
-                      onClick={() => generateBasicDraft()}
-                      disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
+                      className="w-full h-9 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white"
+                      onClick={handleImproveLeaflet}
+                      disabled={leafletActions.primary.disabled}
                     >
-                      {isGeneratingBasic ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Image className="w-4 h-4 mr-2" />}
-                      Generate Basic Draft — 0 credits
+                      {isGenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                      {leafletActions.primary.action === "generate"
+                        ? `Generate Leaflet — ${openAiLeafletStatus?.configured ? aiCost : internalCost} credits`
+                        : "Improve Leaflet"}
                     </Button>
-                    <Button
-                      size="sm"
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                      onClick={() => generatePremiumAi(false)}
-                      disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo) || !openAiLeafletStatus?.configured}
-                    >
-                      {isGeneratingPremium ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                      Generate Premium AI Leaflet — {aiCost} credits
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => generatePremiumInternal(false)}
-                      disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
-                    >
-                      <Sparkles className="w-4 h-4 mr-2" />
-                      Internal Premium — {internalCost} credits
-                    </Button>
-                    {isPremiumReady && (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => generatePremiumExternal(false)}
-                        disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
-                      >
-                        <Sparkles className="w-4 h-4 mr-2" />
-                        External Provider — {externalCost} credits
-                      </Button>
-                    )}
+
+                    <Collapsible className="w-full">
+                      <CollapsibleTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="w-full h-8 text-[11px] text-slate-600 hover:text-slate-800 hover:bg-slate-100"
+                        >
+                          Advanced Options
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="space-y-2 pt-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                          onClick={handleUseBasicDraft}
+                          disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
+                        >
+                          <Image className="w-3.5 h-3.5 mr-1.5" />
+                          Use Basic Draft — 0 credits
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                          onClick={handleUseInternalTemplate}
+                          disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
+                        >
+                          <LayoutTemplate className="w-3.5 h-3.5 mr-1.5" />
+                          Use Internal Template — {internalCost} credits
+                        </Button>
+                        {openAiLeafletStatus?.configured && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                            onClick={handleRegenerateWithAi}
+                            disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
+                          >
+                            <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                            Regenerate with AI — {aiCost} credits
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                          onClick={() =>
+                            document
+                              .getElementById(`leaflet-version-history-${content.id}`)
+                              ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                          }
+                        >
+                          <History className="w-3.5 h-3.5 mr-1.5" />
+                          View Version History
+                        </Button>
+                      </CollapsibleContent>
+                    </Collapsible>
                   </div>
                 </div>
               </div>
@@ -2276,10 +2321,10 @@ Include:
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-semibold text-purple-900 flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                    {isBasicDraftAsset ? "Design Refinement" : "Premium Refinement"}
+                    Refine Leaflet
                   </h4>
                   <Badge variant="outline" className="text-[10px] h-5">
-                    {internalCost} credits
+                    {openAiLeafletStatus?.configured ? aiCost : internalCost} credits
                   </Badge>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
@@ -2300,34 +2345,46 @@ Include:
                   ))}
                 </div>
                 <Textarea
-                  placeholder="Tell the AI what to change, e.g. 'Use a darker background and put more emphasis on the courier service'"
+                  placeholder="Tell the AI what to change, e.g. 'Move the logo to the top-right and make the text bigger'"
                   className="min-h-[72px] text-xs"
                   value={refinementInstruction}
                   onChange={(e) =>
                     setRefinementById((prev) => ({ ...prev, [content.id]: e.target.value }))
                   }
                 />
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex-1 min-w-[140px] h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
-                    onClick={() => generateBasicDraft()}
-                    disabled={isGenerating || !refinementInstruction.trim()}
-                  >
-                    {isGeneratingBasic ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
-                    Design Refinement
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="flex-1 min-w-[140px] h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
-                    onClick={() => generatePremiumAi(true)}
-                    disabled={isGenerating || !refinementInstruction.trim() || !openAiLeafletStatus?.configured}
-                  >
-                    {isGeneratingPremium ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
-                    Premium AI + Stronger Brand Fit
-                  </Button>
-                </div>
+                <Button
+                  size="sm"
+                  className="w-full h-8 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white"
+                  onClick={handleImproveLeaflet}
+                  disabled={isGenerating || !refinementInstruction.trim() || (!businessForLeaflet?.logo && !allowNoLogo)}
+                >
+                  {isGenerating ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
+                  Improve Leaflet
+                </Button>
+                <Collapsible className="w-full">
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="w-full h-8 text-[11px] text-slate-600 hover:text-slate-800 hover:bg-slate-100"
+                    >
+                      Advanced Options
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="pt-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                      onClick={handleApplyLayoutChanges}
+                      disabled={isGenerating || !refinementInstruction.trim() || (!businessForLeaflet?.logo && !allowNoLogo)}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                      Apply Layout Changes
+                    </Button>
+                  </CollapsibleContent>
+                </Collapsible>
               </div>
             )}
 
@@ -2347,38 +2404,72 @@ Include:
                   Download Leaflet
                 </Button>
               )}
-              {openAiLeafletStatus?.configured === false && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-left">
-                  <p className="text-xs text-red-800 font-medium flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                    OpenAI API key is missing.
-                  </p>
-                  <p className="text-[11px] text-red-700 mt-1 ml-6">
-                    Premium AI leaflet generation is disabled. Add OPENAI_API_KEY to your environment variables, or use Internal Premium as a fallback.
-                  </p>
-                </div>
-              )}
-              {(isReady || isFailed) && !isGenerating && (
-                <>
-                  <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generateBasicDraft()} disabled={isGenerating}>
-                    {isGeneratingBasic ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Image className="w-3.5 h-3.5 mr-1.5" />}
-                    Regenerate Basic Draft
-                  </Button>
-                  <Button size="sm" className="w-full h-8 text-[12px] bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generatePremiumAi(false)} disabled={isGenerating || !openAiLeafletStatus?.configured}>
-                    {isGeneratingPremium ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
-                    Regenerate Premium AI Leaflet
-                  </Button>
-                  <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generatePremiumInternal(false)} disabled={isGenerating}>
-                    <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                    Regenerate Internal Premium
-                  </Button>
-                  {isPremiumReady && (
-                    <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => generatePremiumExternal(false)} disabled={isGenerating}>
-                      <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                      Regenerate External Premium
+              {isReady && !isGenerating && (
+                <Collapsible className="w-full">
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="w-full h-8 text-[11px] text-slate-600 hover:text-slate-800 hover:bg-slate-100"
+                    >
+                      Advanced Options
                     </Button>
-                  )}
-                </>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="space-y-2 pt-2">
+                    {leafletActions.advanced.includes("basicDraft") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                        onClick={handleUseBasicDraft}
+                        disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
+                      >
+                        <Image className="w-3.5 h-3.5 mr-1.5" />
+                        Use Basic Draft — 0 credits
+                      </Button>
+                    )}
+                    {leafletActions.advanced.includes("internalTemplate") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                        onClick={handleUseInternalTemplate}
+                        disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
+                      >
+                        <LayoutTemplate className="w-3.5 h-3.5 mr-1.5" />
+                        Use Internal Template — {internalCost} credits
+                      </Button>
+                    )}
+                    {leafletActions.advanced.includes("regenerateAi") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                        onClick={handleRegenerateWithAi}
+                        disabled={isGenerating || (!businessForLeaflet?.logo && !allowNoLogo)}
+                      >
+                        <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                        Regenerate with AI — {aiCost} credits
+                      </Button>
+                    )}
+                    {leafletActions.advanced.includes("viewHistory") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full h-8 text-[11px] border-slate-300 text-slate-700 hover:bg-slate-50"
+                        onClick={() =>
+                          document
+                            .getElementById(`leaflet-version-history-${content.id}`)
+                            ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                        }
+                      >
+                        <History className="w-3.5 h-3.5 mr-1.5" />
+                        View Version History
+                      </Button>
+                    )}
+                  </CollapsibleContent>
+                </Collapsible>
               )}
               {!captionPack && !isGenerating && (
                 <Button

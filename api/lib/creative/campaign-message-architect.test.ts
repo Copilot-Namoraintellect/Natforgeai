@@ -450,6 +450,28 @@ describe("validateCampaignCopy", () => {
     );
     expect(result.warnings.some((w) => w.includes("any business"))).toBe(true);
   });
+
+  it.each([
+    { headline: "The best choice for your brand", phrase: "your brand" },
+    { headline: "We help your business grow", phrase: "your business" },
+    { headline: "Transform your brand today", phrase: "transform your brand" },
+  ])("rejects placeholder language: $phrase", ({ headline, phrase }) => {
+    const bad = pack({
+      headline,
+      subheadline: "Unlock success with our revolutionary service.",
+      benefitBullets: ["Quality service", "Professional team", "Great results"],
+      cta: "Learn more",
+    });
+    const result = validateCampaignCopy(bad, ctx());
+    expect(result.passed).toBe(false);
+    expect(
+      result.rejections.some(
+        (r) =>
+          r.toLowerCase().includes(phrase.toLowerCase()) ||
+          r.toLowerCase().includes("placeholder")
+      )
+    ).toBe(true);
+  });
 });
 
 // ─── CTA expectations ───

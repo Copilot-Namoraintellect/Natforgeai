@@ -258,6 +258,81 @@ export function getActiveGenerationRunId(
   return asString(getContentMeta(latestReady).generationRunId) || null;
 }
 
+// ─── Leaflet action buttons ───
+
+export type LeafletPrimaryAction = "generate" | "improve";
+export type LeafletAdvancedAction =
+  | "basicDraft"
+  | "internalTemplate"
+  | "regenerateAi"
+  | "applyLayoutChanges"
+  | "viewHistory";
+export type LeafletFailureAction = "tryAgain" | "safeTemplate" | "contactSupport";
+
+export interface LeafletActions {
+  primary: { action: LeafletPrimaryAction; disabled: boolean };
+  secondary?: { action: "download"; disabled: boolean };
+  advanced: LeafletAdvancedAction[];
+  failure: LeafletFailureAction[];
+}
+
+export function getLeafletActions(opts: {
+  imageUrl?: string | null;
+  isFailed?: boolean;
+  hasLogo?: boolean;
+  allowNoLogo?: boolean;
+  openAiConfigured?: boolean;
+  hasRefinementInstruction?: boolean;
+  isGenerating?: boolean;
+}): LeafletActions {
+  const {
+    imageUrl,
+    isFailed = false,
+    hasLogo = true,
+    allowNoLogo = false,
+    openAiConfigured = false,
+    hasRefinementInstruction = false,
+    isGenerating = false,
+  } = opts;
+
+  const logoBlocked = !hasLogo && !allowNoLogo;
+  const primaryDisabled = isGenerating || logoBlocked;
+
+  // Failure state takes precedence.
+  if (isFailed) {
+    return {
+      primary: { action: "improve", disabled: primaryDisabled },
+      advanced: [],
+      failure: ["tryAgain", "safeTemplate", "contactSupport"],
+    };
+  }
+
+  const isReady = !!imageUrl;
+
+  const advanced: LeafletAdvancedAction[] = [
+    "basicDraft",
+    "internalTemplate",
+    ...(openAiConfigured ? (["regenerateAi"] as const) : []),
+    ...(hasRefinementInstruction ? (["applyLayoutChanges"] as const) : []),
+    "viewHistory",
+  ];
+
+  if (!isReady) {
+    return {
+      primary: { action: "generate", disabled: primaryDisabled },
+      advanced,
+      failure: [],
+    };
+  }
+
+  return {
+    primary: { action: "improve", disabled: primaryDisabled },
+    secondary: { action: "download", disabled: false },
+    advanced,
+    failure: [],
+  };
+}
+
 export type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
 export interface ConnectedIntegrationLike {

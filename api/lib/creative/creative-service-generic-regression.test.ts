@@ -350,3 +350,189 @@ describe("generatePremiumLeaflet generic regression", () => {
     expect(best?.headline).toBe(specificPack.headline);
   });
 });
+
+const campaign23SpecificPack: CampaignMessagePack = {
+  headline: "Printing, Courier and Business Services in Alberton",
+  subheadline:
+    "Get wall canvas prints, large format printing, courier services, flyers, banners, posters, business cards and custom printing from 3@1 Newmarket.",
+  benefitBullets: [
+    "Print marketing material, posters, banners and business cards for your next promotion.",
+    "Create wall canvas prints, photo prints and large format displays for home or business use.",
+    "Send documents and parcels with convenient courier services from 3@1 Newmarket.",
+  ],
+  cta: "Request a Quote from 3@1 Newmarket",
+  footerContact: { location: "Alberton" },
+  platformCaptions: [],
+  validation: { passed: true, score: 95, rejections: [], warnings: [] },
+  messagePackSource: "manual_restore",
+};
+
+const campaign23GenericPack: CampaignMessagePack = {
+  headline: "Elevate Your Brand with Tailored Printing and Courier Solutions",
+  subheadline: "Transform your brand with our revolutionary service.",
+  benefitBullets: ["Quality service", "Professional team", "Great results"],
+  cta: "Learn more",
+  footerContact: { location: "Alberton" },
+  platformCaptions: [],
+  validation: { passed: true, score: 60, rejections: [], warnings: [] },
+  messagePackSource: "ai_refined_pack",
+};
+
+function createMockDbForCampaign23() {
+  return {
+    select: vi.fn(() => ({
+      from: vi.fn((table: any) => {
+        const tableName = (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string;
+        const rowsByTable: Record<string, any[]> = {
+          content_posts: [
+            {
+              id: 100,
+              userId: 10,
+              campaignId: 23,
+              title: "3@1 Leaflet",
+              hook: "Fast printing and courier services in Alberton",
+              cta: "Request a Quote",
+              platform: "Instagram",
+              metadata: {},
+            },
+          ],
+          campaigns: [
+            {
+              id: 23,
+              userId: 10,
+              businessId: 31,
+              name: "3@1 Newmarket Campaign",
+              productOrService: "Printing, courier and business services",
+              targetBuyer: "Small businesses and households in Alberton",
+              mainPainPoint: "Finding reliable printing and courier services locally",
+              offerDetails: null,
+              excludedOffers: null,
+              preferredCta: "Request a Quote",
+              platforms: "Instagram, Facebook",
+              primaryOutcome: null,
+              coreMessage: null,
+              workflowContext: {},
+            },
+          ],
+          businesses: [
+            {
+              id: 31,
+              userId: 10,
+              name: "3@1 Newmarket",
+              displayName: "3@1 Newmarket",
+              logo: "https://example.com/3at1-logo.png",
+              industry: "Print and courier services",
+              location: "Alberton",
+              websiteEvidence: {
+                businessCategory: "Print, Copy & Courier Services",
+                productsServices: [
+                  "Wall canvas prints",
+                  "Large format printing",
+                  "Courier services",
+                  "Flyers",
+                  "Banners",
+                  "Posters",
+                  "Business cards",
+                  "Custom printing",
+                ],
+                targetCustomers: ["Small businesses", "Households in Alberton"],
+              },
+            },
+          ],
+          generated_images: [],
+          campaign_assets: [
+            {
+              id: 3,
+              metadata: {
+                approvedMessagePack: campaign23GenericPack,
+                messagePackSource: campaign23GenericPack.messagePackSource,
+                isGeneric: true,
+                specificityScore: 15,
+              },
+              createdAt: new Date("2026-07-02T00:00:00Z"),
+            },
+            {
+              id: 2,
+              metadata: {
+                approvedMessagePack: campaign23SpecificPack,
+                messagePackSource: campaign23SpecificPack.messagePackSource,
+                isGeneric: false,
+                specificityScore: 110,
+              },
+              createdAt: new Date("2026-07-01T00:00:00Z"),
+            },
+          ],
+        };
+        const rows = rowsByTable[tableName] || [];
+        return {
+          where: vi.fn(() => ({
+            then: (resolve: (value: any[]) => void) => resolve(rows),
+            limit: vi.fn(async () => rows),
+            orderBy: vi.fn(() => ({ limit: vi.fn(async () => rows) })),
+          })),
+        };
+      }),
+    })),
+    insert: vi.fn(() => ({ values: vi.fn(async () => [{ insertId: 1 }]) })),
+    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => []) })) })),
+  };
+}
+
+describe("Campaign #23 regression", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    renderMock.mockClear();
+  });
+
+  it("design-only instruction mentioning service labels preserves the 3@1 approved pack", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const db = createMockDbForCampaign23();
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const instruction =
+      "Keep the approved campaign copy and CTA. Remove the title, move the logo to the top-right, add a compact services section.";
+
+    const result = await generatePremiumLeaflet({
+      userId: 10,
+      contentPostId: 100,
+      provider: "internal",
+      refinementInstruction: instruction,
+    });
+
+    expect(result.status).toBe("completed");
+
+    // LLM copy refinement must not be invoked.
+    expect(architect.refineApprovedMessagePack).not.toHaveBeenCalled();
+
+    const renderReq = renderMock.mock.calls[0][0];
+    expect(renderReq.headline).toBe(campaign23SpecificPack.headline);
+    expect(renderReq.subheadline).toBe(campaign23SpecificPack.subheadline);
+    expect(renderReq.cta).toBe(campaign23SpecificPack.cta);
+    expect(renderReq.services).toEqual(campaign23SpecificPack.benefitBullets);
+
+    const inputs = JSON.stringify(renderReq).toLowerCase();
+    expect(inputs).not.toContain("your brand");
+    expect(inputs).not.toContain("your business");
+    expect(inputs).not.toContain("transform your brand");
+    expect(inputs).not.toContain("elevate your brand");
+  });
+
+  it("selects the specific 3@1 approved pack over a newer generic AI-refined pack", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const db = createMockDbForCampaign23();
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const result = await generatePremiumLeaflet({
+      userId: 10,
+      contentPostId: 100,
+      provider: "internal",
+    });
+
+    expect(result.status).toBe("completed");
+
+    const renderReq = renderMock.mock.calls[0][0];
+    expect(renderReq.headline).toBe(campaign23SpecificPack.headline);
+    expect(renderReq.cta).toBe(campaign23SpecificPack.cta);
+    expect(renderReq.services).toEqual(campaign23SpecificPack.benefitBullets);
+  });
+});

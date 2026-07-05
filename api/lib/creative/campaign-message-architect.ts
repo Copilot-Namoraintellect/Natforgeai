@@ -1289,17 +1289,125 @@ const COPY_SECTION_KEYWORDS = [
   "trust signals",
 ];
 
+// Strong visual/layout phrases that should force a design-only classification
+// even if the instruction also mentions copy words such as "keep the copy".
+const DESIGN_OVERRIDE_KEYWORDS = [
+  "move logo",
+  "move the logo",
+  "logo to the top",
+  "logo top",
+  "top-right",
+  "top right",
+  "remove title",
+  "remove the title",
+  "remove headline",
+  "remove the headline",
+  "hide title",
+  "hide the title",
+  "hide business name",
+  "hide sub-headline",
+  "hide subheadline",
+  "remove sub-headline",
+  "remove subheadline",
+  "add services section",
+  "add a services section",
+  "add service labels",
+  "service labels",
+  "services as labels",
+  "compact services",
+  "compact service",
+  "cleaner layout",
+  "cleaner service grid",
+  "simpler background",
+  "more whitespace",
+  "more white space",
+  "darker background",
+  "brighter colours",
+  "brighter colors",
+  "center offer",
+  "centre offer",
+];
+
+// Phrases that make it clear the user wants to keep the existing copy.
+const COPY_PRESERVATION_PHRASES = [
+  "keep the approved",
+  "keep approved",
+  "keep the copy",
+  "keep copy",
+  "keep the headline",
+  "keep headline",
+  "keep the subheadline",
+  "keep subheadline",
+  "keep the cta",
+  "keep cta",
+  "keep the benefits",
+  "keep benefits",
+  "do not change",
+  "do not rewrite",
+  "don't change",
+  "don't rewrite",
+  "preserve the",
+  "preserve approved",
+  "same copy",
+  "same headline",
+  "same cta",
+  "same benefits",
+];
+
+// Explicit rewrite requests that should prevent design-only classification.
+const COPY_INTENT_KEYWORDS = [
+  "rewrite",
+  "change the headline",
+  "change headline",
+  "new headline",
+  "different headline",
+  "update the headline",
+  "change the cta",
+  "change cta",
+  "new cta",
+  "different cta",
+  "update the cta",
+  "change the subheadline",
+  "change subheadline",
+  "new subheadline",
+  "update the subheadline",
+  "update the copy",
+  "update copy",
+  "reword",
+  "re-word",
+  "make the headline",
+  "make the cta",
+  "make the subheadline",
+  "write a new",
+  "new copy",
+];
+
 /**
  * Detect whether a refinement instruction is purely about visual/design/style
- * and does not attempt to change copy fields.
+ * and should not trigger a copy rewrite.
+ *
+ * Instructions that preserve copy ("keep the approved copy") while asking for
+ * layout changes ("move the logo", "remove the title", "add service labels")
+ * are treated as design-only.
  */
 export function isDesignOnlyRefinementInstruction(instruction: string): boolean {
   if (!instruction || typeof instruction !== "string") return false;
   const lower = instruction.toLowerCase();
 
-  // If the user names explicit copy sections, treat it as structured/mixed.
+  // Explicit copy-rewrite intent always takes precedence.
+  const hasCopyIntent = COPY_INTENT_KEYWORDS.some((kw) => lower.includes(kw));
+  if (hasCopyIntent) return false;
+
+  // Strong layout/visual instructions force design-only mode, even when the
+  // user mentions copy words such as "keep the approved copy".
+  const hasDesignOverride = DESIGN_OVERRIDE_KEYWORDS.some((kw) => lower.includes(kw));
+  if (hasDesignOverride) return true;
+
+  // If the user names explicit copy sections but also preserves existing copy,
+  // it is still a design/layout request rather than a rewrite request.
   const hasCopySection = COPY_SECTION_KEYWORDS.some((kw) => lower.includes(kw));
-  if (hasCopySection) return false;
+  const hasPreservation = COPY_PRESERVATION_PHRASES.some((kw) => lower.includes(kw));
+  if (hasCopySection && !hasPreservation) return false;
 
   const hasDesignKeyword = DESIGN_ONLY_KEYWORDS.some((kw) => lower.includes(kw));
   return hasDesignKeyword;
