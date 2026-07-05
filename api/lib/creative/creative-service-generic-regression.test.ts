@@ -535,4 +535,152 @@ describe("Campaign #23 regression", () => {
     expect(renderReq.cta).toBe(campaign23SpecificPack.cta);
     expect(renderReq.services).toEqual(campaign23SpecificPack.benefitBullets);
   });
+
+  it("preserves the exact Campaign #23 approved pack for the real design-only instruction", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const db = createMockDbForCampaign23();
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const instruction =
+      "Keep the approved 3@1 Newmarket copy exactly. Do not rewrite the headline, CTA, subheadline, or benefits. Redesign the leaflet only: remove the \"3@1Newmarket Marketing Campaign\" title from the design, move the logo to the top-right corner, use a cleaner premium layout, make the text more readable, and add a compact services section with these labels only: wall canvas prints, large format prints, courier services, business cards, flyers, banners, posters, and custom printing.";
+
+    const result = await generatePremiumLeaflet({
+      userId: 10,
+      contentPostId: 100,
+      provider: "internal",
+      refinementInstruction: instruction,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(architect.refineApprovedMessagePack).not.toHaveBeenCalled();
+
+    const renderReq = renderMock.mock.calls[0][0];
+    expect(renderReq.headline).toBe(campaign23SpecificPack.headline);
+    expect(renderReq.cta).toBe(campaign23SpecificPack.cta);
+    expect(renderReq.services).toEqual(campaign23SpecificPack.benefitBullets);
+
+    const inputs = JSON.stringify(renderReq).toLowerCase();
+    expect(inputs).not.toContain("your brand");
+    expect(inputs).not.toContain("transform your brand");
+    expect(inputs).not.toContain("elevate your brand");
+  });
+
+  it("does not reuse a stale image when the approved message pack has changed", async () => {
+    const { getDb } = await import("../../queries/connection");
+
+    // Mock DB with an existing premium image rendered from the old generic pack
+    // and a newer, manually restored specific pack.
+    const rowsByTable: Record<string, any[]> = {
+      content_posts: [
+        {
+          id: 100,
+          userId: 10,
+          campaignId: 23,
+          title: "3@1 Leaflet",
+          hook: "Fast printing and courier services in Alberton",
+          cta: "Request a Quote",
+          platform: "Instagram",
+          metadata: {},
+        },
+      ],
+      campaigns: [
+        {
+          id: 23,
+          userId: 10,
+          businessId: 31,
+          name: "3@1 Newmarket Campaign",
+          productOrService: "Printing, courier and business services",
+          targetBuyer: "Small businesses and households in Alberton",
+          mainPainPoint: "Finding reliable printing and courier services locally",
+          offerDetails: null,
+          excludedOffers: null,
+          preferredCta: "Request a Quote",
+          platforms: "Instagram, Facebook",
+          primaryOutcome: null,
+          coreMessage: null,
+          workflowContext: {},
+        },
+      ],
+      businesses: [
+        {
+          id: 31,
+          userId: 10,
+          name: "3@1 Newmarket",
+          displayName: "3@1 Newmarket",
+          logo: "https://example.com/3at1-logo.png",
+          industry: "Print and courier services",
+          location: "Alberton",
+          websiteEvidence: {
+            businessCategory: "Print, Copy & Courier Services",
+            productsServices: ["Wall canvas prints", "Large format printing", "Courier services", "Flyers", "Banners", "Posters", "Business cards", "Custom printing"],
+            targetCustomers: ["Small businesses", "Households in Alberton"],
+          },
+        },
+      ],
+      generated_images: [
+        {
+          id: 900,
+          url: "https://cdn.example.com/old-generic-leaflet.png",
+          provider: "internal",
+          providerJobId: "old-job",
+          createdAt: new Date("2026-07-01T00:00:00Z"),
+          metadata: {
+            assetTier: "premium",
+            approvedMessagePack: campaign23GenericPack,
+          },
+        },
+      ],
+      campaign_assets: [
+        {
+          id: 3,
+          metadata: {
+            approvedMessagePack: campaign23GenericPack,
+            messagePackSource: campaign23GenericPack.messagePackSource,
+            isGeneric: true,
+            specificityScore: 15,
+          },
+          createdAt: new Date("2026-07-02T00:00:00Z"),
+        },
+        {
+          id: 2,
+          metadata: {
+            approvedMessagePack: campaign23SpecificPack,
+            messagePackSource: campaign23SpecificPack.messagePackSource,
+            isGeneric: false,
+            specificityScore: 110,
+          },
+          createdAt: new Date("2026-07-03T00:00:00Z"),
+        },
+      ],
+    };
+
+    vi.mocked(getDb).mockReturnValue({
+      select: vi.fn(() => ({
+        from: vi.fn((table: any) => ({
+          where: vi.fn(() => ({
+            then: (resolve: (value: any[]) => void) => resolve(rowsByTable[(table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string] || []),
+            limit: vi.fn(async () => rowsByTable[(table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string] || []),
+            orderBy: vi.fn(() => ({ limit: vi.fn(async () => rowsByTable[(table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string] || []) })),
+          })),
+        })),
+      })),
+      insert: vi.fn(() => ({ values: vi.fn(async () => [{ insertId: 1 }]) })),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => []) })) })),
+    } as any);
+
+    const result = await generatePremiumLeaflet({
+      userId: 10,
+      contentPostId: 100,
+      provider: "internal",
+    });
+
+    expect(result.status).toBe("completed");
+    // A new render must be invoked; the old image must not be returned.
+    expect(renderMock).toHaveBeenCalledTimes(1);
+    expect(result.imageUrl).not.toBe("https://cdn.example.com/old-generic-leaflet.png");
+
+    const renderReq = renderMock.mock.calls[0][0];
+    expect(renderReq.headline).toBe(campaign23SpecificPack.headline);
+    expect(renderReq.cta).toBe(campaign23SpecificPack.cta);
+  });
 });

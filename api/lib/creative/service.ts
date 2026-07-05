@@ -41,6 +41,8 @@ import { validateAiLeafletQuality, qualityTierLabel, type LeafletQualityResult }
 import {
   ensureApprovedMessagePack,
   loadApprovedMessagePack,
+  loadAllApprovedMessagePacks,
+  selectBestApprovedMessagePack,
   saveApprovedMessagePack,
   validateCampaignCopy,
   parseStructuredRefinementInstruction,
@@ -609,10 +611,31 @@ export async function generatePremiumLeaflet({
       iterationNumber,
     });
 
+    // If the approved message pack has changed since the existing image was
+    // rendered, never reuse the old image (e.g. after restoring a better pack).
+    const allApproved = existingImage ? await loadAllApprovedMessagePacks(post.campaignId) : [];
+    const bestApprovedItem = allApproved.length
+      ? allApproved.find((i) => i.pack === selectBestApprovedMessagePack(allApproved))
+      : undefined;
+    const bestApprovedCreatedAt = bestApprovedItem?.createdAt;
+    const imagePack = (existingImage?.metadata as any)?.approvedMessagePack;
+    const packHeadlineChanged =
+      !!imagePack &&
+      (!existingPack ||
+        imagePack.headline !== existingPack.headline ||
+        imagePack.cta !== existingPack.cta);
+    const packAssetNewerThanImage =
+      !!existingImage &&
+      !!bestApprovedCreatedAt &&
+      Number(bestApprovedCreatedAt) > Number(new Date(existingImage.createdAt || 0));
+    const approvedPackChanged =
+      packHeadlineChanged || packAssetNewerThanImage;
+
     const canReuseExisting =
       !isExplicitRegenerate &&
       !hasRefinementInstruction &&
-      !strongerBrandFit;
+      !strongerBrandFit &&
+      !approvedPackChanged;
 
     if (canReuseExisting && existingPack?.validation?.passed && existingImage) {
       const meta = existingImage.metadata as any;
@@ -672,7 +695,8 @@ export async function generatePremiumLeaflet({
 
     if (existingImage) {
       let reuseSkippedReason: string;
-      if (hasRefinementInstruction) reuseSkippedReason = "refinement_instruction_present";
+      if (approvedPackChanged) reuseSkippedReason = "approved_message_pack_changed";
+      else if (hasRefinementInstruction) reuseSkippedReason = "refinement_instruction_present";
       else if (strongerBrandFit) reuseSkippedReason = "stronger_brand_fit";
       else if (isExplicitRegenerate) reuseSkippedReason = "force_regenerate";
       else reuseSkippedReason = "template_or_settings_changed";
@@ -888,6 +912,8 @@ export async function generatePremiumLeaflet({
               ? "ai_refined_pack"
               : userStructuredPack
               ? "fallback_user_pack"
+              : basePack.validation?.passed
+              ? "latest_message_pack"
               : "stale_metadata",
             passed: refinedPack.validation.passed,
           });

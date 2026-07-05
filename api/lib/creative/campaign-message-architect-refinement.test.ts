@@ -435,4 +435,10 @@ describe("isDesignOnlyRefinementInstruction", () => {
     expect(isDesignOnlyRefinementInstruction("Make the copy more urgent")).toBe(false);
     expect(isDesignOnlyRefinementInstruction("Improve the wording")).toBe(false);
   });
+
+  it("classifies the exact Campaign #23 instruction as design-only", () => {
+    const instruction =
+      "Keep the approved 3@1 Newmarket copy exactly. Do not rewrite the headline, CTA, subheadline, or benefits. Redesign the leaflet only: remove the \"3@1Newmarket Marketing Campaign\" title from the design, move the logo to the top-right corner, use a cleaner premium layout, make the text more readable, and add a compact services section with these labels only: wall canvas prints, large format prints, courier services, business cards, flyers, banners, posters, and custom printing.";
+    expect(isDesignOnlyRefinementInstruction(instruction)).toBe(true);
+  });
 });

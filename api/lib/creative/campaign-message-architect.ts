@@ -1326,6 +1326,13 @@ const DESIGN_OVERRIDE_KEYWORDS = [
   "brighter colors",
   "center offer",
   "centre offer",
+  "redesign the leaflet",
+  "redesign only",
+  "design only",
+  "make the text more readable",
+  "premium layout",
+  "cleaner premium layout",
+  "services section with these labels",
 ];
 
 // Phrases that make it clear the user wants to keep the existing copy.
@@ -1342,10 +1349,18 @@ const COPY_PRESERVATION_PHRASES = [
   "keep cta",
   "keep the benefits",
   "keep benefits",
+  "keep the approved copy exactly",
   "do not change",
   "do not rewrite",
   "don't change",
   "don't rewrite",
+  "do not rewrite the headline",
+  "do not rewrite the cta",
+  "do not rewrite the subheadline",
+  "do not rewrite the benefits",
+  "do not rewrite the headline, cta, subheadline, or benefits",
+  "redesign the leaflet only",
+  "design only",
   "preserve the",
   "preserve approved",
   "same copy",
@@ -1394,8 +1409,15 @@ export function isDesignOnlyRefinementInstruction(instruction: string): boolean 
   if (!instruction || typeof instruction !== "string") return false;
   const lower = instruction.toLowerCase();
 
+  // Strip negated copy-rewrite verbs so "do not rewrite the headline" is not
+  // mistaken for a rewrite request.
+  const intentLower = lower.replace(
+    /\b(?:do not|don't|never)\s+(rewrite|change|update|modify|alter)\b/g,
+    "PRESERVE"
+  );
+
   // Explicit copy-rewrite intent always takes precedence.
-  const hasCopyIntent = COPY_INTENT_KEYWORDS.some((kw) => lower.includes(kw));
+  const hasCopyIntent = COPY_INTENT_KEYWORDS.some((kw) => intentLower.includes(kw));
   if (hasCopyIntent) return false;
 
   // Strong layout/visual instructions force design-only mode, even when the
