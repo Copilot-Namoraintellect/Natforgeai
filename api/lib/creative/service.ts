@@ -663,6 +663,7 @@ export async function generatePremiumLeaflet({
             imageJobId: existingImage.providerJobId || "premium",
             imageStatus: "ready",
             imageError: null,
+            lastRefinementError: null,
             imageCreditsCharged: 0,
             imageExtension: "png",
             imageSource: "premium",
@@ -894,6 +895,10 @@ export async function generatePremiumLeaflet({
         }
 
         if (trimmedInstruction) {
+          // Snapshot the post metadata before refinement so we can roll back any
+          // approved image-ready asset fields if the refined copy fails validation.
+          const preRefinementMetaSnapshot = { ...currentMeta };
+
           const { refineApprovedMessagePack } = await import("./campaign-message-architect");
           const refinedPack = await refineApprovedMessagePack({
             userId,
@@ -936,7 +941,12 @@ export async function generatePremiumLeaflet({
             );
             const message = `Refined copy failed quality validation:\n${refinedPack.validation.rejections.join("; ")}\n\nGenerated copy that failed:\n${failedCopy}`;
             logError("[PremiumLeaflet] Refinement validation failed", { userId, contentPostId, error: message });
-            await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+            // Roll back to the previously approved image-ready asset and store the
+            // refinement error separately so the current approved image remains publishable.
+            await setPostImageStatus(contentPostId, {
+              ...preRefinementMetaSnapshot,
+              lastRefinementError: message,
+            });
             return { status: "failed", jobId: "", errorMessage: message };
           } else {
             approvedMessagePack = refinedPack;
@@ -1434,6 +1444,7 @@ export async function generatePremiumLeaflet({
           imageStatus: "ready",
           imageGeneratedAt: new Date().toISOString(),
           imageError: null,
+          lastRefinementError: null,
           imageCreditsCharged: cost,
           imageExtension: renderResult.extension || "png",
           imageSource: "premium",

@@ -49,7 +49,10 @@ import { generatePremiumLeaflet } from "./service";
 import * as architect from "./campaign-message-architect";
 import * as creditEngine from "../billing/credit-engine";
 
-function createMockDb() {
+function createMockDb({ postMetadata = {} }: { postMetadata?: Record<string, any> } = {}) {
+  const updateSetSpies = new Map<unknown, ReturnType<typeof vi.fn>>();
+  const updateSetByTableName = new Map<string, ReturnType<typeof vi.fn>>();
+
   return {
     select: vi.fn(() => ({
       from: vi.fn((table: any) => ({
@@ -67,7 +70,8 @@ function createMockDb() {
                   hook: "Old hook",
                   cta: "Old CTA",
                   platform: "Instagram",
-                  metadata: {},
+                  status: "draft",
+                  metadata: { ...postMetadata },
                 },
               ];
             }
@@ -121,7 +125,15 @@ function createMockDb() {
       })),
     })),
     insert: vi.fn(() => ({ values: vi.fn(async () => [{ insertId: 1 }]) })),
-    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => []) })) })),
+    update: vi.fn((table: any) => {
+      const setSpy = vi.fn(() => ({ where: vi.fn(async () => []) }));
+      updateSetSpies.set(table, setSpy);
+      const tableName = (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string;
+      if (tableName) updateSetByTableName.set(tableName, setSpy);
+      return { set: setSpy };
+    }),
+    updateSetSpies,
+    updateSetByTableName,
   };
 }
 
@@ -179,5 +191,82 @@ describe("generatePremiumLeaflet credit protection on refinement validation fail
     expect(result.errorMessage).toContain("Learn more");
     expect(creditEngine.deductCredits).not.toHaveBeenCalled();
     expect(creditEngine.recordAiUsage).not.toHaveBeenCalled();
+  });
+
+  it("preserves the existing approved image-ready asset when refinement validation fails", async () => {
+    const { getDb } = await import("../../queries/connection");
+
+    const preservedMeta = {
+      approved: true,
+      assetKind: "master_campaign_post",
+      imageStatus: "ready",
+      imageUrl: "https://example.com/preserved-leaflet.png",
+      currentVersionId: 41,
+      iterationNumber: 4,
+      imageProvider: "internal",
+    };
+
+    const mockDb = createMockDb({ postMetadata: preservedMeta });
+    vi.mocked(getDb).mockReturnValue(mockDb as any);
+
+    const validPack: architect.CampaignMessagePack = {
+      headline: "Reliable electrical repairs for Centurion homes",
+      subheadline: "We help homeowners fix faults fast and keep properties safe.",
+      benefitBullets: [
+        "Clear fault finding and upfront quotes.",
+        "Safety-first inspections and repairs.",
+        "Local Centurion team with quick response.",
+      ],
+      cta: "Request a Quote",
+      footerContact: { location: "Centurion" },
+      platformCaptions: [],
+      validation: { passed: true, score: 100, rejections: [], warnings: [] },
+    };
+
+    const invalidRefinedPack: architect.CampaignMessagePack = {
+      headline: "The best choice for your business",
+      subheadline: "We help your business grow and succeed.",
+      benefitBullets: ["Quality service", "Professional team", "Great results"],
+      cta: "Learn more",
+      footerContact: { location: "Centurion" },
+      platformCaptions: [],
+      validation: {
+        passed: false,
+        score: 30,
+        rejections: ["Placeholder language detected: \"your business\"", "CTA is too generic"],
+        warnings: [],
+      },
+    };
+
+    vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(validPack);
+    vi.mocked(architect.refineApprovedMessagePack).mockResolvedValue(invalidRefinedPack);
+
+    const result = await generatePremiumLeaflet({
+      userId: 10,
+      contentPostId: 100,
+      refinementInstruction: "Make it more generic",
+      provider: "internal",
+    });
+
+    expect(result.status).toBe("failed");
+
+    const updateSetSpy = mockDb.updateSetByTableName.get("content_posts");
+    expect(updateSetSpy).toHaveBeenCalled();
+
+    const refinementFailurePatch = updateSetSpy!.mock.calls
+      .map((call) => call[0] as any)
+      .find((patch) => patch.metadata?.lastRefinementError);
+
+    expect(refinementFailurePatch).toBeDefined();
+    expect(refinementFailurePatch.metadata.approved).toBe(true);
+    expect(refinementFailurePatch.metadata.imageStatus).toBe("ready");
+    expect(refinementFailurePatch.metadata.imageUrl).toBe("https://example.com/preserved-leaflet.png");
+    expect(refinementFailurePatch.metadata.currentVersionId).toBe(41);
+    expect(refinementFailurePatch.metadata.iterationNumber).toBe(4);
+    expect(refinementFailurePatch.metadata.assetKind).toBe("master_campaign_post");
+    expect(refinementFailurePatch.metadata.imageProvider).toBe("internal");
+    expect(refinementFailurePatch.metadata.lastRefinementError).toContain(
+      "Refined copy failed quality validation"
+    );
   });
 });
