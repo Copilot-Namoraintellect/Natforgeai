@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --open",
-    "build": "vite build && esbuild api/boot.ts api/worker.ts --platform=node --bundle --format=esm --outdir=dist --external:ffmpeg-static --external:sharp --external:execa --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\" && node scripts/verify-deployment.mjs",
+    "build": "vite build && esbuild api/boot.ts api/worker.ts --platform=node --bundle --format=esm --outdir=dist --external:ffmpeg-static --external:sharp --external:execa --external:playwright --external:playwright-core --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\" && node scripts/verify-deployment.mjs",
     "verify:deploy": "node scripts/verify-deployment.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -115,6 +115,7 @@
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
     "kimi-plugin-inspect-react": "^1.0.3",
+    "playwright": "^1.61.1",
     "postcss": "^8.5.6",
     "prettier": "^3.7.4",
     "tailwindcss": "^3.4.19",

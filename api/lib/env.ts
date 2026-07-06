@@ -66,6 +66,12 @@ export const env = {
   // Default provider for premium leaflet generation. Can be overridden per-request.
   premiumLeafletProvider: process.env.PREMIUM_LEAFLET_PROVIDER ?? "v2",
 
+  // Hybrid OpenAI creative pipeline feature flags and model selection.
+  enableHybridLeafletPipeline: process.env.ENABLE_HYBRID_LEAFLET_PIPELINE === "true",
+  hybridLeafletTextModel: process.env.HYBRID_LEAFLET_TEXT_MODEL ?? "gpt-4o-mini",
+  hybridLeafletVisionModel: process.env.HYBRID_LEAFLET_VISION_MODEL ?? "gpt-4o-mini",
+  hybridLeafletMaxRevisions: parseInt(process.env.HYBRID_LEAFLET_MAX_REVISIONS || "2", 10),
+
   bannerbearApiKey: process.env.BANNERBEAR_API_KEY ?? "",
   bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
   bannerbearTemplateServiceBusinessPromo: process.env.BANNERBEAR_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",

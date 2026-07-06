@@ -55,6 +55,7 @@ import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendere
 import { buildPremiumV2Brief } from "./premium-v2/brief";
 import { validatePremiumV2Quality } from "./premium-v2/quality";
 import { resolveBrandKit } from "./premium-v2/brand-kit";
+import { runHybridPipeline } from "./premium-v2/hybrid-pipeline";
 import type { PremiumLeafletV2Brief } from "./premium-v2/types";
 import {
   resolveProviderTemplateId,
@@ -1044,9 +1045,10 @@ export async function generatePremiumLeaflet({
 
     // Build the deterministic V2 brief if using the V2 renderer. The brief
     // quality gate runs before any credits are spent so bad copy/crowding is
-    // rejected early.
+    // rejected early. When the hybrid pipeline is enabled we skip this because
+    // the AI brief builder and vision critic handle quality.
     let v2Brief: PremiumLeafletV2Brief | undefined;
-    if (isV2Provider) {
+    if (isV2Provider && !env.enableHybridLeafletPipeline) {
       const brandKit = await resolveBrandKit({
         displayName: business.displayName,
         name: business.name,
@@ -1279,9 +1281,50 @@ export async function generatePremiumLeaflet({
         aiAttempts = aiRender.attempts;
       }
     } else {
-      renderResult = await templateRenderer.render(renderReq);
+      if (isV2Provider && env.enableHybridLeafletPipeline) {
+        const hybridResult = await runHybridPipeline({
+          business,
+          campaign,
+          post,
+          approvedMessagePack,
+          refinementInstruction,
+          allowNoLogo,
+        });
+        templateRenderer = { name: "premium-v2-hybrid", configured: true, render: async () => ({ success: false, error: "" }) };
+        buffer = hybridResult.buffer;
+        renderResult = {
+          success: true,
+          imageBase64: hybridResult.buffer.toString("base64"),
+          extension: "png",
+          providerJobId: `premium-v2-hybrid-${Date.now()}`,
+          costUsd: 0,
+          metadata: {
+            hybrid: hybridResult.metadata,
+            critic: hybridResult.critic,
+            v2LayoutMetrics: { width: 1080, height: 1350 },
+          },
+        };
+        const avgScore = Math.round(
+          (hybridResult.critic.scores.brandFidelity +
+            hybridResult.critic.scores.readability +
+            hybridResult.critic.scores.premiumFeel +
+            hybridResult.critic.scores.visualHierarchy +
+            hybridResult.critic.scores.logoUsage +
+            hybridResult.critic.scores.CTAVisibility +
+            (100 - hybridResult.critic.scores.genericTemplateRisk)) /
+            7
+        );
+        v2QualityResult = {
+          passed: hybridResult.critic.passed,
+          score: avgScore,
+          label: hybridResult.critic.passed ? "Premium Ready" : "Needs Design Review",
+          criticalFailures: hybridResult.critic.criticalIssues,
+          warnings: hybridResult.critic.improvementSuggestions,
+        };
+      } else {
+        renderResult = await templateRenderer.render(renderReq);
 
-      if (!renderResult.success || (!renderResult.imageUrl && !renderResult.imageBase64)) {
+        if (!renderResult.success || (!renderResult.imageUrl && !renderResult.imageBase64)) {
         const errorMessage = renderResult.error || "Premium template provider failed to render the leaflet.";
         console.error(`[PremiumLeaflet] Provider render failed | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`);
         await setPostImageStatus(contentPostId, {
@@ -1332,6 +1375,7 @@ export async function generatePremiumLeaflet({
           await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
           return { status: "failed", jobId: renderResult.providerJobId || "", errorMessage: message, provider: templateRenderer.name };
         }
+      }
       }
     }
 

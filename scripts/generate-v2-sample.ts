@@ -13,6 +13,8 @@ import { buildPremiumV2Brief } from "../api/lib/creative/premium-v2/brief";
 import { renderV2FromBrief } from "../api/lib/creative/premium-v2/renderer";
 import { validatePremiumV2Quality } from "../api/lib/creative/premium-v2/quality";
 import { resolveBrandKit } from "../api/lib/creative/premium-v2/brand-kit";
+import { runHybridPipeline } from "../api/lib/creative/premium-v2/hybrid-pipeline";
+import { env } from "../api/lib/env";
 import { ALL_FIXTURES, fixture3At1Newmarket } from "../api/lib/creative/premium-v2/fixtures";
 import { writeFileSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
@@ -44,8 +46,8 @@ function parseArgs(): Record<string, string | boolean> {
 
 async function renderFixture(
   fixtureName: string,
-  options: { production?: boolean; logo?: string; out?: string }
-): Promise<{ outputPath: string; label: string; passed: boolean }> {
+  options: { production?: boolean; logo?: string; out?: string; hybrid?: boolean }
+): Promise<{ outputPath: string; label: string; passed: boolean; critic?: any }> {
   const fixtureFn = ALL_FIXTURES[fixtureName as keyof typeof ALL_FIXTURES];
   if (!fixtureFn) {
     throw new Error(`Unknown fixture: ${fixtureName}. Available: ${Object.keys(ALL_FIXTURES).join(", ")}`);
@@ -60,35 +62,59 @@ async function renderFixture(
     logo: options.logo || baseBusiness.logo,
   };
 
-  const brandKit = await resolveBrandKit(business);
-  const brief = await buildPremiumV2Brief({
-    business,
-    campaign,
-    post: { id: 200, campaignId: campaign.id, title: `${business.displayName} promo` },
-    brandKit,
-  });
+  let buffer: Buffer;
+  let label: string;
+  let passed: boolean;
+  let criticJson: any;
 
-  console.log(`\n[${fixtureName}] Brief:`, JSON.stringify(brief, null, 2));
+  if (options.hybrid) {
+    (env as any).enableHybridLeafletPipeline = true;
+    const hybrid = await runHybridPipeline({
+      business,
+      campaign,
+      post: { id: 200, campaignId: campaign.id, title: `${business.displayName} promo` },
+    });
+    buffer = hybrid.buffer;
+    label = hybrid.critic.passed ? "Premium Ready" : "Needs Design Review";
+    passed = hybrid.critic.passed;
+    criticJson = hybrid.critic;
+    console.log(`\n[${fixtureName}] Hybrid brief:`, JSON.stringify(hybrid.brief, null, 2));
+    console.log(`[${fixtureName}] Hybrid visual direction:`, JSON.stringify(hybrid.visualDirection, null, 2));
+    console.log(`[${fixtureName}] Hybrid critic:`, JSON.stringify(hybrid.critic, null, 2));
+  } else {
+    const brandKit = await resolveBrandKit(business);
+    const brief = await buildPremiumV2Brief({
+      business,
+      campaign,
+      post: { id: 200, campaignId: campaign.id, title: `${business.displayName} promo` },
+      brandKit,
+    });
 
-  const preQuality = validatePremiumV2Quality(brief, undefined, { production: !!options.production });
-  console.log(`[${fixtureName}] Pre-render quality:`, preQuality.label, preQuality.warnings);
+    console.log(`\n[${fixtureName}] Brief:`, JSON.stringify(brief, null, 2));
 
-  const { buffer, metrics } = await renderV2FromBrief(brief);
-  const postQuality = validatePremiumV2Quality(brief, metrics, { production: !!options.production });
-  console.log(`[${fixtureName}] Post-render quality:`, postQuality.label, postQuality.score);
+    const preQuality = validatePremiumV2Quality(brief, undefined, { production: !!options.production });
+    console.log(`[${fixtureName}] Pre-render quality:`, preQuality.label, preQuality.warnings);
 
-  const suffix = options.production ? "production" : "v2.2";
+    const { buffer: renderedBuffer, metrics } = await renderV2FromBrief(brief);
+    const postQuality = validatePremiumV2Quality(brief, metrics, { production: !!options.production });
+    buffer = renderedBuffer;
+    label = postQuality.label;
+    passed = postQuality.passed;
+    console.log(`[${fixtureName}] Post-render quality:`, postQuality.label, postQuality.score);
+  }
+
+  const suffix = options.production ? "production" : options.hybrid ? "hybrid" : "v2.2";
   const outputPath =
     options.out ||
     (fixtureName === "3at1"
       ? join(outputDir, `3at1-newmarket-${suffix}-sample.png`)
-      : join(outputDir, "v2.2", `${fixtureName}-${suffix}-sample.png`));
+      : join(outputDir, options.hybrid ? "hybrid" : "v2.2", `${fixtureName}-${suffix}-sample.png`));
 
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, buffer);
   console.log(`[${fixtureName}] Sample written to:`, outputPath);
 
-  return { outputPath, label: postQuality.label, passed: postQuality.passed };
+  return { outputPath, label, passed, critic: criticJson };
 }
 
 async function renderDraftSample(businessId: string, campaignId: string, options: { production?: boolean; logo?: string }) {
@@ -133,11 +159,18 @@ async function main() {
   const args = parseArgs();
 
   if (args["all-fixtures"] || args.all) {
-    mkdirSync(join(outputDir, "v2.2"), { recursive: true });
-    const results: { name: string; label: string; passed: boolean }[] = [];
+    const hybrid = !!args.hybrid;
+    mkdirSync(join(outputDir, hybrid ? "hybrid" : "v2.2"), { recursive: true });
+    const results: { name: string; label: string; passed: boolean; critic?: any }[] = [];
     for (const name of Object.keys(ALL_FIXTURES)) {
-      const result = await renderFixture(name, { production: !!args.production, logo: args.logo as string });
+      const result = await renderFixture(name, { production: !!args.production, logo: args.logo as string, hybrid });
       results.push({ name, ...result });
+    }
+    if (hybrid) {
+      console.log("\n=== Hybrid critic JSON ===");
+      for (const r of results) {
+        console.log(`\n[${r.name}]`, JSON.stringify(r.critic, null, 2));
+      }
     }
     console.log("\n=== Sample summary ===");
     for (const r of results) {
@@ -147,7 +180,7 @@ async function main() {
   }
 
   if (args.fixture) {
-    await renderFixture(args.fixture as string, { production: !!args.production, logo: args.logo as string, out: args.out as string });
+    await renderFixture(args.fixture as string, { production: !!args.production, logo: args.logo as string, out: args.out as string, hybrid: !!args.hybrid });
     return;
   }
 
@@ -166,6 +199,7 @@ async function main() {
 Usage:
   npx tsx scripts/generate-v2-sample.ts --fixture 3at1
   npx tsx scripts/generate-v2-sample.ts --all-fixtures
+  npx tsx scripts/generate-v2-sample.ts --all-fixtures --hybrid
   npx tsx scripts/generate-v2-sample.ts --business-id 20 --campaign-id 23 --draft-only
   npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --logo ./logo.png --production
   npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --out ./my-sample.png
