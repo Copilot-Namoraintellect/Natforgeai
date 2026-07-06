@@ -97,10 +97,21 @@ export function buildCommercialHeadline(business: BusinessEvidence, campaign?: C
   }
 }
 
+function productSignal(business: BusinessEvidence, campaign?: CampaignEvidence): string {
+  return clean(
+    asString(business.productOrService) +
+      " " +
+      asString((business.websiteEvidence as any)?.productsServices?.join(" ")) +
+      " " +
+      asString(campaign?.productOrService)
+  ).toLowerCase();
+}
+
 export function buildCommercialSubheadline(business: BusinessEvidence, campaign?: CampaignEvidence): string {
   const category = inferBusinessCategory(business, campaign);
   const name = businessName(business);
   const loc = location(business, campaign);
+  const signal = productSignal(business, campaign);
 
   switch (category) {
     case "print_courier":
@@ -108,17 +119,28 @@ export function buildCommercialSubheadline(business: BusinessEvidence, campaign?
         ? `From flyers and business cards to canvas prints and courier support, get reliable local service from ${name}.`
         : `From flyers and business cards to canvas prints and courier support, get reliable local service.`;
     case "food_restaurant":
-      return `Fresh ingredients, generous portions and easy ordering for dine-in, takeaway or delivery.`;
+      return `Freshly prepared meals, bold flavours and local favourites for the whole family.`;
     case "beauty_wellness":
-      return `Professional treatments in a calm, welcoming space${loc ? ` in ${loc}` : ""}.`;
-    case "local_services":
+      return `Relax, refresh and make time for yourself with professional beauty treatments.`;
+    case "local_services": {
+      if (signal.includes("clean") || signal.includes("carpet") || signal.includes("window")) {
+        return `Reliable cleaning support that keeps your home or office fresh, consistent and ready.`;
+      }
+      if (signal.includes("plumb") || signal.includes("leak") || signal.includes("geyser") || signal.includes("pipe")) {
+        return `Fast plumbing support for leaks, geysers and urgent repairs when you need it most.`;
+      }
       return `Professional help for homes and businesses${loc ? ` in ${loc}` : ""}.`;
+    }
     case "retail_product":
       return `Quality products, great prices${loc ? `, right here in ${loc}` : ""}.`;
     case "professional_services":
-      return `Professional support for growing businesses${loc ? ` in ${loc}` : ""}.`;
-    case "training_education":
+      return `Clear strategy, practical guidance and expert support for growing businesses.`;
+    case "training_education": {
+      if (signal.includes("leadership") || signal.includes("manager")) {
+        return `Practical leadership training for managers and teams ready to perform with confidence.`;
+      }
       return `Practical courses and workshops${loc ? ` in ${loc}` : ""} to build real skills.`;
+    }
     case "logistics":
       return `Transport, freight and delivery services${loc ? ` across ${loc}` : ""}.`;
     case "healthcare_wellness":

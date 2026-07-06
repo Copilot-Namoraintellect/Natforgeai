@@ -1,11 +1,12 @@
 /**
- * Generate Premium Leaflet V2.1 sample images.
+ * Generate Premium Leaflet V2.2 sample images.
  *
  * Usage:
  *   npx tsx scripts/generate-v2-sample.ts --fixture 3at1
  *   npx tsx scripts/generate-v2-sample.ts --all-fixtures
  *   npx tsx scripts/generate-v2-sample.ts --business-id 20 --campaign-id 23 --draft-only
  *   npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --logo ./path/to/logo.png --production
+ *   npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --out ./my-sample.png
  */
 
 import { buildPremiumV2Brief } from "../api/lib/creative/premium-v2/brief";
@@ -43,7 +44,7 @@ function parseArgs(): Record<string, string | boolean> {
 
 async function renderFixture(
   fixtureName: string,
-  options: { production?: boolean; logo?: string }
+  options: { production?: boolean; logo?: string; out?: string }
 ): Promise<{ outputPath: string; label: string; passed: boolean }> {
   const fixtureFn = ALL_FIXTURES[fixtureName as keyof typeof ALL_FIXTURES];
   if (!fixtureFn) {
@@ -76,11 +77,12 @@ async function renderFixture(
   const postQuality = validatePremiumV2Quality(brief, metrics, { production: !!options.production });
   console.log(`[${fixtureName}] Post-render quality:`, postQuality.label, postQuality.score);
 
-  const suffix = options.production ? "production" : "v2.1";
+  const suffix = options.production ? "production" : "v2.2";
   const outputPath =
-    fixtureName === "3at1"
+    options.out ||
+    (fixtureName === "3at1"
       ? join(outputDir, `3at1-newmarket-${suffix}-sample.png`)
-      : join(outputDir, "v2.1", `${fixtureName}-${suffix}-sample.png`);
+      : join(outputDir, "v2.2", `${fixtureName}-${suffix}-sample.png`));
 
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, buffer);
@@ -131,7 +133,7 @@ async function main() {
   const args = parseArgs();
 
   if (args["all-fixtures"] || args.all) {
-    mkdirSync(join(outputDir, "v2.1"), { recursive: true });
+    mkdirSync(join(outputDir, "v2.2"), { recursive: true });
     const results: { name: string; label: string; passed: boolean }[] = [];
     for (const name of Object.keys(ALL_FIXTURES)) {
       const result = await renderFixture(name, { production: !!args.production, logo: args.logo as string });
@@ -145,7 +147,7 @@ async function main() {
   }
 
   if (args.fixture) {
-    await renderFixture(args.fixture as string, { production: !!args.production, logo: args.logo as string });
+    await renderFixture(args.fixture as string, { production: !!args.production, logo: args.logo as string, out: args.out as string });
     return;
   }
 
@@ -166,6 +168,7 @@ Usage:
   npx tsx scripts/generate-v2-sample.ts --all-fixtures
   npx tsx scripts/generate-v2-sample.ts --business-id 20 --campaign-id 23 --draft-only
   npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --logo ./logo.png --production
+  npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --out ./my-sample.png
 `);
 }
 

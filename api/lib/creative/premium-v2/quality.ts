@@ -9,6 +9,11 @@
 import type { PremiumLeafletV2Brief, PremiumV2QualityResult } from "./types";
 import { isWeak, WEAK_PHRASES } from "./copy";
 
+function asString(value: unknown): string {
+  if (typeof value === "string") return value;
+  return "";
+}
+
 const GENERIC_PHRASES = [
   "your business",
   "your brand",
@@ -151,6 +156,13 @@ export function validatePremiumV2Quality(
     score -= 20;
   }
 
+  // ── Pain-point guard ──
+  const customerPainPoint = asString(brief.customerPainPoint);
+  if (customerPainPoint && brief.subheadline && customerPainPoint.toLowerCase().trim() === brief.subheadline.toLowerCase().trim()) {
+    criticalFailures.push("Subheadline uses raw customer pain point as customer-facing copy");
+    score -= 30;
+  }
+
   // ── Service card value ──
   const describedCards = brief.primaryServices.filter((s) => !!s.description).length;
   if (brief.primaryServices.length > 0 && describedCards < brief.primaryServices.length) {
@@ -258,6 +270,10 @@ export function validatePremiumV2Quality(
 
   if (label === "Premium Ready" && (!brief.logoUrl || layoutMetrics?.logoComposited === false)) {
     label = "Missing Logo";
+  }
+
+  if (label === "Premium Ready" && customerPainPoint && brief.subheadline && customerPainPoint.toLowerCase().trim() === brief.subheadline.toLowerCase().trim()) {
+    label = "Raw Pain Point Used As Copy";
   }
 
   if (label === "Premium Ready" && score < 70) {

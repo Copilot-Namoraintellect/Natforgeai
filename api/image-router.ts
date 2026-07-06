@@ -288,7 +288,7 @@ export const imageRouter = createRouter({
         brandColors: z.array(z.string()).optional(),
         creativeType: z.enum(["leaflet", "poster", "service_menu", "offer_advert", "event_announcement"]).default("leaflet"),
         templateId: z.enum(ALL_TEMPLATE_IDS).optional(),
-        provider: z.enum(["internal", "external", "ai"]).default("ai"),
+        provider: z.enum(["internal", "external", "ai", "v2"]).default("v2"),
         strongerBrandFit: z.boolean().default(false),
         creativeGuidance: z.string().optional(),
         refinementInstruction: z.string().optional(),

@@ -210,9 +210,7 @@ function resolveSubheadline(
   const postHook = asString(post?.hook);
   if (postHook && !isWeak(postHook)) return postHook;
 
-  const mainPainPoint = asString(campaign.mainPainPoint);
-  if (mainPainPoint && !isWeak(mainPainPoint) && mainPainPoint.length > 20) return mainPainPoint;
-
+  // Never use the raw customer pain point as customer-facing copy.
   return buildCommercialSubheadline(business, campaign);
 }
 

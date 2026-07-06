@@ -554,7 +554,7 @@ export async function generatePremiumLeaflet({
   brandColors,
   creativeType = "leaflet",
   templateId,
-  provider = "internal",
+  provider = env.premiumLeafletProvider as "internal" | "external" | "ai" | "v2",
   strongerBrandFit = false,
   creativeGuidance,
   refinementInstruction,

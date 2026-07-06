@@ -63,6 +63,9 @@ export const env = {
   enablePremiumTemplateProvider: process.env.ENABLE_PREMIUM_TEMPLATE_PROVIDER === "true",
   premiumTemplateProvider: process.env.PREMIUM_TEMPLATE_PROVIDER ?? "",
 
+  // Default provider for premium leaflet generation. Can be overridden per-request.
+  premiumLeafletProvider: process.env.PREMIUM_LEAFLET_PROVIDER ?? "v2",
+
   bannerbearApiKey: process.env.BANNERBEAR_API_KEY ?? "",
   bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
   bannerbearTemplateServiceBusinessPromo: process.env.BANNERBEAR_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",

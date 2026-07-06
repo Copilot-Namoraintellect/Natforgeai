@@ -102,6 +102,36 @@ describe("Premium V2.1 category-wide brand fidelity", () => {
     const described = brief.primaryServices.filter((s) => !!s.description).length;
     expect(described).toBeGreaterThan(0);
   });
+
+  it.each(FIXTURES)("$name subheadline is customer-facing and not the raw pain point", async ({ get }) => {
+    const { business, campaign } = get();
+    const brandKit = await resolveBrandKit(business);
+    const brief = await buildPremiumV2Brief({
+      business,
+      campaign,
+      post: { id: 1, campaignId: campaign.id, title: "Promo" },
+      brandKit,
+    });
+
+    expect(brief.subheadline).toBeTruthy();
+    expect(brief.subheadline!.length).toBeGreaterThanOrEqual(20);
+
+    // Must not equal the raw customer pain point.
+    const painPoint = (campaign.mainPainPoint || "").toLowerCase().trim();
+    if (painPoint) {
+      expect(brief.subheadline!.toLowerCase().trim()).not.toBe(painPoint);
+    }
+
+    // Must be customer-facing: contain positive outcome words rather than problem-only words.
+    const subLower = brief.subheadline!.toLowerCase();
+    const positiveWords = ["fresh", "bold", "relax", "refresh", "reliable", "fast", "practical", "clear", "expert", "professional", "quality", "great", "trusted", "easy", "convenient", "friendly"];
+    const hasPositive = positiveWords.some((w) => subLower.includes(w));
+    expect(hasPositive).toBe(true);
+
+    const problemOnlyWords = ["boring", "stress", "lack", "inconsistent", "burst", "unclear"];
+    const hasProblemOnly = problemOnlyWords.some((w) => subLower.includes(w));
+    expect(hasProblemOnly).toBe(false);
+  });
 });
 
 describe("3@1 Newmarket V2.1 regression target", () => {

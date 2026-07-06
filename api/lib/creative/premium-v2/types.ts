@@ -137,6 +137,7 @@ export interface PremiumV2QualityResult {
     | "Duplicate Services"
     | "Missing Logo"
     | "Placeholder Contact"
+    | "Raw Pain Point Used As Copy"
     | "Needs Design Review";
   criticalFailures: string[];
   warnings: string[];
