@@ -391,7 +391,12 @@ describe("contentRouter.publishCampaignPack", () => {
     type: "social_post",
     platform: "Instagram",
     status: "draft",
-    metadata: { approved: true },
+    metadata: {
+      approved: true,
+      assetKind: "master_campaign_post",
+      imageStatus: "ready",
+      imageUrl: "https://example.com/master-image.png",
+    },
   };
 
   const baseIntegration = {
@@ -572,13 +577,18 @@ describe("contentRouter.publishCampaignPack", () => {
     };
 
     const post = {
-      id: 108,
+      id: 109,
       userId: 14,
       campaignId: 23,
       type: "social_post",
       platform: "Instagram",
       status: "draft",
-      metadata: { approved: true },
+      metadata: {
+        approved: true,
+        assetKind: "master_campaign_post",
+        imageStatus: "ready",
+        imageUrl: "/generated/images/23/premium-leaflet-internal_12ad3497-86bb-4c5b-9759-93bf8da278b9.png",
+      },
     };
 
     const fbIntegration = {

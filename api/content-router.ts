@@ -48,6 +48,16 @@ function buildPlatformStatusesFromIntegrations(
   return statuses;
 }
 
+function isApprovedImageReadySocialPost(post: any): boolean {
+  if (post.type !== "social_post") return false;
+  if (post.status === "published" || post.status === "archived") return false;
+  const meta = (post.metadata || {}) as any;
+  if (!meta.approved) return false;
+  if (meta.imageStatus !== "ready") return false;
+  if (!meta.imageUrl) return false;
+  return true;
+}
+
 export const contentRouter = createRouter({
   list: authedQuery
     .input(
@@ -938,11 +948,54 @@ export const contentRouter = createRouter({
         excludedPlatforms,
       });
 
-      // Refresh approved social posts after updates
-      const publishablePosts = posts.filter((p) => {
-        if (p.type !== "social_post") return false;
-        const meta = (p.metadata || {}) as any;
-        return meta.approved === true || p.status === "published";
+      // Select approved, image-ready social posts. We do not rely on an approvalStatus column
+      // or a status="approved" enum value; the schema only supports draft/scheduled/published/archived.
+      const approvedPosts = posts.filter(isApprovedImageReadySocialPost);
+
+      if (approvedPosts.length === 0) {
+        const candidatePosts = posts
+          .filter((p) => p.type === "social_post")
+          .map((p) => {
+            const meta = (p.metadata || {}) as any;
+            return {
+              id: p.id,
+              platform: p.platform,
+              status: p.status,
+              approved: !!meta.approved,
+              assetKind: meta.assetKind,
+              imageStatus: meta.imageStatus,
+              hasImageUrl: !!meta.imageUrl,
+            };
+          });
+        const message =
+          "[PublishCampaignPack] Contract error: eligibility returned ready and publishable platforms exist, but no approved image-ready social post was found";
+        logError(message, {
+          campaignId: input.campaignId,
+          userId: ctx.user.id,
+          businessId: campaignBusinessId,
+          publishablePlatforms,
+          candidatePosts,
+        });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "No approved image-ready social post found for publishing.",
+        });
+      }
+
+      logInfo("[PublishCampaignPack] Selecting posts for platforms", {
+        campaignId: input.campaignId,
+        publishablePlatforms,
+        candidatePostIds: approvedPosts.map((p) => {
+          const meta = (p.metadata || {}) as any;
+          return {
+            id: p.id,
+            platform: p.platform,
+            approved: !!meta.approved,
+            assetKind: meta.assetKind,
+            imageStatus: meta.imageStatus,
+            hasImageUrl: !!meta.imageUrl,
+          };
+        }),
       });
 
       // Defensive contract check: if connected integrations exist and eligibility returned ready,
@@ -1030,17 +1083,51 @@ export const contentRouter = createRouter({
         const integration = integrations.find((i) => i.platform === platform);
         if (!integration) continue;
 
-        // Find best content post for this platform
-        let post = publishablePosts.find((p) => p.platform?.toLowerCase() === platform);
-        if (!post) post = publishablePosts[0];
+        // Find best content post for this platform:
+        // 1. Platform-specific post whose platform matches (case-insensitive).
+        // 2. A master_campaign_post that can be reused across platforms.
+        // 3. Any other approved image-ready social post as final fallback.
+        let selectionReason = "platform-specific";
+        let post = approvedPosts.find((p) => p.platform?.toLowerCase() === platform);
+        if (!post) {
+          const masterPost = approvedPosts.find(
+            (p) => (p.metadata as any)?.assetKind === "master_campaign_post"
+          );
+          if (masterPost) {
+            post = masterPost;
+            selectionReason = "master_campaign_post fallback";
+          } else {
+            post = approvedPosts[0];
+            selectionReason = "first approved post fallback";
+          }
+        }
 
         if (!post) {
-          console.log("[PublishCampaignPack] No approved social post for platform", {
+          const message = `[PublishCampaignPack] Contract error: no approved social post could be selected for platform ${platform}`;
+          logError(message, {
             campaignId: input.campaignId,
             platform,
+            approvedPostIds: approvedPosts.map((p) => p.id),
           });
-          continue;
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Publishing post selection failed. Please contact support.",
+          });
         }
+
+        const postMeta = (post.metadata || {}) as any;
+        logInfo("[PublishCampaignPack] Selected post for platform", {
+          campaignId: input.campaignId,
+          platform,
+          selectedPostId: post.id,
+          selectedPostPlatform: post.platform,
+          selectedPostStatus: post.status,
+          selectedPostApproved: !!postMeta.approved,
+          selectedPostAssetKind: postMeta.assetKind,
+          selectedPostImageStatus: postMeta.imageStatus,
+          selectedPostHasImageUrl: !!postMeta.imageUrl,
+          selectionReason,
+        });
 
         // Reuse an existing pending/retrying queue item for this post/platform if present
         let queueItemId: number;
