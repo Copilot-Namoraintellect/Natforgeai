@@ -1,5 +1,5 @@
 import { getDb } from "../../queries/connection";
-import { publishingQueue, contentPosts, socialIntegrations } from "@db/schema";
+import { publishingQueue, contentPosts, socialIntegrations, campaigns, approvalRequests } from "@db/schema";
 import { eq, and, lte, or } from "drizzle-orm";
 import {
   publishToFacebook,
@@ -57,6 +57,105 @@ export async function runSafetyCheckOnQueueItem(queueItemId: number) {
     .where(eq(publishingQueue.id, queueItemId));
 
   return safety;
+}
+
+/**
+ * Finalize campaign and content-post state after queue items change.
+ * When every queue row for the campaign is published, mark the campaign as
+ * campaign_live and update content post metadata with per-platform IDs.
+ */
+export async function finalizeCampaignPublishState(campaignId: number | null | undefined) {
+  if (!campaignId) return;
+  const db = getDb();
+
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(eq(campaigns.id, campaignId))
+    .limit(1);
+  if (!campaign) return;
+
+  const queueRows = await db
+    .select()
+    .from(publishingQueue)
+    .where(eq(publishingQueue.campaignId, campaignId));
+  if (queueRows.length === 0) return;
+
+  const allPublished = queueRows.every((q) => q.status === "published");
+
+  const publishedPlatforms: string[] = [];
+  const failedPlatforms: string[] = [];
+  const pendingApprovalPlatforms: string[] = [];
+  const platformPostIds: Record<string, string> = {};
+
+  for (const q of queueRows) {
+    const platform = String(q.platform || "").trim().toLowerCase();
+    if (!platform) continue;
+    if (q.status === "published") {
+      publishedPlatforms.push(platform);
+      if (q.externalPostId) {
+        platformPostIds[`${platform}PostId`] = q.externalPostId;
+      }
+    } else if (q.status === "failed" || q.status === "safety_blocked") {
+      failedPlatforms.push(platform);
+    } else if (q.status === "pending_approval") {
+      pendingApprovalPlatforms.push(platform);
+    }
+  }
+
+  const contentPostIds = [...new Set(queueRows.map((q) => q.contentPostId).filter(Boolean))];
+  for (const postId of contentPostIds) {
+    const [post] = await db
+      .select()
+      .from(contentPosts)
+      .where(eq(contentPosts.id, postId as number))
+      .limit(1);
+    if (!post) continue;
+
+    const meta = (post.metadata || {}) as any;
+    const updateSet: any = {
+      metadata: {
+        ...meta,
+        publishedPlatforms,
+        failedPlatforms,
+        pendingApprovalPlatforms,
+        ...platformPostIds,
+      },
+    };
+    if (allPublished) {
+      updateSet.status = "published";
+      updateSet.publishedAt = new Date();
+    }
+
+    await db
+      .update(contentPosts)
+      .set(updateSet)
+      .where(eq(contentPosts.id, postId as number));
+  }
+
+  if (allPublished) {
+    await db
+      .update(campaigns)
+      .set({
+        status: "active",
+        workflowState: "campaign_live",
+        updatedAt: new Date(),
+      })
+      .where(eq(campaigns.id, campaignId));
+
+    // Clear any pending campaign_launch approval so the UI/eligibility no longer
+    // reports "launch approval required" for a fully-live campaign.
+    await db
+      .update(approvalRequests)
+      .set({ status: "approved", approvedAt: new Date() })
+      .where(
+        and(
+          eq(approvalRequests.campaignId, campaignId),
+          eq(approvalRequests.approvalType, "campaign_launch"),
+          eq(approvalRequests.status, "pending")
+        )
+      );
+  }
 }
 
 /**
@@ -356,26 +455,14 @@ export async function publishSinglePost(queueItemId: number) {
         })
         .where(eq(publishingQueue.id, post.id));
 
-      if (post.contentPostId) {
-        // Only mark the master content post as fully published when every queue item
-        // for this post has reached the published state. This prevents a partial publish
-        // (e.g. Instagram published, Facebook pending approval) from looking complete.
-        const siblingQueue = await db
-          .select({ status: publishingQueue.status })
-          .from(publishingQueue)
-          .where(eq(publishingQueue.contentPostId, post.contentPostId));
-        const allPublished =
-          siblingQueue.length > 0 && siblingQueue.every((q) => q.status === "published");
-        if (allPublished) {
-          await db
-            .update(contentPosts)
-            .set({
-              status: "published",
-              publishedAt: now,
-            })
-            .where(eq(contentPosts.id, post.contentPostId));
-        }
-      }
+      // Finalize campaign/content-post state once this platform is live. This covers
+      // both the pack-publish path and the per-platform approve-and-publish path.
+      await finalizeCampaignPublishState(post.campaignId).catch((err: any) => {
+        console.error(
+          `[Publishing Runner] finalizeCampaignPublishState failed for campaign ${post.campaignId}:`,
+          err.message
+        );
+      });
 
       // Refresh permissioned audience data after a successful publish so that
       // engagement and performance signals can feed back into Audience Intelligence.

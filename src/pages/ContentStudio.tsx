@@ -1187,6 +1187,7 @@ Include:
     onSuccess: (data) => {
       utils.content.list.invalidate();
       refetchPublishingQueue();
+      utils.campaign.get.invalidate({ id: numericCampaignId });
       const { type, message } = getPublishResultToast(data);
       if (type === "success") {
         toast.success(message);
@@ -1199,6 +1200,7 @@ Include:
     },
     onError: (err) => {
       refetchPublishingQueue();
+      utils.campaign.get.invalidate({ id: numericCampaignId });
       toast.error(err.message || "Failed to publish campaign pack");
     },
   });
@@ -1212,6 +1214,8 @@ Include:
       await approveQueueItemMutation.mutateAsync({ queueId: queueItemId });
       const result = await publishQueueItemMutation.mutateAsync({ queueId: queueItemId });
       refetchPublishingQueue();
+      utils.campaign.get.invalidate({ id: numericCampaignId });
+      utils.content.list.invalidate();
       if (result.success) {
         const platformLabel = result.platform
           ? result.platform.charAt(0).toUpperCase() + result.platform.slice(1)

@@ -13,7 +13,7 @@ import { env } from "./lib/env";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
 import { createApprovalRequest } from "./lib/workflow/engine";
 import { logInfo, logError } from "./lib/logger";
-import { publishSinglePost } from "./lib/workflow/publishing-runner";
+import { publishSinglePost, finalizeCampaignPublishState } from "./lib/workflow/publishing-runner";
 import { checkContentSafety } from "./lib/safety/checker";
 import { isFacebookPublishingReady, isInstagramPublishingReady } from "./lib/integrations/platforms";
 
@@ -1342,55 +1342,23 @@ export const contentRouter = createRouter({
         });
       }
 
-      // Update per-platform metadata on the approved posts so the UI and eligibility
-      // can show exactly which platforms are published, failed, or awaiting approval.
-      const publishedPlatforms = results
-        .filter((r) => r.status === "published")
-        .map((r) => r.platform);
-      const failedPlatforms = results
-        .filter((r) => r.status === "failed" || r.status === "safety_blocked")
-        .map((r) => r.platform);
-      const pendingApprovalPlatforms = results
-        .filter((r) => r.status === "pending_approval")
-        .map((r) => r.platform);
-
-      for (const post of approvedPosts) {
-        const meta = (post.metadata || {}) as any;
-        await db
-          .update(contentPosts)
-          .set({
-            metadata: {
-              ...meta,
-              publishedPlatforms,
-              failedPlatforms,
-              pendingApprovalPlatforms,
-            },
-          })
-          .where(and(eq(contentPosts.id, post.id), eq(contentPosts.userId, ctx.user.id)));
-      }
-
-      // Update campaign state based on publish results
-      const anyPublished = results.some((r) => r.status === "published");
+      // Finalize campaign/content-post state from the authoritative publishing_queue
+      // rows. This also handles the case where the user later approves a pending
+      // platform via the per-platform approval flow.
       const allPublished = results.length > 0 && results.every((r) => r.status === "published");
-
       logInfo("[PublishCampaignPack] Campaign state update", {
         campaignId: input.campaignId,
-        anyPublished,
         allPublished,
         resultCount: results.length,
-        publishedPlatforms,
-        failedPlatforms,
-        pendingApprovalPlatforms,
+        results: results.map((r) => ({ platform: r.platform, status: r.status })),
       });
 
-      await db
-        .update(campaigns)
-        .set({
-          status: anyPublished ? "active" : campaign.status,
-          workflowState: allPublished ? "campaign_live" : "launch_approval_required",
-          updatedAt: new Date(),
-        })
-        .where(eq(campaigns.id, input.campaignId));
+      await finalizeCampaignPublishState(input.campaignId).catch((err: any) => {
+        logError("[PublishCampaignPack] finalizeCampaignPublishState failed", {
+          campaignId: input.campaignId,
+          error: err.message,
+        });
+      });
 
       return {
         success: true,

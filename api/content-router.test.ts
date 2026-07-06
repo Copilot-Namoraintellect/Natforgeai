@@ -1,14 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { SQL } from "drizzle-orm";
+import { finalizeCampaignPublishState } from "./lib/workflow/publishing-runner";
 
 vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
 }));
 
-vi.mock("./lib/workflow/publishing-runner", () => ({
-  publishSinglePost: vi.fn(),
-}));
+vi.mock("./lib/workflow/publishing-runner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lib/workflow/publishing-runner")>();
+  return {
+    ...actual,
+    publishSinglePost: vi.fn(),
+  };
+});
 
 vi.mock("./lib/integrations/platforms", () => ({
   isFacebookPublishingReady: vi.fn(() => true),
@@ -913,6 +918,91 @@ describe("contentRouter.publishCampaignPack", () => {
     const retryQueueInsertSpy = retryDb.insertValuesByTableName.get("publishing_queue");
     const retryPlatforms = retryQueueInsertSpy?.mock.calls.map((call) => (call[0] as any).platform) || [];
     expect(retryPlatforms).not.toContain("instagram");
+  });
+
+  it("finalizes campaign to campaign_live when all queue rows are published after Facebook approve-and-publish", async () => {
+    const { getDb } = await import("./queries/connection");
+
+    const campaign23Publish = {
+      id: 23,
+      userId: 14,
+      businessId: 20,
+      status: "active",
+      workflowState: "launch_approval_required",
+      platforms: "Facebook, Instagram",
+      name: "3@1 Newmarket Campaign",
+      aiGenerated: true,
+    };
+
+    const masterPost = {
+      id: 109,
+      userId: 14,
+      campaignId: 23,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: { approved: true, assetKind: "master_campaign_post", imageStatus: "ready", imageUrl: "https://example.com/ig.png" },
+    };
+
+    const mockDb = createMockDb({
+      campaign: campaign23Publish,
+      posts: [masterPost],
+      queue: [
+        {
+          id: 6,
+          userId: 14,
+          campaignId: 23,
+          contentPostId: 109,
+          platform: "instagram",
+          status: "published",
+          externalPostId: "18106085213021936",
+          approvalRequired: false,
+        },
+        {
+          id: 5,
+          userId: 14,
+          campaignId: 23,
+          contentPostId: 109,
+          platform: "facebook",
+          status: "published",
+          externalPostId: "122144189559083955",
+          approvalRequired: false,
+        },
+      ],
+      approvals: [
+        {
+          id: 1,
+          userId: 14,
+          campaignId: 23,
+          approvalType: "campaign_launch",
+          status: "pending",
+          title: "Approve Launch",
+          riskLevel: "low",
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    // Simulate the per-platform approve-and-publish path finalizing the campaign.
+    await finalizeCampaignPublishState(23);
+
+    const campaignUpdate = mockDb.updateSetByTableName.get("campaigns")?.mock.calls[0]?.[0];
+    expect(campaignUpdate).toMatchObject({
+      status: "active",
+      workflowState: "campaign_live",
+    });
+
+    const contentPostUpdate = mockDb.updateSetByTableName.get("content_posts")?.mock.calls[0]?.[0];
+    expect(contentPostUpdate.metadata).toMatchObject({
+      publishedPlatforms: expect.arrayContaining(["facebook", "instagram"]),
+      failedPlatforms: [],
+      pendingApprovalPlatforms: [],
+      facebookPostId: "122144189559083955",
+      instagramPostId: "18106085213021936",
+    });
+
+    const approvalUpdate = mockDb.updateSetByTableName.get("approval_requests")?.mock.calls[0]?.[0];
+    expect(approvalUpdate).toMatchObject({ status: "approved" });
   });
 });
 
