@@ -12,6 +12,7 @@ import {
   getTemplateRendererProvider,
   getInternalTemplateRenderer,
   getOpenAiLeafletRenderer,
+  getPremiumV2Renderer,
   isOpenAiLeafletConfigured,
 } from "./registry";
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
@@ -51,6 +52,9 @@ import {
   type MessagePackSource,
 } from "./campaign-message-architect";
 import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendererResult } from "./providers/template-renderer";
+import { buildPremiumV2Brief } from "./premium-v2/brief";
+import { validatePremiumV2Quality } from "./premium-v2/quality";
+import type { PremiumLeafletV2Brief } from "./premium-v2/types";
 import {
   resolveProviderTemplateId,
   getPremiumTemplateStatus,
@@ -562,7 +566,7 @@ export async function generatePremiumLeaflet({
   brandColors?: string[];
   creativeType?: CreativeType;
   templateId?: TemplateId;
-  provider?: "internal" | "external" | "ai";
+  provider?: "internal" | "external" | "ai" | "v2";
   strongerBrandFit?: boolean;
   creativeGuidance?: string;
   refinementInstruction?: string;
@@ -716,9 +720,12 @@ export async function generatePremiumLeaflet({
 
   let isAiProvider = provider === "ai";
   const isExternalProvider = provider === "external";
+  const isV2Provider = provider === "v2";
   let storageProvider = provider;
 
-  if (isAiProvider) {
+  if (isV2Provider) {
+    // V2 is always configured; it is the deterministic premium engine.
+  } else if (isAiProvider) {
     if (!isOpenAiLeafletConfigured()) {
       const message = "Premium AI leaflet generation is not configured. Add an OpenAI API key or generate a Basic Draft / Internal Premium Leaflet instead.";
       console.warn(`[PremiumLeaflet] Blocked AI | userId=${userId} | contentPostId=${contentPostId} | missing=OPENAI_API_KEY`);
@@ -737,7 +744,9 @@ export async function generatePremiumLeaflet({
     }
   }
 
-  let templateRenderer = isAiProvider
+  let templateRenderer = isV2Provider
+    ? getPremiumV2Renderer()
+    : isAiProvider
     ? getOpenAiLeafletRenderer()
     : isExternalProvider
     ? getTemplateRendererProvider()
@@ -988,7 +997,7 @@ export async function generatePremiumLeaflet({
       return { status: "failed", jobId: "", errorMessage: message };
     }
 
-    let resolvedProviderTemplateId = providerTemplateId as string;
+    let resolvedProviderTemplateId = isV2Provider ? "premium-v2" : (providerTemplateId as string);
 
     console.log(`[PremiumLeaflet] Rendering | userId=${userId} | contentPostId=${contentPostId} | provider=${templateRenderer.name} | template=${resolvedProviderTemplateId}`);
 
@@ -1029,6 +1038,21 @@ export async function generatePremiumLeaflet({
         services = refined.services;
       } catch (refineErr: any) {
         console.warn(`[PremiumLeaflet] Copy refinement failed, using original copy | error="${refineErr.message}"`);
+      }
+    }
+
+    // Build the deterministic V2 brief if using the V2 renderer. The brief
+    // quality gate runs before any credits are spent so bad copy/crowding is
+    // rejected early.
+    let v2Brief: PremiumLeafletV2Brief | undefined;
+    if (isV2Provider) {
+      v2Brief = buildPremiumV2Brief({ business, campaign, post, approvedMessagePack: approvedMessagePack || undefined, refinementInstruction });
+      const v2Quality = validatePremiumV2Quality(v2Brief);
+      if (!v2Quality.passed && v2Quality.criticalFailures.length > 0) {
+        const message = `Premium V2 brief failed quality gate: ${v2Quality.criticalFailures.join("; ")}`;
+        logError("[PremiumLeaflet] V2 brief quality gate failed", { userId, contentPostId, error: message, failures: v2Quality.criticalFailures });
+        await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+        return { status: "failed", jobId: "", errorMessage: message };
       }
     }
 
@@ -1115,8 +1139,8 @@ export async function generatePremiumLeaflet({
       }
     }
 
-    const renderReq: TemplateRendererRequest = {
-      providerTemplateId: resolvedProviderTemplateId,
+    const renderReq: TemplateRendererRequest & { v2Brief?: PremiumLeafletV2Brief } = {
+      providerTemplateId: isV2Provider ? "premium-v2" : resolvedProviderTemplateId,
       format: "leaflet",
       outputFormat: "png",
       aspectRatio,
@@ -1155,12 +1179,14 @@ export async function generatePremiumLeaflet({
       visualStyle: business.visualStyle || undefined,
       refinementInstruction:
         refinementInstructionType === "design_only" ? refinementInstruction : undefined,
+      ...(isV2Provider && v2Brief ? { v2Brief } : {}),
     };
 
     let renderResult: TemplateRendererResult;
     let buffer: Buffer;
     let aiQualityResult: LeafletQualityResult | undefined;
     let aiAttempts: any[] | undefined;
+    let v2QualityResult: ReturnType<typeof validatePremiumV2Quality> | undefined;
 
     let fallbackMeta: {
       provider: "internal-premium-fallback";
@@ -1287,12 +1313,25 @@ export async function generatePremiumLeaflet({
           providerJobId: renderResult.providerJobId,
         };
       }
+
+      // V2 post-render quality gate: layout guarantees and copy checks.
+      if (isV2Provider && v2Brief) {
+        const layoutMetrics = renderResult.metadata?.v2LayoutMetrics;
+        v2QualityResult = validatePremiumV2Quality(v2Brief, layoutMetrics);
+        if (!v2QualityResult.passed && v2QualityResult.criticalFailures.length > 0) {
+          const message = `Premium V2 leaflet failed quality gate: ${v2QualityResult.criticalFailures.join("; ")}`;
+          logError("[PremiumLeaflet] V2 render quality gate failed", { userId, contentPostId, error: message, failures: v2QualityResult.criticalFailures });
+          await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+          return { status: "failed", jobId: renderResult.providerJobId || "", errorMessage: message, provider: templateRenderer.name };
+        }
+      }
     }
 
     const storagePrefix = {
       ai: "premium-leaflet-ai",
       external: "premium-leaflet",
       internal: "premium-leaflet-internal",
+      v2: "premium-leaflet-v2",
     }[storageProvider];
 
     const stored = await storeImageBuffer(buffer, {
@@ -1360,10 +1399,20 @@ export async function generatePremiumLeaflet({
 
     const qualityTier: ImageQualityTier = isAiProvider
       ? ((aiQualityResult?.qualityTier as ImageQualityTier) ?? "premium")
+      : isV2Provider
+      ? ((v2QualityResult?.passed ? "premium" : "draft") as ImageQualityTier)
       : "premium";
-    const qualityLabel = isAiProvider ? qualityTierLabel(aiQualityResult?.qualityTier ?? "premium") : "Premium Marketing Leaflet";
-    const score = isAiProvider ? (aiQualityResult?.score ?? 80) : 90;
-    const warnings = isAiProvider ? aiQualityResult?.warnings ?? [] : [];
+    const qualityLabel = isAiProvider
+      ? qualityTierLabel(aiQualityResult?.qualityTier ?? "premium")
+      : isV2Provider
+      ? v2QualityResult?.label || "Premium Marketing Leaflet"
+      : "Premium Marketing Leaflet";
+    const score = isAiProvider
+      ? (aiQualityResult?.score ?? 80)
+      : isV2Provider
+      ? (v2QualityResult?.score ?? 80)
+      : 90;
+    const warnings = isAiProvider ? aiQualityResult?.warnings ?? [] : isV2Provider ? v2QualityResult?.warnings ?? [] : [];
 
     const previousVersions = Array.isArray(currentMeta?.imageVersions) ? currentMeta.imageVersions : [];
     const newVersion = {

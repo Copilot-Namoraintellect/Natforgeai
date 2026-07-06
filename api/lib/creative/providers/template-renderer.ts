@@ -80,6 +80,8 @@ export interface TemplateRendererResult {
   error?: string;
   providerJobId?: string;
   rawResponse?: any;
+  /** Optional structured metadata for quality gates / UI (e.g. V2 layout metrics). */
+  metadata?: Record<string, any>;
 }
 
 export interface TemplateRendererProvider {
