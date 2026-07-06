@@ -205,8 +205,8 @@ describe("Generic premium leaflet brief across categories", () => {
     },
   ];
 
-  it.each(cases)("builds a brief for $name", ({ business, campaign, expectedCategory }) => {
-    const brief = buildPremiumV2Brief({ business, campaign, post: { id: 1, campaignId: 10, title: "Post" } });
+  it.each(cases)("builds a brief for $name", async ({ business, campaign, expectedCategory }) => {
+    const brief = await buildPremiumV2Brief({ business, campaign, post: { id: 1, campaignId: 10, title: "Post" } });
     expect(brief.businessCategory).toBe(expectedCategory);
     expect(brief.headline).toBeTruthy();
     expect(brief.cta).toBeTruthy();
@@ -218,7 +218,7 @@ describe("Generic premium leaflet brief across categories", () => {
 // ── B. "Include all services" curates services into primary + secondary ──
 
 describe("'Include all services' service curation", () => {
-  it("curates a long service list into primary cards and a compact secondary strip", () => {
+  it("curates a long service list into primary cards and a compact secondary strip", async () => {
     const services = ["A", "B", "C", "D", "E", "F", "G", "H", "I"];
     const { primaryServices, secondaryServices } = curateServices(services, "premium_services", "general");
     expect(primaryServices.length).toBeLessThanOrEqual(5);
@@ -227,14 +227,14 @@ describe("'Include all services' service curation", () => {
     expect(secondaryServices.every((s) => !s.isPrimary)).toBe(true);
   });
 
-  it("keeps minimal mode to 3 primary cards even with many services", () => {
+  it("keeps minimal mode to 3 primary cards even with many services", async () => {
     const services = ["A", "B", "C", "D", "E", "F", "G"];
     const { primaryServices, secondaryServices } = curateServices(services, "premium_minimal", "general");
     expect(primaryServices.length).toBe(3);
     expect(secondaryServices.length).toBe(4);
   });
 
-  it("uses category preset priority keywords to order services", () => {
+  it("uses category preset priority keywords to order services", async () => {
     const services = ["Laminating", "Business cards", "Copying", "Courier", "Flyers"];
     const { primaryServices } = curateServices(services, "premium_services", "print_courier");
     expect(primaryServices[0].name.toLowerCase()).toContain("business card");
@@ -244,7 +244,7 @@ describe("'Include all services' service curation", () => {
 // ── C. Design-only refinement preserves copy exactly ──
 
 describe("Design-only refinement preserves copy", () => {
-  it("does not rewrite approved headline, CTA, or services", () => {
+  it("does not rewrite approved headline, CTA, or services", async () => {
     const approvedPack = {
       headline: "Approved headline",
       subheadline: "Approved subheadline",
@@ -252,7 +252,7 @@ describe("Design-only refinement preserves copy", () => {
       cta: "Approved CTA",
     };
 
-    const brief = buildPremiumV2Brief({
+    const brief = await buildPremiumV2Brief({
       business: makeBusiness(),
       campaign: makeCampaign(),
       approvedMessagePack: approvedPack,
@@ -270,7 +270,7 @@ describe("Design-only refinement preserves copy", () => {
 // ── D. Copy refinement creates structured message pack ──
 
 describe("Copy refinement parses structured instruction", () => {
-  it("detects improve_copy mode from natural language", () => {
+  it("detects improve_copy mode from natural language", async () => {
     expect(parseRefinementMode("Rewrite the headline to be punchier")).toBe("improve_copy");
     expect(parseRefinementMode("Better CTA")).toBe("stronger_cta");
     expect(parseRefinementMode("Make it more premium")).toBe("more_premium");
@@ -280,14 +280,14 @@ describe("Copy refinement parses structured instruction", () => {
 // ── E & F. Failed refinement preserves approved asset / published asset not overwritten ──
 
 describe("Stable iteration model", () => {
-  it("quality gate rejects a brief with no primary services or offer", () => {
+  it("quality gate rejects a brief with no primary services or offer", async () => {
     const brief = makeBrief({ primaryServices: [], offer: undefined, secondaryServices: [] });
     const result = validatePremiumV2Quality(brief);
     expect(result.passed).toBe(false);
     expect(result.criticalFailures.some((f) => f.includes("No primary services"))).toBe(true);
   });
 
-  it("does not approve a leaflet with a clipped CTA", () => {
+  it("does not approve a leaflet with a clipped CTA", async () => {
     const brief = makeBrief();
     const result = validatePremiumV2Quality(brief, {
       ctaBoundingBox: { x: 900, y: 1300, w: 300, h: 80 },
@@ -304,7 +304,7 @@ describe("Stable iteration model", () => {
     expect(result.label).toBe("CTA Clipped");
   });
 
-  it("does not approve a leaflet with a clipped footer", () => {
+  it("does not approve a leaflet with a clipped footer", async () => {
     const brief = makeBrief();
     const result = validatePremiumV2Quality(brief, {
       ctaBoundingBox: { x: 400, y: 1180, w: 280, h: 64 },
@@ -326,12 +326,12 @@ describe("Stable iteration model", () => {
 // ── G. CTA clipping fails premium quality gate ──
 
 describe("CTA clipping fails premium quality gate", () => {
-  it("assertV2LayoutGuarantees detects a clipped CTA", () => {
+  it("assertV2LayoutGuarantees detects a clipped CTA", async () => {
     const { ctaClipped } = assertV2LayoutGuarantees(1080, 1350, { x: 900, y: 1300, w: 300, h: 80 }, 1240);
     expect(ctaClipped).toBe(true);
   });
 
-  it("assertV2LayoutGuarantees accepts a safe CTA", () => {
+  it("assertV2LayoutGuarantees accepts a safe CTA", async () => {
     const { ctaClipped } = assertV2LayoutGuarantees(1080, 1350, { x: 400, y: 1180, w: 280, h: 64 }, 1240);
     expect(ctaClipped).toBe(false);
   });
@@ -340,7 +340,7 @@ describe("CTA clipping fails premium quality gate", () => {
 // ── H. Too many service cards fails or switches to catalogue/brochure mode ──
 
 describe("Too many service cards handling", () => {
-  it("fails quality gate when premium_services has more than 5 primary cards", () => {
+  it("fails quality gate when premium_services has more than 5 primary cards", async () => {
     const brief = makeBrief({
       layoutDensity: "premium_services",
       primaryServices: Array.from({ length: 8 }, (_, i) => ({ name: `Service ${i + 1}`, isPrimary: true })),
@@ -352,13 +352,13 @@ describe("Too many service cards handling", () => {
     expect(result.criticalFailures.some((f) => f.includes("Too many primary services"))).toBe(true);
   });
 
-  it("infers catalogue_brochure when explicitly requested", () => {
+  it("infers catalogue_brochure when explicitly requested", async () => {
     const density = inferLayoutDensity(makeBusiness(), makeCampaign({ offerDetails: "Full catalogue brochure" }), undefined, 12);
     expect(density).toBe("catalogue_brochure");
   });
 
-  it("brief builder switches to catalogue layout on explicit brochure instruction", () => {
-    const brief = buildPremiumV2Brief({
+  it("brief builder switches to catalogue layout on explicit brochure instruction", async () => {
+    const brief = await buildPremiumV2Brief({
       business: makeBusiness({
         productOrService: "A, B, C, D, E, F, G, H, I, J",
       }),
@@ -402,8 +402,8 @@ describe("3@1 Newmarket regression fixture", () => {
     preferredCta: "Request a Quote Today",
   };
 
-  it("classifies 3@1 Newmarket as print/courier", () => {
-    const brief = buildPremiumV2Brief({
+  it("classifies 3@1 Newmarket as print/courier", async () => {
+    const brief = await buildPremiumV2Brief({
       business: newmarketBusiness,
       campaign: newmarketCampaign,
       post: { id: 200, campaignId: 20, title: "Print promo" },
@@ -411,7 +411,7 @@ describe("3@1 Newmarket regression fixture", () => {
     expect(brief.businessCategory).toBe("print_courier");
   });
 
-  it("curates print/courier services with priority items first", () => {
+  it("curates print/courier services with priority items first", async () => {
     const services = normalizeServices([
       ...newmarketBusiness.websiteEvidence.productsServices,
       newmarketCampaign.productOrService,
@@ -423,8 +423,8 @@ describe("3@1 Newmarket regression fixture", () => {
     expect(secondaryServices.map((s) => s.name.toLowerCase())).toContain("laminating");
   });
 
-  it("uses a premium_services density by default (not a catalogue)", () => {
-    const brief = buildPremiumV2Brief({
+  it("uses a premium_services density by default (not a catalogue)", async () => {
+    const brief = await buildPremiumV2Brief({
       business: newmarketBusiness,
       campaign: newmarketCampaign,
       post: { id: 200, campaignId: 20, title: "Print promo" },
@@ -432,8 +432,8 @@ describe("3@1 Newmarket regression fixture", () => {
     expect(brief.layoutDensity).toBe("premium_services");
   });
 
-  it("uses the campaign CTA", () => {
-    const brief = buildPremiumV2Brief({
+  it("uses the campaign CTA", async () => {
+    const brief = await buildPremiumV2Brief({
       business: newmarketBusiness,
       campaign: newmarketCampaign,
       post: { id: 200, campaignId: 20, title: "Print promo" },
@@ -445,7 +445,7 @@ describe("3@1 Newmarket regression fixture", () => {
 // ── J. Premium quality gate rejects dull/crowded/generic leaflets ──
 
 describe("Premium quality gate rejects poor leaflets", () => {
-  it("rejects generic placeholder copy", () => {
+  it("rejects generic placeholder copy", async () => {
     const brief = makeBrief({
       headline: "Your business needs our professional team",
       subheadline: "We understand your needs",
@@ -453,11 +453,11 @@ describe("Premium quality gate rejects poor leaflets", () => {
       cta: "Contact us today",
     });
     const result = validatePremiumV2Quality(brief);
-    expect(result.label).toBe("Generic Copy");
-    expect(result.warnings.some((w) => w.includes("Generic phrases"))).toBe(true);
+    expect(result.label).toBe("Weak Copy");
+    expect(result.warnings.some((w) => w.includes("Weak copy") || w.includes("Generic phrases"))).toBe(true);
   });
 
-  it("rejects a crowded leaflet with too many services", () => {
+  it("rejects a crowded leaflet with too many services", async () => {
     const brief = makeBrief({
       layoutDensity: "premium_services",
       primaryServices: Array.from({ length: 7 }, (_, i) => ({ name: `Service ${i + 1}`, isPrimary: true })),
@@ -468,7 +468,7 @@ describe("Premium quality gate rejects poor leaflets", () => {
     expect(result.label).toBe("Failed Premium Standard");
   });
 
-  it("flags text too small", () => {
+  it("flags text too small", async () => {
     const brief = makeBrief();
     const result = validatePremiumV2Quality(brief, {
       ctaBoundingBox: { x: 400, y: 1180, w: 280, h: 64 },

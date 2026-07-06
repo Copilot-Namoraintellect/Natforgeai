@@ -65,6 +65,12 @@ export interface PremiumV2BrandPalette {
   textMuted: string;
 }
 
+export interface PremiumV2BrandKit {
+  palette: PremiumV2BrandPalette;
+  source: "logo" | "brandColors" | "websiteEvidence" | "default";
+  logoUrl?: string;
+}
+
 export interface PremiumV2ContactLines {
   phone?: string;
   whatsapp?: string;
@@ -124,7 +130,14 @@ export interface PremiumV2QualityResult {
     | "CTA Clipped"
     | "Footer Clipped"
     | "Generic Copy"
-    | "Failed Premium Standard";
+    | "Failed Premium Standard"
+    | "Brand Mismatch"
+    | "Generic Layout"
+    | "Weak Copy"
+    | "Duplicate Services"
+    | "Missing Logo"
+    | "Placeholder Contact"
+    | "Needs Design Review";
   criticalFailures: string[];
   warnings: string[];
 }

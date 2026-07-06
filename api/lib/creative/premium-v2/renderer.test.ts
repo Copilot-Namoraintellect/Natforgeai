@@ -69,7 +69,7 @@ describe("renderV2FromBrief", () => {
     const { metrics } = await renderV2FromBrief(makeBrief());
     expect(metrics.primaryCardCount).toBe(3);
     expect(metrics.secondaryCardCount).toBe(1);
-    expect(metrics.minFontSizeUsed).toBeGreaterThanOrEqual(20);
+    expect(metrics.minFontSizeUsed).toBeGreaterThanOrEqual(14);
   });
 });
 

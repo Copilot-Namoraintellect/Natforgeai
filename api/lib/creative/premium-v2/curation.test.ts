@@ -68,11 +68,11 @@ describe("inferVisualStyle", () => {
 });
 
 describe("curateServices", () => {
-  it("caps primary services at 5 for premium_services", () => {
+  it("caps primary services at 4 for premium_services", () => {
     const services = Array.from({ length: 9 }, (_, i) => `Service ${i + 1}`);
     const { primaryServices, secondaryServices } = curateServices(services, "premium_services");
-    expect(primaryServices.length).toBe(5);
-    expect(secondaryServices.length).toBe(4);
+    expect(primaryServices.length).toBe(4);
+    expect(secondaryServices.length).toBe(5);
     expect(primaryServices[0].isPrimary).toBe(true);
     expect(secondaryServices[0].isPrimary).toBe(false);
   });
@@ -95,7 +95,7 @@ describe("normalizeServices", () => {
   it("trims, dedupes, and removes trailing punctuation", () => {
     expect(normalizeServices(["  Printing  ", "Printing.", "Copying", "", "Copying"])).toEqual([
       "Printing",
-      "Copying",
+      "Copies",
     ]);
   });
 });

@@ -10,6 +10,7 @@
 
 import type { PremiumLeafletV2Brief, PremiumV2BusinessCategory, PremiumV2LayoutDensity, PremiumV2Service, PremiumV2VisualStyle } from "./types";
 import { getCategoryPreset, sortServicesByPreset } from "./presets";
+import { getServiceMicrocopy } from "./copy";
 
 export interface BusinessEvidence {
   displayName?: string;
@@ -65,7 +66,7 @@ export function asString(value: unknown): string | undefined {
   return undefined;
 }
 
-function asArray(value: unknown): string[] {
+export function asArray(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((v) => typeof v === "string" && v.trim()).map((v) => v.trim());
   return [];
 }
@@ -79,7 +80,7 @@ export function hasKeyword(text: string, keywords: string[]): boolean {
 export function hasWordKeyword(text: string, keywords: string[]): boolean {
   const lower = text.toLowerCase();
   return keywords.some((kw) => {
-    const pattern = new RegExp(`\\b${kw.toLowerCase()}`, "i");
+    const pattern = new RegExp(`\\b${kw.toLowerCase()}\\b`, "i");
     return pattern.test(lower);
   });
 }
@@ -130,7 +131,7 @@ export function inferLayoutDensity(
   business: BusinessEvidence,
   campaign: CampaignEvidence,
   refinementMode?: string,
-  serviceCount = 0
+  _serviceCount = 0
 ): PremiumV2LayoutDensity {
   const offerSignal = asString(campaign.offerDetails) || "";
   const styleSignal = asString(campaign.contentStyle) || "";
@@ -148,7 +149,8 @@ export function inferLayoutDensity(
   const category = inferBusinessCategory(business, campaign);
   const preset = getCategoryPreset(category);
 
-  if (category === "food_restaurant" && serviceCount > 5) return "catalogue_brochure";
+  // Food businesses with many items still render as a premium service menu,
+  // not a plain catalogue, unless the user explicitly asks for a brochure.
 
   // Strong campaign-level signals (offer details / explicit content style) can override the category default.
   // Campaign names alone are a weaker signal and should not override the category default.
@@ -192,15 +194,110 @@ export function inferVisualStyle(business: BusinessEvidence, campaign?: Campaign
   return getCategoryPreset(category).defaultVisualStyle;
 }
 
-export function normalizeServices(rawServices: string[]): string[] {
-  return rawServices
+function canonicalKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/\+/g, " and ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const PRINT_PRODUCTS = [
+  "business card",
+  "flyer",
+  "banner",
+  "poster",
+  "large format",
+  "canvas",
+  "wall canvas",
+  "brochure",
+  "booklet",
+  "sticker",
+  "sign",
+  "display",
+];
+
+function isGenericPrint(name: string): boolean {
+  const lower = canonicalKey(name);
+  return lower === "printing" || lower === "print" || lower === "custom printing";
+}
+
+function hasSpecificPrintProduct(services: string[]): boolean {
+  return services.some((s) => PRINT_PRODUCTS.some((p) => canonicalKey(s).includes(p)));
+}
+
+const SYNONYM_OVERRIDES: Record<string, string> = {
+  "courier services": "Courier Services",
+  courier: "Courier Services",
+  copying: "Copies",
+  copies: "Copies",
+  scans: "Scanning",
+  scanning: "Scanning",
+  "copying services": "Copies",
+  "scanning services": "Scanning",
+  milkshakes: "Shakes",
+  milkshake: "Shakes",
+};
+
+function groupRelatedServices(services: string[]): string[] {
+  const keys = services.map((s) => canonicalKey(s));
+  const hasBusinessCards = keys.includes("business cards");
+  const hasFlyers = keys.includes("flyers");
+  const hasCopies = keys.includes("copies");
+  const hasScanning = keys.includes("scanning");
+
+  const result: string[] = [];
+  let groupedBusinessCards = false;
+  let groupedCopies = false;
+
+  for (const s of services) {
+    const key = canonicalKey(s);
+    if (hasBusinessCards && hasFlyers && (key === "business cards" || key === "flyers")) {
+      if (!groupedBusinessCards) {
+        result.push("Business Cards & Flyers");
+        groupedBusinessCards = true;
+      }
+      continue;
+    }
+    if (hasCopies && hasScanning && (key === "copies" || key === "scanning")) {
+      if (!groupedCopies) {
+        result.push("Copies & Scans");
+        groupedCopies = true;
+      }
+      continue;
+    }
+    result.push(s);
+  }
+
+  return result;
+}
+
+export function normalizeServices(rawServices: string[], _category: PremiumV2BusinessCategory = "general"): string[] {
+  const cleaned = rawServices
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((s) => {
-      // Remove trailing punctuation and excessive descriptors.
-      return s.replace(/\s+/g, " ").replace(/[,.;:!]+$/, "").trim();
-    })
-    .filter((s, i, arr) => arr.indexOf(s) === i);
+    .map((s) => s.replace(/\s+/g, " ").replace(/[,.;:!]+$/, "").trim());
+
+  // Apply synonym overrides and remove generic print if specific products exist.
+  const specificPrintExists = hasSpecificPrintProduct(cleaned);
+  const merged: { original: string; key: string; canonical: string }[] = [];
+
+  for (const s of cleaned) {
+    const lower = canonicalKey(s);
+    if (specificPrintExists && isGenericPrint(s)) continue;
+
+    const replacement = SYNONYM_OVERRIDES[lower];
+    const value = replacement || s;
+    const key = canonicalKey(value);
+
+    // Skip duplicates by canonical key; keep first occurrence's casing.
+    if (merged.some((m) => m.key === key)) continue;
+    merged.push({ original: value, key, canonical: key });
+  }
+
+  return groupRelatedServices(merged.map((m) => m.original));
 }
 
 function cleanServiceName(name: string): string {
@@ -213,36 +310,56 @@ export function isAllServicesRequest(refinementInstruction?: string): boolean {
   return hasKeyword(lower, ["all services", "all products", "include everything", "list all", "show all"]);
 }
 
+function titleCase(value: string): string {
+  return value
+    .split(" ")
+    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1).toLowerCase() : ""))
+    .join(" ");
+}
+
+function enrichServiceName(name: string, _category: PremiumV2BusinessCategory): string {
+  const lower = canonicalKey(name);
+  // Expand courier to a clearer title.
+  if (lower === "courier services" || lower === "courier") return "Courier Services";
+  if (lower === "large format printing" || lower === "large format prints") return "Large Format Printing";
+  if (lower === "wall canvas prints" || lower === "canvas") return "Wall Canvas Prints";
+  return titleCase(name);
+}
+
 export function curateServices(
   rawServices: string[],
   density: PremiumV2LayoutDensity,
   category: PremiumV2BusinessCategory = "general"
 ): { primaryServices: PremiumV2Service[]; secondaryServices: PremiumV2Service[] } {
-  const cleaned = normalizeServices(rawServices);
+  const cleaned = normalizeServices(rawServices, category);
   const preset = getCategoryPreset(category);
   const ordered = sortServicesByPreset(cleaned, preset);
 
-  let primaryLimit = 5;
+  let primaryLimit = 4;
   if (density === "premium_minimal") primaryLimit = 3;
   else if (density === "offer_focused") primaryLimit = 4;
   else if (density === "corporate_professional") primaryLimit = 4;
   else if (density === "local_promo") primaryLimit = 4;
   else if (density === "catalogue_brochure") primaryLimit = 8;
-  else primaryLimit = 5;
+  else primaryLimit = 4;
 
   // For non-catalogue modes, never exceed 5 primary cards.
   if (density !== "catalogue_brochure" && primaryLimit > 5) primaryLimit = 5;
 
   const primaryNames = ordered.slice(0, primaryLimit);
-  const secondaryNames = ordered.slice(primaryLimit);
+  const secondaryNames = ordered.slice(primaryLimit).slice(0, 8);
 
-  const primaryServices: PremiumV2Service[] = primaryNames.map((name) => ({
-    name: cleanServiceName(name),
-    isPrimary: true,
-  }));
+  const primaryServices: PremiumV2Service[] = primaryNames.map((name) => {
+    const displayName = enrichServiceName(name, category);
+    return {
+      name: displayName,
+      description: getServiceMicrocopy(category, displayName),
+      isPrimary: true,
+    };
+  });
 
   const secondaryServices: PremiumV2Service[] = secondaryNames.map((name) => ({
-    name: cleanServiceName(name),
+    name: titleCase(cleanServiceName(name)),
     isPrimary: false,
   }));
 
@@ -269,6 +386,8 @@ export function buildProofPoints(business: BusinessEvidence, campaign?: Campaign
   return points;
 }
 
+// Re-export a sync palette helper for callers that already have a brand kit.
+// The canonical resolver is async and lives in ./brand-kit.
 export function resolveBrandPaletteV2(business: BusinessEvidence): PremiumLeafletV2Brief["brandPalette"] {
   const colors = asArray(business.brandColors);
   const primary = colors[0] || "#0F172A";

@@ -7,6 +7,7 @@
  */
 
 import type { PremiumLeafletV2Brief, PremiumV2QualityResult } from "./types";
+import { isWeak, WEAK_PHRASES } from "./copy";
 
 const GENERIC_PHRASES = [
   "your business",
@@ -46,11 +47,25 @@ interface LayoutMetrics {
   primaryCardCount: number;
   secondaryCardCount: number;
   layoutDensity: PremiumLeafletV2Brief["layoutDensity"];
+  didCrowd?: boolean;
+  usedContentHeight?: number;
+  availableContentHeight?: number;
+  logoComposited?: boolean;
+  primaryWithDescriptionCount?: number;
 }
+
+const PLACEHOLDER_CONTACT_PATTERNS = [
+  /example\.com/i,
+  /\.test$/i,
+  /011 123 9999/,
+  /info@example/i,
+  /placeholder/i,
+];
 
 export function validatePremiumV2Quality(
   brief: PremiumLeafletV2Brief,
-  layoutMetrics?: Partial<LayoutMetrics>
+  layoutMetrics?: Partial<LayoutMetrics>,
+  options: { production?: boolean } = {}
 ): PremiumV2QualityResult {
   const criticalFailures: string[] = [];
   const warnings: string[] = [];
@@ -59,13 +74,13 @@ export function validatePremiumV2Quality(
   // ── Service crowding rules ──
   const maxPrimary: Record<PremiumLeafletV2Brief["layoutDensity"], number> = {
     premium_minimal: 3,
-    premium_services: 5,
+    premium_services: 4,
     offer_focused: 4,
     corporate_professional: 4,
     local_promo: 4,
     catalogue_brochure: Infinity,
   };
-  const limit = maxPrimary[brief.layoutDensity] ?? 5;
+  const limit = maxPrimary[brief.layoutDensity] ?? 4;
   if (brief.layoutDensity !== "catalogue_brochure" && brief.primaryServices.length > limit) {
     criticalFailures.push(`Too many primary services (${brief.primaryServices.length}) for ${brief.layoutDensity} layout`);
     score -= 25;
@@ -75,13 +90,29 @@ export function validatePremiumV2Quality(
     score -= 10;
   }
 
+  // ── Duplicate services ──
+  const serviceNames = [...brief.primaryServices, ...brief.secondaryServices].map((s) => s.name.toLowerCase());
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
+  for (const name of serviceNames) {
+    if (seen.has(name)) {
+      duplicates.push(name);
+    } else {
+      seen.add(name);
+    }
+  }
+  if (duplicates.length > 0) {
+    criticalFailures.push(`Duplicate services detected: ${Array.from(new Set(duplicates)).join(", ")}`);
+    score -= 15;
+  }
+
   // ── Copy quality ──
   const allCopy = [
     brief.headline,
     brief.subheadline,
     brief.cta,
     ...brief.benefits,
-    ...brief.primaryServices.map((s) => s.name),
+    ...brief.primaryServices.map((s) => `${s.name} ${s.description || ""}`),
     ...brief.secondaryServices.map((s) => s.name),
   ]
     .filter(Boolean)
@@ -94,9 +125,20 @@ export function validatePremiumV2Quality(
     score -= 10;
   }
 
-  if (!brief.headline || brief.headline.length < 8) {
-    criticalFailures.push("Headline missing or too short");
+  const weakMatches = WEAK_PHRASES.filter((p) => allCopy.includes(p));
+  if (weakMatches.length) {
+    warnings.push(`Weak copy detected: ${weakMatches.join(", ")}`);
+    score -= 10;
+  }
+
+  if (!brief.headline || brief.headline.length < 12 || isWeak(brief.headline)) {
+    criticalFailures.push("Headline is missing, too short, or weak");
     score -= 20;
+  }
+
+  if (brief.subheadline && isWeak(brief.subheadline)) {
+    warnings.push("Subheadline uses weak phrasing");
+    score -= 8;
   }
 
   if (!brief.cta || brief.cta.length < 3) {
@@ -109,15 +151,27 @@ export function validatePremiumV2Quality(
     score -= 20;
   }
 
+  // ── Service card value ──
+  const describedCards = brief.primaryServices.filter((s) => !!s.description).length;
+  if (brief.primaryServices.length > 0 && describedCards < brief.primaryServices.length) {
+    warnings.push("Some primary service cards lack a benefit description");
+    score -= 8;
+  }
+
   // ── Brand/contact ──
   if (!brief.logoUrl) {
     warnings.push("No logo provided");
     score -= 5;
   }
+
   const contact = brief.contact || {};
+  const contactValues = [contact.phone, contact.whatsapp, contact.email, contact.website].filter(Boolean).join(" ");
   if (!contact.phone && !contact.whatsapp && !contact.email && !contact.website) {
     warnings.push("No contact details available");
     score -= 5;
+  } else if (options.production && PLACEHOLDER_CONTACT_PATTERNS.some((p) => p.test(contactValues))) {
+    criticalFailures.push("Placeholder contact details detected in production mode");
+    score -= 20;
   }
 
   // ── Layout metrics (when supplied by the renderer) ──
@@ -148,12 +202,26 @@ export function validatePremiumV2Quality(
       warnings.push("Text size may be too small to read");
       score -= 15;
     }
+
+    // Generic layout / too much empty space.
+    const used = layoutMetrics.usedContentHeight || 0;
+    const available = layoutMetrics.availableContentHeight || 1;
+    if (used > 0 && available / used > 1.45 && brief.layoutDensity !== "catalogue_brochure") {
+      warnings.push("Layout has excessive empty space");
+      score -= 8;
+    }
+
+    // Missing logo when one was expected. We downgrade rather than fail so
+    // that temporary logo fetch issues do not block an otherwise valid render.
+    if (brief.logoUrl && layoutMetrics.logoComposited === false) {
+      warnings.push("Logo was provided but could not be composited");
+      score -= 15;
+    }
   }
 
   // ── Determine label ──
   let label: PremiumV2QualityResult["label"] = "Premium Ready";
 
-  // Layout-metric labels take precedence over copy labels.
   if (layoutMetrics?.ctaBoundingBox) {
     const { ctaBoundingBox, width = 1080, height = 1350 } = layoutMetrics;
     const ctaClipped =
@@ -168,6 +236,14 @@ export function validatePremiumV2Quality(
     label = "Text Too Small";
   }
 
+  if (label === "Premium Ready" && duplicates.length > 0) {
+    label = "Duplicate Services";
+  }
+
+  if (label === "Premium Ready" && weakMatches.length > 0) {
+    label = "Weak Copy";
+  }
+
   if (label === "Premium Ready" && criticalFailures.length > 0) {
     label = "Failed Premium Standard";
   }
@@ -176,14 +252,18 @@ export function validatePremiumV2Quality(
     label = "Generic Copy";
   }
 
-  if (label === "Premium Ready" && brief.primaryServices.length > 5 && brief.layoutDensity !== "catalogue_brochure") {
+  if (label === "Premium Ready" && brief.primaryServices.length > 4 && brief.layoutDensity !== "catalogue_brochure") {
     label = "Too Crowded";
+  }
+
+  if (label === "Premium Ready" && (!brief.logoUrl || layoutMetrics?.logoComposited === false)) {
+    label = "Missing Logo";
   }
 
   if (label === "Premium Ready" && score < 70) {
     label = "Failed Premium Standard";
   } else if (label === "Premium Ready" && score < 85) {
-    label = "Good but Needs Review";
+    label = "Needs Design Review";
   }
 
   return {

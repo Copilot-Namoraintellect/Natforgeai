@@ -56,8 +56,10 @@ const LOCAL_SERVICES: PremiumV2CategoryPreset = {
 const RETAIL_PRODUCT: PremiumV2CategoryPreset = {
   category: "retail_product",
   label: "Retail / product",
-  headlineTemplate: (b, c) =>
-    asString(c?.offerDetails) || `${name(b) || "Your Local"} Shop${location(b) ? ` – ${location(b)}` : ""}`,
+  headlineTemplate: (b, c) => {
+    if (asString(c?.offerDetails)) return `${name(b) || "Your Local"} – ${c!.offerDetails as string}`;
+    return `${name(b) || "Your Local"} Shop${location(b) ? ` – ${location(b)}` : ""}`;
+  },
   subheadlineTemplate: (b, c) =>
     asString(c?.mainPainPoint)
       ? `Find exactly what you need without the hassle.`
@@ -90,8 +92,11 @@ const FOOD_RESTAURANT: PremiumV2CategoryPreset = {
 const PROFESSIONAL_SERVICES: PremiumV2CategoryPreset = {
   category: "professional_services",
   label: "Professional services",
-  headlineTemplate: (b, c) =>
-    asString(c?.offerDetails) || `${name(b) || "Expert"} Advice You Can Trust`,
+  headlineTemplate: (b, c) => {
+    if (asString(c?.offerDetails)) return asString(c!.offerDetails as string) as string;
+    const loc = location(b);
+    return loc ? `Expert Advice & Professional Services in ${loc}` : `Expert Advice You Can Trust`;
+  },
   subheadlineTemplate: (b, c) =>
     asString(c?.mainPainPoint)
       ? `Helping you ${(c!.mainPainPoint as string).toLowerCase()} with clear, expert guidance.`
@@ -107,8 +112,13 @@ const PROFESSIONAL_SERVICES: PremiumV2CategoryPreset = {
 const PRINT_COURIER: PremiumV2CategoryPreset = {
   category: "print_courier",
   label: "Print / courier / business services",
-  headlineTemplate: (b) =>
-    `${name(b) || "Professional"} Printing${location(b) ? ` in ${location(b)}` : ""}`,
+  headlineTemplate: (b, c) => {
+    const loc = location(b);
+    if (asString(c?.offerDetails)) return asString(c!.offerDetails as string) as string;
+    return loc
+      ? `Professional Printing, Courier & Business Services in ${loc}`
+      : `Print, Courier & Business Services Made Simple`;
+  },
   subheadlineTemplate: (b, c) =>
     asString(c?.mainPainPoint)
       ? `Fast, reliable print and courier support when you need it most.`
@@ -124,6 +134,7 @@ const PRINT_COURIER: PremiumV2CategoryPreset = {
     "courier",
     "banner",
     "poster",
+    "custom printing",
   ],
   compactServiceKeywords: ["laminating", "binding", "copy", "scan", "custom"],
   proofPointLabels: ["Location", "Fast turnaround", "Local delivery"],
@@ -166,8 +177,11 @@ const HEALTHCARE_WELLNESS: PremiumV2CategoryPreset = {
 const TRAINING_EDUCATION: PremiumV2CategoryPreset = {
   category: "training_education",
   label: "Training / education",
-  headlineTemplate: (b, c) =>
-    asString(c?.offerDetails) || `Learn with ${name(b) || "the Experts"}`,
+  headlineTemplate: (b, c) => {
+    if (asString(c?.offerDetails)) return asString(c!.offerDetails as string) as string;
+    const loc = location(b);
+    return loc ? `Practical Courses & Workshops in ${loc}` : `Build Skills with Industry Experts`;
+  },
   subheadlineTemplate: (b, c) =>
     asString(c?.mainPainPoint)
       ? `Practical training that helps you move forward faster.`

@@ -22,6 +22,14 @@ vi.mock("./brand-palette", () => ({
     accent: "#10B981",
     source: "mock",
   })),
+  extractLogoPalette: vi.fn(async () => null),
+  normaliseHex: vi.fn((value: unknown) => {
+    const clean = String(value ?? "").replace("#", "").trim();
+    if (!clean) return undefined;
+    if (/^[0-9A-Fa-f]{3}$/.test(clean)) return `#${clean.split("").map((c) => c + c).join("").toUpperCase()}`;
+    if (/^[0-9A-Fa-f]{6}$/.test(clean)) return `#${clean.toUpperCase()}`;
+    return undefined;
+  }),
   safeText: vi.fn((value: unknown) => (value == null ? "" : String(value).trim())),
 }));
 

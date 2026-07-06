@@ -48,8 +48,8 @@ const approvedPack: ApprovedCopyPack = {
 };
 
 describe("buildPremiumV2Brief", () => {
-  it("infers professional services category and corporate density", () => {
-    const brief = buildPremiumV2Brief({
+  it("infers professional services category and corporate density", async () => {
+    const brief = await buildPremiumV2Brief({
       business: baseBusiness,
       campaign: baseCampaign,
       post: basePost,
@@ -61,20 +61,20 @@ describe("buildPremiumV2Brief", () => {
     expect(brief.headline).toBe("Approved headline");
   });
 
-  it("curates 'all services' into primary + secondary strip, not a catalogue by default", () => {
+  it("curates 'all services' into primary + secondary strip, not a catalogue by default", async () => {
     const business = {
       ...baseBusiness,
       productOrService: "A, B, C, D, E, F, G",
       websiteEvidence: { productsServices: ["H", "I", "J"] },
     };
-    const brief = buildPremiumV2Brief({ business, campaign: baseCampaign, post: basePost });
+    const brief = await buildPremiumV2Brief({ business, campaign: baseCampaign, post: basePost });
     expect(brief.layoutDensity).not.toBe("catalogue_brochure");
     expect(brief.primaryServices.length).toBeLessThanOrEqual(5);
     expect(brief.secondaryServices.length).toBeGreaterThan(0);
   });
 
-  it("switches to catalogue layout when many services are explicitly requested", () => {
-    const brief = buildPremiumV2Brief({
+  it("switches to catalogue layout when many services are explicitly requested", async () => {
+    const brief = await buildPremiumV2Brief({
       business: baseBusiness,
       campaign: baseCampaign,
       post: basePost,
@@ -84,8 +84,8 @@ describe("buildPremiumV2Brief", () => {
     expect(brief.primaryServices.length).toBeGreaterThan(0);
   });
 
-  it("preserves approved copy on a design-only refinement", () => {
-    const brief = buildPremiumV2Brief({
+  it("preserves approved copy on a design-only refinement", async () => {
+    const brief = await buildPremiumV2Brief({
       business: baseBusiness,
       campaign: baseCampaign,
       post: basePost,
@@ -98,8 +98,8 @@ describe("buildPremiumV2Brief", () => {
     expect(brief.refinementMode).toBe("design_only");
   });
 
-  it("uses structured copy fields from approved pack", () => {
-    const brief = buildPremiumV2Brief({
+  it("uses structured copy fields from approved pack", async () => {
+    const brief = await buildPremiumV2Brief({
       business: baseBusiness,
       campaign: baseCampaign,
       post: basePost,
@@ -110,14 +110,14 @@ describe("buildPremiumV2Brief", () => {
     expect(brief.benefits).toContain("Benefit A");
   });
 
-  it("parses refinement modes from natural language", () => {
+  it("parses refinement modes from natural language", async () => {
     expect(parseRefinementMode("add more services")).toBe("add_services");
     expect(parseRefinementMode("full catalogue brochure")).toBe("catalogue_layout");
     expect(parseRefinementMode("make it cleaner with fewer services")).toBe("reduce_clutter");
     expect(parseRefinementMode("stronger call to action")).toBe("stronger_cta");
   });
 
-  it("builds a 3@1 Newmarket fixture as a print/courier business", () => {
+  it("builds a 3@1 Newmarket fixture as a print/courier business", async () => {
     const business = {
       id: 2,
       name: "3@1 Newmarket",
@@ -127,13 +127,13 @@ describe("buildPremiumV2Brief", () => {
       location: "Newmarket",
       phone: "011 123 9999",
       website: "https://3at1newmarket.test",
-      productOrService: "Printing, Copying, Scanning, Laminating, Binding, Courier, Business cards, Banners, Canvas",
+      productOrService: "Printing, Copying, Scanning, Laminating, Binding, Courier, Business cards, Flyers, Banners, Canvas",
       targetCustomer: "Local businesses and students",
       brandColors: ["#0047AB", "#FFD700", "#FFFFFF"],
       visualStyle: "modern",
       websiteEvidence: {
         businessCategory: "print and courier",
-        productsServices: ["Printing", "Copying", "Scanning", "Laminating", "Binding", "Courier", "Business cards", "Banners", "Canvas"],
+        productsServices: ["Printing", "Copying", "Scanning", "Laminating", "Binding", "Courier", "Business cards", "Flyers", "Banners", "Canvas"],
       },
     };
     const campaign = {
@@ -146,10 +146,10 @@ describe("buildPremiumV2Brief", () => {
       productOrService: "Printing, Copying, Scanning, Laminating, Binding, Courier",
       preferredCta: "Get a Quote",
     };
-    const brief = buildPremiumV2Brief({ business, campaign, post: { id: 200, campaignId: 20, title: "Print promo" } });
+    const brief = await buildPremiumV2Brief({ business, campaign, post: { id: 200, campaignId: 20, title: "Print promo" } });
 
     expect(brief.businessCategory).toBe("print_courier");
-    expect(brief.primaryServices.map((s) => s.name)).toContain("Printing");
+    expect(brief.primaryServices.map((s) => s.name)).toContain("Business Cards & Flyers");
     expect(brief.primaryServices.length).toBeLessThanOrEqual(5);
     expect(brief.headline).toBeTruthy();
     expect(brief.cta).toBe("Get a Quote");

@@ -54,6 +54,7 @@ import {
 import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendererResult } from "./providers/template-renderer";
 import { buildPremiumV2Brief } from "./premium-v2/brief";
 import { validatePremiumV2Quality } from "./premium-v2/quality";
+import { resolveBrandKit } from "./premium-v2/brand-kit";
 import type { PremiumLeafletV2Brief } from "./premium-v2/types";
 import {
   resolveProviderTemplateId,
@@ -1046,7 +1047,14 @@ export async function generatePremiumLeaflet({
     // rejected early.
     let v2Brief: PremiumLeafletV2Brief | undefined;
     if (isV2Provider) {
-      v2Brief = buildPremiumV2Brief({ business, campaign, post, approvedMessagePack: approvedMessagePack || undefined, refinementInstruction });
+      const brandKit = await resolveBrandKit({
+        displayName: business.displayName,
+        name: business.name,
+        logo: business.logo,
+        brandColors: business.brandColors,
+        websiteEvidence: business.websiteEvidence,
+      });
+      v2Brief = await buildPremiumV2Brief({ business, campaign, post, approvedMessagePack: approvedMessagePack || undefined, refinementInstruction, brandKit });
       const v2Quality = validatePremiumV2Quality(v2Brief);
       if (!v2Quality.passed && v2Quality.criticalFailures.length > 0) {
         const message = `Premium V2 brief failed quality gate: ${v2Quality.criticalFailures.join("; ")}`;

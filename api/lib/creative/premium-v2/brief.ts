@@ -7,6 +7,7 @@
 
 import type {
   PremiumLeafletV2Brief,
+  PremiumV2BrandKit,
   PremiumV2BusinessCategory,
   PremiumV2LayoutDensity,
   PremiumV2RefinementMode,
@@ -19,10 +20,7 @@ import {
   curateServices,
   buildContactLines,
   buildProofPoints,
-  resolveBrandPaletteV2,
   inferLogoPlacement,
-  buildDefaultHeadline,
-  buildDefaultSubheadline,
   buildDefaultCta,
   normalizeServices,
   asString,
@@ -30,6 +28,8 @@ import {
   isAllServicesRequest,
 } from "./curation";
 import type { BusinessEvidence, CampaignEvidence, ApprovedCopyPack } from "./curation";
+import { resolveBrandKit } from "./brand-kit";
+import { buildCommercialBenefits, buildCommercialHeadline, buildCommercialSubheadline, isWeak, rejectWeakCopy } from "./copy";
 
 export interface BuildPremiumV2BriefInput {
   business: any;
@@ -37,6 +37,7 @@ export interface BuildPremiumV2BriefInput {
   post?: any;
   approvedMessagePack?: ApprovedCopyPack | null;
   refinementInstruction?: string;
+  brandKit?: PremiumV2BrandKit;
 }
 
 function toBusinessEvidence(business: any): BusinessEvidence {
@@ -145,21 +146,27 @@ function extractServices(
     sources.push(...business.productOrService.split(/[\n,;]+/));
   }
 
-  return normalizeServices(sources);
+  return sources;
 }
 
-function extractBenefits(business: BusinessEvidence, campaign: CampaignEvidence, approvedPack?: ApprovedCopyPack | null): string[] {
+function extractBenefits(
+  business: BusinessEvidence,
+  campaign: CampaignEvidence,
+  approvedPack?: ApprovedCopyPack | null
+): string[] {
   const benefits: string[] = [];
   if (approvedPack?.benefitBullets?.length) {
     benefits.push(...approvedPack.benefitBullets.slice(0, 4));
   }
-  if (!benefits.length && campaign.mainPainPoint) {
-    benefits.push(`Solves ${campaign.mainPainPoint.toLowerCase()}`);
+
+  if (!benefits.length) {
+    return buildCommercialBenefits(business, campaign).slice(0, 4);
   }
-  if (!benefits.length && business.targetCustomer) {
-    benefits.push(`Built for ${business.targetCustomer}`);
-  }
-  return benefits.slice(0, 4);
+
+  return benefits
+    .map((b) => rejectWeakCopy(b, ""))
+    .filter(Boolean)
+    .slice(0, 4);
 }
 
 function buildComplianceNotes(business: BusinessEvidence, campaign: CampaignEvidence): string[] {
@@ -173,8 +180,44 @@ function buildComplianceNotes(business: BusinessEvidence, campaign: CampaignEvid
   return notes;
 }
 
-export function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): PremiumLeafletV2Brief {
-  const { business: rawBusiness, campaign: rawCampaign, post, approvedMessagePack, refinementInstruction } = input;
+function resolveHeadline(
+  business: BusinessEvidence,
+  campaign: CampaignEvidence,
+  post: any,
+  approvedPack?: ApprovedCopyPack | null
+): string {
+  const approved = asString(approvedPack?.headline);
+  if (approved) return approved;
+
+  const postHeadline = asString(post?.headline);
+  if (postHeadline && !isWeak(postHeadline)) return postHeadline;
+
+  const coreMessage = asString(campaign.coreMessage);
+  if (coreMessage && !isWeak(coreMessage)) return coreMessage;
+
+  return buildCommercialHeadline(business, campaign);
+}
+
+function resolveSubheadline(
+  business: BusinessEvidence,
+  campaign: CampaignEvidence,
+  post: any,
+  approvedPack?: ApprovedCopyPack | null
+): string {
+  const approved = asString(approvedPack?.subheadline);
+  if (approved) return approved;
+
+  const postHook = asString(post?.hook);
+  if (postHook && !isWeak(postHook)) return postHook;
+
+  const mainPainPoint = asString(campaign.mainPainPoint);
+  if (mainPainPoint && !isWeak(mainPainPoint) && mainPainPoint.length > 20) return mainPainPoint;
+
+  return buildCommercialSubheadline(business, campaign);
+}
+
+export async function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): Promise<PremiumLeafletV2Brief> {
+  const { business: rawBusiness, campaign: rawCampaign, post, approvedMessagePack, refinementInstruction, brandKit: injectedBrandKit } = input;
 
   const business = toBusinessEvidence(rawBusiness);
   const campaign = toCampaignEvidence(rawCampaign || {});
@@ -205,17 +248,8 @@ export function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): PremiumLea
   // asked for a catalogue/brochure layout.
   const layoutDensity: PremiumV2LayoutDensity = preliminaryDensity;
 
-  const headline =
-    asString(approvedMessagePack?.headline) ||
-    asString(post?.headline) ||
-    asString(campaign.coreMessage) ||
-    buildDefaultHeadline(business, campaign);
-
-  const subheadline =
-    asString(approvedMessagePack?.subheadline) ||
-    asString(post?.hook) ||
-    asString(campaign.mainPainPoint) ||
-    buildDefaultSubheadline(business, campaign);
+  const headline = resolveHeadline(business, campaign, post, approvedMessagePack || undefined);
+  const subheadline = resolveSubheadline(business, campaign, post, approvedMessagePack || undefined);
 
   const cta =
     asString(approvedMessagePack?.cta) ||
@@ -227,9 +261,10 @@ export function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): PremiumLea
   const benefits = extractBenefits(business, campaign, approvedMessagePack);
   const contact = buildContactLines(business, approvedMessagePack || undefined);
   const proofPoints = buildProofPoints(business, campaign);
-  const brandPalette = resolveBrandPaletteV2(business);
   const visualStyle: PremiumV2VisualStyle = inferVisualStyle(business, campaign);
-  const logoUrl = asString(business.logo);
+
+  const brandKit = injectedBrandKit || (await resolveBrandKit(business));
+  const logoUrl = brandKit.logoUrl;
 
   const brief: PremiumLeafletV2Brief = {
     businessName: asString(business.displayName || business.name) || "Your Business",
@@ -247,7 +282,7 @@ export function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): PremiumLea
     contact,
     visualStyle,
     layoutDensity,
-    brandPalette,
+    brandPalette: brandKit.palette,
     logoUrl,
     logoPlacement: inferLogoPlacement(layoutDensity),
     proofPoints,
@@ -266,4 +301,80 @@ export function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): PremiumLea
   };
 
   return brief;
+}
+
+/** Synchronous variant for callers that already have a resolved BrandKit. */
+export function buildPremiumV2BriefSync(input: BuildPremiumV2BriefInput & { brandKit: PremiumV2BrandKit }): PremiumLeafletV2Brief {
+  const { business: rawBusiness, campaign: rawCampaign, post, approvedMessagePack, refinementInstruction, brandKit } = input;
+
+  const business = toBusinessEvidence(rawBusiness);
+  const campaign = toCampaignEvidence(rawCampaign || {});
+  const category: PremiumV2BusinessCategory = inferBusinessCategory(business, campaign);
+  const refinementMode = parseRefinementMode(refinementInstruction);
+  const allServicesRequested = isAllServicesRequest(refinementInstruction);
+
+  const preserveApprovedCopy = refinementMode === "design_only";
+  const rawServices = extractServices(business, campaign, approvedMessagePack, preserveApprovedCopy);
+
+  let preliminaryDensity: PremiumV2LayoutDensity = refineModeToLayoutDensity(
+    refinementMode,
+    business,
+    campaign,
+    rawServices.length
+  );
+  if (allServicesRequested && preliminaryDensity !== "catalogue_brochure") {
+    preliminaryDensity = rawServices.length > 5 ? "premium_services" : "premium_minimal";
+  }
+
+  const { primaryServices, secondaryServices } = curateServices(rawServices, preliminaryDensity, category);
+  const layoutDensity: PremiumV2LayoutDensity = preliminaryDensity;
+
+  const headline = resolveHeadline(business, campaign, post, approvedMessagePack || undefined);
+  const subheadline = resolveSubheadline(business, campaign, post, approvedMessagePack || undefined);
+
+  const cta =
+    asString(approvedMessagePack?.cta) ||
+    asString(campaign.preferredCta) ||
+    asString(post?.cta) ||
+    buildDefaultCta(campaign, business);
+
+  const offer = asString(campaign.offerDetails);
+  const benefits = extractBenefits(business, campaign, approvedMessagePack);
+  const contact = buildContactLines(business, approvedMessagePack || undefined);
+  const proofPoints = buildProofPoints(business, campaign);
+  const visualStyle: PremiumV2VisualStyle = inferVisualStyle(business, campaign);
+
+  return {
+    businessName: asString(business.displayName || business.name) || "Your Business",
+    businessCategory: category,
+    campaignGoal: asString(campaign.goal || campaign.primaryOutcome),
+    targetCustomer: asString(campaign.targetBuyer || business.targetCustomer),
+    customerPainPoint: asString(campaign.mainPainPoint),
+    headline,
+    subheadline,
+    primaryServices,
+    secondaryServices,
+    offer,
+    benefits,
+    cta,
+    contact,
+    visualStyle,
+    layoutDensity,
+    brandPalette: brandKit.palette,
+    logoUrl: brandKit.logoUrl,
+    logoPlacement: inferLogoPlacement(layoutDensity),
+    proofPoints,
+    complianceNotes: buildComplianceNotes(business, campaign),
+    refinementMode,
+    refinementInstruction: refinementInstruction?.trim(),
+    _evidence: {
+      industry: business.industry,
+      productOrService: business.productOrService,
+      targetBuyer: campaign.targetBuyer,
+      mainPainPoint: campaign.mainPainPoint,
+      offerDetails: campaign.offerDetails,
+      websiteEvidenceCategory: business.websiteEvidence?.businessCategory,
+      websiteEvidenceServices: business.websiteEvidence?.productsServices,
+    },
+  };
 }

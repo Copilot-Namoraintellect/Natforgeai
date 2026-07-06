@@ -1,10 +1,9 @@
 /**
- * Premium Leaflet V2 – SVG renderer.
+ * Premium Leaflet V2.1 – SVG renderer.
  *
  * Produces a 1080x1350 premium leaflet PNG from a PremiumLeafletV2Brief.
- * The layout adapts to the brief's category, density, and visual style while
- * enforcing universal premium rules: safe margins, readable type, clear CTA,
- * strong hierarchy, and no clipped elements.
+ * The renderer is now layout-preset aware, brand-fidelity first, and renders
+ * service cards with descriptions, a stronger CTA block, and a branded footer.
  */
 
 import sharp from "sharp";
@@ -22,6 +21,7 @@ const MIN_HEADLINE = 44;
 const MIN_SUBHEADLINE = 22;
 const MIN_CTA = 26;
 const MIN_SERVICE = 20;
+const MIN_SERVICE_DESC = 14;
 const MIN_FOOTER = 18;
 const MIN_STRIP = 16;
 
@@ -90,6 +90,29 @@ async function compositeLogo(background: Buffer, logoBuffer: Buffer, x: number, 
   return sharp(background).composite([{ input: resized, left, top }]).png().toBuffer();
 }
 
+function initials(name: string): string {
+  const words = name.split(/\s+/).filter(Boolean);
+  const firstChars = words.map((w) => w[0]).filter(Boolean);
+  if (firstChars.length === 0) return "?";
+  if (firstChars.length === 1) return firstChars.slice(0, 2).join("").toUpperCase();
+  return (firstChars[0] + firstChars[firstChars.length - 1]).toUpperCase();
+}
+
+async function drawTextLogo(background: Buffer, businessName: string, x: number, y: number, size: number, color: string): Promise<Buffer> {
+  const text = initials(businessName);
+  const fontSize = Math.round(size * 0.42);
+  const svg = `
+    <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="${size}" height="${size}" rx="${size / 2}" fill="${color}"/>
+      <text x="50%" y="55%" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="900" fill="${contrastColor(color)}" text-anchor="middle" dominant-baseline="middle">${escapeXml(text)}</text>
+    </svg>
+  `;
+  const buffer = await sharp(Buffer.from(svg, "utf-8")).png().toBuffer();
+  const left = Math.round(x - size / 2);
+  const top = Math.round(y - size / 2);
+  return sharp(background).composite([{ input: buffer, left, top }]).png().toBuffer();
+}
+
 function contrastColor(hex: string): string {
   const clean = hex.replace("#", "");
   const r = parseInt(clean.substring(0, 2), 16) || 0;
@@ -97,6 +120,25 @@ function contrastColor(hex: string): string {
   const b = parseInt(clean.substring(4, 6), 16) || 0;
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return luminance > 0.5 ? "#0F172A" : "#FFFFFF";
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const clean = hex.replace("#", "");
+  if (clean.length !== 6) return null;
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  if ([r, g, b].some((v) => Number.isNaN(v))) return null;
+  return { r, g, b };
+}
+
+function lighten(hex: string, amount: number): string {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return hex;
+  const r = Math.min(255, Math.round(rgb.r + (255 - rgb.r) * amount));
+  const g = Math.min(255, Math.round(rgb.g + (255 - rgb.g) * amount));
+  const b = Math.min(255, Math.round(rgb.b + (255 - rgb.b) * amount));
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0").toUpperCase()}`;
 }
 
 function densityCards(density: PremiumV2LayoutDensity): { maxPrimary: number; columns: number; compact: boolean } {
@@ -113,67 +155,99 @@ function densityCards(density: PremiumV2LayoutDensity): { maxPrimary: number; co
       return { maxPrimary: 10, columns: 2, compact: true };
     case "premium_services":
     default:
-      return { maxPrimary: 5, columns: 2, compact: false };
+      return { maxPrimary: 4, columns: 2, compact: false };
   }
 }
 
+type LayoutPreset =
+  | "premium_services_brand_panel"
+  | "premium_offer_hero"
+  | "premium_local_service"
+  | "premium_corporate_clean"
+  | "premium_retail_promo"
+  | "premium_food_offer"
+  | "premium_beauty_booking";
+
+function selectLayoutPreset(brief: PremiumLeafletV2Brief): LayoutPreset {
+  const { layoutDensity, businessCategory } = brief;
+  if (businessCategory === "food_restaurant") return "premium_food_offer";
+  if (businessCategory === "beauty_wellness") return "premium_beauty_booking";
+  if (businessCategory === "retail_product") return "premium_retail_promo";
+  if (layoutDensity === "corporate_professional") return "premium_corporate_clean";
+  if (layoutDensity === "local_promo") return "premium_local_service";
+  if (layoutDensity === "offer_focused") return "premium_offer_hero";
+  return "premium_services_brand_panel";
+}
+
 function buildBackground(brief: PremiumLeafletV2Brief): string {
-  const { primary, secondary, background } = brief.brandPalette;
-  const category = brief.businessCategory;
+  const { primary, secondary, background, accent } = brief.brandPalette;
+  const preset = selectLayoutPreset(brief);
 
-  // Subtle top-to-bottom gradient using brand colours at very low opacity.
-  const top = brief.visualStyle === "bold" || brief.layoutDensity === "local_promo" ? primary : background;
-  const bottom = brief.visualStyle === "luxury" || brief.visualStyle === "modern" ? secondary : background;
+  const heroH = preset === "premium_food_offer" || preset === "premium_beauty_booking" ? 460 : 380;
+  const curve = `<path d="M0,0 H${WIDTH} V${heroH} Q${WIDTH / 2},${heroH + 70} 0,${heroH - 20} Z" fill="${primary}"/>`;
 
-  // Category accent block near the top for visual interest.
-  const accentH = category === "food_restaurant" || category === "beauty_wellness" ? 420 : 320;
-  const accentPath =
-    category === "retail_product"
-      ? `<polygon points="0,0 ${WIDTH},0 ${WIDTH},${accentH - 80} 0,${accentH}" fill="${primary}" opacity="0.9"/>`
-      : `<path d="M0,0 H${WIDTH} V${accentH} Q${WIDTH / 2},${accentH + 60} 0,${accentH - 40} Z" fill="${primary}" opacity="0.92"/>`;
+  const diagonal = `<polygon points="0,0 ${WIDTH},0 ${WIDTH},${heroH - 60} 0,${heroH}" fill="${primary}"/>`;
+
+  const shape = preset === "premium_corporate_clean" || preset === "premium_retail_promo" ? diagonal : curve;
+
+  // Abstract brand shapes in low opacity.
+  const shapes = `
+    <circle cx="${WIDTH - 120}" cy="${heroH + 80}" r="90" fill="${accent}" opacity="0.06"/>
+    <circle cx="${WIDTH - 60}" cy="${heroH + 180}" r="60" fill="${secondary}" opacity="0.05"/>
+    <rect x="${MARGIN}" y="${heroH + 120}" width="70" height="70" rx="16" fill="${accent}" opacity="0.04" transform="rotate(12 ${MARGIN + 35} ${heroH + 155})"/>
+  `;
 
   return `
     <rect width="${WIDTH}" height="${HEIGHT}" fill="${background}"/>
     <defs>
       <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="${top}" stop-opacity="0.05"/>
-        <stop offset="100%" stop-color="${bottom}" stop-opacity="0.03"/>
+        <stop offset="0%" stop-color="${lighten(primary, 0.92)}" stop-opacity="1"/>
+        <stop offset="100%" stop-color="${background}" stop-opacity="1"/>
       </linearGradient>
     </defs>
     <rect width="${WIDTH}" height="${HEIGHT}" fill="url(#bgGrad)"/>
-    ${accentPath}
+    ${shape}
+    ${shapes}
   `;
 }
 
 function buildHeader(brief: PremiumLeafletV2Brief): { svg: string; height: number; logoArea: { x: number; y: number; max: number } } {
-  const { businessName, brandPalette } = brief;
+  const { businessName, brandPalette, logoUrl } = brief;
   const height = 120;
-  const logoMax = 84;
+  const logoMax = 110;
   const logoX = MARGIN + logoMax / 2;
   const logoY = height / 2;
-  const nameX = MARGIN + logoMax + 18;
+  const nameX = logoUrl ? MARGIN + logoMax + 24 : MARGIN;
   const nameMaxWidth = WIDTH - nameX - MARGIN;
-  const nameSize = Math.max(24, fitFontSize(businessName, nameMaxWidth, 40, 24));
+  const nameSize = Math.max(26, fitFontSize(businessName, nameMaxWidth, 44, 26));
 
   const nameLines = wrapText(businessName, Math.round(nameMaxWidth / (nameSize * 0.55)));
-  const lineHeight = nameSize + 6;
+  const lineHeight = nameSize + 8;
   const blockHeight = nameLines.length * lineHeight;
-  const startY = (height - blockHeight) / 2 + nameSize - 4;
+  const startY = (height - blockHeight) / 2 + nameSize - 2;
 
   const nameSvg = nameLines
     .map(
       (line, i) =>
-        `<text x="${nameX}" y="${startY + i * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="800" fill="${contrastColor(brandPalette.primary)}">${escapeXml(line)}</text>`
+        `<text x="${nameX}" y="${startY + i * lineHeight}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="900" fill="${contrastColor(brandPalette.primary)}">${escapeXml(line)}</text>`
     )
     .join("");
 
-  const svg = nameSvg;
+  // Logo backing circle when logo is present.
+  const backingSvg = logoUrl
+    ? `<circle cx="${logoX}" cy="${logoY}" r="${logoMax / 2 + 6}" fill="#FFFFFF" opacity="0.95"/>`
+    : "";
+
+  const svg = `
+    ${backingSvg}
+    ${nameSvg}
+  `;
   return { svg, height, logoArea: { x: logoX, y: logoY, max: logoMax } };
 }
 
 function buildFooter(brief: PremiumLeafletV2Brief, y: number): { svg: string; height: number } {
   const { contact, brandPalette, businessName } = brief;
-  const height = 104;
+  const height = 112;
 
   const items: string[] = [];
   if (contact.phone) items.push(`${contact.phone}`);
@@ -196,8 +270,8 @@ function buildFooter(brief: PremiumLeafletV2Brief, y: number): { svg: string; he
     )
     .join("");
 
-  const businessNameSize = Math.max(14, Math.min(18, fitFontSize(businessName, maxWidth, 18, 14)));
-  const businessNameSvg = `<text x="${WIDTH / 2}" y="${y + 28}" font-family="Arial, Helvetica, sans-serif" font-size="${businessNameSize}" font-weight="700" fill="${contrastColor(brandPalette.primary)}" text-anchor="middle" opacity="0.9">${escapeXml(businessName)}</text>`;
+  const businessNameSize = Math.max(14, Math.min(20, fitFontSize(businessName, maxWidth, 20, 14)));
+  const businessNameSvg = `<text x="${WIDTH / 2}" y="${y + 32}" font-family="Arial, Helvetica, sans-serif" font-size="${businessNameSize}" font-weight="800" fill="${contrastColor(brandPalette.primary)}" text-anchor="middle" opacity="0.95">${escapeXml(businessName)}</text>`;
 
   const svg = `
     <rect x="0" y="${y}" width="${WIDTH}" height="${height}" fill="${brandPalette.primary}"/>
@@ -209,16 +283,17 @@ function buildFooter(brief: PremiumLeafletV2Brief, y: number): { svg: string; he
 
 function buildCta(brief: PremiumLeafletV2Brief, y: number): { svg: string; height: number; bounds: { x: number; y: number; w: number; h: number } } {
   const { cta, brandPalette } = brief;
-  const height = 96;
-  const buttonH = 68;
-  const buttonW = Math.min(720, WIDTH - MARGIN * 2);
+  const height = 104;
+  const buttonH = 72;
+  const buttonW = Math.min(760, WIDTH - MARGIN * 2);
   const buttonX = (WIDTH - buttonW) / 2;
   const buttonY = y + (height - buttonH) / 2;
-  const size = Math.max(MIN_CTA, fitFontSize(cta, buttonW - 64, 34, MIN_CTA));
+  const size = Math.max(MIN_CTA, fitFontSize(cta, buttonW - 72, 36, MIN_CTA));
 
   const svg = `
-    <rect x="${buttonX}" y="${buttonY}" width="${buttonW}" height="${buttonH}" rx="14" fill="${brandPalette.accent}"/>
-    <text x="${WIDTH / 2}" y="${buttonY + buttonH / 2 + size / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${size}" font-weight="800" fill="${contrastColor(brandPalette.accent)}" text-anchor="middle">${escapeXml(cta)}</text>
+    <rect x="${buttonX}" y="${buttonY}" width="${buttonW}" height="${buttonH}" rx="16" fill="${brandPalette.accent}"/>
+    <rect x="${buttonX}" y="${buttonY + 4}" width="${buttonW}" height="${buttonH}" rx="16" fill="#000000" opacity="0.08"/>
+    <text x="${WIDTH / 2}" y="${buttonY + buttonH / 2 + size / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${size}" font-weight="900" fill="${contrastColor(brandPalette.accent)}" text-anchor="middle">${escapeXml(cta)}</text>
   `;
   return { svg, height, bounds: { x: buttonX, y: buttonY, w: buttonW, h: buttonH } };
 }
@@ -227,12 +302,16 @@ function buildHero(brief: PremiumLeafletV2Brief, y: number, maxWidth: number): {
   const { headline, subheadline, offer, brandPalette } = brief;
   let cursorY = y;
 
+  // Hero text sits on the primary brand block; use contrasting text colour.
+  const heroTextColor = contrastColor(brandPalette.primary);
+  const heroMutedColor = contrastColor(brandPalette.primary) === "#FFFFFF" ? "rgba(255,255,255,0.85)" : brandPalette.textMuted;
+
   const headlineSize = Math.max(MIN_HEADLINE, fitFontSize(headline, maxWidth, 62, MIN_HEADLINE));
   const headlineLines = wrapText(headline, Math.round(maxWidth / (headlineSize * 0.55)));
   const headlineSvg = headlineLines
     .map(
       (line, i) =>
-        `<text x="${WIDTH / 2}" y="${cursorY + (i + 1) * (headlineSize + 10)}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="900" fill="${contrastColor(brandPalette.primary)}" text-anchor="middle">${escapeXml(line)}</text>`
+        `<text x="${WIDTH / 2}" y="${cursorY + (i + 1) * (headlineSize + 10)}" font-family="Arial, Helvetica, sans-serif" font-size="${headlineSize}" font-weight="900" fill="${heroTextColor}" text-anchor="middle">${escapeXml(line)}</text>`
     )
     .join("");
   cursorY += headlineLines.length * (headlineSize + 10) + 18;
@@ -241,13 +320,13 @@ function buildHero(brief: PremiumLeafletV2Brief, y: number, maxWidth: number): {
   if (offer) {
     const offerSize = Math.max(26, fitFontSize(offer, maxWidth, 38, 26));
     const offerLines = wrapText(offer, Math.round(maxWidth / (offerSize * 0.55)));
-    const offerH = offerLines.length * (offerSize + 8) + 32;
+    const offerH = offerLines.length * (offerSize + 8) + 36;
     offerSvg = `
-      <rect x="${MARGIN}" y="${cursorY}" width="${maxWidth}" height="${offerH}" rx="12" fill="${brandPalette.accent}" opacity="0.14"/>
+      <rect x="${MARGIN}" y="${cursorY}" width="${maxWidth}" height="${offerH}" rx="14" fill="${brandPalette.accent}" opacity="0.20"/>
       ${offerLines
         .map(
           (line, i) =>
-            `<text x="${WIDTH / 2}" y="${cursorY + 26 + (i + 1) * (offerSize + 8)}" font-family="Arial, Helvetica, sans-serif" font-size="${offerSize}" font-weight="800" fill="${brandPalette.accent}" text-anchor="middle">${escapeXml(line)}</text>`
+            `<text x="${WIDTH / 2}" y="${cursorY + 28 + (i + 1) * (offerSize + 8)}" font-family="Arial, Helvetica, sans-serif" font-size="${offerSize}" font-weight="800" fill="${brandPalette.accent}" text-anchor="middle">${escapeXml(line)}</text>`
         )
         .join("")}
     `;
@@ -261,7 +340,7 @@ function buildHero(brief: PremiumLeafletV2Brief, y: number, maxWidth: number): {
     subSvg = subLines
       .map(
         (line, i) =>
-          `<text x="${WIDTH / 2}" y="${cursorY + (i + 1) * (subSize + 8)}" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="500" fill="${contrastColor(brandPalette.primary)}" opacity="0.92" text-anchor="middle">${escapeXml(line)}</text>`
+          `<text x="${WIDTH / 2}" y="${cursorY + (i + 1) * (subSize + 8)}" font-family="Arial, Helvetica, sans-serif" font-size="${subSize}" font-weight="500" fill="${heroMutedColor}" text-anchor="middle">${escapeXml(line)}</text>`
       )
       .join("");
     cursorY += subLines.length * (subSize + 8) + 14;
@@ -270,7 +349,11 @@ function buildHero(brief: PremiumLeafletV2Brief, y: number, maxWidth: number): {
   return { svg: headlineSvg + offerSvg + subSvg, height: cursorY - y };
 }
 
-function buildServiceCards(brief: PremiumLeafletV2Brief, y: number, availableHeight: number): { svg: string; height: number; didCrowd: boolean } {
+function buildServiceCards(
+  brief: PremiumLeafletV2Brief,
+  y: number,
+  maxHeight: number
+): { svg: string; height: number; didCrowd: boolean } {
   const { primaryServices, secondaryServices, brandPalette, layoutDensity } = brief;
   const { maxPrimary, columns, compact } = densityCards(layoutDensity);
   const services = primaryServices.slice(0, maxPrimary);
@@ -280,15 +363,27 @@ function buildServiceCards(brief: PremiumLeafletV2Brief, y: number, availableHei
   const cardW = (WIDTH - MARGIN * 2 - gap * (columns - 1)) / columns;
   const rows = Math.ceil(services.length / columns);
 
-  // Determine card height from available space, but never let cards get too small.
-  const maxCardH = compact ? 110 : 142;
-  const minCardH = compact ? 72 : 96;
-  const idealCardH = Math.max(minCardH, Math.min(maxCardH, Math.floor((availableHeight - (rows - 1) * gap) / rows)));
-  const cardH = idealCardH;
+  const maxCardH = compact ? 120 : 210;
+  const minCardH = compact ? 86 : 116;
+  const naturalMin = rows * minCardH + (rows - 1) * gap;
 
-  // Detect crowding when available space is too small for the requested number of cards.
-  const requiredMin = rows * minCardH + (rows - 1) * gap;
-  const didCrowd = availableHeight < requiredMin;
+  // Estimate secondary strip/list height.
+  let secondaryNatural = 0;
+  if (layoutDensity === "catalogue_brochure" && secondaryServices.length > 0) {
+    const perCol = Math.ceil((primaryServices.slice(maxPrimary).length + secondaryServices.length) / 2);
+    secondaryNatural = perCol * 30 + 24;
+  } else if (secondaryServices.length > 0) {
+    const stripText = `${secondaryServices.map((s) => s.name).join(" · ")}`;
+    const stripSize = Math.max(MIN_STRIP, fitFontSize(stripText, WIDTH - MARGIN * 2, 22, MIN_STRIP));
+    const stripLines = wrapText(stripText, Math.round((WIDTH - MARGIN * 2) / (stripSize * 0.55)));
+    secondaryNatural = stripLines.length * (stripSize + 6) + 28 + 18;
+  }
+
+  // Shrink cards to fit within maxHeight; if impossible, flag crowding.
+  const fitCardH = Math.max(minCardH, Math.min(maxCardH, Math.floor((maxHeight - secondaryNatural - (rows - 1) * gap) / rows)));
+  const cardH = fitCardH;
+  const primaryHeight = rows * (cardH + gap) - gap;
+  const didCrowd = maxHeight < naturalMin + secondaryNatural;
 
   let svg = "";
   services.forEach((svc, i) => {
@@ -296,45 +391,69 @@ function buildServiceCards(brief: PremiumLeafletV2Brief, y: number, availableHei
     const row = Math.floor(i / columns);
     const x = MARGIN + col * (cardW + gap);
     const cy = y + row * (cardH + gap);
-    const nameSize = Math.max(MIN_SERVICE, fitFontSize(svc.name, cardW - 36, compact ? 26 : 30, MIN_SERVICE));
-    const lines = wrapText(svc.name, Math.round((cardW - 36) / (nameSize * 0.55)));
+
+    const hasDesc = !!svc.description;
+    const nameSize = Math.max(MIN_SERVICE, fitFontSize(svc.name, cardW - 48, compact ? 26 : 30, MIN_SERVICE));
+    const nameLines = wrapText(svc.name, Math.round((cardW - 48) / (nameSize * 0.55)));
+
+    const descSize = Math.max(MIN_SERVICE_DESC, Math.min(16, fitFontSize(svc.description || "", cardW - 48, 16, MIN_SERVICE_DESC)));
+    const descLines = hasDesc ? wrapText(svc.description!, Math.round((cardW - 48) / (descSize * 0.55))).slice(0, 2) : [];
+
+    const nameBlockH = nameLines.length * (nameSize + 4);
+    const descBlockH = descLines.length * (descSize + 4);
+    const totalBlockH = nameBlockH + (hasDesc ? 8 + descBlockH : 0);
+    const contentTop = cy + cardH / 2 - totalBlockH / 2;
+
+    const nameTextSvg = nameLines
+      .map(
+        (line, idx) =>
+          `<text x="${x + 20}" y="${contentTop + (idx + 1) * (nameSize + 4)}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="800" fill="${brandPalette.text}">${escapeXml(line)}</text>`
+      )
+      .join("");
+
+    const descTextSvg = descLines
+      .map(
+        (line, idx) =>
+          `<text x="${x + 20}" y="${contentTop + nameBlockH + 8 + (idx + 1) * (descSize + 4)}" font-family="Arial, Helvetica, sans-serif" font-size="${descSize}" font-weight="500" fill="${brandPalette.textMuted}">${escapeXml(line)}</text>`
+      )
+      .join("");
 
     svg += `
-      <rect x="${x}" y="${cy}" width="${cardW}" height="${cardH}" rx="12" fill="${brandPalette.background}" stroke="${brandPalette.secondary}" stroke-width="2" stroke-opacity="0.18"/>
-      ${lines
-        .map(
-          (line, idx) =>
-            `<text x="${x + cardW / 2}" y="${cy + cardH / 2 + (idx - (lines.length - 1) / 2) * (nameSize + 6) + nameSize / 3}" font-family="Arial, Helvetica, sans-serif" font-size="${nameSize}" font-weight="700" fill="${brandPalette.text}" text-anchor="middle">${escapeXml(line)}</text>`
-        )
-        .join("")}
+      <defs>
+        <filter id="cardShadow${i}" x="-10%" y="-10%" width="120%" height="120%">
+          <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.08"/>
+        </filter>
+      </defs>
+      <rect x="${x}" y="${cy}" width="${cardW}" height="${cardH}" rx="14" fill="${brandPalette.background}" filter="url(#cardShadow${i})"/>
+      <rect x="${x}" y="${cy}" width="6" height="${cardH}" rx="3" fill="${brandPalette.accent}"/>
+      ${nameTextSvg}
+      ${descTextSvg}
     `;
   });
 
-  const primaryHeight = rows * (cardH + gap) - gap;
   let secondaryHeight = 0;
 
   if (secondaryServices.length > 0 && layoutDensity !== "catalogue_brochure") {
-    const stripY = y + primaryHeight + 32;
-    const stripText = `Also available: ${secondaryServices.map((s) => s.name).join(" · ")}`;
+    const stripY = y + primaryHeight + 20;
+    const stripText = `${secondaryServices.map((s) => s.name).join(" · ")}`;
     const stripSize = Math.max(MIN_STRIP, fitFontSize(stripText, WIDTH - MARGIN * 2, 22, MIN_STRIP));
     const stripLines = wrapText(stripText, Math.round((WIDTH - MARGIN * 2) / (stripSize * 0.55)));
     const stripH = stripLines.length * (stripSize + 6) + 24;
 
     svg += `
-      <rect x="${MARGIN}" y="${stripY}" width="${WIDTH - MARGIN * 2}" height="${stripH}" rx="10" fill="${brandPalette.secondary}" opacity="0.08"/>
+      <rect x="${MARGIN}" y="${stripY}" width="${WIDTH - MARGIN * 2}" height="${stripH}" rx="12" fill="${brandPalette.secondary}" opacity="0.10"/>
       ${stripLines
         .map(
           (line, i) =>
-            `<text x="${WIDTH / 2}" y="${stripY + 18 + (i + 1) * (stripSize + 6)}" font-family="Arial, Helvetica, sans-serif" font-size="${stripSize}" font-weight="600" fill="${brandPalette.textMuted}" text-anchor="middle">${escapeXml(line)}</text>`
+            `<text x="${WIDTH / 2}" y="${stripY + 16 + (i + 1) * (stripSize + 6)}" font-family="Arial, Helvetica, sans-serif" font-size="${stripSize}" font-weight="600" fill="${brandPalette.textMuted}" text-anchor="middle">${escapeXml(line)}</text>`
         )
         .join("")}
     `;
-    secondaryHeight = stripH + 18;
+    secondaryHeight = stripH + 14;
   }
 
-  // For catalogue mode, render remaining services as a compact two-column list.
   if (layoutDensity === "catalogue_brochure" && secondaryServices.length > 0) {
-    const listY = y + primaryHeight + 28;
+    const listY = y + primaryHeight + 20;
     const itemSize = Math.max(MIN_STRIP, 20);
     const all = [...primaryServices.slice(maxPrimary), ...secondaryServices];
     const colCount = 2;
@@ -361,16 +480,18 @@ function buildBenefits(brief: PremiumLeafletV2Brief, y: number): { svg: string; 
   const items = benefits.slice(0, 3);
   const itemSize = Math.max(MIN_SUBHEADLINE, 22);
   const maxW = (WIDTH - MARGIN * 2) / items.length - 16;
+  const bandH = 86;
 
-  let svg = "";
+  let contentSvg = "";
   items.forEach((benefit, i) => {
     const x = MARGIN + i * ((WIDTH - MARGIN * 2) / items.length) + (WIDTH - MARGIN * 2) / items.length / 2;
     const lines = wrapText(benefit, Math.round(maxW / (itemSize * 0.55)));
     const lineH = itemSize + 6;
     const blockH = lines.length * lineH;
-    const startY = y + (60 - blockH) / 2 + itemSize;
-    svg += `<circle cx="${x - Math.min(maxW, benefit.length * itemSize * 0.55) / 2 - 10}" cy="${startY - itemSize / 2}" r="4" fill="${brandPalette.accent}"/>`;
-    svg += lines
+    const startY = y + (bandH - blockH) / 2 + itemSize;
+    const bulletX = x - Math.min(maxW, benefit.length * itemSize * 0.55) / 2 - 12;
+    contentSvg += `<circle cx="${bulletX}" cy="${startY - itemSize / 2 + 4}" r="5" fill="${brandPalette.accent}"/>`;
+    contentSvg += lines
       .map(
         (line, idx) =>
           `<text x="${x}" y="${startY + idx * lineH}" font-family="Arial, Helvetica, sans-serif" font-size="${itemSize}" font-weight="600" fill="${brandPalette.text}" text-anchor="middle">${escapeXml(line)}</text>`
@@ -378,7 +499,11 @@ function buildBenefits(brief: PremiumLeafletV2Brief, y: number): { svg: string; 
       .join("");
   });
 
-  return { svg, height: 72 };
+  const svg = `
+    <rect x="${MARGIN}" y="${y}" width="${WIDTH - MARGIN * 2}" height="${bandH}" rx="14" fill="${brandPalette.secondary}" opacity="0.08"/>
+    ${contentSvg}
+  `;
+  return { svg, height: bandH };
 }
 
 export interface V2RenderLayoutMetrics {
@@ -392,11 +517,15 @@ export interface V2RenderLayoutMetrics {
   secondaryCardCount: number;
   layoutDensity: PremiumLeafletV2Brief["layoutDensity"];
   didCrowd: boolean;
+  logoComposited: boolean;
+  usedContentHeight: number;
+  availableContentHeight: number;
+  primaryWithDescriptionCount: number;
 }
 
 export async function renderV2FromBrief(brief: PremiumLeafletV2Brief): Promise<{ buffer: Buffer; metrics: V2RenderLayoutMetrics }> {
   const header = buildHeader(brief);
-  const footerH = 104;
+  const footerH = 112;
 
   // Reserve space from the bottom up so CTA and footer are never clipped.
   const cta = buildCta(brief, SAFE_BOTTOM - 80 - footerH);
@@ -405,6 +534,7 @@ export async function renderV2FromBrief(brief: PremiumLeafletV2Brief): Promise<{
   // Content sits between the header and the CTA, with generous padding.
   const contentTop = header.height + 24;
   const contentBottom = cta.bounds.y - 32;
+  const availableContentHeight = contentBottom - contentTop;
 
   const hero = buildHero(brief, contentTop, WIDTH - MARGIN * 2);
   const heroBottom = contentTop + hero.height;
@@ -413,10 +543,12 @@ export async function renderV2FromBrief(brief: PremiumLeafletV2Brief): Promise<{
   const benefitsSection = buildBenefits(brief, 0);
   const benefitsHeight = benefitsSection.height > 0 ? benefitsSection.height + 20 : 0;
   const servicesSpace = contentBottom - heroBottom - benefitsHeight - 28;
-  const services = buildServiceCards(brief, heroBottom + 28, servicesSpace);
-  const servicesBottom = heroBottom + 28 + services.height;
+  const services = buildServiceCards(brief, heroBottom + 24, servicesSpace);
+  const servicesBottom = heroBottom + 24 + services.height;
 
-  const benefits = buildBenefits(brief, servicesBottom + 16);
+  // Position benefits directly below the service section.
+  const benefitsTop = servicesBottom + 32;
+  const benefits = buildBenefits(brief, benefitsTop);
 
   const svgParts: string[] = [
     `<?xml version="1.0" encoding="UTF-8"?>`,
@@ -433,11 +565,16 @@ export async function renderV2FromBrief(brief: PremiumLeafletV2Brief): Promise<{
 
   const png = await svgToPng(svgParts.join(""));
 
-  // Composite logo if provided.
+  // Composite logo if provided; fall back to a branded initial badge if fetching fails.
   const logoBuffer = await fetchLogoBuffer(brief.logoUrl);
-  const finalBuffer = logoBuffer
-    ? await compositeLogo(png, logoBuffer, header.logoArea.x, header.logoArea.y, header.logoArea.max, header.logoArea.max)
-    : png;
+  let finalBuffer = png;
+  if (logoBuffer) {
+    finalBuffer = await compositeLogo(png, logoBuffer, header.logoArea.x, header.logoArea.y, header.logoArea.max, header.logoArea.max);
+  } else if (brief.logoUrl) {
+    finalBuffer = await drawTextLogo(png, brief.businessName, header.logoArea.x, header.logoArea.y, header.logoArea.max, brief.brandPalette.primary);
+  }
+
+  const usedContentHeight = benefitsTop + (benefits.height > 0 ? benefits.height + 12 : 0) - contentTop;
 
   const metrics: V2RenderLayoutMetrics = {
     width: WIDTH,
@@ -445,11 +582,15 @@ export async function renderV2FromBrief(brief: PremiumLeafletV2Brief): Promise<{
     ctaBoundingBox: cta.bounds,
     footerY: SAFE_BOTTOM - footerH + MARGIN,
     footerHeight: footerH,
-    minFontSizeUsed: MIN_SERVICE,
+    minFontSizeUsed: brief.primaryServices.length > 0 ? MIN_SERVICE : MIN_SERVICE_DESC,
     primaryCardCount: brief.primaryServices.length,
     secondaryCardCount: brief.secondaryServices.length,
     layoutDensity: brief.layoutDensity,
     didCrowd: services.didCrowd,
+    logoComposited: !!logoBuffer || !!brief.logoUrl,
+    usedContentHeight,
+    availableContentHeight,
+    primaryWithDescriptionCount: brief.primaryServices.filter((s) => !!s.description).length,
   };
 
   return { buffer: finalBuffer, metrics };
