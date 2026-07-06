@@ -18,6 +18,15 @@ import { isFacebookPublishingReady, isInstagramPublishingReady } from "./lib/int
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
+const AUTO_PUBLISH_PLATFORMS = new Set([
+  "facebook",
+  "instagram",
+  "linkedin",
+  "twitter",
+  "tiktok",
+  "email",
+]);
+
 function toDisplayPlatformName(platform: string): string {
   if (!platform) return platform;
   return platform.charAt(0).toUpperCase() + platform.slice(1).toLowerCase();
@@ -31,7 +40,7 @@ function buildPlatformStatusesFromIntegrations(
 
   for (const integration of integrations) {
     const normalized = String(integration.platform || "").trim().toLowerCase();
-    if (!normalized || seen.has(normalized)) continue;
+    if (!normalized || !AUTO_PUBLISH_PLATFORMS.has(normalized) || seen.has(normalized)) continue;
     seen.add(normalized);
     statuses.push({ platform: toDisplayPlatformName(normalized), status: "connected" });
   }
@@ -889,19 +898,44 @@ export const contentRouter = createRouter({
           )
         );
 
-      const connectedPlatforms = new Set(integrations.map((i) => i.platform));
-      const autoPublishPlatforms = ["facebook", "instagram", "linkedin", "twitter", "tiktok", "email"];
-      const publishablePlatforms = campaignPlatforms.filter(
-        (p) => autoPublishPlatforms.includes(p) && connectedPlatforms.has(p as any)
-      );
+      // Derive publishable platforms directly from the connected integrations returned for this
+      // campaign/business/user. This must match the source of truth used by ensurePublishEligibility.
+      const platformStatuses = buildPlatformStatusesFromIntegrations(integrations);
+      const publishablePlatforms: string[] = [];
+      const excludedPlatforms: Array<{ platform: string; reason: string }> = [];
+      const seenPlatforms = new Set<string>();
 
-      console.log("[PublishCampaignPack] Starting publish", {
+      for (const integration of integrations) {
+        const normalized = String(integration.platform || "").trim().toLowerCase();
+        if (!normalized) {
+          excludedPlatforms.push({ platform: integration.platform, reason: "missing platform value" });
+          continue;
+        }
+        if (!AUTO_PUBLISH_PLATFORMS.has(normalized)) {
+          excludedPlatforms.push({
+            platform: integration.platform,
+            reason: "platform not supported for auto-publish",
+          });
+          continue;
+        }
+        if (seenPlatforms.has(normalized)) continue;
+        seenPlatforms.add(normalized);
+        publishablePlatforms.push(normalized);
+      }
+
+      logInfo("[PublishCampaignPack] Starting publish", {
         campaignId: input.campaignId,
         userId: ctx.user.id,
         businessId: campaignBusinessId,
-        platforms: campaignPlatforms,
-        publishablePlatforms,
-        integrationIds: integrations.map((i) => ({ platform: i.platform, id: i.id, businessId: i.businessId })),
+        campaignPlatforms,
+        connectedIntegrations: integrations.map((i) => ({
+          platform: i.platform,
+          id: i.id,
+          businessId: i.businessId,
+        })),
+        platformStatuses,
+        derivedPublishablePlatforms: publishablePlatforms,
+        excludedPlatforms,
       });
 
       // Refresh approved social posts after updates
@@ -911,8 +945,41 @@ export const contentRouter = createRouter({
         return meta.approved === true || p.status === "published";
       });
 
+      // Defensive contract check: if connected integrations exist and eligibility returned ready,
+      // every supported connected platform must appear in publishablePlatforms. Otherwise we have a
+      // platform-mapping bug and must fail loudly instead of silently falling back to manual posting.
+      const supportedConnectedPlatforms = integrations
+        .map((i) => String(i.platform || "").trim().toLowerCase())
+        .filter((p) => AUTO_PUBLISH_PLATFORMS.has(p));
+      const missingFromPublishable = supportedConnectedPlatforms.filter(
+        (p) => !publishablePlatforms.includes(p)
+      );
+      if (missingFromPublishable.length > 0) {
+        const message = `[PublishCampaignPack] Contract error: supported connected platforms [${missingFromPublishable.join(
+          ", "
+        )}] missing from publishablePlatforms`;
+        logError(message, {
+          campaignId: input.campaignId,
+          userId: ctx.user.id,
+          businessId: campaignBusinessId,
+          connectedIntegrations: integrations.map((i) => ({
+            platform: i.platform,
+            id: i.id,
+            businessId: i.businessId,
+          })),
+          platformStatuses,
+          publishablePlatforms,
+          missingFromPublishable,
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Publishing platform mapping failed. Please contact support.",
+        });
+      }
+
       // No eligible connected platform for this campaign/business: mark content as ready for
-      // manual posting instead of pretending it was published successfully.
+      // manual posting instead of pretending it was published successfully. This path must NOT be
+      // reached when connected integrations exist and ensurePublishEligibility returned ready.
       if (publishablePlatforms.length === 0) {
         let manualCount = 0;
         for (const post of posts) {
@@ -934,7 +1001,7 @@ export const contentRouter = createRouter({
           manualCount++;
         }
 
-        console.log("[PublishCampaignPack] No connected platforms for campaign; marked as manual posting", {
+        logInfo("[PublishCampaignPack] No connected platforms for campaign; marked as manual posting", {
           campaignId: input.campaignId,
           manualCount,
         });

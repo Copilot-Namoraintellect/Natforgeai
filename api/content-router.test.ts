@@ -542,6 +542,85 @@ describe("contentRouter.publishCampaignPack", () => {
     expect(inserted.status).toBe("failed");
     expect(inserted.lastError).toContain("Instagram publishing is not ready");
   });
+
+  it("Campaign #23 regression: connected Facebook and Instagram integrations produce non-empty publishablePlatforms", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { isFacebookPublishingReady, isInstagramPublishingReady } = await import(
+      "./lib/integrations/platforms"
+    );
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 123,
+      status: "published",
+      platform: "instagram",
+      postId: "ext-123",
+    } as any);
+    vi.mocked(isFacebookPublishingReady).mockReturnValue(true);
+    vi.mocked(isInstagramPublishingReady).mockReturnValue(true);
+
+    const campaign23Publish = {
+      id: 23,
+      userId: 14,
+      businessId: 20,
+      status: "draft",
+      workflowState: "creatives_ready",
+      platforms: "Facebook, Instagram",
+      name: "3@1 Newmarket Campaign",
+      aiGenerated: true,
+    };
+
+    const post = {
+      id: 108,
+      userId: 14,
+      campaignId: 23,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: { approved: true },
+    };
+
+    const fbIntegration = {
+      id: 9,
+      userId: 14,
+      businessId: 20,
+      platform: "facebook",
+      status: "connected",
+      accountName: "3at1newmarketmall",
+      pageId: "fb-page-123",
+      pageAccessTokenEncrypted: "encrypted-token",
+      permissions: ["pages_manage_posts"],
+    };
+
+    const igIntegration = {
+      id: 10,
+      userId: 14,
+      businessId: 20,
+      platform: "instagram",
+      status: "connected",
+      accountName: "3at1newmarketmall",
+      instagramBusinessAccountId: "ig-123",
+      pageAccessTokenEncrypted: "encrypted-token",
+      permissions: ["instagram_content_publishing"],
+    };
+
+    const mockDb = createMockDb({
+      campaign: campaign23Publish,
+      posts: [post],
+      integrations: [fbIntegration, igIntegration],
+      assets: [{ id: 1, userId: 14, campaignId: 23, assetType: "caption_adaptation" }],
+      queue: [],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx(14));
+    const result = await caller.publishCampaignPack({ campaignId: 23 });
+
+    expect(result.manualPosting).toBeFalsy();
+    expect(result.publishedCount).toBe(2);
+    expect(result.failedCount).toBe(0);
+  });
 });
 
 
