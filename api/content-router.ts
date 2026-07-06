@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations, approvalRequests } from "@db/schema";
-import { eq, and, or, desc, count, inArray, isNull } from "drizzle-orm";
+import { eq, and, or, desc, count, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import {
@@ -14,6 +14,7 @@ import { onAgentRunComplete } from "./lib/workflow/triggers";
 import { createApprovalRequest } from "./lib/workflow/engine";
 import { logInfo, logError } from "./lib/logger";
 import { publishSinglePost } from "./lib/workflow/publishing-runner";
+import { checkContentSafety } from "./lib/safety/checker";
 import { isFacebookPublishingReady, isInstagramPublishingReady } from "./lib/integrations/platforms";
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
@@ -697,9 +698,43 @@ export const contentRouter = createRouter({
         | "no_publishable_content"
         | "no_connected_platforms"
         | "strategy_approval_required"
-        | "launch_approval_required" = "ready";
+        | "launch_approval_required"
+        | "safety_blocked" = "ready";
 
-      if (integrations.length > 0 && platformStatuses.length === 0) {
+      // Preflight content safety on the first approved image-ready social post so the
+      // user sees any approval gate before clicking Confirm Publish.
+      const eligiblePost = posts.find(isApprovedImageReadySocialPost);
+      const platformSafety: Array<{
+        platform: string;
+        riskLevel: "low" | "medium" | "high";
+        requiresApproval: boolean;
+      }> = [];
+      let safetyRiskLevel: "low" | "medium" | "high" = "low";
+      if (eligiblePost) {
+        const content = `${eligiblePost.hook || ""}\n${eligiblePost.caption || ""}\n${eligiblePost.cta || ""}`.trim();
+        const safety = await checkContentSafety(content, {}, {
+          userId: ctx.user.id,
+          campaignId: input.campaignId,
+          skipDeduction: true,
+        });
+        safetyRiskLevel = safety.riskLevel;
+        for (const status of platformStatuses) {
+          platformSafety.push({
+            platform: status.platform,
+            riskLevel: safety.riskLevel,
+            requiresApproval: safety.riskLevel !== "low",
+          });
+        }
+        logInfo("[PublishEligibility] Safety preflight", {
+          campaignId: input.campaignId,
+          riskLevel: safety.riskLevel,
+          reasons: safety.reasons,
+        });
+      }
+
+      if (safetyRiskLevel === "high") {
+        unavailableReason = "safety_blocked";
+      } else if (integrations.length > 0 && platformStatuses.length === 0) {
         // Defensive guard: integrations were found but we could not build any usable platform
         // status. This is the production failure mode we must never report as "ready".
         unavailableReason = "no_connected_platforms";
@@ -748,6 +783,8 @@ export const contentRouter = createRouter({
         publishablePostCount,
         unavailableReason,
         platformStatuses,
+        platformSafety,
+        safetyRiskLevel,
       };
 
       logInfo("[PublishEligibility] Computed publish eligibility", response);
@@ -1129,7 +1166,29 @@ export const contentRouter = createRouter({
           selectionReason,
         });
 
-        // Reuse an existing pending/retrying queue item for this post/platform if present
+        // Preflight content safety per platform. We skip billing here so the preflight
+        // does not consume credits and cannot cause a later platform to fail due to
+        // insufficient credits after a sibling platform has already published.
+        const content = `${post.hook || ""}\n${post.caption || ""}\n${post.cta || ""}`.trim();
+        const safety = await checkContentSafety(content, {}, {
+          userId: ctx.user.id,
+          campaignId: input.campaignId,
+          skipDeduction: true,
+        });
+        const isLowRisk = safety.riskLevel === "low";
+        const safetyMessage = isLowRisk
+          ? undefined
+          : `Content safety check flagged ${safety.riskLevel} risk; awaiting approval`;
+
+        logInfo("[PublishCampaignPack] Safety preflight for platform", {
+          campaignId: input.campaignId,
+          platform,
+          riskLevel: safety.riskLevel,
+          reasons: safety.reasons,
+        });
+
+        // Idempotency: look for any existing queue item for this post/platform, regardless
+        // of status, so we never duplicate a platform that is already published or pending.
         let queueItemId: number;
         const [existingQueue] = await db
           .select()
@@ -1139,35 +1198,77 @@ export const contentRouter = createRouter({
               eq(publishingQueue.userId, ctx.user.id),
               eq(publishingQueue.campaignId, input.campaignId),
               eq(publishingQueue.contentPostId, post.id),
-              eq(publishingQueue.platform, platform),
-              inArray(publishingQueue.status, ["approved", "retrying", "pending_approval"])
+              eq(publishingQueue.platform, platform)
             )
           )
           .limit(1);
 
         if (existingQueue) {
           queueItemId = existingQueue.id;
-          console.log("[PublishCampaignPack] Reusing existing queue item", {
+          logInfo("[PublishCampaignPack] Reusing existing queue item", {
             campaignId: input.campaignId,
             platform,
             contentPostId: post.id,
             queueItemId,
+            queueStatus: existingQueue.status,
             integrationId: integration.id,
             pageId: platform === "facebook" ? integration.pageId : undefined,
           });
+
+          if (existingQueue.status === "published") {
+            results.push({
+              platform,
+              queueItemId,
+              status: "published",
+              postId: existingQueue.externalPostId || undefined,
+            });
+            continue;
+          }
+
+          if (existingQueue.status === "pending_approval" || existingQueue.status === "safety_blocked") {
+            results.push({
+              platform,
+              queueItemId,
+              status: existingQueue.status,
+              error: existingQueue.lastError || undefined,
+            });
+            continue;
+          }
+
+          // Existing item is approved/retrying/failed. If current preflight is non-low,
+          // move it back to pending approval rather than publishing.
+          if (!isLowRisk) {
+            await db
+              .update(publishingQueue)
+              .set({
+                status: "pending_approval",
+                approvalRequired: true,
+                lastError: safetyMessage,
+                safetyStatus: safety.riskLevel,
+              })
+              .where(eq(publishingQueue.id, queueItemId));
+            results.push({
+              platform,
+              queueItemId,
+              status: "pending_approval",
+              error: safetyMessage,
+            });
+            continue;
+          }
         } else {
-          // Publishing readiness checks determine the initial queue status: a connected but
-          // not-yet-ready account gets a queue row so the UI never says "published successfully"
-          // when nothing was actually queued, but it is marked failed rather than attempted.
-          let queueStatus: "approved" | "failed" = "approved";
+          // Determine initial queue status from safety + integration readiness.
+          let initialStatus: "approved" | "pending_approval" | "failed" = "approved";
           let queueError: string | undefined;
 
-          if (platform === "facebook" && !isFacebookPublishingReady(integration)) {
-            queueStatus = "failed";
+          if (!isLowRisk) {
+            initialStatus = "pending_approval";
+            queueError = safetyMessage;
+          } else if (platform === "facebook" && !isFacebookPublishingReady(integration)) {
+            initialStatus = "failed";
             queueError =
               "Facebook integration is not publishing-ready. Reconnect to grant pages_manage_posts.";
           } else if (platform === "instagram" && !isInstagramPublishingReady(integration)) {
-            queueStatus = "failed";
+            initialStatus = "failed";
             queueError =
               "Instagram publishing is not ready. Ensure your Facebook Page has a linked Instagram professional account and that the Instagram content publishing permission is granted.";
           }
@@ -1179,24 +1280,24 @@ export const contentRouter = createRouter({
             contentPostId: post.id,
             integrationId: integration.id,
             platform,
-            status: queueStatus,
+            status: initialStatus,
             lastError: queueError ?? null,
-            approvalRequired: false,
+            approvalRequired: initialStatus === "pending_approval",
             scheduledAt: null,
           });
           queueItemId = Number(queueResult.insertId);
 
-          console.log("[PublishCampaignPack] Created queue item", {
+          logInfo("[PublishCampaignPack] Created queue item", {
             campaignId: input.campaignId,
             platform,
             contentPostId: post.id,
             queueItemId,
             integrationId: integration.id,
-            status: queueStatus,
+            status: initialStatus,
             pageId: platform === "facebook" ? integration.pageId : undefined,
           });
 
-          if (queueStatus === "failed") {
+          if (initialStatus === "failed") {
             results.push({
               platform,
               queueItemId,
@@ -1205,12 +1306,22 @@ export const contentRouter = createRouter({
             });
             continue;
           }
+
+          if (initialStatus === "pending_approval") {
+            results.push({
+              platform,
+              queueItemId,
+              status: "pending_approval",
+              error: queueError,
+            });
+            continue;
+          }
         }
 
-        // Attempt immediate publish
+        // Attempt immediate publish for low-risk, ready items
         const publishResult = await publishSinglePost(queueItemId);
 
-        console.log("[PublishCampaignPack] Publish attempt completed", {
+        logInfo("[PublishCampaignPack] Publish attempt completed", {
           campaignId: input.campaignId,
           platform,
           queueItemId,
@@ -1231,15 +1342,45 @@ export const contentRouter = createRouter({
         });
       }
 
+      // Update per-platform metadata on the approved posts so the UI and eligibility
+      // can show exactly which platforms are published, failed, or awaiting approval.
+      const publishedPlatforms = results
+        .filter((r) => r.status === "published")
+        .map((r) => r.platform);
+      const failedPlatforms = results
+        .filter((r) => r.status === "failed" || r.status === "safety_blocked")
+        .map((r) => r.platform);
+      const pendingApprovalPlatforms = results
+        .filter((r) => r.status === "pending_approval")
+        .map((r) => r.platform);
+
+      for (const post of approvedPosts) {
+        const meta = (post.metadata || {}) as any;
+        await db
+          .update(contentPosts)
+          .set({
+            metadata: {
+              ...meta,
+              publishedPlatforms,
+              failedPlatforms,
+              pendingApprovalPlatforms,
+            },
+          })
+          .where(and(eq(contentPosts.id, post.id), eq(contentPosts.userId, ctx.user.id)));
+      }
+
       // Update campaign state based on publish results
       const anyPublished = results.some((r) => r.status === "published");
       const allPublished = results.length > 0 && results.every((r) => r.status === "published");
 
-      console.log("[PublishCampaignPack] Campaign state update", {
+      logInfo("[PublishCampaignPack] Campaign state update", {
         campaignId: input.campaignId,
         anyPublished,
         allPublished,
         resultCount: results.length,
+        publishedPlatforms,
+        failedPlatforms,
+        pendingApprovalPlatforms,
       });
 
       await db
@@ -1255,8 +1396,9 @@ export const contentRouter = createRouter({
         success: true,
         approvedCount: posts.filter((p) => p.status !== "published" && p.status !== "archived").length,
         publishedCount: results.filter((r) => r.status === "published").length,
-        failedCount: results.filter((r) => r.status === "failed").length,
+        failedCount: results.filter((r) => r.status === "failed" || r.status === "safety_blocked").length,
         skippedCount: results.filter((r) => r.status === "skipped").length,
+        pendingApprovalCount: results.filter((r) => r.status === "pending_approval").length,
         results,
       };
     }),

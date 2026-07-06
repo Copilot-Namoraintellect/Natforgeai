@@ -715,7 +715,7 @@ export const socialProfiles = mysqlTable(
       .$onUpdate(() => new Date()),
   },
   (table) => ({
-    userPlatformExternalIdx: index("user_platform_external_idx").on(
+    userPlatformExternalIdx: uniqueIndex("user_platform_external_idx").on(
       table.userId,
       table.platform,
       table.externalId

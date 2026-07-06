@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TRPCError } from "@trpc/server";
+import { SQL } from "drizzle-orm";
 
 vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
@@ -12,6 +13,10 @@ vi.mock("./lib/workflow/publishing-runner", () => ({
 vi.mock("./lib/integrations/platforms", () => ({
   isFacebookPublishingReady: vi.fn(() => true),
   isInstagramPublishingReady: vi.fn(() => true),
+}));
+
+vi.mock("./lib/safety/checker", () => ({
+  checkContentSafety: vi.fn(async () => ({ riskLevel: "low", reasons: [], suggestedFixes: [] })),
 }));
 
 vi.mock("./lib/agents/creative-agent", () => ({
@@ -41,6 +46,110 @@ vi.mock("./lib/rate-limiter", () => ({
 
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string | undefined;
+}
+
+function getBaseTableName(table: unknown): string | undefined {
+  return (table as Record<symbol, unknown>)[Symbol.for("drizzle:BaseName") as symbol] as string | undefined;
+}
+
+type WhereNode =
+  | { op: "and"; left: WhereNode; right: WhereNode }
+  | { op: "or"; left: WhereNode; right: WhereNode }
+  | { op: "eq"; table?: string; column: string; value: unknown }
+  | { op: "isNull"; table?: string; column: string; not: boolean }
+  | null;
+
+function parseWhereCondition(condition: unknown): WhereNode {
+  if (!condition || typeof condition !== "object") return null;
+  const sql = condition as any;
+  if (!Array.isArray(sql.queryChunks)) return null;
+
+  type Token =
+    | { type: "sql"; node: WhereNode }
+    | { type: "string"; value: string }
+    | { type: "column"; table?: string; column: string }
+    | { type: "param"; value: unknown }
+    | { type: "unknown"; chunk: unknown };
+
+  const tokens: Token[] = sql.queryChunks.map((chunk: unknown): Token => {
+    if (chunk instanceof SQL) return { type: "sql" as const, node: parseWhereCondition(chunk) };
+    if (chunk && typeof chunk === "object" && (chunk as any).constructor?.name === "StringChunk") {
+      return { type: "string" as const, value: ((chunk as any).value as string[]).join("") };
+    }
+    if (chunk && typeof chunk === "object" && (chunk as any).name) {
+      return {
+        type: "column" as const,
+        table: getBaseTableName((chunk as any).table) ?? undefined,
+        column: (chunk as any).name as string,
+      };
+    }
+    if (chunk && typeof chunk === "object" && "value" in (chunk as any)) {
+      return { type: "param" as const, value: (chunk as any).value };
+    }
+    return { type: "unknown" as const, chunk };
+  });
+
+  const combinedString = tokens
+    .filter((t): t is { type: "string"; value: string } => t.type === "string")
+    .map((t) => t.value)
+    .join("");
+
+  const sqlNodes = tokens.filter((t): t is { type: "sql"; node: WhereNode } => t.type === "sql");
+  const columns = tokens.filter((t): t is { type: "column"; table?: string; column: string } => t.type === "column");
+  const params = tokens.filter((t): t is { type: "param"; value: unknown } => t.type === "param");
+
+  // N-ary and/or composed of multiple SQL predicates.
+  if (sqlNodes.length > 1) {
+    const ops: Array<"and" | "or"> = [];
+    let lastWasSql = false;
+    for (const t of tokens) {
+      if (t.type === "sql") {
+        lastWasSql = true;
+      } else if (t.type === "string" && lastWasSql) {
+        const s = t.value.toLowerCase();
+        if (s.includes(" and ")) ops.push("and");
+        else if (s.includes(" or ")) ops.push("or");
+      }
+    }
+    if (ops.length > 0 && ops.every((o) => o === ops[0])) {
+      const op = ops[0];
+      let node = sqlNodes[0].node;
+      for (let i = 1; i < sqlNodes.length; i++) {
+        node = { op, left: node, right: sqlNodes[i].node };
+      }
+      return node;
+    }
+  }
+
+  // Single SQL predicate (possibly wrapped in parentheses).
+  if (sqlNodes.length === 1) {
+    return sqlNodes[0].node;
+  }
+
+  if (combinedString.includes(" = ") && columns.length === 1 && params.length === 1) {
+    return { op: "eq", table: columns[0].table, column: columns[0].column, value: params[0].value };
+  }
+  if (combinedString.toLowerCase().includes(" is null") && columns.length === 1) {
+    const not = combinedString.toLowerCase().includes("is not null");
+    return { op: "isNull", table: columns[0].table, column: columns[0].column, not };
+  }
+
+  return null;
+}
+
+function evaluateWhereCondition(node: WhereNode, row: Record<string, unknown>): boolean {
+  if (!node) return true;
+  switch (node.op) {
+    case "and":
+      return evaluateWhereCondition(node.left, row) && evaluateWhereCondition(node.right, row);
+    case "or":
+      return evaluateWhereCondition(node.left, row) || evaluateWhereCondition(node.right, row);
+    case "eq":
+      return row[node.column] == node.value;
+    case "isNull":
+      return node.not ? row[node.column] != null : row[node.column] == null;
+  }
+  return true;
 }
 
 function makeChainable(rows: unknown[]) {
@@ -94,6 +203,7 @@ function createMockDb({
 }: MockDbConfig = {}): MockDb & {
   insertValuesSpies: Map<unknown, ReturnType<typeof vi.fn>>;
   insertValuesByTableName: Map<string, ReturnType<typeof vi.fn>>;
+  insertCallsByTableName: Map<string, any[]>;
   updateSetSpies: Map<unknown, ReturnType<typeof vi.fn>>;
   updateSetByTableName: Map<string, ReturnType<typeof vi.fn>>;
 } {
@@ -109,17 +219,24 @@ function createMockDb({
 
   const insertValuesSpies = new Map<unknown, ReturnType<typeof vi.fn>>();
   const insertValuesByTableName = new Map<string, ReturnType<typeof vi.fn>>();
+  const insertCallsByTableName = new Map<string, ReturnType<typeof vi.fn>[]>();
   const updateSetSpies = new Map<unknown, ReturnType<typeof vi.fn>>();
   const updateSetByTableName = new Map<string, ReturnType<typeof vi.fn>>();
 
-  const whereResult = (table: unknown) => {
+  const whereResult = (table: unknown, condition?: unknown) => {
     const tableName = getTableName(table);
     let limitResult: unknown[] = [];
 
     if (tableName === "campaigns") {
       limitResult = [resolvedCampaign];
     } else if (tableName === "content_posts") {
-      limitResult = posts ?? [{ value: postCount }];
+      limitResult = posts ?? [
+        {
+          value: postCount,
+          userId: resolvedCampaign.userId,
+          campaignId: resolvedCampaign.id,
+        },
+      ];
     } else if (tableName === "social_integrations") {
       // Mirror the backend business-scoping filter used by publishCampaignPack.
       const campaignBusinessId = resolvedCampaign.businessId;
@@ -136,19 +253,32 @@ function createMockDb({
       limitResult = approvals;
     }
 
+    const parsed = condition ? parseWhereCondition(condition) : null;
+    if (parsed) {
+      limitResult = limitResult.filter((row) =>
+        evaluateWhereCondition(parsed, row as Record<string, unknown>)
+      );
+    }
+
     return makeChainable(limitResult);
   };
 
   return {
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => ({
-        where: vi.fn(() => whereResult(table)),
+        where: vi.fn((condition: unknown) => whereResult(table, condition)),
       })),
     })) as unknown as MockDb["select"],
     insert: vi.fn((table: unknown) => {
-      const valuesSpy = vi.fn(async () => [{ insertId }]);
-      insertValuesSpies.set(table, valuesSpy);
       const tableName = getTableName(table);
+      const calls: any[] = [];
+      const valuesSpy = vi.fn(async (vals: any) => {
+        const arr = Array.isArray(vals) ? vals : [vals];
+        calls.push(...arr);
+        if (tableName) insertCallsByTableName.set(tableName, calls);
+        return [{ insertId }];
+      });
+      insertValuesSpies.set(table, valuesSpy);
       if (tableName) insertValuesByTableName.set(tableName, valuesSpy);
       return { values: valuesSpy };
     }) as unknown as MockDb["insert"],
@@ -166,6 +296,7 @@ function createMockDb({
     })) as unknown as MockDb["delete"],
     insertValuesSpies,
     insertValuesByTableName,
+    insertCallsByTableName,
     updateSetSpies,
     updateSetByTableName,
   } as any;
@@ -630,6 +761,158 @@ describe("contentRouter.publishCampaignPack", () => {
     expect(result.manualPosting).toBeFalsy();
     expect(result.publishedCount).toBe(2);
     expect(result.failedCount).toBe(0);
+  });
+
+  it("partial publish: Facebook pending approval for medium safety risk, Instagram publishes, retry does not duplicate Instagram", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { checkContentSafety } = await import("./lib/safety/checker");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 123,
+      status: "published",
+      platform: "instagram",
+      postId: "ext-ig",
+    } as any);
+
+    vi.mocked(checkContentSafety).mockImplementation(async (content: string) => {
+      if (content.toLowerCase().includes("facebook")) {
+        return {
+          riskLevel: "medium",
+          reasons: ["Pricing claim requires review"],
+          suggestedFixes: [],
+        };
+      }
+      return { riskLevel: "low", reasons: [], suggestedFixes: [] };
+    });
+
+    const campaign23Publish = {
+      id: 23,
+      userId: 14,
+      businessId: 20,
+      status: "draft",
+      workflowState: "creatives_ready",
+      platforms: "Facebook, Instagram",
+      name: "3@1 Newmarket Campaign",
+      aiGenerated: true,
+    };
+
+    const fbPost = {
+      id: 110,
+      userId: 14,
+      campaignId: 23,
+      type: "social_post",
+      platform: "Facebook",
+      status: "draft",
+      hook: "Facebook hook",
+      caption: "Exclusive facebook offer",
+      cta: "Shop now",
+      metadata: {
+        approved: true,
+        assetKind: "social_post",
+        imageStatus: "ready",
+        imageUrl: "https://example.com/fb.png",
+      },
+    };
+
+    const igPost = {
+      id: 109,
+      userId: 14,
+      campaignId: 23,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      hook: "Instagram hook",
+      caption: "Exclusive instagram offer",
+      cta: "Shop now",
+      metadata: {
+        approved: true,
+        assetKind: "social_post",
+        imageStatus: "ready",
+        imageUrl: "https://example.com/ig.png",
+      },
+    };
+
+    const fbIntegration = {
+      id: 9,
+      userId: 14,
+      businessId: 20,
+      platform: "facebook",
+      status: "connected",
+      accountName: "3at1newmarketmall",
+      pageId: "fb-page-123",
+      pageAccessTokenEncrypted: "encrypted-token",
+      permissions: ["pages_manage_posts"],
+    };
+
+    const igIntegration = {
+      id: 10,
+      userId: 14,
+      businessId: 20,
+      platform: "instagram",
+      status: "connected",
+      accountName: "3at1newmarketmall",
+      instagramBusinessAccountId: "ig-123",
+      pageAccessTokenEncrypted: "encrypted-token",
+      permissions: ["instagram_content_publishing"],
+    };
+
+    const mockDb = createMockDb({
+      campaign: campaign23Publish,
+      posts: [fbPost, igPost],
+      integrations: [fbIntegration, igIntegration],
+      assets: [{ id: 1, userId: 14, campaignId: 23, assetType: "caption_adaptation" }],
+      queue: [],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx(14));
+    const result = await caller.publishCampaignPack({ campaignId: 23 });
+
+    expect(result.publishedCount).toBe(1);
+    expect(result.pendingApprovalCount).toBe(1);
+    expect(result.results.find((r) => r.platform === "instagram")?.status).toBe("published");
+    expect(result.results.find((r) => r.platform === "facebook")?.status).toBe("pending_approval");
+
+    // Retry with existing queue items: Instagram already published, Facebook pending approval.
+    const retryDb = createMockDb({
+      campaign: campaign23Publish,
+      posts: [fbPost, igPost],
+      integrations: [fbIntegration, igIntegration],
+      assets: [{ id: 1, userId: 14, campaignId: 23, assetType: "caption_adaptation" }],
+      queue: [
+        {
+          id: 1,
+          userId: 14,
+          campaignId: 23,
+          contentPostId: 109,
+          platform: "instagram",
+          status: "published",
+          externalPostId: "ext-ig",
+          approvalRequired: false,
+        },
+        {
+          id: 2,
+          userId: 14,
+          campaignId: 23,
+          contentPostId: 110,
+          platform: "facebook",
+          status: "pending_approval",
+          approvalRequired: true,
+          lastError: "Content safety check flagged medium risk; awaiting approval",
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(retryDb as unknown as ReturnType<typeof getDb>);
+
+    const retryResult = await caller.publishCampaignPack({ campaignId: 23 });
+    expect(retryResult.publishedCount).toBe(1);
+    expect(retryResult.pendingApprovalCount).toBe(1);
+
+    const retryQueueInsertSpy = retryDb.insertValuesByTableName.get("publishing_queue");
+    const retryPlatforms = retryQueueInsertSpy?.mock.calls.map((call) => (call[0] as any).platform) || [];
+    expect(retryPlatforms).not.toContain("instagram");
   });
 });
 

@@ -339,7 +339,13 @@ describe("publish result toast messages", () => {
   it("shows partial success when some platforms failed or skipped", () => {
     const toast = getPublishResultToast({ publishedCount: 1, failedCount: 1, skippedCount: 0 });
     expect(toast.type).toBe("success");
-    expect(toast.message).toBe("1 platform(s) published. 1 failed, 0 skipped.");
+    expect(toast.message).toBe("1 platform(s) published. 1 failed.");
+  });
+
+  it("shows warning when some platforms are pending approval", () => {
+    const toast = getPublishResultToast({ publishedCount: 1, pendingApprovalCount: 1 });
+    expect(toast.type).toBe("warning");
+    expect(toast.message).toBe("1 platform(s) published. 1 platform(s) pending approval.");
   });
 
   it("shows warning when every platform was skipped", () => {

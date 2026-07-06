@@ -469,7 +469,8 @@ export default function ContentStudio() {
       | "no_publishable_content"
       | "no_connected_platforms"
       | "strategy_approval_required"
-      | "launch_approval_required";
+      | "launch_approval_required"
+      | "safety_blocked";
     campaignId: number;
     ctxUserId: number;
     campaignUserId: number;
@@ -480,6 +481,8 @@ export default function ContentStudio() {
     pendingApprovalCount: number;
     publishablePostCount: number;
     platformStatuses: Array<{ platform: string; status: PlatformPublishStatus }>;
+    platformSafety: Array<{ platform: string; riskLevel: "low" | "medium" | "high"; requiresApproval: boolean }>;
+    safetyRiskLevel: "low" | "medium" | "high";
   } | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["masterVisual", "masterVideo"]));
   const [selectedIterationId, setSelectedIterationId] = useState<string | null>(null);
@@ -1199,6 +1202,32 @@ Include:
       toast.error(err.message || "Failed to publish campaign pack");
     },
   });
+
+  const approveQueueItemMutation = trpc.publishing.approvePost.useMutation();
+  const publishQueueItemMutation = trpc.publishing.publishPost.useMutation();
+
+  async function handleApproveAndPublishQueueItem(queueItemId: number) {
+    setPendingActions((prev) => new Set(prev).add(actionKey(queueItemId, "approve-publish")));
+    try {
+      await approveQueueItemMutation.mutateAsync({ queueId: queueItemId });
+      const result = await publishQueueItemMutation.mutateAsync({ queueId: queueItemId });
+      refetchPublishingQueue();
+      if (result.success) {
+        const platformLabel = result.platform
+          ? result.platform.charAt(0).toUpperCase() + result.platform.slice(1)
+          : "Post";
+        toast.success(`${platformLabel} published successfully.`);
+      } else if (result.status === "pending_approval") {
+        toast.warning("This post still needs approval before it can be published.");
+      } else {
+        toast.error(result.error || "Publishing failed.");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to approve or publish post.");
+    } finally {
+      stopAction(queueItemId, "approve-publish");
+    }
+  }
 
   const regenerateFromProfileMutation = trpc.campaign.regenerateFromProfile.useMutation({
     onSuccess: () => {
@@ -3598,6 +3627,78 @@ Include:
                 </span>
               </p>
             )}
+
+            {publishingQueueItems && publishingQueueItems.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-medium text-slate-700 uppercase tracking-wide">
+                  Publishing status
+                </p>
+                <div className="space-y-2">
+                  {Array.from(
+                    new Map(publishingQueueItems.map((item) => [item.platform, item])).values()
+                  ).map((item) => {
+                    const isPublished = item.status === "published";
+                    const isPendingApproval = item.status === "pending_approval";
+                    const isFailed = item.status === "failed";
+                    const isInProgress = ["approved", "retrying"].includes(item.status);
+                    const platformLabel =
+                      item.platform.charAt(0).toUpperCase() + item.platform.slice(1);
+                    const statusLabel = isPublished
+                      ? "Published"
+                      : isPendingApproval
+                      ? "Pending approval"
+                      : isFailed
+                      ? "Failed"
+                      : isInProgress
+                      ? "Publishing in progress"
+                      : item.status;
+                    const isApproving = isPending(item.id, "approve-publish");
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between p-2 rounded-md border border-slate-200 bg-slate-50/50"
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline" className="capitalize">
+                            {platformLabel}
+                          </Badge>
+                          {isPublished && (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                          )}
+                          {isPendingApproval && (
+                            <Clock className="w-4 h-4 text-amber-600" />
+                          )}
+                          {isFailed && <AlertCircle className="w-4 h-4 text-red-600" />}
+                          {isInProgress && (
+                            <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+                          )}
+                          <span className="text-sm text-slate-700">{statusLabel}</span>
+                          {item.lastError && (
+                            <span className="text-xs text-muted-foreground">
+                              {item.lastError}
+                            </span>
+                          )}
+                        </div>
+                        {(isPendingApproval || isFailed) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={isApproving}
+                            onClick={() => handleApproveAndPublishQueueItem(item.id)}
+                          >
+                            {isApproving ? (
+                              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                            ) : null}
+                            {isPendingApproval ? "Approve & Publish" : "Retry"}
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -4007,6 +4108,38 @@ Include:
               const hasConnected = statuses.some((s) => s.status === "connected");
 
 
+              if (eligibility.unavailableReason === "safety_blocked") {
+                return (
+                  <>
+                    <DialogHeader>
+                      <DialogTitle>Content Blocked by Safety Check</DialogTitle>
+                      <DialogDescription>
+                        This campaign content was flagged as high risk. It cannot be published until the content is reviewed and revised.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="p-3 rounded-md bg-red-50 border border-red-200 text-xs text-red-800 mt-2">
+                      <p className="font-medium">High risk detected</p>
+                      {eligibility.platformSafety
+                        .filter((s) => s.riskLevel === "high")
+                        .map((s) => (
+                          <p key={s.platform} className="mt-0.5">
+                            {s.platform}: requires revision
+                          </p>
+                        ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-4">
+                      <Button
+                        variant="outline"
+                        className="flex-1 min-w-[120px]"
+                        onClick={() => setPublishDialogOpen(false)}
+                      >
+                        Close
+                      </Button>
+                    </div>
+                  </>
+                );
+              }
+
               // Contract safety: a ready response must include at least one connected platform.
               if (eligibility.unavailableReason === "ready" && !hasConnected) {
                 return (
@@ -4057,6 +4190,23 @@ Include:
                         <p className="text-amber-700/80 mt-0.5">
                           No connected platform is available for this campaign. Connect the correct business platform or continue as manual posting.
                         </p>
+                      </div>
+                    )}
+                    {eligibility.safetyRiskLevel === "medium" && (
+                      <div className="p-3 rounded-md bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                        <p className="font-medium">Approval required for safety</p>
+                        <p className="text-amber-700/80 mt-0.5">
+                          One or more connected platforms were flagged as medium risk. They will be held for approval before going live.
+                        </p>
+                        <ul className="mt-1 list-disc list-inside text-amber-700/80">
+                          {eligibility.platformSafety
+                            .filter((s) => s.requiresApproval)
+                            .map((s) => (
+                              <li key={s.platform}>
+                                {s.platform}: {s.riskLevel} risk
+                              </li>
+                            ))}
+                        </ul>
                       </div>
                     )}
                     {platformGroups}

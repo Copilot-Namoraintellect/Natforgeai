@@ -113,7 +113,10 @@ export async function publishSinglePost(queueItemId: number) {
         return { id: post.id, status: "safety_blocked", platform: post.platform, error: "High risk content blocked by safety check" };
       }
 
-      if (refreshed.safetyStatus === "medium") {
+      // Medium-risk content normally requires approval. If the item has already
+      // been explicitly approved (e.g. through the approval/retry flow), trust
+      // that decision and allow publishing to proceed.
+      if (refreshed.safetyStatus === "medium" && refreshed.status !== "approved") {
         await db
           .update(publishingQueue)
           .set({
@@ -354,13 +357,24 @@ export async function publishSinglePost(queueItemId: number) {
         .where(eq(publishingQueue.id, post.id));
 
       if (post.contentPostId) {
-        await db
-          .update(contentPosts)
-          .set({
-            status: "published",
-            publishedAt: now,
-          })
-          .where(eq(contentPosts.id, post.contentPostId));
+        // Only mark the master content post as fully published when every queue item
+        // for this post has reached the published state. This prevents a partial publish
+        // (e.g. Instagram published, Facebook pending approval) from looking complete.
+        const siblingQueue = await db
+          .select({ status: publishingQueue.status })
+          .from(publishingQueue)
+          .where(eq(publishingQueue.contentPostId, post.contentPostId));
+        const allPublished =
+          siblingQueue.length > 0 && siblingQueue.every((q) => q.status === "published");
+        if (allPublished) {
+          await db
+            .update(contentPosts)
+            .set({
+              status: "published",
+              publishedAt: now,
+            })
+            .where(eq(contentPosts.id, post.contentPostId));
+        }
       }
 
       // Refresh permissioned audience data after a successful publish so that

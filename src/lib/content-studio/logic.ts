@@ -465,6 +465,7 @@ export interface PublishResultToastInput {
   publishedCount?: number;
   failedCount?: number;
   skippedCount?: number;
+  pendingApprovalCount?: number;
   results?: Array<{ status: string; error?: string }>;
 }
 
@@ -481,18 +482,19 @@ export function getPublishResultToast(
   const published = data.publishedCount || 0;
   const failed = data.failedCount || 0;
   const skipped = data.skippedCount || 0;
+  const pendingApproval = data.pendingApprovalCount || 0;
 
-  if (failed === 0 && skipped === 0 && published > 0) {
+  if (failed === 0 && skipped === 0 && pendingApproval === 0 && published > 0) {
     return {
       type: "success",
       message: `Campaign pack published. ${published} platform(s) published.`,
     };
   }
 
-  if (published > 0) {
+  if (published > 0 || pendingApproval > 0) {
     return {
-      type: "success",
-      message: `${published} platform(s) published. ${failed} failed, ${skipped} skipped.`,
+      type: pendingApproval > 0 ? "warning" : "success",
+      message: `${published} platform(s) published.${pendingApproval > 0 ? ` ${pendingApproval} platform(s) pending approval.` : ""}${failed > 0 ? ` ${failed} failed.` : ""}${skipped > 0 ? ` ${skipped} skipped.` : ""}`,
     };
   }
 
@@ -528,7 +530,8 @@ export type PublishEligibilityUnavailableReason =
   | "no_publishable_content"
   | "no_connected_platforms"
   | "strategy_approval_required"
-  | "launch_approval_required";
+  | "launch_approval_required"
+  | "safety_blocked";
 
 export function getPublishDialogButtonLabel({
   isPending,
@@ -549,6 +552,10 @@ export function getPublishDialogButtonLabel({
 
   if (unavailableReason === "no_connected_platforms") {
     return isRepublish ? "Post manually again" : "Confirm Manual Posting";
+  }
+
+  if (unavailableReason === "safety_blocked") {
+    return "Review Safety";
   }
 
   // Approval-required or contract-error states should not trigger a publish action.

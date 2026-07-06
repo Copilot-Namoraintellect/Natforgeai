@@ -158,25 +158,45 @@ export async function ingestAudienceData({
     metadata: p.metadata ?? null,
   }));
 
-  if (profileValues.length > 0) {
-    await db
-      .insert(socialProfiles)
-      .values(profileValues)
-      .onDuplicateKeyUpdate({
-        set: {
-          handle: sql`VALUES(handle)`,
-          displayName: sql`VALUES(displayName)`,
-          url: sql`VALUES(url)`,
-          followerCount: sql`VALUES(followerCount)`,
-          category: sql`VALUES(category)`,
-          location: sql`VALUES(location)`,
-          profilePictureUrl: sql`VALUES(profilePictureUrl)`,
-          lastSyncedAt: sql`VALUES(lastSyncedAt)`,
-          metadata: sql`VALUES(metadata)`,
+  // Upsert profiles by (userId, platform, externalId) so we never create
+  // duplicate rows for the same external page/account. This is done explicitly
+  // rather than relying on MySQL's ON DUPLICATE KEY UPDATE because the
+  // social_profiles table previously lacked a unique constraint on this tuple.
+  for (const p of profileValues) {
+    const [existing] = await db
+      .select()
+      .from(socialProfiles)
+      .where(
+        and(
+          eq(socialProfiles.userId, p.userId),
+          eq(socialProfiles.platform, p.platform as any),
+          eq(socialProfiles.externalId, p.externalId)
+        )
+      )
+      .limit(1);
+
+    if (existing) {
+      await db
+        .update(socialProfiles)
+        .set({
+          businessId: p.businessId,
+          campaignId: p.campaignId,
+          handle: p.handle,
+          displayName: p.displayName,
+          url: p.url,
+          followerCount: p.followerCount,
+          category: p.category,
+          location: p.location,
+          profilePictureUrl: p.profilePictureUrl,
+          lastSyncedAt: p.lastSyncedAt,
+          metadata: p.metadata,
           updatedAt: new Date(),
-        },
-      });
-    summary.profilesSynced = profileValues.length;
+        })
+        .where(eq(socialProfiles.id, existing.id));
+    } else {
+      await db.insert(socialProfiles).values(p);
+    }
+    summary.profilesSynced++;
   }
 
   // Map external profile IDs to internal social profile IDs

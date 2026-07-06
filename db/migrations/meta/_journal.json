@@ -99,6 +99,13 @@
       "when": 1783021494761,
       "tag": "0013_add_social_integrations_business_id",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1783341181484,
+      "tag": "0014_dedupe_social_profiles",
+      "breakpoints": true
     }
   ]
 }
