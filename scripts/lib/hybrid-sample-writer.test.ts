@@ -105,12 +105,13 @@ describe("hybrid sample writer", () => {
     expect(entry.finalPath).toBe("final.png");
   });
 
-  it("saves attempt images from the hybrid result", () => {
+  it("creates missing directories before saving attempt images", () => {
+    const nestedDir = join(tempDir, "nested", "hybrid");
     const result = makeHybridResult();
     result.attempts = [
       { buffer: Buffer.from("a0"), critic: result.critic, visualDirection: result.visualDirection },
     ];
-    const paths = saveHybridAttemptImages(tempDir, "3at1", result);
+    const paths = saveHybridAttemptImages(nestedDir, "3at1", result);
     expect(paths.length).toBe(1);
     expect(existsSync(paths[0])).toBe(true);
     expect(paths[0]).toContain("3at1-hybrid-attempt-0.png");

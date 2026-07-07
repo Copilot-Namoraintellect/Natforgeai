@@ -3,7 +3,7 @@
  */
 
 import { writeFileSync, mkdirSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import type { HybridPipelineResult, HybridFinalDecision } from "../../api/lib/creative/premium-v2/pipeline-types";
 
 export function decisionLabel(finalDecision: HybridFinalDecision): string {
@@ -57,10 +57,12 @@ export function saveHybridAttemptImages(
 ): string[] {
   if (!hybridResult.attempts || hybridResult.attempts.length === 0) return [];
 
+  mkdirSync(outputDir, { recursive: true });
   const safeName = fixtureName.replace(/[^a-z0-9_-]/gi, "-");
   const paths: string[] = [];
   hybridResult.attempts.forEach((attempt, index) => {
     const path = join(outputDir, `${safeName}-hybrid-attempt-${index}.png`);
+    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, attempt.buffer);
     paths.push(path);
   });

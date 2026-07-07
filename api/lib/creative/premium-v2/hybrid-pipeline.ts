@@ -88,6 +88,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
 
     while (revisionCount <= maxRevisions) {
       const reuseBackground = revisionCount > 0 && shouldReuseBackground(critic?.improvementSuggestions || []);
+      if (!reuseBackground) openAICallCount++; // background generation call
       const render = await renderOnce(input, brandKit, brief, visualDirection, reuseBackground ? lastBackgroundBuffer : null);
       stage.background.attempted = true;
       if (render.backgroundBuffer) {
@@ -423,7 +424,7 @@ function buildResult(
     succeededOpenAIVisualDirection: stage.visualDirection.succeeded,
     attemptedOpenAIBackground: true,
     succeededOpenAIBackground: stage.background.succeeded,
-    finalUsedOpenAIBackground: true,
+    finalUsedOpenAIBackground: stage.background.succeeded,
     attemptedOpenAIVisionCritic: true,
     succeededOpenAIVisionCritic: true,
     finalUsedOpenAIVisionCritic: true,
