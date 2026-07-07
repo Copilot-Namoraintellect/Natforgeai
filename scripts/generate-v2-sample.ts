@@ -9,6 +9,9 @@
  *   npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --out ./my-sample.png
  */
 
+// Load secrets from Google Cloud Secret Manager before app env is evaluated.
+import "./lib/load-secrets";
+
 import { buildPremiumV2Brief } from "../api/lib/creative/premium-v2/brief";
 import { renderV2FromBrief } from "../api/lib/creative/premium-v2/renderer";
 import { validatePremiumV2Quality } from "../api/lib/creative/premium-v2/quality";
