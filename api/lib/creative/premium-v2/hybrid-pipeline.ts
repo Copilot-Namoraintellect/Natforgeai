@@ -102,6 +102,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       const reuseBackground = revisionCount > 0 && shouldReuseBackground(critic?.improvementSuggestions || []);
       if (!reuseBackground) openAICallCount++; // background generation call
       const render = await renderOnce(input, brandKit, brief, visualDirection, reuseBackground ? lastBackgroundBuffer : null);
+      const renderMetrics = render.metrics;
       stage.background.attempted = true;
       if (render.backgroundBuffer) {
         lastBackgroundBuffer = render.backgroundBuffer;
@@ -146,7 +147,8 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
           false,
           stage,
           openAICallCount,
-          attempts
+          attempts,
+          renderMetrics
         );
       }
 
@@ -191,6 +193,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
 interface RenderOutput {
   buffer: Buffer;
   backgroundBuffer: Buffer | null;
+  metrics?: import("./html-renderer").HybridRenderMetrics;
 }
 
 async function renderOnce(
@@ -223,8 +226,8 @@ async function renderOnce(
     brandAsset: brandKit.brandAsset,
   };
 
-  const { buffer } = await renderHybridLeaflet(renderBrief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandKit.brandAsset);
-  return { buffer, backgroundBuffer };
+  const { buffer, metrics } = await renderHybridLeaflet(renderBrief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandKit.brandAsset);
+  return { buffer, backgroundBuffer, metrics };
 }
 
 async function fetchLogo(logoUrl: string): Promise<Buffer | null> {
@@ -443,7 +446,8 @@ function buildResult(
     visionCritic: { attempted: boolean; succeeded: boolean };
   },
   openAICallCount: number,
-  attempts: HybridPipelineAttempt[]
+  attempts: HybridPipelineAttempt[],
+  renderMetrics?: import("./html-renderer").HybridRenderMetrics
 ): HybridPipelineResult {
   const metadata: HybridPipelineMetadata = {
     provider: "premium-v2-hybrid",
@@ -469,6 +473,18 @@ function buildResult(
     revisionCount,
     finalDecision: critic.passed ? "premium_ready" : "hybrid_review_required",
     rejectionCritic: null,
+    realLogoExpected: renderMetrics?.realLogoExpected,
+    realLogoRendered: renderMetrics?.realLogoRendered,
+    logoNaturalWidth: renderMetrics?.logoNaturalWidth,
+    logoNaturalHeight: renderMetrics?.logoNaturalHeight,
+    logoRenderedWidth: renderMetrics?.logoRenderedWidth,
+    logoRenderedHeight: renderMetrics?.logoRenderedHeight,
+    logoVisibleArea: renderMetrics?.logoVisibleArea,
+    logoRenderMode: renderMetrics?.logoRenderMode,
+    fallbackBadgeRendered: renderMetrics?.fallbackBadgeRendered,
+    logoMaskedOrCropped: renderMetrics?.logoMaskedOrCropped,
+    logoDataUriUsed: renderMetrics?.logoDataUriUsed,
+    logoFetchUsed: renderMetrics?.logoFetchUsed,
   };
 
   return {

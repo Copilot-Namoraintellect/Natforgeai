@@ -189,6 +189,19 @@ export interface HybridPipelineMetadata {
   revisionCount: number;
   finalDecision: HybridFinalDecision;
   rejectionCritic: VisionCriticResult | null;
+  // Brand-asset render diagnostics
+  realLogoExpected?: boolean;
+  realLogoRendered?: boolean;
+  logoNaturalWidth?: number;
+  logoNaturalHeight?: number;
+  logoRenderedWidth?: number;
+  logoRenderedHeight?: number;
+  logoVisibleArea?: number;
+  logoRenderMode?: "image" | "fallback_badge";
+  fallbackBadgeRendered?: boolean;
+  logoMaskedOrCropped?: boolean;
+  logoDataUriUsed?: boolean;
+  logoFetchUsed?: boolean;
 }
 
 export interface HybridPipelineResult {

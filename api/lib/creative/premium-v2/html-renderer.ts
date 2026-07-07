@@ -84,22 +84,25 @@ function inferContentType(buffer: Buffer): string {
   return "image/png";
 }
 
-async function computeLogoRenderPlan(buffer: Buffer): Promise<LogoRenderPlan> {
+export async function computeLogoRenderPlan(buffer: Buffer): Promise<LogoRenderPlan> {
   const meta = await sharp(buffer).metadata();
   const naturalWidth = meta.width || 1;
   const naturalHeight = meta.height || 1;
   const aspectRatio = naturalWidth / naturalHeight;
-  const treatment: LogoTreatment = aspectRatio > 2.2 ? "horizontal" : "compact";
 
-  // Horizontal wide logos get a long, clear panel; compact/square logos get a taller panel.
+  // Wide logos (>2.2:1) are treated as horizontal brand marks and given a
+  // long, clear panel. Compact/square logos use a taller panel.
+  const treatment: LogoTreatment = aspectRatio > 2.2 ? "horizontal" : "compact";
   const maxWidth = treatment === "horizontal" ? 340 : 220;
   const maxHeight = treatment === "horizontal" ? 110 : 120;
 
+  // Scale to fit inside the panel while preserving aspect ratio.
   let scale = Math.min(maxWidth / naturalWidth, maxHeight / naturalHeight);
   let renderedWidth = Math.round(naturalWidth * scale);
   let renderedHeight = Math.round(naturalHeight * scale);
 
-  // Enforce a readable minimum height without exceeding the chosen panel size.
+  // Enforce a readable minimum height (normally at least 55px) without
+  // exceeding the chosen panel size.
   if (renderedHeight < 55) {
     scale = Math.min(maxWidth / naturalWidth, 55 / naturalHeight);
     renderedWidth = Math.round(naturalWidth * scale);
@@ -300,7 +303,22 @@ function buildHtml(
       background: ${toCssColour(brandKit.background)};
       ${bgStyle}
     }
-    .bg-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(15,23,42,0.55) 0%, rgba(15,23,42,0.20) 30%, rgba(15,23,42,0.10) 60%, rgba(15,23,42,0.45) 100%); z-index: 1; }
+    .bg-pattern {
+      position: absolute; inset: 0;
+      background-image:
+        radial-gradient(circle at 20% 15%, ${toCssColour(brandKit.primary)}18 0%, transparent 40%),
+        radial-gradient(circle at 85% 80%, ${toCssColour(brandKit.secondary)}14 0%, transparent 38%),
+        radial-gradient(circle at 60% 55%, ${toCssColour(brandKit.accent)}0c 0%, transparent 30%);
+      z-index: 0;
+    }
+    .bg-noise {
+      position: absolute; inset: 0;
+      opacity: 0.035;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+      z-index: 1;
+      pointer-events: none;
+    }
+    .bg-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(15,23,42,0.62) 0%, rgba(15,23,42,0.18) 30%, rgba(15,23,42,0.10) 60%, rgba(15,23,42,0.50) 100%); z-index: 1; }
     .brand-shape {
       position: absolute;
       bottom: 220px;
@@ -327,36 +345,39 @@ function buildHtml(
     .header {
       position: absolute;
       top: 0; left: 0; right: 0;
-      height: 130px;
+      height: 170px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 50px;
-      background: linear-gradient(90deg, ${toCssColour(brandKit.primary)}f2 0%, ${toCssColour(brandKit.primary)}cc 75%, transparent 100%);
-      color: #ffffff;
+      padding: 0 56px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.97) 0%, rgba(255,255,255,0.92) 55%, rgba(255,255,255,0) 100%);
+      border-bottom: 1px solid rgba(255,255,255,0.35);
       z-index: 4;
     }
+    .brand-lockup { display: flex; align-items: center; gap: 22px; max-width: 920px; }
     .logo-panel {
-      background: rgba(255,255,255,0.96);
-      border-radius: 18px;
-      padding: 10px 14px;
-      box-shadow: 0 8px 28px rgba(0,0,0,0.20);
+      background: #ffffff;
+      border-radius: 16px;
+      padding: 12px 18px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.14);
       display: flex;
       align-items: center;
       justify-content: center;
+      border: 1px solid rgba(0,0,0,0.06);
+      flex-shrink: 0;
     }
     .logo-img { display: block; object-fit: contain; }
-    .logo-horizontal { max-width: 340px; max-height: 110px; }
-    .logo-compact { max-width: 220px; max-height: 120px; }
-    .logo-fallback { height: 100px; width: 100px; border-radius: 18px; background: ${toCssColour(brandKit.accent)}; display: flex; align-items: center; justify-content: center; font-size: 38px; font-weight: 900; color: #fff; box-shadow: 0 8px 28px rgba(0,0,0,0.20); }
-    .brand-wordmark { display: flex; flex-direction: column; margin-left: 26px; text-shadow: 0 2px 10px rgba(0,0,0,0.35); }
-    .business-name { font-size: 24px; font-weight: 900; letter-spacing: -0.02em; line-height: 1.1; }
-    .business-label { font-size: 13px; font-weight: 600; opacity: 0.85; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .logo-horizontal { max-width: 340px; max-height: 110px; min-height: 55px; }
+    .logo-compact { max-width: 220px; max-height: 120px; min-height: 55px; }
+    .logo-fallback { height: 100px; width: 100px; border-radius: 18px; background: ${toCssColour(brandKit.accent)}; display: flex; align-items: center; justify-content: center; font-size: 38px; font-weight: 900; color: #fff; box-shadow: 0 10px 30px rgba(0,0,0,0.14); flex-shrink: 0; }
+    .brand-wordmark { display: flex; flex-direction: column; }
+    .business-name { font-size: 20px; font-weight: 900; letter-spacing: -0.01em; line-height: 1.15; color: ${toCssColour(brandKit.text)}; }
+    .business-label { font-size: 12px; font-weight: 700; opacity: 0.58; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.06em; color: ${toCssColour(brandKit.textMuted)}; }
     .hero {
       position: absolute;
-      top: 130px; left: 0; right: 0;
-      min-height: 260px;
-      padding: 36px 56px;
+      top: 170px; left: 0; right: 0;
+      min-height: 300px;
+      padding: 44px 56px;
       display: flex;
       flex-direction: column;
       justify-content: center;
@@ -366,13 +387,13 @@ function buildHtml(
       z-index: 3;
     }
     .hero-panel {
-      background: rgba(15,23,42,0.42);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border-radius: 22px;
-      padding: 22px 28px;
+      background: rgba(15,23,42,0.46);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-radius: 24px;
+      padding: 26px 32px;
       border-left: 6px solid ${toCssColour(brandKit.accent)};
-      box-shadow: 0 12px 32px rgba(0,0,0,0.15);
+      box-shadow: 0 16px 40px rgba(0,0,0,0.18);
       max-width: 920px;
     }
     .hero-shape-accent {
@@ -390,13 +411,25 @@ function buildHtml(
     .headline { position: relative; z-index: 2; font-size: 56px; font-weight: 900; line-height: 1.05; margin-bottom: 12px; letter-spacing: -0.03em; text-shadow: 0 3px 12px rgba(0,0,0,0.25); }
     .subheadline { position: relative; z-index: 2; font-size: 24px; font-weight: 500; line-height: 1.4; opacity: 0.96; }
     .offer-badge { position: relative; z-index: 2; margin-top: 14px; padding: 10px 22px; border-radius: 12px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 24px; font-weight: 900; box-shadow: 0 6px 18px rgba(0,0,0,0.15); display: inline-block; }
-    .services { position: absolute; top: 500px; left: 56px; right: 56px; display: grid; ${serviceGridStyle(visualDirection)}; z-index: 3; }
-    .service-card { position: relative; background: rgba(255,255,255,0.98); border-radius: 18px; padding: 20px 22px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); min-height: 110px; display: flex; flex-direction: column; justify-content: center; border-top: 5px solid ${toCssColour(brandKit.accent)}; }
-    .card-number { position: absolute; top: 8px; right: 14px; font-size: 40px; font-weight: 900; color: ${toCssColour(brandKit.accent)}; opacity: 0.16; line-height: 1; }
-    .card-title { font-size: 26px; font-weight: 900; color: ${toCssColour(brandKit.text)}; margin-bottom: 6px; line-height: 1.2; }
-    .card-desc { font-size: 18px; color: ${toCssColour(brandKit.textMuted)}; line-height: 1.45; }
-    .secondary-strip { position: absolute; top: 800px; left: 56px; right: 56px; padding: 16px 32px; border-radius: 14px; background: rgba(255,255,255,0.92); text-align: center; font-size: 22px; font-weight: 800; color: ${toCssColour(brandKit.text)}; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 2px solid ${toCssColour(brandKit.secondary)}30; }
-    .benefits-band { position: absolute; top: 870px; left: 56px; right: 56px; padding: 20px 32px; border-radius: 16px; background: rgba(255,255,255,0.92); display: flex; justify-content: space-between; gap: 20px; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
+    .services { position: absolute; top: 610px; left: 56px; right: 56px; display: grid; ${serviceGridStyle(visualDirection)}; z-index: 3; }
+    .service-card {
+      position: relative;
+      background: linear-gradient(145deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.96) 100%);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04);
+      min-height: 120px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      border: 1px solid rgba(255,255,255,0.7);
+      border-top: 5px solid ${toCssColour(brandKit.accent)};
+    }
+    .card-number { position: absolute; top: 10px; right: 16px; font-size: 44px; font-weight: 900; color: ${toCssColour(brandKit.accent)}; opacity: 0.10; line-height: 1; }
+    .card-title { font-size: 25px; font-weight: 900; color: ${toCssColour(brandKit.text)}; margin-bottom: 7px; line-height: 1.25; letter-spacing: -0.01em; }
+    .card-desc { font-size: 17px; color: ${toCssColour(brandKit.textMuted)}; line-height: 1.45; }
+    .secondary-strip { position: absolute; top: 900px; left: 56px; right: 56px; padding: 16px 32px; border-radius: 14px; background: rgba(255,255,255,0.94); text-align: center; font-size: 22px; font-weight: 800; color: ${toCssColour(brandKit.text)}; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.6); }
+    .benefits-band { position: absolute; top: 980px; left: 56px; right: 56px; padding: 22px 34px; border-radius: 18px; background: rgba(255,255,255,0.94); display: flex; justify-content: space-between; gap: 20px; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.6); }
     .benefit-item { flex: 1; display: flex; align-items: flex-start; gap: 12px; font-size: 21px; font-weight: 800; line-height: 1.35; color: ${toCssColour(brandKit.text)}; }
     .bullet { width: 11px; height: 11px; border-radius: 50%; background: ${toCssColour(brandKit.accent)}; flex-shrink: 0; margin-top: 7px; }
     .cta {
@@ -409,15 +442,15 @@ function buildHtml(
       justify-content: center;
       z-index: 3;
     }
-    .cta-button { padding: 24px 64px; border-radius: 16px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 38px; font-weight: 900; text-align: center; box-shadow: 0 10px 28px rgba(0,0,0,0.20); border: 3px solid rgba(255,255,255,0.30); text-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+    .cta-button { padding: 24px 64px; border-radius: 16px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 38px; font-weight: 900; text-align: center; box-shadow: 0 10px 28px rgba(0,0,0,0.20), 0 0 0 4px rgba(255,255,255,0.25); border: 3px solid rgba(255,255,255,0.35); text-shadow: 0 1px 2px rgba(0,0,0,0.12); }
     .cta-block { width: 100%; border-radius: 0; }
     .cta-pill { border-radius: 80px; }
     .cta-outline { background: transparent; color: ${toCssColour(brandKit.accent)}; border: 4px solid ${toCssColour(brandKit.accent)}; }
     .footer {
       position: absolute;
       bottom: 0; left: 0; right: 0;
-      height: 120px;
-      background: linear-gradient(90deg, ${toCssColour(brandKit.primary)}f2 0%, ${toCssColour(brandKit.primary)}cc 75%, transparent 100%);
+      height: 130px;
+      background: linear-gradient(90deg, rgba(15,23,42,0.94) 0%, rgba(15,23,42,0.88) 75%, rgba(15,23,42,0.72) 100%);
       color: #ffffff;
       display: flex;
       flex-direction: column;
@@ -427,26 +460,29 @@ function buildHtml(
       padding: 0 56px;
       z-index: 3;
     }
-    .footer-name { font-size: 26px; font-weight: 900; margin-bottom: 6px; text-shadow: 0 2px 8px rgba(0,0,0,0.25); }
-    .footer-line { font-size: 22px; font-weight: 600; opacity: 0.95; }
+    .footer-name { font-size: 28px; font-weight: 900; margin-bottom: 8px; text-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+    .footer-line { font-size: 24px; font-weight: 600; opacity: 0.95; letter-spacing: 0.01em; }
 
     /* Layout presets */
-    .preset-premium_services_brand_panel .hero { min-height: 280px; }
-    .preset-premium_local_service .hero { min-height: 300px; }
+    .preset-premium_services_brand_panel .hero { min-height: 320px; }
+    .preset-premium_local_service .hero { min-height: 340px; }
     .preset-premium_offer_hero .offer-badge { font-size: 30px; padding: 14px 30px; }
     .preset-premium_retail_promo .headline { font-size: 64px; }
-    .preset-premium_food_offer .hero-panel { background: rgba(15,23,42,0.50); }
-    .preset-premium_professional_clean .hero-panel { background: rgba(15,23,42,0.50); }
+    .preset-premium_food_offer .hero-panel { background: rgba(15,23,42,0.52); }
+    .preset-premium_professional_clean .hero-panel { background: rgba(15,23,42,0.52); }
   </style>
 </head>
 <body>
   <div class="canvas preset-${primary}">
+    <div class="bg-pattern"></div>
+    <div class="bg-noise"></div>
     <div class="bg-overlay"></div>
     <div class="brand-shape"></div>
     <div class="brand-stripe"></div>
     ${hasShapeAccent ? '<div class="hero-shape-accent"></div>' : ""}
+
     <div class="header">
-      <div style="display:flex;align-items:center;">
+      <div class="brand-lockup">
         ${logoHtml}
         <div class="brand-wordmark">
           <div class="business-name">${escapeHtml(brief.businessName)}</div>

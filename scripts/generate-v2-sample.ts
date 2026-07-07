@@ -27,6 +27,7 @@ import {
   writeHybridGenerationLog,
   writeDeterministicGenerationLog,
   buildBrandAssetDiagnostics,
+  buildRenderDiagnostics,
   printBrandAssetDiagnostics,
 } from "./lib/hybrid-sample-writer";
 import { ALL_FIXTURES, fixture3At1Newmarket } from "../api/lib/creative/premium-v2/fixtures";
@@ -100,7 +101,7 @@ async function renderFixture(
     console.log(`[${fixtureName}] Hybrid visual direction:`, JSON.stringify(hybrid.visualDirection, null, 2));
     console.log(`[${fixtureName}] Hybrid critic:`, JSON.stringify(hybrid.critic, null, 2));
     console.log(`[${fixtureName}] Hybrid metadata:`, JSON.stringify(hybrid.metadata, null, 2));
-    printBrandAssetDiagnostics(buildBrandAssetDiagnostics(hybrid.brandKit.brandAsset));
+    printBrandAssetDiagnostics(buildBrandAssetDiagnostics(hybrid.brandKit.brandAsset), buildRenderDiagnostics(hybrid.metadata));
   } else {
     const brandKit = await resolveBrandKit(business);
     const brief = await buildPremiumV2Brief({
@@ -184,6 +185,7 @@ async function renderDraftSample(
     brandAssetDiagnostics = buildBrandAssetDiagnostics(hybrid.brandKit.brandAsset);
     console.log("Hybrid draft sample finalDecision:", hybrid.metadata.finalDecision);
     console.log("Hybrid critic:", JSON.stringify(hybrid.critic, null, 2));
+    console.log("Hybrid render diagnostics:", JSON.stringify(buildRenderDiagnostics(hybrid.metadata), null, 2));
   } else {
     const brandKit = await resolveBrandKit(business);
     const brief = await buildPremiumV2Brief({
@@ -218,7 +220,7 @@ async function renderDraftSample(
   }
 
   console.log("Draft sample written to:", outputPath);
-  printBrandAssetDiagnostics(brandAssetDiagnostics);
+  printBrandAssetDiagnostics(brandAssetDiagnostics, options.hybrid && hybrid ? buildRenderDiagnostics(hybrid.metadata) : undefined);
 }
 
 async function main() {

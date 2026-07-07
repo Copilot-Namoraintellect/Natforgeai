@@ -33,6 +33,21 @@ export interface BrandAssetDiagnostics {
   logoCausedDowngrade: boolean;
 }
 
+export interface RenderDiagnostics {
+  realLogoExpected?: boolean;
+  realLogoRendered?: boolean;
+  logoNaturalWidth?: number;
+  logoNaturalHeight?: number;
+  logoRenderedWidth?: number;
+  logoRenderedHeight?: number;
+  logoVisibleArea?: number;
+  logoRenderMode?: string;
+  fallbackBadgeRendered?: boolean;
+  logoMaskedOrCropped?: boolean;
+  logoDataUriUsed?: boolean;
+  logoFetchUsed?: boolean;
+}
+
 export interface HybridLogEntry {
   fixture: string;
   label: string;
@@ -121,7 +136,25 @@ export function writeDeterministicGenerationLog(outputDir: string, entries: Dete
   return logPath;
 }
 
-export function printBrandAssetDiagnostics(diagnostics: BrandAssetDiagnostics): void {
+export function buildRenderDiagnostics(metadata?: HybridPipelineResult["metadata"]): RenderDiagnostics {
+  if (!metadata) return {};
+  return {
+    realLogoExpected: metadata.realLogoExpected,
+    realLogoRendered: metadata.realLogoRendered,
+    logoNaturalWidth: metadata.logoNaturalWidth,
+    logoNaturalHeight: metadata.logoNaturalHeight,
+    logoRenderedWidth: metadata.logoRenderedWidth,
+    logoRenderedHeight: metadata.logoRenderedHeight,
+    logoVisibleArea: metadata.logoVisibleArea,
+    logoRenderMode: metadata.logoRenderMode,
+    fallbackBadgeRendered: metadata.fallbackBadgeRendered,
+    logoMaskedOrCropped: metadata.logoMaskedOrCropped,
+    logoDataUriUsed: metadata.logoDataUriUsed,
+    logoFetchUsed: metadata.logoFetchUsed,
+  };
+}
+
+export function printBrandAssetDiagnostics(diagnostics: BrandAssetDiagnostics, renderDiagnostics?: RenderDiagnostics): void {
   console.log("  Brand asset diagnostics:");
   console.log(`    resolvedLogoPath: ${diagnostics.resolvedLogoPath}`);
   console.log(`    resolvedLogoUrl:  ${diagnostics.resolvedLogoUrl}`);
@@ -131,4 +164,20 @@ export function printBrandAssetDiagnostics(diagnostics: BrandAssetDiagnostics): 
   console.log(`    fallbackUsed:     ${diagnostics.fallbackUsed}`);
   console.log(`    fallbackAllowed:  ${diagnostics.fallbackAllowed}`);
   console.log(`    logoCausedDowngrade: ${diagnostics.logoCausedDowngrade}`);
+
+  if (renderDiagnostics) {
+    console.log("  Render diagnostics:");
+    console.log(`    realLogoExpected:     ${renderDiagnostics.realLogoExpected ?? "n/a"}`);
+    console.log(`    realLogoRendered:     ${renderDiagnostics.realLogoRendered ?? "n/a"}`);
+    console.log(`    logoNaturalWidth:     ${renderDiagnostics.logoNaturalWidth ?? "n/a"}`);
+    console.log(`    logoNaturalHeight:    ${renderDiagnostics.logoNaturalHeight ?? "n/a"}`);
+    console.log(`    logoRenderedWidth:    ${renderDiagnostics.logoRenderedWidth ?? "n/a"}`);
+    console.log(`    logoRenderedHeight:   ${renderDiagnostics.logoRenderedHeight ?? "n/a"}`);
+    console.log(`    logoVisibleArea:      ${renderDiagnostics.logoVisibleArea ?? "n/a"}`);
+    console.log(`    logoRenderMode:       ${renderDiagnostics.logoRenderMode ?? "n/a"}`);
+    console.log(`    fallbackBadgeRendered:${renderDiagnostics.fallbackBadgeRendered ?? "n/a"}`);
+    console.log(`    logoMaskedOrCropped:  ${renderDiagnostics.logoMaskedOrCropped ?? "n/a"}`);
+    console.log(`    logoDataUriUsed:      ${renderDiagnostics.logoDataUriUsed ?? "n/a"}`);
+    console.log(`    logoFetchUsed:        ${renderDiagnostics.logoFetchUsed ?? "n/a"}`);
+  }
 }
