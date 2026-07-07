@@ -12,7 +12,7 @@ import { env } from "../../env";
 import { asString } from "./curation";
 import type { BusinessEvidence } from "./curation";
 import { resolveBrandKit as resolveDeterministicBrandKit } from "./brand-kit";
-import { BrandKitSchema, type HybridBrandKit } from "./pipeline-types";
+import { BrandKitSchema, type HybridBrandKit, type WithFallback } from "./pipeline-types";
 
 const LOGO_FETCH_TIMEOUT_MS = 8000;
 
@@ -62,11 +62,11 @@ function buildUserText(business: BusinessEvidence, logoUrl: string | null): stri
   return parts.join("\n");
 }
 
-export async function resolveBrandKitWithAI(business: BusinessEvidence): Promise<HybridBrandKit> {
+export async function resolveBrandKitWithAI(business: BusinessEvidence): Promise<WithFallback<HybridBrandKit>> {
   const deterministic = await resolveDeterministicBrandKit(business);
 
   if (!env.openaiApiKey || !env.enableHybridLeafletPipeline) {
-    return mapDeterministicToHybrid(deterministic);
+    return { value: mapDeterministicToHybrid(deterministic), usedOpenAI: false };
   }
 
   const logoUrl = asString(business.logo);
@@ -99,10 +99,11 @@ export async function resolveBrandKitWithAI(business: BusinessEvidence): Promise
       object.logoUrl = null;
     }
 
-    return object;
+    return { value: object, usedOpenAI: true };
   } catch (err: any) {
-    console.warn(`[HybridBrandKit] AI brand analysis failed: ${err.message}. Falling back to deterministic resolver.`);
-    return mapDeterministicToHybrid(deterministic);
+    const reason = `AI brand analysis failed: ${err.message}`;
+    console.warn(`[HybridBrandKit] ${reason}. Falling back to deterministic resolver.`);
+    return { value: mapDeterministicToHybrid(deterministic), usedOpenAI: false, fallbackReason: reason };
   }
 }
 

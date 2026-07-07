@@ -33,10 +33,12 @@ import { fixtureRestaurant } from "./fixtures";
 describe("Hybrid pipeline AI modules", () => {
   it("brand-kit-ai falls back to deterministic brand kit when mocked", async () => {
     const { business } = fixtureRestaurant();
-    const brandKit = await resolveBrandKitWithAI(business as any);
-    expect(brandKit.primary).toBeTruthy();
-    expect(brandKit.accent).toBeTruthy();
-    expect(brandKit.logoUrl).toBe(business.logo);
+    const result = await resolveBrandKitWithAI(business as any);
+    expect(result.usedOpenAI).toBe(false);
+    expect(result.fallbackReason).toContain("Mocked OpenAI failure");
+    expect(result.value.primary).toBeTruthy();
+    expect(result.value.accent).toBeTruthy();
+    expect(result.value.logoUrl).toBe(business.logo);
   });
 
   it("brief-ai never returns the raw pain point as subheadline", async () => {
@@ -49,11 +51,13 @@ describe("Hybrid pipeline AI modules", () => {
       text: "#0F172A",
       textMuted: "#475569",
       source: "brandColors" as const,
-      logoUrl: business.logo,
+      logoUrl: business.logo || null,
       logoDescription: null,
       typographyNote: null,
     };
-    const brief = await buildAICreativeBrief(business as any, campaign as any, brandKit);
+    const result = await buildAICreativeBrief(business as any, campaign as any, brandKit);
+    expect(result.usedOpenAI).toBe(false);
+    const brief = result.value;
     expect(brief.subheadline.toLowerCase().trim()).not.toBe(campaign.mainPainPoint.toLowerCase().trim());
     expect(brief.subheadline.length).toBeGreaterThan(20);
   });
@@ -68,14 +72,15 @@ describe("Hybrid pipeline AI modules", () => {
       text: "#0F172A",
       textMuted: "#475569",
       source: "brandColors" as const,
-      logoUrl: business.logo,
+      logoUrl: business.logo || null,
       logoDescription: null,
       typographyNote: null,
     };
-    const brief = await buildAICreativeBrief(business as any, campaign as any, brandKit);
-    const direction = await buildVisualDirection(business as any, campaign as any, brandKit, brief);
-    expect(direction.layoutPreset).toBeTruthy();
-    expect(direction.backgroundPrompt.length).toBeGreaterThan(10);
+    const briefResult = await buildAICreativeBrief(business as any, campaign as any, brandKit);
+    const directionResult = await buildVisualDirection(business as any, campaign as any, brandKit, briefResult.value);
+    expect(directionResult.usedOpenAI).toBe(false);
+    expect(directionResult.value.layoutPreset).toBeTruthy();
+    expect(directionResult.value.backgroundPrompt.length).toBeGreaterThan(10);
   });
 
   it("vision-critic returns a structured scorecard", async () => {
@@ -84,5 +89,24 @@ describe("Hybrid pipeline AI modules", () => {
     expect(critic.scores.brandFidelity).toBeGreaterThan(0);
     expect(critic.scores.readability).toBeGreaterThan(0);
     expect(typeof critic.passed).toBe("boolean");
+  });
+
+  it("vision-critic marks unavailable result on OpenAI failure", async () => {
+    const buffer = Buffer.from("fake-image");
+    const critic = await critiqueRenderedLeaflet(buffer, "Test Business", true);
+    expect(critic.unavailable).toBe(true);
+    expect(critic.passed).toBe(false);
+    expect(critic.scores.genericTemplateRisk).toBe(50);
+  });
+
+  it("vision-critic detects quota errors from OpenAI failures", async () => {
+    const { generateObject } = await import("ai");
+    (generateObject as any).mockRejectedValueOnce(new Error("You exceeded your current quota"));
+
+    const buffer = Buffer.from("fake-image");
+    const critic = await critiqueRenderedLeaflet(buffer, "Test Business", true);
+    expect(critic.unavailable).toBe(true);
+    expect(critic.quotaError).toBe(true);
+    expect(critic.passed).toBe(false);
   });
 });

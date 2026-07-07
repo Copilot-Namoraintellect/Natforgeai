@@ -70,7 +70,7 @@ export const env = {
   enableHybridLeafletPipeline: process.env.ENABLE_HYBRID_LEAFLET_PIPELINE === "true",
   hybridLeafletTextModel: process.env.HYBRID_LEAFLET_TEXT_MODEL ?? "gpt-4o-mini",
   hybridLeafletVisionModel: process.env.HYBRID_LEAFLET_VISION_MODEL ?? "gpt-4o-mini",
-  hybridLeafletMaxRevisions: parseInt(process.env.HYBRID_LEAFLET_MAX_REVISIONS || "2", 10),
+  hybridLeafletMaxRevisions: parseInt(process.env.HYBRID_LEAFLET_MAX_REVISIONS || "1", 10),
 
   bannerbearApiKey: process.env.BANNERBEAR_API_KEY ?? "",
   bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",

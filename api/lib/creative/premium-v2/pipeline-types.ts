@@ -106,9 +106,35 @@ export const VisionCriticResultSchema = z.object({
   passed: z.boolean().describe("True only if all critical checks pass"),
   criticalIssues: z.array(z.string()).describe("Reasons that must block publication"),
   improvementSuggestions: z.array(z.string()).describe("Specific improvements for the next revision"),
+  unavailable: z.boolean().optional().describe("Set by the pipeline when the OpenAI vision critic fails"),
+  quotaError: z.boolean().optional().describe("True when the critic failed because of an OpenAI quota error"),
 });
 
 export type VisionCriticResult = z.infer<typeof VisionCriticResultSchema>;
+
+export type HybridFinalDecision =
+  | "premium_ready"
+  | "hybrid_review_required"
+  | "fallback_used"
+  | "failed";
+
+export interface HybridPipelineMetadata {
+  provider: string;
+  layoutPreset: string;
+  width: number;
+  height: number;
+  usedOpenAIBrandKit: boolean;
+  usedOpenAIBrief: boolean;
+  usedOpenAIVisualDirection: boolean;
+  usedOpenAIBackground: boolean;
+  usedOpenAIVisionCritic: boolean;
+  usedDeterministicFallback: boolean;
+  fallbackReason: string | null;
+  quotaError: boolean;
+  openAICallCount: number;
+  revisionCount: number;
+  finalDecision: HybridFinalDecision;
+}
 
 export interface HybridPipelineResult {
   buffer: Buffer;
@@ -118,12 +144,7 @@ export interface HybridPipelineResult {
   critic: VisionCriticResult;
   revisionCount: number;
   usedFallback: boolean;
-  metadata: {
-    provider: string;
-    layoutPreset: string;
-    width: number;
-    height: number;
-  };
+  metadata: HybridPipelineMetadata;
 }
 
 export interface HybridPipelineInput {
@@ -133,4 +154,11 @@ export interface HybridPipelineInput {
   approvedMessagePack?: any;
   refinementInstruction?: string;
   allowNoLogo?: boolean;
+}
+
+/** Helper returned by every AI stage so the orchestrator can track what ran. */
+export interface WithFallback<T> {
+  value: T;
+  usedOpenAI: boolean;
+  fallbackReason?: string;
 }

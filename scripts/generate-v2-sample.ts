@@ -50,7 +50,7 @@ function parseArgs(): Record<string, string | boolean> {
 async function renderFixture(
   fixtureName: string,
   options: { production?: boolean; logo?: string; out?: string; hybrid?: boolean }
-): Promise<{ outputPath: string; label: string; passed: boolean; critic?: any }> {
+): Promise<{ outputPath: string; label: string; passed: boolean; critic?: any; metadata?: any }> {
   const fixtureFn = ALL_FIXTURES[fixtureName as keyof typeof ALL_FIXTURES];
   if (!fixtureFn) {
     throw new Error(`Unknown fixture: ${fixtureName}. Available: ${Object.keys(ALL_FIXTURES).join(", ")}`);
@@ -69,6 +69,7 @@ async function renderFixture(
   let label: string;
   let passed: boolean;
   let criticJson: any;
+  let metadataJson: any;
 
   if (options.hybrid) {
     (env as any).enableHybridLeafletPipeline = true;
@@ -78,12 +79,15 @@ async function renderFixture(
       post: { id: 200, campaignId: campaign.id, title: `${business.displayName} promo` },
     });
     buffer = hybrid.buffer;
-    label = hybrid.critic.passed ? "Premium Ready" : "Needs Design Review";
-    passed = hybrid.critic.passed;
+    metadataJson = hybrid.metadata;
     criticJson = hybrid.critic;
+    passed = hybrid.critic.passed && !hybrid.metadata.usedDeterministicFallback && !hybrid.critic.unavailable;
+    label = decisionLabel(hybrid.metadata.finalDecision);
+
     console.log(`\n[${fixtureName}] Hybrid brief:`, JSON.stringify(hybrid.brief, null, 2));
     console.log(`[${fixtureName}] Hybrid visual direction:`, JSON.stringify(hybrid.visualDirection, null, 2));
     console.log(`[${fixtureName}] Hybrid critic:`, JSON.stringify(hybrid.critic, null, 2));
+    console.log(`[${fixtureName}] Hybrid metadata:`, JSON.stringify(hybrid.metadata, null, 2));
   } else {
     const brandKit = await resolveBrandKit(business);
     const brief = await buildPremiumV2Brief({
@@ -117,7 +121,22 @@ async function renderFixture(
   writeFileSync(outputPath, buffer);
   console.log(`[${fixtureName}] Sample written to:`, outputPath);
 
-  return { outputPath, label, passed, critic: criticJson };
+  return { outputPath, label, passed, critic: criticJson, metadata: metadataJson };
+}
+
+function decisionLabel(finalDecision: string): string {
+  switch (finalDecision) {
+    case "premium_ready":
+      return "Hybrid Premium Ready";
+    case "hybrid_review_required":
+      return "Vision Critic Unavailable - Needs Review";
+    case "fallback_used":
+      return "Fallback Used - Needs Review";
+    case "failed":
+      return "Failed";
+    default:
+      return "Needs Review";
+  }
 }
 
 async function renderDraftSample(businessId: string, campaignId: string, options: { production?: boolean; logo?: string }) {
@@ -164,12 +183,30 @@ async function main() {
   if (args["all-fixtures"] || args.all) {
     const hybrid = !!args.hybrid;
     mkdirSync(join(outputDir, hybrid ? "hybrid" : "v2.2"), { recursive: true });
-    const results: { name: string; label: string; passed: boolean; critic?: any }[] = [];
-    for (const name of Object.keys(ALL_FIXTURES)) {
+    const fixtureNames = Object.keys(ALL_FIXTURES);
+    const maxFixtures = typeof args["max-fixtures"] === "string" ? parseInt(args["max-fixtures"], 10) : undefined;
+    const selectedFixtures =
+      typeof maxFixtures === "number" && !Number.isNaN(maxFixtures)
+        ? fixtureNames.slice(0, Math.max(0, maxFixtures))
+        : fixtureNames;
+
+    const results: { name: string; label: string; passed: boolean; critic?: any; metadata?: any }[] = [];
+    for (const name of selectedFixtures) {
       const result = await renderFixture(name, { production: !!args.production, logo: args.logo as string, hybrid });
       results.push({ name, ...result });
     }
+
     if (hybrid) {
+      const logPath = join(outputDir, "hybrid", "generation-log.txt");
+      const logEntries = results.map((r) => ({
+        fixture: r.name,
+        label: r.label,
+        passed: r.passed,
+        metadata: r.metadata,
+        critic: r.critic,
+      }));
+      writeFileSync(logPath, JSON.stringify(logEntries, null, 2));
+      console.log("\n=== Hybrid generation log written to ===", logPath);
       console.log("\n=== Hybrid critic JSON ===");
       for (const r of results) {
         console.log(`\n[${r.name}]`, JSON.stringify(r.critic, null, 2));
@@ -177,7 +214,7 @@ async function main() {
     }
     console.log("\n=== Sample summary ===");
     for (const r of results) {
-      console.log(`${r.name}: ${r.label} (${r.passed ? "PASS" : "FAIL"})`);
+      console.log(`${r.name}: ${r.label}`);
     }
     return;
   }

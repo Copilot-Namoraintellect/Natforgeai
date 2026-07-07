@@ -11,7 +11,7 @@ import { structuredModel } from "../../agents/openai";
 import { env } from "../../env";
 import { asString } from "./curation";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
-import { AICreativeBriefSchema, type AICreativeBrief, type HybridBrandKit } from "./pipeline-types";
+import { AICreativeBriefSchema, type AICreativeBrief, type HybridBrandKit, type WithFallback } from "./pipeline-types";
 import { buildCommercialHeadline, buildCommercialSubheadline, buildCommercialBenefits } from "./copy";
 
 function buildEvidencePrompt(business: BusinessEvidence, campaign?: CampaignEvidence): string {
@@ -67,9 +67,9 @@ export async function buildAICreativeBrief(
   business: BusinessEvidence,
   campaign: CampaignEvidence | undefined,
   brandKit: HybridBrandKit
-): Promise<AICreativeBrief> {
+): Promise<WithFallback<AICreativeBrief>> {
   if (!env.openaiApiKey || !env.enableHybridLeafletPipeline) {
-    return deterministicBrief(business, campaign);
+    return { value: deterministicBrief(business, campaign), usedOpenAI: false };
   }
 
   const system = `You are a senior marketing copywriter. Create premium, customer-facing leaflet copy for a local business. The copy must feel human, benefit-led and category-appropriate. Never state the raw customer pain point as the subheadline. Convert pain points into positive outcomes. Keep service names short and description-driven. Return strict JSON matching the requested schema.`;
@@ -84,10 +84,11 @@ export async function buildAICreativeBrief(
       messages: [{ role: "user", content: prompt }],
       temperature: 0.6,
     });
-    return normaliseBrief(object, business, campaign);
+    return { value: normaliseBrief(object, business, campaign), usedOpenAI: true };
   } catch (err: any) {
-    console.warn(`[HybridBrief] AI brief generation failed: ${err.message}. Falling back to deterministic copy.`);
-    return deterministicBrief(business, campaign);
+    const reason = `AI brief generation failed: ${err.message}`;
+    console.warn(`[HybridBrief] ${reason}. Falling back to deterministic copy.`);
+    return { value: deterministicBrief(business, campaign), usedOpenAI: false, fallbackReason: reason };
   }
 }
 

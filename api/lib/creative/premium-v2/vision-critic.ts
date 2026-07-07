@@ -4,6 +4,10 @@
  * Sends the final rendered PNG to an OpenAI vision model and returns a
  * structured scorecard. Flags critical issues such as missing logo, generic
  * template look, clipped text/CTA, weak brand colours and dull copy.
+ *
+ * IMPORTANT: on OpenAI failure (quota, network, etc.) this module returns a
+ * failed result, NOT a permissive pass. The orchestrator must treat a failed
+ * critic as a reason to fall back and mark the output for review.
  */
 
 import { generateObject } from "ai";
@@ -19,7 +23,7 @@ export async function critiqueRenderedLeaflet(
   expectedLogo: boolean
 ): Promise<VisionCriticResult> {
   if (!env.openaiApiKey || !env.enableHybridLeafletPipeline) {
-    return passingResult("OpenAI vision critic disabled; deterministic checks used.");
+    return unavailableResult("OpenAI vision critic disabled; deterministic checks used.", false);
   }
 
   const dataUri = `data:image/png;base64,${imageBuffer.toString("base64")}`;
@@ -58,28 +62,34 @@ export async function critiqueRenderedLeaflet(
 
     return {
       ...object,
+      unavailable: false,
+      quotaError: false,
       criticalIssues: Array.from(new Set(criticalIssues)),
       passed: criticalIssues.length === 0,
     };
   } catch (err: any) {
-    console.warn(`[HybridCritic] Vision critique failed: ${err.message}. Returning permissive result.`);
-    return passingResult("Vision critic unavailable; assuming pass with deterministic guardrails.");
+    const message = err.message || String(err);
+    const isQuota = /quota|rate|billing|insufficient|limit/i.test(message);
+    console.warn(`[HybridCritic] Vision critique failed: ${message}. Marking critic as unavailable.`);
+    return unavailableResult(message, isQuota);
   }
 }
 
-function passingResult(reason: string): VisionCriticResult {
+function unavailableResult(reason: string, quotaError: boolean): VisionCriticResult {
   return {
     scores: {
-      brandFidelity: 85,
-      readability: 85,
-      premiumFeel: 80,
-      visualHierarchy: 85,
-      logoUsage: 85,
-      CTAVisibility: 90,
-      genericTemplateRisk: 25,
+      brandFidelity: 50,
+      readability: 50,
+      premiumFeel: 50,
+      visualHierarchy: 50,
+      logoUsage: 50,
+      CTAVisibility: 50,
+      genericTemplateRisk: 50,
     },
-    passed: true,
-    criticalIssues: [],
-    improvementSuggestions: [reason],
+    passed: false,
+    unavailable: true,
+    quotaError,
+    criticalIssues: [quotaError ? `OpenAI quota error: ${reason}` : `Vision critic unavailable: ${reason}`],
+    improvementSuggestions: ["Re-render with deterministic fallback and queue for manual review."],
   };
 }

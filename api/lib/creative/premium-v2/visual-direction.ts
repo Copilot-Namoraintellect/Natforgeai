@@ -10,7 +10,7 @@ import { generateObject } from "ai";
 import { structuredModel } from "../../agents/openai";
 import { env } from "../../env";
 import type { AICreativeBrief, HybridBrandKit, VisualDirection } from "./pipeline-types";
-import { VisualDirectionSchema } from "./pipeline-types";
+import { VisualDirectionSchema, type WithFallback } from "./pipeline-types";
 import { inferBusinessCategory } from "./curation";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
 
@@ -86,9 +86,9 @@ export async function buildVisualDirection(
   campaign: CampaignEvidence | undefined,
   brandKit: HybridBrandKit,
   brief: AICreativeBrief
-): Promise<VisualDirection> {
+): Promise<WithFallback<VisualDirection>> {
   if (!env.openaiApiKey || !env.enableHybridLeafletPipeline) {
-    return defaultDirection(business, campaign);
+    return { value: defaultDirection(business, campaign), usedOpenAI: false };
   }
 
   const system = `You are a senior visual designer planning a 1080x1350 marketing leaflet. Choose a layout preset, hero treatment, background direction and CTA style. Output a detailed background prompt that is STRICTLY text-free, logo-free, signage-free and contact-detail-free. Return strict JSON.`;
@@ -103,9 +103,10 @@ export async function buildVisualDirection(
       messages: [{ role: "user", content: prompt }],
       temperature: 0.5,
     });
-    return object;
+    return { value: object, usedOpenAI: true };
   } catch (err: any) {
-    console.warn(`[HybridVisualDirection] AI visual direction failed: ${err.message}. Falling back to default.`);
-    return defaultDirection(business, campaign);
+    const reason = `AI visual direction failed: ${err.message}`;
+    console.warn(`[HybridVisualDirection] ${reason}. Falling back to default.`);
+    return { value: defaultDirection(business, campaign), usedOpenAI: false, fallbackReason: reason };
   }
 }
