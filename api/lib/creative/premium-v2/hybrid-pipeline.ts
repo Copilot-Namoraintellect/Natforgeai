@@ -2,23 +2,25 @@
  * Premium Leaflet Hybrid Pipeline – Orchestrator.
  *
  * Runs the full hybrid creative pipeline:
- *   BrandKit → Creative Brief → Visual Direction → Background → HTML Render → Vision Critic → Revision Loop.
+ *   Combined Creative Plan (BrandKit + Brief + Visual Direction)
+ *   → Background
+ *   → HTML Render
+ *   → Vision Critic
+ *   → Revision Loop (reuses background for layout/text issues)
  *
  * Falls back to the deterministic V2 renderer if any AI stage fails or if the
  * hybrid pipeline is disabled. Preserves the previous approved asset on failure.
  *
  * Transparency rules:
- * - Every result reports exactly which OpenAI stages ran.
+ * - Every result reports attempted/succeeded/final-used per OpenAI stage.
+ * - Rejected hybrid attempts are kept in sampleMode so they can be inspected.
  * - Deterministic fallback never reports perfect critic scores.
- * - Vision critic failures (quota, network, etc.) are never permissive passes.
- * - The generation log shows the real finalDecision and fallbackReason.
+ * - Vision critic failures (quota/API/unavailable) are never permissive passes.
  */
 
 import { env } from "../../env";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
-import { resolveBrandKitWithAI } from "./brand-kit-ai";
-import { buildAICreativeBrief } from "./brief-ai";
-import { buildVisualDirection } from "./visual-direction";
+import { planCreativeWithAI } from "./plan-ai";
 import { generateBackground } from "./background-generator";
 import { renderHybridLeaflet, type HybridRenderBrief } from "./html-renderer";
 import { critiqueRenderedLeaflet } from "./vision-critic";
@@ -34,11 +36,12 @@ import type {
   HybridPipelineMetadata,
   HybridFinalDecision,
   VisionCriticResult,
+  HybridPipelineAttempt,
 } from "./pipeline-types";
 
 export async function runHybridPipeline(input: HybridPipelineInput): Promise<HybridPipelineResult> {
   if (!env.enableHybridLeafletPipeline || !env.openaiApiKey) {
-    return runDeterministicFallback(input, undefined, undefined, {
+    return runDeterministicFallback(input, undefined, undefined, undefined, {
       reason: !env.enableHybridLeafletPipeline
         ? "Hybrid pipeline feature flag disabled"
         : "OPENAI_API_KEY not configured",
@@ -47,58 +50,68 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
 
   const business = input.business as BusinessEvidence;
   const campaign = (input.campaign || {}) as CampaignEvidence;
+  const sampleMode = input.sampleMode ?? false;
 
   let openAICallCount = 0;
-  let usedOpenAIBrandKit = false;
-  let usedOpenAIBrief = false;
-  let usedOpenAIVisualDirection = false;
-  let usedOpenAIBackground = false;
-  let usedOpenAIVisionCritic = false;
   let fallbackReason: string | null = null;
   let quotaError = false;
 
+  // Track attempted/succeeded per stage.
+  const stage = {
+    brandKit: { attempted: false, succeeded: false },
+    brief: { attempted: false, succeeded: false },
+    visualDirection: { attempted: false, succeeded: false },
+    background: { attempted: false, succeeded: false },
+    visionCritic: { attempted: false, succeeded: false },
+  };
+
   try {
-    const brandKitResult = await resolveBrandKitWithAI(business);
-    openAICallCount += brandKitResult.usedOpenAI ? 1 : 0;
-    usedOpenAIBrandKit = brandKitResult.usedOpenAI;
-    if (brandKitResult.fallbackReason) fallbackReason = brandKitResult.fallbackReason;
-    const brandKit = brandKitResult.value;
+    const planResult = await planCreativeWithAI(business, campaign);
+    stage.brandKit.attempted = true;
+    stage.brief.attempted = true;
+    stage.visualDirection.attempted = true;
+    stage.brandKit.succeeded = planResult.usedOpenAI;
+    stage.brief.succeeded = planResult.usedOpenAI;
+    stage.visualDirection.succeeded = planResult.usedOpenAI;
+    openAICallCount += planResult.usedOpenAI ? 1 : 0;
+    if (planResult.fallbackReason) fallbackReason = planResult.fallbackReason;
 
-    const briefResult = await buildAICreativeBrief(business, campaign, brandKit);
-    openAICallCount += briefResult.usedOpenAI ? 1 : 0;
-    usedOpenAIBrief = briefResult.usedOpenAI;
-    if (briefResult.fallbackReason) fallbackReason = briefResult.fallbackReason;
-    const brief = briefResult.value;
-
-    const visualResult = await buildVisualDirection(business, campaign, brandKit, brief);
-    openAICallCount += visualResult.usedOpenAI ? 1 : 0;
-    usedOpenAIVisualDirection = visualResult.usedOpenAI;
-    if (visualResult.fallbackReason) fallbackReason = visualResult.fallbackReason;
-    let visualDirection = visualResult.value;
+    const { brandKit, brief, visualDirection: initialVisualDirection } = planResult.value;
+    let visualDirection = initialVisualDirection;
 
     let revisionCount = 0;
     const maxRevisions = Math.max(0, env.hybridLeafletMaxRevisions);
     let lastBackgroundBuffer: Buffer | null = null;
+    const attempts: HybridPipelineAttempt[] = [];
+    let rejectionCritic: VisionCriticResult | null = null;
+    let critic: VisionCriticResult | undefined;
 
     while (revisionCount <= maxRevisions) {
-      const reuseBackground = revisionCount > 0 && shouldReuseBackground(visualDirection.backgroundPrompt);
+      const reuseBackground = revisionCount > 0 && shouldReuseBackground(critic?.improvementSuggestions || []);
       const render = await renderOnce(input, brandKit, brief, visualDirection, reuseBackground ? lastBackgroundBuffer : null);
+      stage.background.attempted = true;
       if (render.backgroundBuffer) {
         lastBackgroundBuffer = render.backgroundBuffer;
-        usedOpenAIBackground = true;
+        stage.background.succeeded = true;
       }
 
-      const critic = await critiqueRenderedLeaflet(
+      critic = await critiqueRenderedLeaflet(
         render.buffer,
         business.displayName || business.name || "Business",
         !!brandKit.logoUrl
       );
+      stage.visionCritic.attempted = true;
+      stage.visionCritic.succeeded = !critic.unavailable;
       openAICallCount++; // critic call
-      usedOpenAIVisionCritic = !critic.unavailable;
+
+      if (sampleMode) {
+        attempts.push({ buffer: render.buffer, critic, visualDirection });
+      }
 
       if (critic.unavailable) {
         quotaError = !!critic.quotaError;
         fallbackReason = critic.criticalIssues[0] || "Vision critic unavailable";
+        rejectionCritic = critic;
         console.warn(`[HybridPipeline] ${fallbackReason}. Falling back to deterministic V2 renderer.`);
         break;
       }
@@ -113,16 +126,13 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
           critic,
           revisionCount,
           false,
-          {
-            usedOpenAIBrandKit,
-            usedOpenAIBrief,
-            usedOpenAIVisualDirection,
-            usedOpenAIBackground,
-            usedOpenAIVisionCritic,
-            openAICallCount,
-          }
+          stage,
+          openAICallCount,
+          attempts
         );
       }
+
+      rejectionCritic = critic;
 
       if (revisionCount >= maxRevisions) {
         fallbackReason = `Critic rejected after ${revisionCount} revision(s)`;
@@ -135,23 +145,20 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       revisionCount++;
     }
 
-    return runDeterministicFallback(input, brandKit, brief, {
+    return runDeterministicFallback(input, brandKit, brief, attempts, {
       reason: fallbackReason || "Hybrid critic did not pass",
       quotaError,
       openAICallCount,
-      usedOpenAIBrandKit,
-      usedOpenAIBrief,
-      usedOpenAIVisualDirection,
+      stage,
+      rejectionCritic,
     });
   } catch (err: any) {
     const reason = `Pipeline failed: ${err.message}`;
     console.warn(`[HybridPipeline] ${reason}. Falling back to deterministic V2 renderer.`);
-    return runDeterministicFallback(input, undefined, undefined, {
+    return runDeterministicFallback(input, undefined, undefined, undefined, {
       reason,
       openAICallCount,
-      usedOpenAIBrandKit,
-      usedOpenAIBrief,
-      usedOpenAIVisualDirection,
+      stage,
     });
   }
 }
@@ -203,9 +210,9 @@ async function fetchLogo(logoUrl: string): Promise<Buffer | null> {
   }
 }
 
-function shouldReuseBackground(backgroundPrompt: string): boolean {
-  const text = backgroundPrompt.toLowerCase();
-  const layoutIssues = ["text", "font", "readability", "contrast", "cta", "clipped", "hierarchy", "logo", "layout", "empty", "crowded"];
+function shouldReuseBackground(suggestions: string[]): boolean {
+  const text = suggestions.join(" ").toLowerCase();
+  const layoutIssues = ["text", "font", "readability", "contrast", "cta", "clipped", "hierarchy", "logo", "layout", "empty", "crowded", "typography"];
   const backgroundIssues = ["background", "texture", "gradient", "bland", "plain", "boring", "photo"];
   return layoutIssues.some((w) => text.includes(w)) && !backgroundIssues.some((w) => text.includes(w));
 }
@@ -214,34 +221,28 @@ function reviseVisualDirection(visualDirection: VisualDirection, suggestions: st
   const text = suggestions.join(" ").toLowerCase();
   const next: VisualDirection = { ...visualDirection };
 
-  // CTA / clipping issues -> make CTA impossible to miss.
   if (text.match(/cta|clipped|button|small/)) {
     next.ctaTreatment = "block_banner";
   }
 
-  // Readability / contrast / text size -> reduce density and use a solid hero block.
-  if (text.match(/readability|contrast|font|text|small|blurry/)) {
+  if (text.match(/readability|contrast|font|text|small|blurry|typography/)) {
     next.density = "minimal";
     next.heroTreatment = "solid_brand_block";
   }
 
-  // Generic / template feel -> switch to more distinctive hero and background.
   if (text.match(/generic|template|cheap|boring/)) {
     next.heroTreatment = next.heroTreatment === "solid_brand_block" ? "shape_accent" : "solid_brand_block";
     next.backgroundDirection = next.backgroundDirection === "abstract_brand_gradient" ? "dark_premium" : "abstract_brand_gradient";
   }
 
-  // Premium feel -> richer background.
   if (text.match(/premium|luxury|rich|flat/)) {
     next.backgroundDirection = next.backgroundDirection === "clean_white" ? "soft_noise_texture" : "dark_premium";
   }
 
-  // Logo issues -> give logo its own shape-accent hero.
   if (text.match(/logo|brand/)) {
     next.heroTreatment = "shape_accent";
   }
 
-  // Visual hierarchy / crowded -> balance density.
   if (text.match(/hierarchy|crowded|clutter|empty space/)) {
     next.density = next.density === "dense" ? "balanced" : "minimal";
   }
@@ -253,15 +254,21 @@ interface FallbackOptions {
   reason: string;
   quotaError?: boolean;
   openAICallCount?: number;
-  usedOpenAIBrandKit?: boolean;
-  usedOpenAIBrief?: boolean;
-  usedOpenAIVisualDirection?: boolean;
+  stage?: {
+    brandKit: { attempted: boolean; succeeded: boolean };
+    brief: { attempted: boolean; succeeded: boolean };
+    visualDirection: { attempted: boolean; succeeded: boolean };
+    background: { attempted: boolean; succeeded: boolean };
+    visionCritic: { attempted: boolean; succeeded: boolean };
+  };
+  rejectionCritic?: VisionCriticResult | null;
 }
 
 async function runDeterministicFallback(
   input: HybridPipelineInput,
   brandKit?: HybridBrandKit,
   aiBrief?: AICreativeBrief,
+  attempts?: HybridPipelineAttempt[],
   options: FallbackOptions = { reason: "Unknown" }
 ): Promise<HybridPipelineResult> {
   const brief = await buildPremiumV2Brief({
@@ -329,22 +336,38 @@ async function runDeterministicFallback(
     offerLine: brief.offer || null,
   };
 
+  const stage = options.stage || {
+    brandKit: { attempted: false, succeeded: false },
+    brief: { attempted: false, succeeded: false },
+    visualDirection: { attempted: false, succeeded: false },
+    background: { attempted: false, succeeded: false },
+    visionCritic: { attempted: false, succeeded: false },
+  };
+
   const metadata: HybridPipelineMetadata = {
     provider: "premium-v2-deterministic",
     layoutPreset: brief.layoutDensity,
     width: metrics.width,
     height: metrics.height,
-    usedOpenAIBrandKit: options.usedOpenAIBrandKit ?? false,
-    usedOpenAIBrief: options.usedOpenAIBrief ?? false,
-    usedOpenAIVisualDirection: options.usedOpenAIVisualDirection ?? false,
-    usedOpenAIBackground: false,
-    usedOpenAIVisionCritic: false,
+    attemptedOpenAIBrandKit: stage.brandKit.attempted,
+    succeededOpenAIBrandKit: stage.brandKit.succeeded,
+    attemptedOpenAIBrief: stage.brief.attempted,
+    succeededOpenAIBrief: stage.brief.succeeded,
+    attemptedOpenAIVisualDirection: stage.visualDirection.attempted,
+    succeededOpenAIVisualDirection: stage.visualDirection.succeeded,
+    attemptedOpenAIBackground: stage.background.attempted,
+    succeededOpenAIBackground: stage.background.succeeded,
+    finalUsedOpenAIBackground: false,
+    attemptedOpenAIVisionCritic: stage.visionCritic.attempted,
+    succeededOpenAIVisionCritic: stage.visionCritic.succeeded,
+    finalUsedOpenAIVisionCritic: false,
     usedDeterministicFallback: true,
     fallbackReason: options.reason,
     quotaError: !!options.quotaError,
     openAICallCount: options.openAICallCount ?? 0,
     revisionCount: 0,
     finalDecision,
+    rejectionCritic: options.rejectionCritic || null,
   };
 
   return {
@@ -364,16 +387,8 @@ async function runDeterministicFallback(
     revisionCount: 0,
     usedFallback: true,
     metadata,
+    attempts,
   };
-}
-
-interface SuccessMeta {
-  usedOpenAIBrandKit: boolean;
-  usedOpenAIBrief: boolean;
-  usedOpenAIVisualDirection: boolean;
-  usedOpenAIBackground: boolean;
-  usedOpenAIVisionCritic: boolean;
-  openAICallCount: number;
 }
 
 function buildResult(
@@ -385,24 +400,40 @@ function buildResult(
   critic: VisionCriticResult,
   revisionCount: number,
   usedFallback: boolean,
-  meta: SuccessMeta
+  stage: {
+    brandKit: { attempted: boolean; succeeded: boolean };
+    brief: { attempted: boolean; succeeded: boolean };
+    visualDirection: { attempted: boolean; succeeded: boolean };
+    background: { attempted: boolean; succeeded: boolean };
+    visionCritic: { attempted: boolean; succeeded: boolean };
+  },
+  openAICallCount: number,
+  attempts: HybridPipelineAttempt[]
 ): HybridPipelineResult {
   const metadata: HybridPipelineMetadata = {
     provider: "premium-v2-hybrid",
     layoutPreset: visualDirection.layoutPreset,
     width: 1080,
     height: 1350,
-    usedOpenAIBrandKit: meta.usedOpenAIBrandKit,
-    usedOpenAIBrief: meta.usedOpenAIBrief,
-    usedOpenAIVisualDirection: meta.usedOpenAIVisualDirection,
-    usedOpenAIBackground: meta.usedOpenAIBackground,
-    usedOpenAIVisionCritic: meta.usedOpenAIVisionCritic,
+    attemptedOpenAIBrandKit: stage.brandKit.attempted,
+    succeededOpenAIBrandKit: stage.brandKit.succeeded,
+    attemptedOpenAIBrief: stage.brief.attempted,
+    succeededOpenAIBrief: stage.brief.succeeded,
+    attemptedOpenAIVisualDirection: stage.visualDirection.attempted,
+    succeededOpenAIVisualDirection: stage.visualDirection.succeeded,
+    attemptedOpenAIBackground: true,
+    succeededOpenAIBackground: stage.background.succeeded,
+    finalUsedOpenAIBackground: true,
+    attemptedOpenAIVisionCritic: true,
+    succeededOpenAIVisionCritic: true,
+    finalUsedOpenAIVisionCritic: true,
     usedDeterministicFallback: false,
     fallbackReason: null,
     quotaError: false,
-    openAICallCount: meta.openAICallCount,
+    openAICallCount,
     revisionCount,
     finalDecision: critic.passed ? "premium_ready" : "hybrid_review_required",
+    rejectionCritic: null,
   };
 
   return {
@@ -414,5 +445,6 @@ function buildResult(
     revisionCount,
     usedFallback,
     metadata,
+    attempts,
   };
 }

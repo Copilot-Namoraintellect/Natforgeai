@@ -92,7 +92,7 @@ export async function buildAICreativeBrief(
   }
 }
 
-function deterministicBrief(business: BusinessEvidence, campaign?: CampaignEvidence): AICreativeBrief {
+export function deterministicBrief(business: BusinessEvidence, campaign?: CampaignEvidence): AICreativeBrief {
   const productOrService = asString(business.productOrService) || "";
   const services = productOrService
     .split(/,|;/)

@@ -118,22 +118,36 @@ export type HybridFinalDecision =
   | "fallback_used"
   | "failed";
 
+export interface HybridPipelineAttempt {
+  buffer: Buffer;
+  critic: VisionCriticResult;
+  visualDirection: VisualDirection;
+}
+
 export interface HybridPipelineMetadata {
   provider: string;
   layoutPreset: string;
   width: number;
   height: number;
-  usedOpenAIBrandKit: boolean;
-  usedOpenAIBrief: boolean;
-  usedOpenAIVisualDirection: boolean;
-  usedOpenAIBackground: boolean;
-  usedOpenAIVisionCritic: boolean;
+  attemptedOpenAIBrandKit: boolean;
+  succeededOpenAIBrandKit: boolean;
+  attemptedOpenAIBrief: boolean;
+  succeededOpenAIBrief: boolean;
+  attemptedOpenAIVisualDirection: boolean;
+  succeededOpenAIVisualDirection: boolean;
+  attemptedOpenAIBackground: boolean;
+  succeededOpenAIBackground: boolean;
+  finalUsedOpenAIBackground: boolean;
+  attemptedOpenAIVisionCritic: boolean;
+  succeededOpenAIVisionCritic: boolean;
+  finalUsedOpenAIVisionCritic: boolean;
   usedDeterministicFallback: boolean;
   fallbackReason: string | null;
   quotaError: boolean;
   openAICallCount: number;
   revisionCount: number;
   finalDecision: HybridFinalDecision;
+  rejectionCritic: VisionCriticResult | null;
 }
 
 export interface HybridPipelineResult {
@@ -145,6 +159,7 @@ export interface HybridPipelineResult {
   revisionCount: number;
   usedFallback: boolean;
   metadata: HybridPipelineMetadata;
+  attempts?: HybridPipelineAttempt[];
 }
 
 export interface HybridPipelineInput {
@@ -154,6 +169,7 @@ export interface HybridPipelineInput {
   approvedMessagePack?: any;
   refinementInstruction?: string;
   allowNoLogo?: boolean;
+  sampleMode?: boolean;
 }
 
 /** Helper returned by every AI stage so the orchestrator can track what ran. */

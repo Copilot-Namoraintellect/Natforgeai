@@ -14,7 +14,7 @@ import { VisualDirectionSchema, type WithFallback } from "./pipeline-types";
 import { inferBusinessCategory } from "./curation";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
 
-function defaultDirection(business: BusinessEvidence, campaign?: CampaignEvidence): VisualDirection {
+export function defaultDirection(business: BusinessEvidence, campaign?: CampaignEvidence): VisualDirection {
   const category = inferBusinessCategory(business, campaign);
   switch (category) {
     case "food_restaurant":
