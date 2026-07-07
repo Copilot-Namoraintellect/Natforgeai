@@ -41,6 +41,24 @@ async function getBrowser(): Promise<Browser> {
   return browser;
 }
 
+async function fetchLogoBuffer(logoUrl: string): Promise<Buffer | null> {
+  try {
+    const res = await fetch(logoUrl);
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+function inferContentType(buffer: Buffer): string {
+  if (buffer[0] === 0x89 && buffer[1] === 0x50) return "image/png";
+  if (buffer[0] === 0xff && buffer[1] === 0xd8) return "image/jpeg";
+  if (buffer[0] === 0x47 && buffer[1] === 0x49) return "image/gif";
+  if (buffer[0] === 0x52 && buffer[1] === 0x49) return "image/webp";
+  return "image/png";
+}
+
 export async function renderHybridLeaflet(
   brief: HybridRenderBrief,
   brandKit: HybridBrandKit,
@@ -49,7 +67,18 @@ export async function renderHybridLeaflet(
   logoBuffer: Buffer | null,
   brandAsset?: BrandAssetResolution
 ): Promise<{ buffer: Buffer; metrics: HybridRenderMetrics }> {
-  const html = buildHtml(brief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandAsset);
+  let resolvedLogoBuffer = logoBuffer;
+  if (!resolvedLogoBuffer && brandAsset?.logoResolved && brandAsset.realLogoExpected) {
+    const logoUrl = brandAsset.logoSourceUrl || brandKit.logoUrl || null;
+    if (logoUrl) {
+      resolvedLogoBuffer = await fetchLogoBuffer(logoUrl);
+      if (!resolvedLogoBuffer) {
+        console.warn(`[HybridRenderer] Failed to fetch real logo from ${logoUrl}; will fall back to badge.`);
+      }
+    }
+  }
+
+  const html = buildHtml(brief, brandKit, visualDirection, backgroundBuffer, resolvedLogoBuffer, brandAsset);
 
   const page = await (await getBrowser()).newPage({ viewport: { width: WIDTH, height: HEIGHT } });
   const consoleErrors: string[] = [];
@@ -124,7 +153,7 @@ function buildHtml(
 ): string {
   const primary = visualDirection.layoutPreset;
   const bg = backgroundBuffer ? `data:image/png;base64,${backgroundBuffer.toString("base64")}` : undefined;
-  const logo = logoBuffer ? `data:image/png;base64,${logoBuffer.toString("base64")}` : undefined;
+  const logo = logoBuffer ? `data:${inferContentType(logoBuffer)};base64,${logoBuffer.toString("base64")}` : undefined;
 
   const primaryCards = brief.primaryServices
     .slice(0, visualDirection.density === "dense" ? 6 : 4)

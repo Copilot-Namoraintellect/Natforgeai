@@ -129,7 +129,12 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
         break;
       }
 
-      if (critic.passed) {
+      const realLogoExpected = !!brandAsset && brandAsset.realLogoExpected;
+      const logoRenderedCorrectly =
+        !realLogoExpected ||
+        (critic.realLogoPresent && !critic.fallbackBadgeUsed && critic.logoMatchesBrand && !critic.logoDistortedOrCropped);
+
+      if (critic.passed && logoRenderedCorrectly) {
         return buildResult(
           input,
           brandKit,
@@ -143,6 +148,13 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
           openAICallCount,
           attempts
         );
+      }
+
+      if (realLogoExpected && !logoRenderedCorrectly) {
+        rejectionCritic = critic;
+        fallbackReason = "Hybrid attempt did not render the real brand logo correctly";
+        console.warn(`[HybridPipeline] ${fallbackReason}. Falling back to deterministic V2 renderer.`);
+        break;
       }
 
       rejectionCritic = critic;

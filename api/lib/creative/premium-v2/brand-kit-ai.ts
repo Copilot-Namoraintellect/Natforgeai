@@ -12,7 +12,7 @@ import { env } from "../../env";
 import { asString } from "./curation";
 import type { BusinessEvidence } from "./curation";
 import { resolveBrandKit as resolveDeterministicBrandKit } from "./brand-kit";
-import { BrandKitSchema, type HybridBrandKit, type WithFallback } from "./pipeline-types";
+import { BrandKitOpenAISchema, type HybridBrandKit, type WithFallback } from "./pipeline-types";
 
 const LOGO_FETCH_TIMEOUT_MS = 8000;
 
@@ -84,13 +84,15 @@ export async function resolveBrandKitWithAI(business: BusinessEvidence): Promise
       });
     }
 
-    const { object } = await generateObject({
+    const { object: rawObject } = await generateObject({
       model: structuredModel,
-      schema: BrandKitSchema,
+      schema: BrandKitOpenAISchema,
       system: buildSystemPrompt(),
       messages: [{ role: "user", content: userContent }],
       temperature: 0.2,
     });
+
+    const object = rawObject as unknown as HybridBrandKit;
 
     if (!object.logoUrl && logoUrl) {
       object.logoUrl = logoUrl;
@@ -98,6 +100,7 @@ export async function resolveBrandKitWithAI(business: BusinessEvidence): Promise
     if (!object.logoUrl) {
       object.logoUrl = null;
     }
+    object.brandAsset = deterministic.brandAsset;
 
     return { value: object, usedOpenAI: true };
   } catch (err: any) {

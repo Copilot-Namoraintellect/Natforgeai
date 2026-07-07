@@ -10,7 +10,6 @@
  */
 
 import { generateObject } from "ai";
-import { z } from "zod";
 import { structuredModel } from "../../agents/openai";
 import { env } from "../../env";
 import { asString } from "./curation";
@@ -19,19 +18,10 @@ import { deterministicBrief } from "./brief-ai";
 import { defaultDirection } from "./visual-direction";
 import { resolveBrandAssets } from "../brand-asset-resolver";
 import {
-  BrandKitSchema,
-  AICreativeBriefSchema,
-  VisualDirectionSchema,
+  CreativePlanOpenAISchema,
+  type CreativePlan,
   type WithFallback,
 } from "./pipeline-types";
-
-const CreativePlanSchema = z.object({
-  brandKit: BrandKitSchema,
-  brief: AICreativeBriefSchema,
-  visualDirection: VisualDirectionSchema,
-});
-
-export type CreativePlan = z.infer<typeof CreativePlanSchema>;
 
 function toDataUri(buffer: Buffer, contentType: string): string {
   return `data:${contentType};base64,${buffer.toString("base64")}`;
@@ -125,13 +115,15 @@ export async function planCreativeWithAI(
       });
     }
 
-    const { object } = await generateObject({
+    const { object: rawObject } = await generateObject({
       model: structuredModel,
-      schema: CreativePlanSchema,
+      schema: CreativePlanOpenAISchema,
       system: buildSystemPrompt(),
       messages: [{ role: "user", content: userContent }],
       temperature: 0.4,
     });
+
+    const object = rawObject as unknown as CreativePlan;
 
     if (!object.brandKit.logoUrl && brandAsset.logoSourceUrl) {
       object.brandKit.logoUrl = brandAsset.logoSourceUrl;

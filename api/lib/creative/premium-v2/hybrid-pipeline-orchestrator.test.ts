@@ -80,6 +80,18 @@ function makePlan() {
       logoUrl: "https://example.com/logo.png",
       logoDescription: "round logo",
       typographyNote: null,
+      brandAsset: {
+        logoSourceType: "uploaded" as const,
+        logoSourcePath: "/uploads/logo/test.png",
+        logoSourceUrl: "https://example.com/logo.png",
+        logoResolved: true,
+        logoRenderMode: "image" as const,
+        realLogoExpected: true,
+        realLogoRendered: true,
+        fallbackReason: null,
+        brandAssetWarnings: [],
+        logoBuffer: Buffer.from("fake-logo"),
+      },
     },
     brief: {
       angle: "Fresh clean home",
@@ -262,5 +274,54 @@ describe("Hybrid pipeline orchestrator", () => {
     expect(result.attempts!.length).toBeGreaterThanOrEqual(1);
     expect(result.attempts![0].buffer).toBeInstanceOf(Buffer);
     expect(result.attempts![0].critic.passed).toBe(false);
+  });
+
+  it("passes the resolved brandAsset and logo buffer into the hybrid HTML renderer", async () => {
+    const plan = makePlan();
+    mockPlanCreativeWithAI.mockResolvedValue({ value: plan, usedOpenAI: true });
+    mockCritiqueRenderedLeaflet.mockResolvedValue(makePassingCritic());
+
+    await runHybridPipeline(makeInput() as any);
+
+    const renderCall = mockRenderHybridLeaflet.mock.calls[0];
+    const passedBrandKit = renderCall[1];
+    const passedLogoBuffer = renderCall[4];
+    const passedBrandAsset = renderCall[5];
+
+    expect(passedBrandKit.brandAsset).toBeDefined();
+    expect(passedBrandKit.brandAsset.realLogoRendered).toBe(true);
+    expect(passedLogoBuffer).toBeInstanceOf(Buffer);
+    expect(passedBrandAsset?.realLogoExpected).toBe(true);
+  });
+
+  it("does not allow premium_ready when the critic reports a fallback badge while a real logo exists", async () => {
+    mockCritiqueRenderedLeaflet.mockResolvedValue({
+      ...makePassingCritic(),
+      realLogoPresent: false,
+      logoMatchesBrand: false,
+      fallbackBadgeUsed: true,
+      logoDistortedOrCropped: false,
+      brandFidelityPassed: false,
+    });
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.finalDecision).not.toBe("premium_ready");
+    expect(result.metadata.usedDeterministicFallback).toBe(true);
+    expect(result.critic.passed).toBe(false);
+  });
+
+  it("does not allow premium_ready when the critic reports a distorted logo while a real logo exists", async () => {
+    mockCritiqueRenderedLeaflet.mockResolvedValue({
+      ...makePassingCritic(),
+      realLogoPresent: true,
+      logoMatchesBrand: true,
+      fallbackBadgeUsed: false,
+      logoDistortedOrCropped: true,
+      brandFidelityPassed: false,
+    });
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.finalDecision).not.toBe("premium_ready");
+    expect(result.metadata.usedDeterministicFallback).toBe(true);
   });
 });
