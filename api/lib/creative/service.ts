@@ -57,6 +57,7 @@ import { validatePremiumV2Quality } from "./premium-v2/quality";
 import { resolveBrandKit } from "./premium-v2/brand-kit";
 import { runHybridPipeline } from "./premium-v2/hybrid-pipeline";
 import type { PremiumLeafletV2Brief } from "./premium-v2/types";
+import { applyBrandAssetGate, type BrandAssetResolution } from "./brand-asset-resolver";
 import {
   resolveProviderTemplateId,
   getPremiumTemplateStatus,
@@ -1064,6 +1065,14 @@ export async function generatePremiumLeaflet({
         await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
         return { status: "failed", jobId: "", errorMessage: message };
       }
+
+      const brandAssetGate = v2Brief.brandAsset ? applyBrandAssetGate(v2Brief.brandAsset) : { passed: true, label: "Brand Assets OK", criticalIssues: [] as string[], warnings: [] as string[] };
+      if (!brandAssetGate.passed) {
+        const message = `Brand Asset Review Required: ${brandAssetGate.criticalIssues.join("; ")}`;
+        logError("[PremiumLeaflet] Brand asset gate failed", { userId, contentPostId, error: message, issues: brandAssetGate.criticalIssues });
+        await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+        return { status: "failed", jobId: "", errorMessage: message };
+      }
     }
 
     // Validate the render inputs against the architect rules one more time.
@@ -1207,6 +1216,8 @@ export async function generatePremiumLeaflet({
       creditsReason?: "admin_test_fallback";
     } | undefined;
 
+    let hybridBrandAsset: BrandAssetResolution | undefined;
+
     if (isAiProvider) {
       const aiRender = await renderAiLeafletWithQuality(templateRenderer, renderReq, {
         business,
@@ -1321,6 +1332,18 @@ export async function generatePremiumLeaflet({
           criticalFailures: hybridResult.critic.criticalIssues,
           warnings: hybridResult.critic.improvementSuggestions,
         };
+
+        hybridBrandAsset = hybridResult.brandKit.brandAsset;
+
+      if (hybridResult.metadata.finalDecision !== "premium_ready") {
+          const isBrandAssetFailure = hybridResult.metadata.fallbackReason?.includes("Brand Asset Review Required");
+          const message = isBrandAssetFailure
+            ? hybridResult.metadata.fallbackReason!
+            : `Hybrid pipeline did not reach premium_ready (finalDecision=${hybridResult.metadata.finalDecision}). ${hybridResult.metadata.fallbackReason || ""}`.trim();
+          logError("[PremiumLeaflet] Hybrid pipeline blocked by brand-asset/fallback gate", { userId, contentPostId, finalDecision: hybridResult.metadata.finalDecision, reason: hybridResult.metadata.fallbackReason });
+          await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message, brandAsset: hybridBrandAsset });
+          return { status: "failed", jobId: renderResult.providerJobId || "", errorMessage: message, provider: "premium-v2-hybrid" };
+        }
       } else {
         renderResult = await templateRenderer.render(renderReq);
 
@@ -1465,6 +1488,7 @@ export async function generatePremiumLeaflet({
       ? (v2QualityResult?.score ?? 80)
       : 90;
     const warnings = isAiProvider ? aiQualityResult?.warnings ?? [] : isV2Provider ? v2QualityResult?.warnings ?? [] : [];
+    const brandAssetMetadata = v2Brief?.brandAsset ?? hybridBrandAsset;
 
     const previousVersions = Array.isArray(currentMeta?.imageVersions) ? currentMeta.imageVersions : [];
     const newVersion = {
@@ -1518,6 +1542,7 @@ export async function generatePremiumLeaflet({
         assetType: "leaflet",
         assetTier: "premium",
         approvedMessagePack,
+        brandAsset: brandAssetMetadata,
         ...(aiAttempts ? { attempts: aiAttempts } : {}),
         ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
         ...(fallbackMessage ? { fallbackMessage } : {}),
@@ -1573,6 +1598,7 @@ export async function generatePremiumLeaflet({
           iterationNumber,
           assetType: "leaflet",
           assetTier: "premium",
+          brandAsset: brandAssetMetadata,
           ...(aiAttempts ? { imageAttempts: aiAttempts } : {}),
         },
       })

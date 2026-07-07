@@ -39,7 +39,7 @@ describe("Hybrid pipeline AI modules", () => {
     expect(result.fallbackReason).toContain("Mocked OpenAI failure");
     expect(result.value.primary).toBeTruthy();
     expect(result.value.accent).toBeTruthy();
-    expect(result.value.logoUrl).toBe(business.logo);
+    expect(result.value.logoUrl).toContain(business.logo);
   });
 
   it("brief-ai never returns the raw pain point as subheadline", async () => {
@@ -86,7 +86,8 @@ describe("Hybrid pipeline AI modules", () => {
 
   it("vision-critic returns a structured scorecard", async () => {
     const buffer = Buffer.from("fake-image");
-    const critic = await critiqueRenderedLeaflet(buffer, "Test Business", true);
+    const brandAsset = { logoSourceType: "uploaded" as const, logoSourcePath: "/uploads/logo/test.png", logoSourceUrl: "https://example.com/logo.png", logoResolved: true, logoRenderMode: "image" as const, realLogoExpected: true, realLogoRendered: true, fallbackReason: null, brandAssetWarnings: [] };
+    const critic = await critiqueRenderedLeaflet(buffer, "Test Business", brandAsset);
     expect(critic.scores.brandFidelity).toBeGreaterThan(0);
     expect(critic.scores.readability).toBeGreaterThan(0);
     expect(typeof critic.passed).toBe("boolean");
@@ -94,7 +95,8 @@ describe("Hybrid pipeline AI modules", () => {
 
   it("vision-critic marks unavailable result on OpenAI failure", async () => {
     const buffer = Buffer.from("fake-image");
-    const critic = await critiqueRenderedLeaflet(buffer, "Test Business", true);
+    const brandAsset = { logoSourceType: "uploaded" as const, logoSourcePath: "/uploads/logo/test.png", logoSourceUrl: "https://example.com/logo.png", logoResolved: true, logoRenderMode: "image" as const, realLogoExpected: true, realLogoRendered: true, fallbackReason: null, brandAssetWarnings: [] };
+    const critic = await critiqueRenderedLeaflet(buffer, "Test Business", brandAsset);
     expect(critic.unavailable).toBe(true);
     expect(critic.passed).toBe(false);
     expect(critic.scores.genericTemplateRisk).toBe(50);
@@ -105,7 +107,8 @@ describe("Hybrid pipeline AI modules", () => {
     (generateObject as any).mockRejectedValueOnce(new Error("You exceeded your current quota"));
 
     const buffer = Buffer.from("fake-image");
-    const critic = await critiqueRenderedLeaflet(buffer, "Test Business", true);
+    const brandAsset = { logoSourceType: "uploaded" as const, logoSourcePath: "/uploads/logo/test.png", logoSourceUrl: "https://example.com/logo.png", logoResolved: true, logoRenderMode: "image" as const, realLogoExpected: true, realLogoRendered: true, fallbackReason: null, brandAssetWarnings: [] };
+    const critic = await critiqueRenderedLeaflet(buffer, "Test Business", brandAsset);
     expect(critic.unavailable).toBe(true);
     expect(critic.quotaError).toBe(true);
     expect(critic.passed).toBe(false);
@@ -119,6 +122,11 @@ describe("Hybrid pipeline AI modules", () => {
       improvementSuggestions: ["improve"],
       unavailable: false,
       quotaError: false,
+      realLogoPresent: true,
+      logoMatchesBrand: true,
+      fallbackBadgeUsed: false,
+      logoDistortedOrCropped: false,
+      brandFidelityPassed: true,
     };
     expect(() => VisionCriticResultSchema.parse(valid)).not.toThrow();
 
@@ -126,5 +134,10 @@ describe("Hybrid pipeline AI modules", () => {
     delete (missing as any).unavailable;
     delete (missing as any).quotaError;
     expect(() => VisionCriticResultSchema.parse(missing)).toThrow();
+
+    const missingChecks = { ...valid };
+    delete (missingChecks as any).realLogoPresent;
+    delete (missingChecks as any).fallbackBadgeUsed;
+    expect(() => VisionCriticResultSchema.parse(missingChecks)).toThrow();
   });
 });

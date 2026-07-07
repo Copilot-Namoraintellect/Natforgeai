@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
@@ -47,6 +47,7 @@ vi.mock("./campaign-message-architect", async () => {
 import { generatePremiumLeaflet } from "./service";
 import * as architect from "./campaign-message-architect";
 import * as creditEngine from "../billing/credit-engine";
+import { ensureFixtureLogos, resolveFixtureLogoPath } from "./premium-v2/fixture-logos";
 
 function createMockDb() {
   return {
@@ -82,7 +83,7 @@ function createMockDb() {
                 userId: 10,
                 name: "3@1 Newmarket",
                 displayName: "3@1 Newmarket",
-                logo: "https://example.com/logo.png",
+                logo: resolveFixtureLogoPath("3at1"),
                 industry: "Print and courier",
                 location: "Newmarket",
                 phone: "011 123 9999",
@@ -122,6 +123,10 @@ const validPack: architect.CampaignMessagePack = {
 };
 
 describe("generatePremiumLeaflet V2 provider", () => {
+  beforeAll(async () => {
+    await ensureFixtureLogos();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

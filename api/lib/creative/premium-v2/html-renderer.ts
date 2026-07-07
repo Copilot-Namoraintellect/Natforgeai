@@ -7,6 +7,7 @@
 
 import { chromium, type Browser } from "playwright";
 import type { HybridBrandKit, VisualDirection } from "./pipeline-types";
+import type { BrandAssetResolution } from "../brand-asset-resolver";
 
 const WIDTH = 1080;
 const HEIGHT = 1350;
@@ -21,12 +22,14 @@ export interface HybridRenderBrief {
   cta: string;
   offerLine?: string | null;
   contact: { phone?: string; website?: string; location?: string };
+  brandAsset?: BrandAssetResolution;
 }
 
 export interface HybridRenderMetrics {
   width: number;
   height: number;
   layoutPreset: string;
+  logoImageErrors?: string[];
 }
 
 let browser: Browser | null = null;
@@ -43,17 +46,32 @@ export async function renderHybridLeaflet(
   brandKit: HybridBrandKit,
   visualDirection: VisualDirection,
   backgroundBuffer: Buffer | null,
-  logoBuffer: Buffer | null
+  logoBuffer: Buffer | null,
+  brandAsset?: BrandAssetResolution
 ): Promise<{ buffer: Buffer; metrics: HybridRenderMetrics }> {
-  const html = buildHtml(brief, brandKit, visualDirection, backgroundBuffer, logoBuffer);
+  const html = buildHtml(brief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandAsset);
 
   const page = await (await getBrowser()).newPage({ viewport: { width: WIDTH, height: HEIGHT } });
+  const consoleErrors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") {
+      const text = msg.text();
+      consoleErrors.push(text);
+      console.warn(`[HybridRenderer] page console error: ${text}`);
+    }
+  });
+  page.on("pageerror", (err) => {
+    const text = err.message || String(err);
+    consoleErrors.push(text);
+    console.warn(`[HybridRenderer] page error: ${text}`);
+  });
+
   try {
     await page.setContent(html, { waitUntil: "networkidle" });
     const screenshot = await page.screenshot({ type: "png", fullPage: false });
     return {
       buffer: screenshot,
-      metrics: { width: WIDTH, height: HEIGHT, layoutPreset: visualDirection.layoutPreset },
+      metrics: { width: WIDTH, height: HEIGHT, layoutPreset: visualDirection.layoutPreset, logoImageErrors: consoleErrors },
     };
   } finally {
     await page.close();
@@ -101,7 +119,8 @@ function buildHtml(
   brandKit: HybridBrandKit,
   visualDirection: VisualDirection,
   backgroundBuffer: Buffer | null,
-  logoBuffer: Buffer | null
+  logoBuffer: Buffer | null,
+  brandAsset?: BrandAssetResolution
 ): string {
   const primary = visualDirection.layoutPreset;
   const bg = backgroundBuffer ? `data:image/png;base64,${backgroundBuffer.toString("base64")}` : undefined;
@@ -137,9 +156,13 @@ function buildHtml(
   const contactParts = [brief.contact.phone, brief.contact.website, brief.contact.location].filter((t): t is string => typeof t === "string" && t.length > 0);
   const footer = contactParts.length ? `<div class="footer-line">${contactParts.map(escapeHtml).join(" · ")}</div>` : "";
 
-  const logoHtml = logo
-    ? `<img class="logo-img" src="${logo}" alt="" />`
+  const renderRealLogo = !!logoBuffer && (brandAsset ? brandAsset.logoResolved && brandAsset.realLogoExpected : true);
+  const logoHtml = renderRealLogo && logo
+    ? `<img class="logo-img" src="${logo}" alt="" onerror="console.error('[HybridRenderer] Logo image failed to load:', this.src)" />`
     : `<div class="logo-fallback"><span>${escapeHtml(brief.businessName.split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase())}</span></div>`;
+  if (brandAsset?.realLogoExpected && !renderRealLogo) {
+    console.warn(`[HybridRenderer] Real logo expected for ${brief.businessName} but not rendered; using fallback badge. Source=${brandAsset.logoSourceType}, resolved=${brandAsset.logoResolved}, hasBuffer=${!!logoBuffer}.`);
+  }
 
   const bgStyle = bg ? `background-image: url('${bg}'); background-size: cover; background-position: center;` : "";
   const hasShapeAccent = visualDirection.heroTreatment === "shape_accent";
@@ -209,7 +232,7 @@ function buildHtml(
       z-index: 3;
       border-bottom: 6px solid ${toCssColour(brandKit.accent)};
     }
-    .logo-img { height: 84px; width: 84px; object-fit: contain; border-radius: 50%; background: #fff; padding: 5px; box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
+    .logo-img { max-height: 84px; max-width: 220px; width: auto; height: auto; object-fit: contain; border-radius: 12px; background: #fff; padding: 5px; box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
     .logo-fallback { height: 84px; width: 84px; border-radius: 50%; background: ${toCssColour(brandKit.accent)}; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: 900; color: #fff; box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
     .business-name { font-size: 42px; font-weight: 900; letter-spacing: -0.02em; }
     .hero {

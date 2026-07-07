@@ -9,6 +9,7 @@
 import sharp from "sharp";
 import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendererResult } from "../providers/template-renderer";
 import type { PremiumLeafletV2Brief, PremiumV2LayoutDensity } from "./types";
+import type { BrandAssetResolution } from "../brand-asset-resolver";
 import { validatePremiumV2Quality } from "./quality";
 
 const WIDTH = 1080;
@@ -79,12 +80,26 @@ async function fetchLogoBuffer(logoUrl: string | undefined): Promise<Buffer | nu
   }
 }
 
-async function compositeLogo(background: Buffer, logoBuffer: Buffer, x: number, y: number, maxWidth: number, maxHeight: number): Promise<Buffer> {
+function shouldRenderRealLogo(brandAsset: BrandAssetResolution | undefined): boolean {
+  return !!brandAsset && brandAsset.realLogoExpected && brandAsset.logoResolved;
+}
+
+async function resolveLogoBuffer(brandAsset: BrandAssetResolution | undefined, logoUrl: string | undefined): Promise<Buffer | null> {
+  if (brandAsset?.logoBuffer) return brandAsset.logoBuffer;
+  if (brandAsset?.logoSourceUrl) return fetchLogoBuffer(brandAsset.logoSourceUrl);
+  return fetchLogoBuffer(logoUrl);
+}
+
+async function compositeLogo(background: Buffer, logoBuffer: Buffer, x: number, y: number, maxWidth: number, maxHeight: number, businessName?: string): Promise<Buffer> {
+  const sourceMeta = await sharp(logoBuffer).metadata();
   const resized = await sharp(logoBuffer)
     .resize({ width: maxWidth, height: maxHeight, fit: sharp.fit.inside, withoutEnlargement: true })
     .png()
     .toBuffer();
   const meta = await sharp(resized).metadata();
+  console.log(
+    `[PremiumV2Renderer] Compositing real logo for ${businessName || "business"}: source ${sourceMeta.width}x${sourceMeta.height} → rendered ${meta.width}x${meta.height} (fit inside ${maxWidth}x${maxHeight})`
+  );
   const left = Math.round(x - (meta.width || maxWidth) / 2);
   const top = Math.round(y - (meta.height || maxHeight) / 2);
   return sharp(background).composite([{ input: resized, left, top }]).png().toBuffer();
@@ -565,12 +580,17 @@ export async function renderV2FromBrief(brief: PremiumLeafletV2Brief): Promise<{
 
   const png = await svgToPng(svgParts.join(""));
 
-  // Composite logo if provided; fall back to a branded initial badge if fetching fails.
-  const logoBuffer = await fetchLogoBuffer(brief.logoUrl);
+  // Brand-fidelity first: use the resolved real logo whenever it is expected and available.
+  // Fall back to a branded initial badge only when no real logo is expected.
+  const renderRealLogo = shouldRenderRealLogo(brief.brandAsset);
+  const logoBuffer = renderRealLogo ? await resolveLogoBuffer(brief.brandAsset, brief.logoUrl) : null;
   let finalBuffer = png;
   if (logoBuffer) {
-    finalBuffer = await compositeLogo(png, logoBuffer, header.logoArea.x, header.logoArea.y, header.logoArea.max, header.logoArea.max);
-  } else if (brief.logoUrl) {
+    finalBuffer = await compositeLogo(png, logoBuffer, header.logoArea.x, header.logoArea.y, header.logoArea.max, header.logoArea.max, brief.businessName);
+  } else if (!renderRealLogo) {
+    finalBuffer = await drawTextLogo(png, brief.businessName, header.logoArea.x, header.logoArea.y, header.logoArea.max, brief.brandPalette.primary);
+  } else {
+    console.warn(`[PremiumV2Renderer] Real logo expected for ${brief.businessName} but could not be rendered; producing fallback badge for review.`);
     finalBuffer = await drawTextLogo(png, brief.businessName, header.logoArea.x, header.logoArea.y, header.logoArea.max, brief.brandPalette.primary);
   }
 
@@ -587,7 +607,7 @@ export async function renderV2FromBrief(brief: PremiumLeafletV2Brief): Promise<{
     secondaryCardCount: brief.secondaryServices.length,
     layoutDensity: brief.layoutDensity,
     didCrowd: services.didCrowd,
-    logoComposited: !!logoBuffer || !!brief.logoUrl,
+    logoComposited: !!logoBuffer,
     usedContentHeight,
     availableContentHeight,
     primaryWithDescriptionCount: brief.primaryServices.filter((s) => !!s.description).length,

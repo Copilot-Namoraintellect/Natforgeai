@@ -20,6 +20,7 @@
 
 import { env } from "../../env";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
+import { applyBrandAssetGate } from "../brand-asset-resolver";
 import { planCreativeWithAI } from "./plan-ai";
 import { generateBackground } from "./background-generator";
 import { renderHybridLeaflet, type HybridRenderBrief } from "./html-renderer";
@@ -77,6 +78,17 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
     if (planResult.fallbackReason) fallbackReason = planResult.fallbackReason;
 
     const { brandKit, brief, visualDirection: initialVisualDirection } = planResult.value;
+    const brandAsset = brandKit.brandAsset;
+    const gate = brandAsset ? applyBrandAssetGate(brandAsset) : { passed: true, label: "Brand Assets OK", criticalIssues: [], warnings: [] };
+    if (!gate.passed) {
+      console.warn(`[HybridPipeline] Brand asset gate failed: ${gate.criticalIssues.join("; ")}`);
+      return runDeterministicFallback(input, brandKit, brief, [], {
+        reason: `Brand Asset Review Required: ${gate.criticalIssues.join("; ")}`,
+        openAICallCount,
+        stage,
+        finalDecisionOverride: "fallback_used",
+      });
+    }
     let visualDirection = initialVisualDirection;
 
     let revisionCount = 0;
@@ -99,7 +111,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       critic = await critiqueRenderedLeaflet(
         render.buffer,
         business.displayName || business.name || "Business",
-        !!brandKit.logoUrl
+        brandAsset
       );
       stage.visionCritic.attempted = true;
       stage.visionCritic.succeeded = !critic.unavailable;
@@ -176,9 +188,10 @@ async function renderOnce(
   visualDirection: VisualDirection,
   reuseBackground: Buffer | null = null
 ): Promise<RenderOutput> {
+  const brandAsset = brandKit.brandAsset;
   const [backgroundBuffer, logoBuffer] = await Promise.all([
     reuseBackground ? Promise.resolve(reuseBackground) : generateBackground(visualDirection),
-    brandKit.logoUrl ? fetchLogo(brandKit.logoUrl) : Promise.resolve(null),
+    brandAsset?.logoBuffer ? Promise.resolve(brandAsset.logoBuffer) : brandKit.logoUrl ? fetchLogo(brandKit.logoUrl) : Promise.resolve(null),
   ]);
 
   const renderBrief: HybridRenderBrief = {
@@ -195,9 +208,10 @@ async function renderOnce(
       website: input.business.website || undefined,
       location: input.business.location || undefined,
     },
+    brandAsset: brandKit.brandAsset,
   };
 
-  const { buffer } = await renderHybridLeaflet(renderBrief, brandKit, visualDirection, backgroundBuffer, logoBuffer);
+  const { buffer } = await renderHybridLeaflet(renderBrief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandKit.brandAsset);
   return { buffer, backgroundBuffer };
 }
 
@@ -253,6 +267,7 @@ function reviseVisualDirection(visualDirection: VisualDirection, suggestions: st
 
 interface FallbackOptions {
   reason: string;
+  finalDecisionOverride?: HybridFinalDecision;
   quotaError?: boolean;
   openAICallCount?: number;
   stage?: {
@@ -279,7 +294,7 @@ async function runDeterministicFallback(
     approvedMessagePack: input.approvedMessagePack,
     refinementInstruction: input.refinementInstruction,
     brandKit: brandKit
-      ? { palette: brandKit, source: brandKit.source, logoUrl: brandKit.logoUrl || undefined }
+      ? { palette: brandKit, source: brandKit.source, logoUrl: brandKit.logoUrl || undefined, brandAsset: brandKit.brandAsset }
       : undefined,
   });
 
@@ -307,11 +322,14 @@ async function runDeterministicFallback(
       "Hybrid pipeline fell back to deterministic renderer.",
       ...(options.quotaError ? ["OpenAI quota/API error occurred; review before publishing."] : []),
     ],
+    realLogoPresent: false,
+    logoMatchesBrand: false,
+    fallbackBadgeUsed: true,
+    logoDistortedOrCropped: false,
+    brandFidelityPassed: false,
   };
 
-  const finalDecision: HybridFinalDecision = options.quotaError
-    ? "hybrid_review_required"
-    : "fallback_used";
+  const finalDecision: HybridFinalDecision = options.finalDecisionOverride || (options.quotaError ? "hybrid_review_required" : "fallback_used");
 
   const deterministicBrandKit: HybridBrandKit = brandKit || {
     primary: brief.brandPalette.primary,
@@ -324,7 +342,11 @@ async function runDeterministicFallback(
     logoUrl: brief.logoUrl || null,
     logoDescription: null,
     typographyNote: null,
+    brandAsset: brief.brandAsset,
   };
+  if (brandKit && !deterministicBrandKit.brandAsset) {
+    deterministicBrandKit.brandAsset = brief.brandAsset;
+  }
 
   const deterministicBrief: AICreativeBrief = aiBrief || {
     angle: brief.subheadline || "",

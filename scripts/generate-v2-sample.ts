@@ -1,10 +1,12 @@
 /**
- * Generate Premium Leaflet V2.2 sample images.
+ * Generate Premium Leaflet V2.2 / hybrid sample images.
  *
  * Usage:
  *   npx tsx scripts/generate-v2-sample.ts --fixture 3at1
  *   npx tsx scripts/generate-v2-sample.ts --all-fixtures
+ *   npx tsx scripts/generate-v2-sample.ts --all-fixtures --hybrid
  *   npx tsx scripts/generate-v2-sample.ts --business-id 20 --campaign-id 23 --draft-only
+ *   npx tsx scripts/generate-v2-sample.ts --business-id 20 --campaign-id 23 --draft-only --hybrid
  *   npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --logo ./path/to/logo.png --production
  *   npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --out ./my-sample.png
  */
@@ -23,8 +25,12 @@ import {
   buildHybridLogEntry,
   saveHybridAttemptImages,
   writeHybridGenerationLog,
+  writeDeterministicGenerationLog,
+  buildBrandAssetDiagnostics,
+  printBrandAssetDiagnostics,
 } from "./lib/hybrid-sample-writer";
 import { ALL_FIXTURES, fixture3At1Newmarket } from "../api/lib/creative/premium-v2/fixtures";
+import { ensureFixtureLogos } from "../api/lib/creative/premium-v2/fixture-logos";
 import { writeFileSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
@@ -56,7 +62,7 @@ function parseArgs(): Record<string, string | boolean> {
 async function renderFixture(
   fixtureName: string,
   options: { production?: boolean; logo?: string; out?: string; hybrid?: boolean }
-): Promise<{ outputPath: string; label: string; passed: boolean; hybridResult?: any }> {
+): Promise<{ outputPath: string; label: string; passed: boolean; hybridResult?: any; deterministicLog?: any }> {
   const fixtureFn = ALL_FIXTURES[fixtureName as keyof typeof ALL_FIXTURES];
   if (!fixtureFn) {
     throw new Error(`Unknown fixture: ${fixtureName}. Available: ${Object.keys(ALL_FIXTURES).join(", ")}`);
@@ -75,6 +81,7 @@ async function renderFixture(
   let label: string;
   let passed: boolean;
   let hybridResult: any;
+  let deterministicLog: any;
 
   if (options.hybrid) {
     (env as any).enableHybridLeafletPipeline = true;
@@ -93,6 +100,7 @@ async function renderFixture(
     console.log(`[${fixtureName}] Hybrid visual direction:`, JSON.stringify(hybrid.visualDirection, null, 2));
     console.log(`[${fixtureName}] Hybrid critic:`, JSON.stringify(hybrid.critic, null, 2));
     console.log(`[${fixtureName}] Hybrid metadata:`, JSON.stringify(hybrid.metadata, null, 2));
+    printBrandAssetDiagnostics(buildBrandAssetDiagnostics(hybrid.brandKit.brandAsset));
   } else {
     const brandKit = await resolveBrandKit(business);
     const brief = await buildPremiumV2Brief({
@@ -113,6 +121,14 @@ async function renderFixture(
     label = postQuality.label;
     passed = postQuality.passed;
     console.log(`[${fixtureName}] Post-render quality:`, postQuality.label, postQuality.score);
+    deterministicLog = {
+      fixture: fixtureName,
+      label,
+      passed,
+      score: postQuality.score,
+      brandAsset: buildBrandAssetDiagnostics(brief.brandAsset),
+    };
+    printBrandAssetDiagnostics(deterministicLog.brandAsset);
   }
 
   const suffix = options.production ? "production" : options.hybrid ? "hybrid" : "v2.2";
@@ -126,16 +142,19 @@ async function renderFixture(
   writeFileSync(outputPath, buffer);
   console.log(`[${fixtureName}] Sample written to:`, outputPath);
 
-  return { outputPath, label, passed, hybridResult };
+  return { outputPath, label, passed, hybridResult, deterministicLog };
 }
 
-
-async function renderDraftSample(businessId: string, campaignId: string, options: { production?: boolean; logo?: string }) {
+async function renderDraftSample(
+  businessId: string,
+  campaignId: string,
+  options: { production?: boolean; logo?: string; hybrid?: boolean }
+) {
   console.warn(`\n[Draft sample] Loading business ${businessId} and campaign ${campaignId} from DB (read-only).`);
   console.warn("This mode is sample-only and will not mutate content_posts, publishing_queue or campaign state.");
 
   const { getDb } = await import("../api/queries/connection");
-  const { businesses, campaigns } = await import("../api/db/schema");
+  const { businesses, campaigns } = await import("../db/schema.ts");
   const db = getDb();
 
   const businessRows = await db.select().from(businesses).where(eq(businesses.id, Number(businessId))).limit(1);
@@ -149,27 +168,66 @@ async function renderDraftSample(businessId: string, campaignId: string, options
   const campaign = campaignRows[0] as any;
   if (options.logo) business.logo = options.logo;
 
-  const brandKit = await resolveBrandKit(business);
-  const brief = await buildPremiumV2Brief({
-    business,
-    campaign,
-    post: { id: 0, campaignId: campaign.id, title: "Draft sample" },
-    brandKit,
-  });
+  let buffer: Buffer;
+  let brandAssetDiagnostics: any;
+  let hybrid: any;
 
-  const { buffer, metrics } = await renderV2FromBrief(brief);
-  const quality = validatePremiumV2Quality(brief, metrics, { production: !!options.production });
+  if (options.hybrid) {
+    (env as any).enableHybridLeafletPipeline = true;
+    hybrid = await runHybridPipeline({
+      business,
+      campaign,
+      post: { id: 0, campaignId: campaign.id, title: "Draft sample" },
+      sampleMode: true,
+    });
+    buffer = hybrid.buffer;
+    brandAssetDiagnostics = buildBrandAssetDiagnostics(hybrid.brandKit.brandAsset);
+    console.log("Hybrid draft sample finalDecision:", hybrid.metadata.finalDecision);
+    console.log("Hybrid critic:", JSON.stringify(hybrid.critic, null, 2));
+  } else {
+    const brandKit = await resolveBrandKit(business);
+    const brief = await buildPremiumV2Brief({
+      business,
+      campaign,
+      post: { id: 0, campaignId: campaign.id, title: "Draft sample" },
+      brandKit,
+    });
 
-  const outputPath = join(outputDir, "draft", `business-${businessId}-campaign-${campaignId}-sample.png`);
+    const { buffer: renderedBuffer, metrics } = await renderV2FromBrief(brief);
+    const quality = validatePremiumV2Quality(brief, metrics, { production: !!options.production });
+    buffer = renderedBuffer;
+    brandAssetDiagnostics = buildBrandAssetDiagnostics(brief.brandAsset);
+    console.log("Quality:", quality.label, quality.score, quality.warnings);
+  }
+
+  const suffix = options.hybrid ? "hybrid-draft" : "draft";
+  const outputPath = join(outputDir, "draft", `business-${businessId}-campaign-${campaignId}-${suffix}-sample.png`);
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, buffer);
 
+  if (options.hybrid) {
+    const attemptDir = dirname(outputPath);
+    const fixtureName = `business-${businessId}-campaign-${campaignId}`;
+    const attemptPaths = saveHybridAttemptImages(attemptDir, fixtureName, hybrid);
+    const entry = buildHybridLogEntry(fixtureName, hybrid, attemptPaths, outputPath);
+    const logPath = writeHybridGenerationLog(attemptDir, [entry]);
+    console.log("Hybrid generation log written to:", logPath);
+    if (attemptPaths.length) {
+      console.log("Hybrid attempt images:", attemptPaths);
+    }
+  }
+
   console.log("Draft sample written to:", outputPath);
-  console.log("Quality:", quality.label, quality.score, quality.warnings);
+  printBrandAssetDiagnostics(brandAssetDiagnostics);
 }
 
 async function main() {
   const args = parseArgs();
+
+  if (args.fixture || args["all-fixtures"] || args.all) {
+    // Ensure local fixture logo files exist before rendering.
+    await ensureFixtureLogos();
+  }
 
   if (args["all-fixtures"] || args.all) {
     const hybrid = !!args.hybrid;
@@ -182,6 +240,7 @@ async function main() {
         : fixtureNames;
 
     const logEntries: any[] = [];
+    const deterministicEntries: any[] = [];
     const summary: { name: string; label: string }[] = [];
     for (const name of selectedFixtures) {
       const result = await renderFixture(name, { production: !!args.production, logo: args.logo as string, hybrid });
@@ -191,6 +250,8 @@ async function main() {
         const attemptPaths = saveHybridAttemptImages(attemptDir, name, result.hybridResult);
         const entry = buildHybridLogEntry(name, result.hybridResult, attemptPaths, result.outputPath);
         logEntries.push(entry);
+      } else if (result.deterministicLog) {
+        deterministicEntries.push(result.deterministicLog);
       }
     }
 
@@ -201,6 +262,9 @@ async function main() {
       for (const entry of logEntries) {
         console.log(`\n[${entry.fixture}]`, JSON.stringify(entry.critic, null, 2));
       }
+    } else if (deterministicEntries.length) {
+      const logPath = writeDeterministicGenerationLog(join(outputDir, "v2.2"), deterministicEntries);
+      console.log("\n=== Deterministic generation log written to ===", logPath);
     }
     console.log("\n=== Sample summary ===");
     for (const s of summary) {
@@ -223,6 +287,9 @@ async function main() {
       const logPath = writeHybridGenerationLog(attemptDir, [entry]);
       console.log("\n=== Hybrid generation log written to ===", logPath);
       console.log(`\n[${args.fixture}] Attempt images:`, attemptPaths);
+    } else if (result.deterministicLog) {
+      const logPath = writeDeterministicGenerationLog(join(outputDir, "v2.2"), [result.deterministicLog]);
+      console.log("\n=== Deterministic generation log written to ===", logPath);
     }
     console.log("\n=== Sample summary ===");
     console.log(`${args.fixture}: ${result.label}`);
@@ -236,6 +303,7 @@ async function main() {
     await renderDraftSample(args["business-id"] as string, args["campaign-id"] as string, {
       production: !!args.production,
       logo: args.logo as string,
+      hybrid: !!args.hybrid,
     });
     return;
   }
@@ -246,12 +314,15 @@ Usage:
   npx tsx scripts/generate-v2-sample.ts --all-fixtures
   npx tsx scripts/generate-v2-sample.ts --all-fixtures --hybrid
   npx tsx scripts/generate-v2-sample.ts --business-id 20 --campaign-id 23 --draft-only
+  npx tsx scripts/generate-v2-sample.ts --business-id 20 --campaign-id 23 --draft-only --hybrid
   npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --logo ./logo.png --production
   npx tsx scripts/generate-v2-sample.ts --fixture 3at1 --out ./my-sample.png
 `);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });

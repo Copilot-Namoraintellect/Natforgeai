@@ -15,17 +15,15 @@ import { structuredModel } from "../../agents/openai";
 import { env } from "../../env";
 import { asString } from "./curation";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
-import { resolveBrandKit } from "./brand-kit";
 import { deterministicBrief } from "./brief-ai";
 import { defaultDirection } from "./visual-direction";
+import { resolveBrandAssets } from "../brand-asset-resolver";
 import {
   BrandKitSchema,
   AICreativeBriefSchema,
   VisualDirectionSchema,
   type WithFallback,
 } from "./pipeline-types";
-
-const LOGO_FETCH_TIMEOUT_MS = 8000;
 
 const CreativePlanSchema = z.object({
   brandKit: BrandKitSchema,
@@ -45,19 +43,6 @@ function inferContentType(buffer: Buffer): string {
   if (buffer[0] === 0x47 && buffer[1] === 0x49) return "image/gif";
   if (buffer[0] === 0x52 && buffer[1] === 0x49) return "image/webp";
   return "image/png";
-}
-
-async function fetchLogoBuffer(logoUrl: string): Promise<Buffer | null> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), LOGO_FETCH_TIMEOUT_MS);
-    const res = await fetch(logoUrl, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
-  } catch {
-    return null;
-  }
 }
 
 function buildSystemPrompt(): string {
@@ -99,17 +84,23 @@ async function deterministicPlan(
   business: BusinessEvidence,
   campaign?: CampaignEvidence
 ): Promise<CreativePlan> {
-  const [deterministicBrandKit, brief, visualDirection] = await Promise.all([
-    resolveBrandKit(business),
+  const [brandAsset, brief, visualDirection] = await Promise.all([
+    resolveBrandAssets(business, campaign, { fetchBuffer: true }),
     deterministicBrief(business, campaign),
     defaultDirection(business, campaign),
   ]);
   const brandKit: CreativePlan["brandKit"] = {
-    ...deterministicBrandKit.palette,
-    source: deterministicBrandKit.source,
-    logoUrl: deterministicBrandKit.logoUrl || null,
+    primary: "#0F172A",
+    secondary: "#334155",
+    accent: "#3B82F6",
+    background: "#FFFFFF",
+    text: "#0F172A",
+    textMuted: "#475569",
+    source: brandAsset.logoResolved ? "logo" : "default",
+    logoUrl: brandAsset.logoResolved ? brandAsset.logoSourceUrl : null,
     logoDescription: null,
     typographyNote: null,
+    brandAsset,
   };
   return { brandKit, brief, visualDirection };
 }
@@ -122,8 +113,8 @@ export async function planCreativeWithAI(
     return { value: await deterministicPlan(business, campaign), usedOpenAI: false };
   }
 
-  const logoUrl = asString(business.logo);
-  const logoBuffer = logoUrl ? await fetchLogoBuffer(logoUrl) : null;
+  const brandAsset = await resolveBrandAssets(business, campaign, { fetchBuffer: true });
+  const logoBuffer = brandAsset.logoBuffer || null;
 
   try {
     const userContent: any[] = [{ type: "text", text: buildUserPrompt(business, campaign) }];
@@ -142,12 +133,13 @@ export async function planCreativeWithAI(
       temperature: 0.4,
     });
 
-    if (!object.brandKit.logoUrl && logoUrl) {
-      object.brandKit.logoUrl = logoUrl;
+    if (!object.brandKit.logoUrl && brandAsset.logoSourceUrl) {
+      object.brandKit.logoUrl = brandAsset.logoSourceUrl;
     }
     if (!object.brandKit.logoUrl) {
       object.brandKit.logoUrl = null;
     }
+    object.brandKit.brandAsset = brandAsset;
 
     return { value: object, usedOpenAI: true };
   } catch (err: any) {

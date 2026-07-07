@@ -111,6 +111,11 @@ function makePassingCritic(): any {
     quotaError: false,
     criticalIssues: [],
     improvementSuggestions: [],
+    realLogoPresent: true,
+    logoMatchesBrand: true,
+    fallbackBadgeUsed: false,
+    logoDistortedOrCropped: false,
+    brandFidelityPassed: true,
   };
 }
 
@@ -122,6 +127,11 @@ function makeRejectingCritic(): any {
     quotaError: false,
     criticalIssues: ["Generic"],
     improvementSuggestions: ["Improve hierarchy"],
+    realLogoPresent: true,
+    logoMatchesBrand: true,
+    fallbackBadgeUsed: false,
+    logoDistortedOrCropped: false,
+    brandFidelityPassed: false,
   };
 }
 
@@ -204,6 +214,11 @@ describe("Hybrid pipeline orchestrator", () => {
       quotaError: true,
       criticalIssues: ["OpenAI quota error"],
       improvementSuggestions: ["Re-render with deterministic fallback and queue for manual review."],
+      realLogoPresent: false,
+      logoMatchesBrand: false,
+      fallbackBadgeUsed: true,
+      logoDistortedOrCropped: false,
+      brandFidelityPassed: false,
     });
 
     const result = await runHybridPipeline(makeInput() as any);

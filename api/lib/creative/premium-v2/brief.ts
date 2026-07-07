@@ -261,7 +261,7 @@ export async function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): Prom
   const proofPoints = buildProofPoints(business, campaign);
   const visualStyle: PremiumV2VisualStyle = inferVisualStyle(business, campaign);
 
-  const brandKit = injectedBrandKit || (await resolveBrandKit(business));
+  const brandKit = injectedBrandKit || (await resolveBrandKit(business, campaign));
   const logoUrl = brandKit.logoUrl;
 
   const brief: PremiumLeafletV2Brief = {
@@ -282,6 +282,7 @@ export async function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): Prom
     layoutDensity,
     brandPalette: brandKit.palette,
     logoUrl,
+    brandAsset: brandKit.brandAsset,
     logoPlacement: inferLogoPlacement(layoutDensity),
     proofPoints,
     complianceNotes: buildComplianceNotes(business, campaign),
@@ -360,6 +361,7 @@ export function buildPremiumV2BriefSync(input: BuildPremiumV2BriefInput & { bran
     layoutDensity,
     brandPalette: brandKit.palette,
     logoUrl: brandKit.logoUrl,
+    brandAsset: brandKit.brandAsset,
     logoPlacement: inferLogoPlacement(layoutDensity),
     proofPoints,
     complianceNotes: buildComplianceNotes(business, campaign),

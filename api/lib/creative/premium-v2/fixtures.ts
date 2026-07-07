@@ -5,6 +5,8 @@
  * generator and by category-wide regression tests.
  */
 
+import { resolveFixtureLogoPath, real3At1LogoExists } from "./fixture-logos";
+
 export interface FixtureBusiness {
   id: number;
   name: string;
@@ -46,8 +48,8 @@ export function fixture3At1Newmarket(mock = true): { business: FixtureBusiness; 
       name: "3@1 Newmarket",
       displayName: "3@1 Newmarket",
       logo: mock
-        ? "https://via.placeholder.com/200x200/0047AB/FFD700?text=3@1"
-        : process.env.SAMPLE_3AT1_LOGO_URL || "https://via.placeholder.com/200x200/0047AB/FFD700?text=3@1",
+        ? resolveFixtureLogoPath("3at1")
+        : process.env.SAMPLE_3AT1_LOGO_URL || (real3At1LogoExists() ? resolveFixtureLogoPath("3at1") : "https://via.placeholder.com/200x200/0047AB/FFD700?text=3@1"),
       industry: "Print and courier",
       location: "Newmarket, Alberton",
       phone: mock ? "011 123 9999" : process.env.SAMPLE_3AT1_PHONE || "",
@@ -95,7 +97,7 @@ export function fixtureRestaurant(): { business: FixtureBusiness; campaign: Fixt
       id: 3,
       name: "Burger Barn",
       displayName: "Burger Barn",
-      logo: "https://via.placeholder.com/200x200/B91C1C/FFFFFF?text=BB",
+      logo: resolveFixtureLogoPath("restaurant"),
       industry: "Restaurant",
       location: "Sandton",
       phone: "011 456 7890",
@@ -125,7 +127,7 @@ export function fixtureBeauty(): { business: FixtureBusiness; campaign: FixtureC
       id: 4,
       name: "Glow Spa",
       displayName: "Glow Spa",
-      logo: "https://via.placeholder.com/200x200/831843/FFFFFF?text=Glow",
+      logo: resolveFixtureLogoPath("beauty"),
       industry: "Beauty salon",
       location: "Rosebank",
       phone: "011 222 3333",
@@ -154,7 +156,7 @@ export function fixtureCleaning(): { business: FixtureBusiness; campaign: Fixtur
       id: 5,
       name: "Sparkle Cleaners",
       displayName: "Sparkle Cleaners",
-      logo: "https://via.placeholder.com/200x200/0F766E/FFFFFF?text=SC",
+      logo: resolveFixtureLogoPath("cleaning"),
       industry: "Cleaning",
       location: "Centurion",
       phone: "012 345 6789",
@@ -184,7 +186,7 @@ export function fixturePlumber(): { business: FixtureBusiness; campaign: Fixture
       id: 6,
       name: "Leak Fix",
       displayName: "Leak Fix Plumbers",
-      logo: "https://via.placeholder.com/200x200/1E3A8A/FFFFFF?text=LF",
+      logo: resolveFixtureLogoPath("plumber"),
       industry: "Plumbing",
       location: "Pretoria East",
       phone: "012 999 0000",
@@ -213,7 +215,7 @@ export function fixtureRetail(): { business: FixtureBusiness; campaign: FixtureC
       id: 7,
       name: "The Boutique",
       displayName: "The Boutique",
-      logo: "https://via.placeholder.com/200x200/4338CA/FFFFFF?text=TB",
+      logo: resolveFixtureLogoPath("retail"),
       industry: "Retail",
       location: "Cape Town",
       phone: "021 111 2222",
@@ -243,7 +245,7 @@ export function fixtureProfessional(): { business: FixtureBusiness; campaign: Fi
       id: 8,
       name: "Strategy First",
       displayName: "Strategy First Consulting",
-      logo: "https://via.placeholder.com/200x200/1E3A8A/FFFFFF?text=SF",
+      logo: resolveFixtureLogoPath("professional"),
       industry: "Consulting",
       location: "Johannesburg",
       phone: "011 777 8888",
@@ -272,7 +274,7 @@ export function fixtureTraining(): { business: FixtureBusiness; campaign: Fixtur
       id: 9,
       name: "Skill Up",
       displayName: "Skill Up Academy",
-      logo: "https://via.placeholder.com/200x200/065F46/FFFFFF?text=SU",
+      logo: resolveFixtureLogoPath("training"),
       industry: "Training",
       location: "Durban",
       phone: "031 444 5555",

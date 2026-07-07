@@ -65,10 +65,13 @@ export interface PremiumV2BrandPalette {
   textMuted: string;
 }
 
+import type { BrandAssetResolution } from "../brand-asset-resolver";
+
 export interface PremiumV2BrandKit {
   palette: PremiumV2BrandPalette;
   source: "logo" | "brandColors" | "websiteEvidence" | "default";
   logoUrl?: string;
+  brandAsset?: BrandAssetResolution;
 }
 
 export interface PremiumV2ContactLines {
@@ -102,6 +105,7 @@ export interface PremiumLeafletV2Brief {
   layoutDensity: PremiumV2LayoutDensity;
   brandPalette: PremiumV2BrandPalette;
   logoUrl?: string;
+  brandAsset?: BrandAssetResolution;
   logoPlacement: "header" | "footer" | "hero";
   proofPoints: PremiumV2ProofPoint[];
   complianceNotes?: string[];

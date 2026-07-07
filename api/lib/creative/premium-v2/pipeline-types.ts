@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import type { BrandAssetResolution } from "../brand-asset-resolver";
 
 export const LayoutPresetId = z.enum([
   "premium_services_brand_panel",
@@ -56,9 +57,10 @@ export const BrandKitSchema = z.object({
   logoUrl: z.string().nullable().describe("Validated logo URL or null if unavailable"),
   logoDescription: z.string().nullable().describe("Short description of the logo from vision analysis"),
   typographyNote: z.string().nullable().describe("Optional note on brand typography preference"),
+  brandAsset: z.any().nullable().optional().describe("Internal brand asset resolution metadata"),
 });
 
-export type HybridBrandKit = z.infer<typeof BrandKitSchema>;
+export type HybridBrandKit = z.infer<typeof BrandKitSchema> & { brandAsset?: BrandAssetResolution };
 
 export const ServiceItemSchema = z.object({
   name: z.string().describe("Short customer-facing service name, max 4 words"),
@@ -108,6 +110,11 @@ export const VisionCriticResultSchema = z.object({
   improvementSuggestions: z.array(z.string()).describe("Specific improvements for the next revision"),
   unavailable: z.boolean().describe("Always false for a real critic result; pipeline sets true when OpenAI fails"),
   quotaError: z.boolean().describe("Always false for a real critic result; pipeline sets true when OpenAI quota is exceeded"),
+  realLogoPresent: z.boolean().describe("Whether the rendered leaflet shows a real logo (not a fallback badge)"),
+  logoMatchesBrand: z.boolean().describe("Whether the logo appears to match the expected business/brand"),
+  fallbackBadgeUsed: z.boolean().describe("Whether a fallback monogram/badge is used instead of the real logo"),
+  logoDistortedOrCropped: z.boolean().describe("Whether the logo is distorted, cropped, or too small to read"),
+  brandFidelityPassed: z.boolean().describe("Whether brand fidelity should pass overall"),
 });
 
 export type VisionCriticResult = z.infer<typeof VisionCriticResultSchema>;

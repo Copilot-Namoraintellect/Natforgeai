@@ -14,13 +14,14 @@ import { generateObject } from "ai";
 import { structuredModel } from "../../agents/openai";
 import { env } from "../../env";
 import { VisionCriticResultSchema, type VisionCriticResult } from "./pipeline-types";
+import type { BrandAssetResolution } from "../brand-asset-resolver";
 
 const MIN_SCORE = 70;
 
 export async function critiqueRenderedLeaflet(
   imageBuffer: Buffer,
   businessName: string,
-  expectedLogo: boolean
+  brandAsset: BrandAssetResolution | undefined
 ): Promise<VisionCriticResult> {
   if (!env.openaiApiKey || !env.enableHybridLeafletPipeline) {
     return unavailableResult("OpenAI vision critic disabled; deterministic checks used.", false);
@@ -30,7 +31,18 @@ export async function critiqueRenderedLeaflet(
 
   const system = `You are a strict marketing-design QA critic. Inspect the attached 1080x1350 leaflet PNG. Score it on the 7 dimensions in the requested JSON schema. Be critical and realistic. A score below ${MIN_SCORE} on any dimension is a problem. genericTemplateRisk above 50 is a problem. Return strict JSON.`;
 
-  const prompt = `Business: ${businessName}. Expected logo present: ${expectedLogo}. Evaluate brand fidelity (colours + logo match), readability, premium feel, visual hierarchy, logo usage, CTA visibility and generic-template risk. List critical issues and 1-3 concrete improvement suggestions.`;
+  const expectedLogo = !!brandAsset && brandAsset.realLogoExpected;
+  const renderMode = brandAsset?.logoRenderMode ?? "fallback_badge";
+  const prompt = `Business: ${businessName}. Expected logo present: ${expectedLogo}. Render mode: ${renderMode}. Brand source: ${brandAsset?.logoSourceType ?? "unknown"}.
+
+Evaluate the 1080x1350 leaflet on the 7 score dimensions and also answer these five brand-fidelity questions explicitly in the JSON fields:
+1. realLogoPresent: does the rendered leaflet show a real logo (not a fallback initials badge)?
+2. logoMatchesBrand: does the logo appear to match the expected business/brand?
+3. fallbackBadgeUsed: is a fallback/monogram badge used?
+4. logoDistortedOrCropped: is the logo distorted, cropped, or too small to read?
+5. brandFidelityPassed: should this pass brand fidelity overall?
+
+Be critical. A real logo expected but missing or replaced by a fallback badge MUST fail brand fidelity. A distorted/cropped/unreadable logo MUST fail brand fidelity. A brand name/logo mismatch MUST fail brand fidelity. List critical issues and 1-3 concrete improvement suggestions.`;
 
   try {
     const { object } = await generateObject({
@@ -57,6 +69,12 @@ export async function critiqueRenderedLeaflet(
     if (scores.premiumFeel < MIN_SCORE) criticalIssues.push("Premium feel below threshold");
     if (scores.visualHierarchy < MIN_SCORE) criticalIssues.push("Visual hierarchy below threshold");
     if (expectedLogo && scores.logoUsage < MIN_SCORE) criticalIssues.push("Logo usage below threshold");
+    if (expectedLogo && renderMode === "fallback_badge") criticalIssues.push("Rendered logo is a fallback badge instead of the real brand logo");
+    if (expectedLogo && !object.realLogoPresent) criticalIssues.push("Real logo missing in rendered leaflet");
+    if (object.fallbackBadgeUsed && expectedLogo) criticalIssues.push("Fallback badge used while a real logo exists");
+    if (object.logoDistortedOrCropped) criticalIssues.push("Logo is distorted, cropped, or too small");
+    if (!object.logoMatchesBrand && expectedLogo) criticalIssues.push("Logo does not appear to match the expected brand");
+    if (!object.brandFidelityPassed && expectedLogo) criticalIssues.push("Brand fidelity check failed");
     if (scores.CTAVisibility < MIN_SCORE) criticalIssues.push("CTA visibility below threshold");
     if (scores.genericTemplateRisk > 50) criticalIssues.push("Generic template risk too high");
 
@@ -91,5 +109,10 @@ function unavailableResult(reason: string, quotaError: boolean): VisionCriticRes
     quotaError,
     criticalIssues: [quotaError ? `OpenAI quota error: ${reason}` : `Vision critic unavailable: ${reason}`],
     improvementSuggestions: ["Re-render with deterministic fallback and queue for manual review."],
+    realLogoPresent: false,
+    logoMatchesBrand: false,
+    fallbackBadgeUsed: true,
+    logoDistortedOrCropped: true,
+    brandFidelityPassed: false,
   };
 }

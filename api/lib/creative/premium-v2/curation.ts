@@ -13,6 +13,7 @@ import { getCategoryPreset, sortServicesByPreset } from "./presets";
 import { getServiceMicrocopy } from "./copy";
 
 export interface BusinessEvidence {
+  id?: string | number;
   displayName?: string;
   name?: string;
   logo?: string;

@@ -8,10 +8,13 @@
  *   4. Category-appropriate deterministic defaults.
  */
 
+import { existsSync } from "fs";
+import path from "path";
 import { extractLogoPalette, normaliseHex } from "../brand-palette";
 import type { BusinessEvidence } from "./curation";
 import { inferBusinessCategory, asArray, asString } from "./curation";
 import type { PremiumV2BrandKit, PremiumV2BrandPalette } from "./types";
+import { resolveBrandAssets } from "../brand-asset-resolver";
 
 const DEFAULT_PALETTES: Record<string, PremiumV2BrandPalette> = {
   print_courier: {
@@ -140,8 +143,9 @@ async function fetchLogoPaletteWithTimeout(logoUrl: string): Promise<ReturnType<
   }
 }
 
-export async function resolveBrandKit(business: BusinessEvidence): Promise<PremiumV2BrandKit> {
+export async function resolveBrandKit(business: BusinessEvidence, campaign?: any): Promise<PremiumV2BrandKit> {
   const category = inferBusinessCategory(business);
+  const brandAsset = await resolveBrandAssets(business, campaign, { fetchBuffer: true });
 
   // 1. Explicit saved brand colours take precedence.
   const savedColors = asArray(business.brandColors);
@@ -149,14 +153,14 @@ export async function resolveBrandKit(business: BusinessEvidence): Promise<Premi
     return {
       palette: withBackgroundTint(paletteFromHexes(savedColors)),
       source: "brandColors",
-      logoUrl: asString(business.logo),
+      logoUrl: brandAsset.logoResolved ? brandAsset.logoSourceUrl || undefined : undefined,
+      brandAsset,
     };
   }
 
-  // 2. Extract from logo when available.
-  const logoUrl = asString(business.logo);
-  if (logoUrl) {
-    const fromLogo = await fetchLogoPaletteWithTimeout(logoUrl);
+  // 2. Extract from logo when available and resolvable.
+  if (brandAsset.logoResolved && brandAsset.logoSourceUrl) {
+    const fromLogo = await fetchLogoPaletteWithTimeout(brandAsset.logoSourceUrl);
     if (fromLogo) {
       return {
         palette: withBackgroundTint({
@@ -168,7 +172,8 @@ export async function resolveBrandKit(business: BusinessEvidence): Promise<Premi
           textMuted: "#475569",
         }),
         source: "logo",
-        logoUrl,
+        logoUrl: brandAsset.logoSourceUrl,
+        brandAsset,
       };
     }
   }
@@ -179,7 +184,8 @@ export async function resolveBrandKit(business: BusinessEvidence): Promise<Premi
     return {
       palette: withBackgroundTint(paletteFromHexes(websiteColors)),
       source: "websiteEvidence",
-      logoUrl,
+      logoUrl: brandAsset.logoResolved ? brandAsset.logoSourceUrl || undefined : undefined,
+      brandAsset,
     };
   }
 
@@ -187,8 +193,24 @@ export async function resolveBrandKit(business: BusinessEvidence): Promise<Premi
   return {
     palette: withBackgroundTint(DEFAULT_PALETTES[category] || DEFAULT_PALETTES.general),
     source: "default",
-    logoUrl,
+    logoUrl: brandAsset.logoResolved ? brandAsset.logoSourceUrl || undefined : undefined,
+    brandAsset,
   };
+}
+
+function localLogoExists(logoUrl: string): boolean {
+  if (/^https?:\/\//i.test(logoUrl)) return false; // sync path cannot verify remote URLs
+  if (logoUrl.startsWith("/")) {
+    const relative = logoUrl.slice(1);
+    const candidates = [
+      path.resolve(process.cwd(), "public", relative),
+      path.resolve(process.cwd(), "dist/public", relative),
+      path.resolve(process.cwd(), "data/public/uploads", relative),
+      path.resolve(process.cwd(), "data/public", relative),
+    ];
+    return candidates.some((p) => existsSync(p));
+  }
+  return existsSync(logoUrl);
 }
 
 export function resolveBrandKitSync(business: BusinessEvidence, fallbackKit?: PremiumV2BrandKit): PremiumV2BrandKit {
@@ -197,12 +219,37 @@ export function resolveBrandKitSync(business: BusinessEvidence, fallbackKit?: Pr
   const savedColors = asArray(business.brandColors);
   const websiteColors = asArray((business.websiteEvidence as any)?.brandColours);
   const category = inferBusinessCategory(business);
+  const logoUrl = asString(business.logo);
+  const logoResolved = logoUrl ? localLogoExists(logoUrl) : false;
+
+  const syncBrandAsset = {
+    businessId: business?.id,
+    campaignId: undefined,
+    logoSourceType: logoUrl ? ("uploaded" as const) : ("fallback" as const),
+    logoSourcePath: logoUrl || null,
+    logoSourceUrl: logoUrl || null,
+    logoResolved,
+    logoRenderMode: (logoResolved ? "image" : "fallback_badge") as "image" | "fallback_badge",
+    realLogoExpected: !!logoUrl,
+    realLogoRendered: logoResolved,
+    fallbackReason: logoUrl
+      ? logoResolved
+        ? null
+        : `Logo path exists on business but could not be read: ${logoUrl}`
+      : "No logo source found on business or campaign",
+    brandAssetWarnings: logoUrl
+      ? logoResolved
+        ? []
+        : ["Real logo expected but could not be loaded; fallback badge is a placeholder."]
+      : ["Using fallback monogram because no brand logo exists."],
+  };
 
   if (savedColors.length > 0) {
     return {
       palette: withBackgroundTint(paletteFromHexes(savedColors)),
       source: "brandColors",
-      logoUrl: asString(business.logo),
+      logoUrl,
+      brandAsset: syncBrandAsset,
     };
   }
 
@@ -210,13 +257,15 @@ export function resolveBrandKitSync(business: BusinessEvidence, fallbackKit?: Pr
     return {
       palette: withBackgroundTint(paletteFromHexes(websiteColors)),
       source: "websiteEvidence",
-      logoUrl: asString(business.logo),
+      logoUrl,
+      brandAsset: syncBrandAsset,
     };
   }
 
   return {
     palette: withBackgroundTint(DEFAULT_PALETTES[category] || DEFAULT_PALETTES.general),
     source: "default",
-    logoUrl: asString(business.logo),
+    logoUrl,
+    brandAsset: syncBrandAsset,
   };
 }

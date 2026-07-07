@@ -111,6 +111,7 @@ function mapDeterministicToHybrid(deterministic: {
   palette: { primary: string; secondary: string; accent: string; background: string; text: string; textMuted: string };
   source: "logo" | "brandColors" | "websiteEvidence" | "default";
   logoUrl?: string;
+  brandAsset?: any;
 }): HybridBrandKit {
   return {
     ...deterministic.palette,
@@ -118,6 +119,7 @@ function mapDeterministicToHybrid(deterministic: {
     logoUrl: deterministic.logoUrl || null,
     logoDescription: null,
     typographyNote: null,
+    brandAsset: deterministic.brandAsset,
   };
 }
 
