@@ -28,6 +28,7 @@ import { resolveBrandKitWithAI } from "./brand-kit-ai";
 import { buildAICreativeBrief } from "./brief-ai";
 import { buildVisualDirection } from "./visual-direction";
 import { critiqueRenderedLeaflet } from "./vision-critic";
+import { VisionCriticResultSchema } from "./pipeline-types";
 import { fixtureRestaurant } from "./fixtures";
 
 describe("Hybrid pipeline AI modules", () => {
@@ -108,5 +109,22 @@ describe("Hybrid pipeline AI modules", () => {
     expect(critic.unavailable).toBe(true);
     expect(critic.quotaError).toBe(true);
     expect(critic.passed).toBe(false);
+  });
+
+  it("VisionCriticResultSchema requires all declared keys including unavailable and quotaError", () => {
+    const valid = {
+      scores: { brandFidelity: 80, readability: 80, premiumFeel: 80, visualHierarchy: 80, logoUsage: 80, CTAVisibility: 80, genericTemplateRisk: 30 },
+      passed: false,
+      criticalIssues: ["test"],
+      improvementSuggestions: ["improve"],
+      unavailable: false,
+      quotaError: false,
+    };
+    expect(() => VisionCriticResultSchema.parse(valid)).not.toThrow();
+
+    const missing = { ...valid };
+    delete (missing as any).unavailable;
+    delete (missing as any).quotaError;
+    expect(() => VisionCriticResultSchema.parse(missing)).toThrow();
   });
 });

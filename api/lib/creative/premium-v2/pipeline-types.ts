@@ -106,8 +106,8 @@ export const VisionCriticResultSchema = z.object({
   passed: z.boolean().describe("True only if all critical checks pass"),
   criticalIssues: z.array(z.string()).describe("Reasons that must block publication"),
   improvementSuggestions: z.array(z.string()).describe("Specific improvements for the next revision"),
-  unavailable: z.boolean().optional().describe("Set by the pipeline when the OpenAI vision critic fails"),
-  quotaError: z.boolean().optional().describe("True when the critic failed because of an OpenAI quota error"),
+  unavailable: z.boolean().describe("Always false for a real critic result; pipeline sets true when OpenAI fails"),
+  quotaError: z.boolean().describe("Always false for a real critic result; pipeline sets true when OpenAI quota is exceeded"),
 });
 
 export type VisionCriticResult = z.infer<typeof VisionCriticResultSchema>;

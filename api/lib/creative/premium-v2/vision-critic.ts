@@ -62,8 +62,8 @@ export async function critiqueRenderedLeaflet(
 
     return {
       ...object,
-      unavailable: false,
-      quotaError: false,
+      unavailable: object.unavailable ?? false,
+      quotaError: object.quotaError ?? false,
       criticalIssues: Array.from(new Set(criticalIssues)),
       passed: criticalIssues.length === 0,
     };
