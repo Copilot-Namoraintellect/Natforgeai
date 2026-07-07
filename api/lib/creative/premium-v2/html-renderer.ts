@@ -6,11 +6,14 @@
  */
 
 import { chromium, type Browser } from "playwright";
+import sharp from "sharp";
 import type { HybridBrandKit, VisualDirection } from "./pipeline-types";
 import type { BrandAssetResolution } from "../brand-asset-resolver";
 
 const WIDTH = 1080;
 const HEIGHT = 1350;
+
+export type LogoTreatment = "horizontal" | "compact";
 
 export interface HybridRenderBrief {
   businessName: string;
@@ -30,6 +33,28 @@ export interface HybridRenderMetrics {
   height: number;
   layoutPreset: string;
   logoImageErrors?: string[];
+  // Brand-asset render diagnostics
+  realLogoExpected?: boolean;
+  realLogoRendered?: boolean;
+  logoNaturalWidth?: number;
+  logoNaturalHeight?: number;
+  logoRenderedWidth?: number;
+  logoRenderedHeight?: number;
+  logoVisibleArea?: number;
+  logoRenderMode?: "image" | "fallback_badge";
+  fallbackBadgeRendered?: boolean;
+  logoMaskedOrCropped?: boolean;
+  logoDataUriUsed?: boolean;
+  logoFetchUsed?: boolean;
+}
+
+export interface LogoRenderPlan {
+  naturalWidth: number;
+  naturalHeight: number;
+  renderedWidth: number;
+  renderedHeight: number;
+  treatment: LogoTreatment;
+  aspectRatio: number;
 }
 
 let browser: Browser | null = null;
@@ -59,6 +84,31 @@ function inferContentType(buffer: Buffer): string {
   return "image/png";
 }
 
+async function computeLogoRenderPlan(buffer: Buffer): Promise<LogoRenderPlan> {
+  const meta = await sharp(buffer).metadata();
+  const naturalWidth = meta.width || 1;
+  const naturalHeight = meta.height || 1;
+  const aspectRatio = naturalWidth / naturalHeight;
+  const treatment: LogoTreatment = aspectRatio > 2.2 ? "horizontal" : "compact";
+
+  // Horizontal wide logos get a long, clear panel; compact/square logos get a taller panel.
+  const maxWidth = treatment === "horizontal" ? 340 : 220;
+  const maxHeight = treatment === "horizontal" ? 110 : 120;
+
+  let scale = Math.min(maxWidth / naturalWidth, maxHeight / naturalHeight);
+  let renderedWidth = Math.round(naturalWidth * scale);
+  let renderedHeight = Math.round(naturalHeight * scale);
+
+  // Enforce a readable minimum height without exceeding the chosen panel size.
+  if (renderedHeight < 55) {
+    scale = Math.min(maxWidth / naturalWidth, 55 / naturalHeight);
+    renderedWidth = Math.round(naturalWidth * scale);
+    renderedHeight = Math.round(naturalHeight * scale);
+  }
+
+  return { naturalWidth, naturalHeight, renderedWidth, renderedHeight, treatment, aspectRatio };
+}
+
 export async function renderHybridLeaflet(
   brief: HybridRenderBrief,
   brandKit: HybridBrandKit,
@@ -67,10 +117,18 @@ export async function renderHybridLeaflet(
   logoBuffer: Buffer | null,
   brandAsset?: BrandAssetResolution
 ): Promise<{ buffer: Buffer; metrics: HybridRenderMetrics }> {
+  const realLogoExpected = !!brandAsset && brandAsset.realLogoExpected;
   let resolvedLogoBuffer = logoBuffer;
-  if (!resolvedLogoBuffer && brandAsset?.logoResolved && brandAsset.realLogoExpected) {
+  let logoFetchUsed = false;
+
+  if (!resolvedLogoBuffer && brandAsset?.logoBuffer) {
+    resolvedLogoBuffer = brandAsset.logoBuffer;
+  }
+
+  if (!resolvedLogoBuffer && brandAsset?.logoResolved && realLogoExpected) {
     const logoUrl = brandAsset.logoSourceUrl || brandKit.logoUrl || null;
     if (logoUrl) {
+      logoFetchUsed = true;
       resolvedLogoBuffer = await fetchLogoBuffer(logoUrl);
       if (!resolvedLogoBuffer) {
         console.warn(`[HybridRenderer] Failed to fetch real logo from ${logoUrl}; will fall back to badge.`);
@@ -78,7 +136,14 @@ export async function renderHybridLeaflet(
     }
   }
 
-  const html = buildHtml(brief, brandKit, visualDirection, backgroundBuffer, resolvedLogoBuffer, brandAsset);
+  const renderRealLogo = !!resolvedLogoBuffer && (brandAsset ? brandAsset.logoResolved && brandAsset.realLogoExpected : true);
+  const logoRenderPlan = renderRealLogo && resolvedLogoBuffer ? await computeLogoRenderPlan(resolvedLogoBuffer) : null;
+
+  if (realLogoExpected && !renderRealLogo) {
+    console.warn(`[HybridRenderer] Real logo expected for ${brief.businessName} but not rendered; using fallback badge. Source=${brandAsset?.logoSourceType}, resolved=${brandAsset?.logoResolved}, hasBuffer=${!!logoBuffer}.`);
+  }
+
+  const html = buildHtml(brief, brandKit, visualDirection, backgroundBuffer, resolvedLogoBuffer, brandAsset, logoRenderPlan);
 
   const page = await (await getBrowser()).newPage({ viewport: { width: WIDTH, height: HEIGHT } });
   const consoleErrors: string[] = [];
@@ -96,12 +161,29 @@ export async function renderHybridLeaflet(
   });
 
   try {
-    await page.setContent(html, { waitUntil: "networkidle" });
+    await page.setContent(html, { waitUntil: "load" });
     const screenshot = await page.screenshot({ type: "png", fullPage: false });
-    return {
-      buffer: screenshot,
-      metrics: { width: WIDTH, height: HEIGHT, layoutPreset: visualDirection.layoutPreset, logoImageErrors: consoleErrors },
+
+    const metrics: HybridRenderMetrics = {
+      width: WIDTH,
+      height: HEIGHT,
+      layoutPreset: visualDirection.layoutPreset,
+      logoImageErrors: consoleErrors,
+      realLogoExpected,
+      realLogoRendered: renderRealLogo,
+      logoNaturalWidth: logoRenderPlan?.naturalWidth,
+      logoNaturalHeight: logoRenderPlan?.naturalHeight,
+      logoRenderedWidth: logoRenderPlan?.renderedWidth,
+      logoRenderedHeight: logoRenderPlan?.renderedHeight,
+      logoVisibleArea: logoRenderPlan ? logoRenderPlan.renderedWidth * logoRenderPlan.renderedHeight : undefined,
+      logoRenderMode: renderRealLogo ? "image" : "fallback_badge",
+      fallbackBadgeRendered: !renderRealLogo,
+      logoMaskedOrCropped: false,
+      logoDataUriUsed: renderRealLogo,
+      logoFetchUsed,
     };
+
+    return { buffer: screenshot, metrics };
   } finally {
     await page.close();
   }
@@ -149,7 +231,8 @@ function buildHtml(
   visualDirection: VisualDirection,
   backgroundBuffer: Buffer | null,
   logoBuffer: Buffer | null,
-  brandAsset?: BrandAssetResolution
+  brandAsset?: BrandAssetResolution,
+  logoRenderPlan?: LogoRenderPlan | null
 ): string {
   const primary = visualDirection.layoutPreset;
   const bg = backgroundBuffer ? `data:image/png;base64,${backgroundBuffer.toString("base64")}` : undefined;
@@ -186,11 +269,16 @@ function buildHtml(
   const footer = contactParts.length ? `<div class="footer-line">${contactParts.map(escapeHtml).join(" · ")}</div>` : "";
 
   const renderRealLogo = !!logoBuffer && (brandAsset ? brandAsset.logoResolved && brandAsset.realLogoExpected : true);
-  const logoHtml = renderRealLogo && logo
-    ? `<img class="logo-img" src="${logo}" alt="" onerror="console.error('[HybridRenderer] Logo image failed to load:', this.src)" />`
-    : `<div class="logo-fallback"><span>${escapeHtml(brief.businessName.split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase())}</span></div>`;
-  if (brandAsset?.realLogoExpected && !renderRealLogo) {
-    console.warn(`[HybridRenderer] Real logo expected for ${brief.businessName} but not rendered; using fallback badge. Source=${brandAsset.logoSourceType}, resolved=${brandAsset.logoResolved}, hasBuffer=${!!logoBuffer}.`);
+  let logoHtml = "";
+  if (renderRealLogo && logo && logoRenderPlan) {
+    const treatmentClass = logoRenderPlan.treatment === "horizontal" ? "logo-horizontal" : "logo-compact";
+    logoHtml = `
+      <div class="logo-panel">
+        <img class="logo-img ${treatmentClass}" src="${logo}" alt="" width="${logoRenderPlan.renderedWidth}" height="${logoRenderPlan.renderedHeight}" onerror="console.error('[HybridRenderer] Logo image failed to load:', this.src)" />
+      </div>`;
+  } else {
+    const initials = escapeHtml(brief.businessName.split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase());
+    logoHtml = `<div class="logo-fallback"><span>${initials}</span></div>`;
   }
 
   const bgStyle = bg ? `background-image: url('${bg}'); background-size: cover; background-position: center;` : "";
@@ -201,9 +289,8 @@ function buildHtml(
 <head>
   <meta charset="UTF-8">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap');
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Inter', Arial, sans-serif; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
     .canvas {
       width: ${WIDTH}px;
       height: ${HEIGHT}px;
@@ -213,38 +300,27 @@ function buildHtml(
       background: ${toCssColour(brandKit.background)};
       ${bgStyle}
     }
-    .bg-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.12) 0%, rgba(0,0,0,0.02) 35%, rgba(0,0,0,0.06) 70%, rgba(0,0,0,0.22) 100%); }
+    .bg-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(15,23,42,0.55) 0%, rgba(15,23,42,0.20) 30%, rgba(15,23,42,0.10) 60%, rgba(15,23,42,0.45) 100%); z-index: 1; }
     .brand-shape {
       position: absolute;
-      top: -120px;
-      right: -80px;
-      width: 460px;
-      height: 460px;
+      bottom: 220px;
+      left: -120px;
+      width: 320px;
+      height: 320px;
       border-radius: 50%;
       background: ${toCssColour(brandKit.accent)};
-      opacity: 0.20;
-      z-index: 1;
-    }
-    .brand-shape-2 {
-      position: absolute;
-      bottom: 260px;
-      left: -100px;
-      width: 280px;
-      height: 280px;
-      border-radius: 50%;
-      background: ${toCssColour(brandKit.secondary)};
-      opacity: 0.14;
+      opacity: 0.10;
       z-index: 1;
     }
     .brand-stripe {
       position: absolute;
-      top: -80px;
-      right: 220px;
-      width: 90px;
-      height: 500px;
-      background: ${toCssColour(brandKit.accent)};
-      opacity: 0.16;
-      transform: rotate(18deg);
+      top: -60px;
+      right: 180px;
+      width: 70px;
+      height: 420px;
+      background: ${toCssColour(brandKit.secondary)};
+      opacity: 0.10;
+      transform: rotate(20deg);
       border-radius: 50px;
       z-index: 1;
     }
@@ -254,58 +330,78 @@ function buildHtml(
       height: 130px;
       display: flex;
       align-items: center;
-      gap: 22px;
-      padding: 0 56px;
-      background: ${toCssColour(brandKit.primary)};
+      justify-content: space-between;
+      padding: 0 50px;
+      background: linear-gradient(90deg, ${toCssColour(brandKit.primary)}f2 0%, ${toCssColour(brandKit.primary)}cc 75%, transparent 100%);
       color: #ffffff;
-      z-index: 3;
-      border-bottom: 6px solid ${toCssColour(brandKit.accent)};
+      z-index: 4;
     }
-    .logo-img { max-height: 84px; max-width: 220px; width: auto; height: auto; object-fit: contain; border-radius: 12px; background: #fff; padding: 5px; box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
-    .logo-fallback { height: 84px; width: 84px; border-radius: 50%; background: ${toCssColour(brandKit.accent)}; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: 900; color: #fff; box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
-    .business-name { font-size: 42px; font-weight: 900; letter-spacing: -0.02em; }
+    .logo-panel {
+      background: rgba(255,255,255,0.96);
+      border-radius: 18px;
+      padding: 10px 14px;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.20);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .logo-img { display: block; object-fit: contain; }
+    .logo-horizontal { max-width: 340px; max-height: 110px; }
+    .logo-compact { max-width: 220px; max-height: 120px; }
+    .logo-fallback { height: 100px; width: 100px; border-radius: 18px; background: ${toCssColour(brandKit.accent)}; display: flex; align-items: center; justify-content: center; font-size: 38px; font-weight: 900; color: #fff; box-shadow: 0 8px 28px rgba(0,0,0,0.20); }
+    .brand-wordmark { display: flex; flex-direction: column; margin-left: 26px; text-shadow: 0 2px 10px rgba(0,0,0,0.35); }
+    .business-name { font-size: 24px; font-weight: 900; letter-spacing: -0.02em; line-height: 1.1; }
+    .business-label { font-size: 13px; font-weight: 600; opacity: 0.85; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
     .hero {
       position: absolute;
       top: 130px; left: 0; right: 0;
-      min-height: 360px;
-      padding: 56px;
+      min-height: 260px;
+      padding: 36px 56px;
       display: flex;
       flex-direction: column;
       justify-content: center;
       align-items: flex-start;
       text-align: left;
-      background: ${toCssColour(brandKit.primary)};
       color: #ffffff;
       z-index: 3;
+    }
+    .hero-panel {
+      background: rgba(15,23,42,0.42);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-radius: 22px;
+      padding: 22px 28px;
+      border-left: 6px solid ${toCssColour(brandKit.accent)};
+      box-shadow: 0 12px 32px rgba(0,0,0,0.15);
+      max-width: 920px;
     }
     .hero-shape-accent {
       position: absolute;
       top: 50%;
-      left: 50%;
-      width: 420px;
-      height: 420px;
+      left: 58%;
+      width: 380px;
+      height: 380px;
       transform: translate(-50%, -50%) rotate(12deg);
-      border: 18px solid ${toCssColour(brandKit.accent)};
-      opacity: 0.22;
-      border-radius: 40px;
+      border: 16px solid ${toCssColour(brandKit.accent)};
+      opacity: 0.14;
+      border-radius: 36px;
       z-index: 0;
     }
-    .headline { position: relative; z-index: 2; font-size: 72px; font-weight: 900; line-height: 1.0; margin-bottom: 18px; letter-spacing: -0.03em; text-shadow: 0 4px 14px rgba(0,0,0,0.25); max-width: 960px; }
-    .subheadline { position: relative; z-index: 2; font-size: 28px; font-weight: 500; line-height: 1.45; opacity: 0.95; max-width: 880px; }
-    .offer-badge { position: relative; z-index: 2; margin-top: 24px; padding: 14px 30px; border-radius: 12px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 28px; font-weight: 900; box-shadow: 0 6px 18px rgba(0,0,0,0.15); display: inline-block; }
-    .section-rule { position: absolute; top: 490px; left: 56px; right: 56px; height: 5px; background: ${toCssColour(brandKit.accent)}; border-radius: 3px; z-index: 3; opacity: 0.9; }
-    .services { position: absolute; top: 520px; left: 56px; right: 56px; display: grid; ${serviceGridStyle(visualDirection)}; z-index: 3; }
-    .service-card { position: relative; background: rgba(255,255,255,0.96); border-radius: 16px; padding: 24px 24px 24px 32px; box-shadow: 0 10px 28px rgba(0,0,0,0.10); min-height: 130px; display: flex; flex-direction: column; justify-content: center; border-left: 7px solid ${toCssColour(brandKit.accent)}; }
-    .card-number { position: absolute; top: 8px; right: 14px; font-size: 42px; font-weight: 900; color: ${toCssColour(brandKit.accent)}; opacity: 0.20; line-height: 1; }
-    .card-title { font-size: 28px; font-weight: 900; color: ${toCssColour(brandKit.text)}; margin-bottom: 6px; line-height: 1.2; }
-    .card-desc { font-size: 19px; color: ${toCssColour(brandKit.textMuted)}; line-height: 1.45; }
-    .secondary-strip { position: absolute; top: 900px; left: 56px; right: 56px; padding: 16px 30px; border-radius: 12px; background: ${toCssColour(brandKit.secondary)}26; text-align: center; font-size: 21px; font-weight: 800; color: ${toCssColour(brandKit.text)}; z-index: 3; border: 2px solid ${toCssColour(brandKit.secondary)}40; }
-    .benefits-band { position: absolute; top: 970px; left: 56px; right: 56px; padding: 20px 30px; border-radius: 14px; background: ${toCssColour(brandKit.secondary)}14; display: flex; justify-content: space-between; gap: 20px; z-index: 3; }
-    .benefit-item { flex: 1; display: flex; align-items: flex-start; gap: 10px; font-size: 20px; font-weight: 800; line-height: 1.35; color: ${toCssColour(brandKit.text)}; }
-    .bullet { width: 10px; height: 10px; border-radius: 50%; background: ${toCssColour(brandKit.accent)}; flex-shrink: 0; margin-top: 6px; }
+    .headline { position: relative; z-index: 2; font-size: 56px; font-weight: 900; line-height: 1.05; margin-bottom: 12px; letter-spacing: -0.03em; text-shadow: 0 3px 12px rgba(0,0,0,0.25); }
+    .subheadline { position: relative; z-index: 2; font-size: 24px; font-weight: 500; line-height: 1.4; opacity: 0.96; }
+    .offer-badge { position: relative; z-index: 2; margin-top: 14px; padding: 10px 22px; border-radius: 12px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 24px; font-weight: 900; box-shadow: 0 6px 18px rgba(0,0,0,0.15); display: inline-block; }
+    .services { position: absolute; top: 500px; left: 56px; right: 56px; display: grid; ${serviceGridStyle(visualDirection)}; z-index: 3; }
+    .service-card { position: relative; background: rgba(255,255,255,0.98); border-radius: 18px; padding: 20px 22px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); min-height: 110px; display: flex; flex-direction: column; justify-content: center; border-top: 5px solid ${toCssColour(brandKit.accent)}; }
+    .card-number { position: absolute; top: 8px; right: 14px; font-size: 40px; font-weight: 900; color: ${toCssColour(brandKit.accent)}; opacity: 0.16; line-height: 1; }
+    .card-title { font-size: 26px; font-weight: 900; color: ${toCssColour(brandKit.text)}; margin-bottom: 6px; line-height: 1.2; }
+    .card-desc { font-size: 18px; color: ${toCssColour(brandKit.textMuted)}; line-height: 1.45; }
+    .secondary-strip { position: absolute; top: 800px; left: 56px; right: 56px; padding: 16px 32px; border-radius: 14px; background: rgba(255,255,255,0.92); text-align: center; font-size: 22px; font-weight: 800; color: ${toCssColour(brandKit.text)}; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 2px solid ${toCssColour(brandKit.secondary)}30; }
+    .benefits-band { position: absolute; top: 870px; left: 56px; right: 56px; padding: 20px 32px; border-radius: 16px; background: rgba(255,255,255,0.92); display: flex; justify-content: space-between; gap: 20px; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
+    .benefit-item { flex: 1; display: flex; align-items: flex-start; gap: 12px; font-size: 21px; font-weight: 800; line-height: 1.35; color: ${toCssColour(brandKit.text)}; }
+    .bullet { width: 11px; height: 11px; border-radius: 50%; background: ${toCssColour(brandKit.accent)}; flex-shrink: 0; margin-top: 7px; }
     .cta {
       position: absolute;
-      bottom: 140px;
+      bottom: 150px;
       left: 56px;
       right: 56px;
       display: flex;
@@ -320,46 +416,51 @@ function buildHtml(
     .footer {
       position: absolute;
       bottom: 0; left: 0; right: 0;
-      height: 110px;
-      background: ${toCssColour(brandKit.primary)};
+      height: 120px;
+      background: linear-gradient(90deg, ${toCssColour(brandKit.primary)}f2 0%, ${toCssColour(brandKit.primary)}cc 75%, transparent 100%);
       color: #ffffff;
       display: flex;
       flex-direction: column;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
-      text-align: center;
+      text-align: left;
       padding: 0 56px;
       z-index: 3;
     }
-    .footer-name { font-size: 24px; font-weight: 900; margin-bottom: 6px; }
-    .footer-line { font-size: 20px; opacity: 0.93; }
+    .footer-name { font-size: 26px; font-weight: 900; margin-bottom: 6px; text-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+    .footer-line { font-size: 22px; font-weight: 600; opacity: 0.95; }
 
     /* Layout presets */
-    .preset-premium_services_brand_panel .hero { min-height: 340px; }
-    .preset-premium_local_service .hero { min-height: 360px; }
-    .preset-premium_offer_hero .offer-badge { font-size: 32px; padding: 16px 34px; }
-    .preset-premium_retail_promo .headline { font-size: 76px; }
-    .preset-premium_food_offer .hero { background: linear-gradient(180deg, ${toCssColour(brandKit.primary)} 0%, ${toCssColour(brandKit.primary)}dd 100%); }
-    .preset-premium_professional_clean .hero { background: ${toCssColour(brandKit.primary)}; }
+    .preset-premium_services_brand_panel .hero { min-height: 280px; }
+    .preset-premium_local_service .hero { min-height: 300px; }
+    .preset-premium_offer_hero .offer-badge { font-size: 30px; padding: 14px 30px; }
+    .preset-premium_retail_promo .headline { font-size: 64px; }
+    .preset-premium_food_offer .hero-panel { background: rgba(15,23,42,0.50); }
+    .preset-premium_professional_clean .hero-panel { background: rgba(15,23,42,0.50); }
   </style>
 </head>
 <body>
   <div class="canvas preset-${primary}">
     <div class="bg-overlay"></div>
     <div class="brand-shape"></div>
-    <div class="brand-shape-2"></div>
     <div class="brand-stripe"></div>
     ${hasShapeAccent ? '<div class="hero-shape-accent"></div>' : ""}
     <div class="header">
-      ${logoHtml}
-      <div class="business-name">${escapeHtml(brief.businessName)}</div>
+      <div style="display:flex;align-items:center;">
+        ${logoHtml}
+        <div class="brand-wordmark">
+          <div class="business-name">${escapeHtml(brief.businessName)}</div>
+          <div class="business-label">${escapeHtml(visualDirection.density === "minimal" ? "Premium Service" : "Trusted Local Business")}</div>
+        </div>
+      </div>
     </div>
     <div class="hero">
-      <div class="headline">${escapeHtml(brief.headline)}</div>
-      <div class="subheadline">${escapeHtml(brief.subheadline)}</div>
-      ${offerBadge}
+      <div class="hero-panel">
+        <div class="headline">${escapeHtml(brief.headline)}</div>
+        <div class="subheadline">${escapeHtml(brief.subheadline)}</div>
+        ${offerBadge}
+      </div>
     </div>
-    <div class="section-rule"></div>
     <div class="services">${primaryCards}</div>
     ${secondaryStrip}
     ${benefits}
