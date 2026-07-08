@@ -28,6 +28,12 @@ export interface HybridRenderBrief {
   brandAsset?: BrandAssetResolution;
 }
 
+export interface HybridRenderResult {
+  buffer: Buffer;
+  metrics: HybridRenderMetrics;
+  html: string;
+}
+
 export interface LogoRenderPlan {
   naturalWidth: number;
   naturalHeight: number;
@@ -99,7 +105,7 @@ export async function renderHybridLeaflet(
   backgroundBuffer: Buffer | null,
   logoBuffer: Buffer | null,
   brandAsset?: BrandAssetResolution
-): Promise<{ buffer: Buffer; metrics: HybridRenderMetrics }> {
+): Promise<HybridRenderResult> {
   const realLogoExpected = !!brandAsset && brandAsset.realLogoExpected;
   let resolvedLogoBuffer = logoBuffer;
   let logoFetchUsed = false;
@@ -181,7 +187,7 @@ export async function renderHybridLeaflet(
       logoFetchUsed,
     };
 
-    return { buffer: screenshot, metrics };
+    return { buffer: screenshot, metrics, html };
   } finally {
     await page.close();
   }

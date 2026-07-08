@@ -4,6 +4,7 @@
 
 import { writeFileSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
+import sharp from "sharp";
 import type { HybridPipelineResult, HybridFinalDecision } from "../../api/lib/creative/premium-v2/pipeline-types";
 import type { BrandAssetResolution } from "../../api/lib/creative/brand-asset-resolver";
 
@@ -13,6 +14,8 @@ export function decisionLabel(finalDecision: HybridFinalDecision): string {
       return "Hybrid Premium Ready";
     case "hybrid_review_required":
       return "Vision Critic Unavailable - Needs Review";
+    case "content_review_required":
+      return "Content Review Required";
     case "fallback_used":
       return "Fallback Used - Needs Review";
     case "failed":
@@ -46,6 +49,15 @@ export interface RenderDiagnostics {
   logoMaskedOrCropped?: boolean;
   logoDataUriUsed?: boolean;
   logoFetchUsed?: boolean;
+  structuralBrandFidelityPassed?: boolean;
+  visionBrandFidelityPassed?: boolean;
+  criticConflict?: boolean;
+  criticConflictReason?: string | null;
+  offerExpected?: boolean;
+  offerSource?: string | null;
+  offerRendered?: boolean;
+  inventedOfferDetected?: boolean;
+  contentFidelityPassed?: boolean;
 }
 
 export interface HybridLogEntry {
@@ -126,6 +138,38 @@ export function saveHybridAttemptImages(
   return paths;
 }
 
+export async function saveHybridLogoArtifacts(
+  outputDir: string,
+  fixtureName: string,
+  hybridResult: HybridPipelineResult
+): Promise<{ expectedLogoPath?: string; logoCropPath?: string }> {
+  mkdirSync(outputDir, { recursive: true });
+  const safeName = fixtureName.replace(/[^a-z0-9_-]/gi, "-");
+  const result: { expectedLogoPath?: string; logoCropPath?: string } = {};
+
+  const logoBuffer = hybridResult.brandKit.brandAsset?.logoBuffer;
+  if (logoBuffer) {
+    const expectedLogoPath = join(outputDir, `${safeName}-expected-logo.png`);
+    writeFileSync(expectedLogoPath, logoBuffer);
+    result.expectedLogoPath = expectedLogoPath;
+  }
+
+  // Crop the header/logo region from the final rendered leaflet for visual inspection.
+  // The header spans the full width, top 170px, with the logo panel on the left.
+  const finalBuffer = hybridResult.buffer;
+  try {
+    const logoCropPath = join(outputDir, `${safeName}-logo-region-crop.png`);
+    await sharp(finalBuffer)
+      .extract({ left: 40, top: 20, width: 440, height: 150 })
+      .toFile(logoCropPath);
+    result.logoCropPath = logoCropPath;
+  } catch (err: any) {
+    console.warn(`[HybridSampleWriter] Could not crop logo region: ${err.message}`);
+  }
+
+  return result;
+}
+
 export function writeHybridGenerationLog(outputDir: string, entries: HybridLogEntry[]): string {
   mkdirSync(outputDir, { recursive: true });
   const logPath = join(outputDir, "generation-log.txt");
@@ -161,6 +205,15 @@ export function buildRenderDiagnostics(metadata?: HybridPipelineResult["metadata
     logoMaskedOrCropped: metadata.logoMaskedOrCropped,
     logoDataUriUsed: metadata.logoDataUriUsed,
     logoFetchUsed: metadata.logoFetchUsed,
+    structuralBrandFidelityPassed: metadata.structuralBrandFidelityPassed,
+    visionBrandFidelityPassed: metadata.visionBrandFidelityPassed,
+    criticConflict: metadata.criticConflict,
+    criticConflictReason: metadata.criticConflictReason,
+    offerExpected: metadata.offerExpected,
+    offerSource: metadata.offerSource,
+    offerRendered: metadata.offerRendered,
+    inventedOfferDetected: metadata.inventedOfferDetected,
+    contentFidelityPassed: metadata.contentFidelityPassed,
   };
 }
 
@@ -189,5 +242,13 @@ export function printBrandAssetDiagnostics(diagnostics: BrandAssetDiagnostics, r
     console.log(`    logoMaskedOrCropped:  ${renderDiagnostics.logoMaskedOrCropped ?? "n/a"}`);
     console.log(`    logoDataUriUsed:      ${renderDiagnostics.logoDataUriUsed ?? "n/a"}`);
     console.log(`    logoFetchUsed:        ${renderDiagnostics.logoFetchUsed ?? "n/a"}`);
+    console.log(`    structuralBrandFidelityPassed: ${renderDiagnostics.structuralBrandFidelityPassed ?? "n/a"}`);
+    console.log(`    visionBrandFidelityPassed:     ${renderDiagnostics.visionBrandFidelityPassed ?? "n/a"}`);
+    console.log(`    criticConflict:       ${renderDiagnostics.criticConflict ?? "n/a"}`);
+    console.log(`    offerExpected:        ${renderDiagnostics.offerExpected ?? "n/a"}`);
+    console.log(`    offerSource:          ${renderDiagnostics.offerSource ?? "n/a"}`);
+    console.log(`    offerRendered:        ${renderDiagnostics.offerRendered ?? "n/a"}`);
+    console.log(`    inventedOfferDetected:${renderDiagnostics.inventedOfferDetected ?? "n/a"}`);
+    console.log(`    contentFidelityPassed:${renderDiagnostics.contentFidelityPassed ?? "n/a"}`);
   }
 }

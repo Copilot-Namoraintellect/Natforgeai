@@ -24,6 +24,7 @@ import {
   decisionLabel,
   buildHybridLogEntry,
   saveHybridAttemptImages,
+  saveHybridLogoArtifacts,
   writeHybridGenerationLog,
   writeDeterministicGenerationLog,
   buildBrandAssetDiagnostics,
@@ -211,11 +212,18 @@ async function renderDraftSample(
     const attemptDir = dirname(outputPath);
     const fixtureName = `business-${businessId}-campaign-${campaignId}`;
     const attemptPaths = saveHybridAttemptImages(attemptDir, fixtureName, hybrid);
+    const logoArtifacts = await saveHybridLogoArtifacts(attemptDir, fixtureName, hybrid);
     const entry = buildHybridLogEntry(fixtureName, hybrid, attemptPaths, outputPath);
     const logPath = writeHybridGenerationLog(attemptDir, [entry]);
     console.log("Hybrid generation log written to:", logPath);
     if (attemptPaths.length) {
       console.log("Hybrid attempt images:", attemptPaths);
+    }
+    if (logoArtifacts.expectedLogoPath) {
+      console.log("Expected logo saved to:", logoArtifacts.expectedLogoPath);
+    }
+    if (logoArtifacts.logoCropPath) {
+      console.log("Logo region crop saved to:", logoArtifacts.logoCropPath);
     }
   }
 
@@ -250,6 +258,7 @@ async function main() {
       if (hybrid && result.hybridResult) {
         const attemptDir = join(outputDir, "hybrid");
         const attemptPaths = saveHybridAttemptImages(attemptDir, name, result.hybridResult);
+        await saveHybridLogoArtifacts(attemptDir, name, result.hybridResult);
         const entry = buildHybridLogEntry(name, result.hybridResult, attemptPaths, result.outputPath);
         logEntries.push(entry);
       } else if (result.deterministicLog) {
@@ -285,10 +294,13 @@ async function main() {
     if (args.hybrid && result.hybridResult) {
       const attemptDir = join(outputDir, "hybrid");
       const attemptPaths = saveHybridAttemptImages(attemptDir, args.fixture as string, result.hybridResult);
+      const logoArtifacts = await saveHybridLogoArtifacts(attemptDir, args.fixture as string, result.hybridResult);
       const entry = buildHybridLogEntry(args.fixture as string, result.hybridResult, attemptPaths, result.outputPath);
       const logPath = writeHybridGenerationLog(attemptDir, [entry]);
       console.log("\n=== Hybrid generation log written to ===", logPath);
       console.log(`\n[${args.fixture}] Attempt images:`, attemptPaths);
+      if (logoArtifacts.expectedLogoPath) console.log(`[${args.fixture}] Expected logo:`, logoArtifacts.expectedLogoPath);
+      if (logoArtifacts.logoCropPath) console.log(`[${args.fixture}] Logo region crop:`, logoArtifacts.logoCropPath);
     } else if (result.deterministicLog) {
       const logPath = writeDeterministicGenerationLog(join(outputDir, "v2.2"), [result.deterministicLog]);
       console.log("\n=== Deterministic generation log written to ===", logPath);

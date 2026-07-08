@@ -1,0 +1,98 @@
+import { describe, it, expect } from "vitest";
+import { evaluateContentFidelity } from "./content-fidelity";
+import type { BusinessEvidence, CampaignEvidence } from "./curation";
+import type { AICreativeBrief } from "./pipeline-types";
+
+function makeBrief(offerLine: string | null): AICreativeBrief {
+  return {
+    angle: "Fresh clean home",
+    headline: "Spotless Home, Zero Stress",
+    subheadline: "Professional cleaning you can trust.",
+    primaryServices: [{ name: "Home Cleaning", description: "Top to bottom", isPrimary: true }],
+    secondaryServices: [],
+    benefits: ["Reliable", "Affordable"],
+    cta: "Book Now",
+    offerLine,
+  };
+}
+
+const business: BusinessEvidence = {
+  displayName: "Test Business",
+  name: "Test Business",
+  industry: "Services",
+  productOrService: "Cleaning",
+};
+
+describe("evaluateContentFidelity", () => {
+  it("returns contentFidelityPassed=true when no offer is expected and no promo language is rendered", () => {
+    const campaign: CampaignEvidence = {};
+    const html = "<div>Spotless Home, Zero Stress</div><div>Book Now</div>";
+    const result = evaluateContentFidelity(business, campaign, makeBrief(null), html);
+    expect(result.offerExpected).toBe(false);
+    expect(result.offerRendered).toBe(false);
+    expect(result.inventedOfferDetected).toBe(false);
+    expect(result.contentFidelityPassed).toBe(true);
+  });
+
+  it("flags invented 10% off when no offer is provided", () => {
+    const campaign: CampaignEvidence = {};
+    const html = "<div>Get 10% off your first order!</div><div>Book Now</div>";
+    const result = evaluateContentFidelity(business, campaign, makeBrief("Get 10% off your first order!"), html);
+    expect(result.offerExpected).toBe(false);
+    expect(result.inventedOfferDetected).toBe(true);
+    expect(result.contentFidelityPassed).toBe(false);
+    expect(result.detectedOfferSnippet).toMatch(/10% off/i);
+  });
+
+  it("flags invented 'exclusive offers' when no offer is provided", () => {
+    const campaign: CampaignEvidence = {};
+    const html = "<div>Join us for exclusive offers</div><div>Book Now</div>";
+    const result = evaluateContentFidelity(business, campaign, makeBrief("exclusive offers"), html);
+    expect(result.inventedOfferDetected).toBe(true);
+    expect(result.contentFidelityPassed).toBe(false);
+  });
+
+  it("flags invented 'free' when no offer is provided", () => {
+    const campaign: CampaignEvidence = {};
+    const html = "<div>Get a free consultation</div><div>Book Now</div>";
+    const result = evaluateContentFidelity(business, campaign, makeBrief("free consultation"), html);
+    expect(result.inventedOfferDetected).toBe(true);
+    expect(result.contentFidelityPassed).toBe(false);
+  });
+
+  it("flags invented 'special discount' when no offer is provided", () => {
+    const campaign: CampaignEvidence = {};
+    const html = "<div>Special discount available</div><div>Book Now</div>";
+    const result = evaluateContentFidelity(business, campaign, makeBrief("special discount"), html);
+    expect(result.inventedOfferDetected).toBe(true);
+    expect(result.contentFidelityPassed).toBe(false);
+  });
+
+  it("does not flag an approved campaign offer that matches the rendered text", () => {
+    const campaign: CampaignEvidence = { offerDetails: "10% off your first order" };
+    const html = "<div>10% off your first order</div><div>Book Now</div>";
+    const result = evaluateContentFidelity(business, campaign, makeBrief("10% off your first order"), html);
+    expect(result.offerExpected).toBe(true);
+    expect(result.offerSource).toBe("campaign");
+    expect(result.offerRendered).toBe(true);
+    expect(result.inventedOfferDetected).toBe(false);
+    expect(result.contentFidelityPassed).toBe(true);
+  });
+
+  it("flags stronger promotional language than the approved offer", () => {
+    const campaign: CampaignEvidence = { offerDetails: "10% off your first order" };
+    const html = "<div>20% off plus free delivery</div><div>Book Now</div>";
+    const result = evaluateContentFidelity(business, campaign, makeBrief("20% off plus free delivery"), html);
+    expect(result.offerExpected).toBe(true);
+    expect(result.inventedOfferDetected).toBe(true);
+    expect(result.contentFidelityPassed).toBe(false);
+  });
+
+  it("ignores non-promotional percentages like '100%'", () => {
+    const campaign: CampaignEvidence = {};
+    const html = "<div>100% reliable service</div><div>Book Now</div>";
+    const result = evaluateContentFidelity(business, campaign, makeBrief(null), html);
+    expect(result.inventedOfferDetected).toBe(false);
+    expect(result.contentFidelityPassed).toBe(true);
+  });
+});

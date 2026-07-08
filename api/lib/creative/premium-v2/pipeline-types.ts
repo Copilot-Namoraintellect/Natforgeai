@@ -156,6 +156,7 @@ export type VisionCriticResult = z.infer<typeof VisionCriticResultSchema>;
 export type HybridFinalDecision =
   | "premium_ready"
   | "hybrid_review_required"
+  | "content_review_required"
   | "fallback_used"
   | "failed";
 
@@ -210,6 +211,17 @@ export interface HybridPipelineMetadata {
   revisionCount: number;
   finalDecision: HybridFinalDecision;
   rejectionCritic: VisionCriticResult | null;
+  // Brand-asset adjudication
+  structuralBrandFidelityPassed?: boolean;
+  visionBrandFidelityPassed?: boolean;
+  criticConflict?: boolean;
+  criticConflictReason?: string | null;
+  // Content fidelity
+  offerExpected?: boolean;
+  offerSource?: string | null;
+  offerRendered?: boolean;
+  inventedOfferDetected?: boolean;
+  contentFidelityPassed?: boolean;
   // Brand-asset render diagnostics
   realLogoExpected?: boolean;
   realLogoRendered?: boolean;

@@ -61,7 +61,7 @@ function makeInput(overrides?: { sampleMode?: boolean }) {
       location: "Auckland",
       logo: "https://example.com/logo.png",
     },
-    campaign: { id: 10, mainPainPoint: "dirty house", preferredCta: "Book Now" },
+    campaign: { id: 10, mainPainPoint: "dirty house", preferredCta: "Book Now" } as any,
     post: { id: 100, campaignId: 10, title: "Test promo" },
     sampleMode: overrides?.sampleMode ?? false,
   };
@@ -155,6 +155,7 @@ describe("Hybrid pipeline orchestrator", () => {
     mockGenerateBackground.mockResolvedValue(Buffer.from("background"));
     mockRenderHybridLeaflet.mockResolvedValue({
       buffer: Buffer.from("hybrid"),
+      html: "<div>Spotless Home, Zero Stress</div><div>Book Now</div>",
       metrics: {
         width: 1080,
         height: 1350,
@@ -377,5 +378,96 @@ describe("Hybrid pipeline orchestrator", () => {
     expect(attemptMetrics!.realLogoExpected).toBe(true);
     expect(attemptMetrics!.realLogoRendered).toBe(true);
     expect(attemptMetrics!.fallbackBadgeRendered).toBe(false);
+  });
+
+  it("detects critic conflict when renderer reports real logo but critic rejects it", async () => {
+    mockCritiqueRenderedLeaflet.mockResolvedValue({
+      ...makePassingCritic(),
+      realLogoPresent: false,
+      logoMatchesBrand: false,
+      fallbackBadgeUsed: true,
+      logoDistortedOrCropped: false,
+      brandFidelityPassed: false,
+    });
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.finalDecision).not.toBe("premium_ready");
+    expect(result.metadata.criticConflict).toBe(true);
+    expect(result.metadata.structuralBrandFidelityPassed).toBe(true);
+    expect(result.metadata.visionBrandFidelityPassed).toBe(false);
+    expect(result.metadata.criticConflictReason).toMatch(/Vision critic contradicted renderer logo diagnostics/i);
+    expect(result.metadata.fallbackReason).toMatch(/Vision critic contradicted renderer logo diagnostics/i);
+  });
+
+  it("passes content fidelity when no offer is provided and no promotional language is rendered", async () => {
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.offerExpected).toBe(false);
+    expect(result.metadata.offerRendered).toBe(false);
+    expect(result.metadata.inventedOfferDetected).toBe(false);
+    expect(result.metadata.contentFidelityPassed).toBe(true);
+  });
+
+  it("blocks premium_ready and sets content_review_required when an invented offer is detected", async () => {
+    mockRenderHybridLeaflet.mockResolvedValue({
+      buffer: Buffer.from("hybrid"),
+      html: "<div>Get 10% off your first order!</div><div>Book Now</div>",
+      metrics: {
+        width: 1080,
+        height: 1350,
+        layoutPreset: "premium_local_service",
+        realLogoExpected: true,
+        realLogoRendered: true,
+        logoNaturalWidth: 1432,
+        logoNaturalHeight: 472,
+        logoRenderedWidth: 334,
+        logoRenderedHeight: 110,
+        logoVisibleArea: 334 * 110,
+        logoRenderMode: "image",
+        fallbackBadgeRendered: false,
+        logoMaskedOrCropped: false,
+        logoDataUriUsed: true,
+        logoFetchUsed: false,
+      },
+    });
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.finalDecision).toBe("content_review_required");
+    expect(result.metadata.inventedOfferDetected).toBe(true);
+    expect(result.metadata.contentFidelityPassed).toBe(false);
+    expect(result.metadata.fallbackReason).toMatch(/10% off/i);
+    expect(result.metadata.usedDeterministicFallback).toBe(true);
+  });
+
+  it("allows an approved campaign offer to render without flagging it as invented", async () => {
+    const input = makeInput();
+    input.campaign = { ...input.campaign, offerDetails: "10% off your first order" };
+    mockRenderHybridLeaflet.mockResolvedValue({
+      buffer: Buffer.from("hybrid"),
+      html: "<div>10% off your first order</div><div>Book Now</div>",
+      metrics: {
+        width: 1080,
+        height: 1350,
+        layoutPreset: "premium_local_service",
+        realLogoExpected: true,
+        realLogoRendered: true,
+        logoNaturalWidth: 1432,
+        logoNaturalHeight: 472,
+        logoRenderedWidth: 334,
+        logoRenderedHeight: 110,
+        logoVisibleArea: 334 * 110,
+        logoRenderMode: "image",
+        fallbackBadgeRendered: false,
+        logoMaskedOrCropped: false,
+        logoDataUriUsed: true,
+        logoFetchUsed: false,
+      },
+    });
+
+    const result = await runHybridPipeline(input as any);
+    expect(result.metadata.offerExpected).toBe(true);
+    expect(result.metadata.offerSource).toBe("campaign");
+    expect(result.metadata.offerRendered).toBe(true);
+    expect(result.metadata.inventedOfferDetected).toBe(false);
+    expect(result.metadata.contentFidelityPassed).toBe(true);
   });
 });

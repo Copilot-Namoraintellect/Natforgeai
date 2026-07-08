@@ -1337,10 +1337,13 @@ export async function generatePremiumLeaflet({
 
       if (hybridResult.metadata.finalDecision !== "premium_ready") {
           const isBrandAssetFailure = hybridResult.metadata.fallbackReason?.includes("Brand Asset Review Required");
+          const isContentFailure = hybridResult.metadata.finalDecision === "content_review_required" || hybridResult.metadata.inventedOfferDetected;
           const message = isBrandAssetFailure
             ? hybridResult.metadata.fallbackReason!
+            : isContentFailure
+            ? `Content Review Required: ${hybridResult.metadata.fallbackReason || "Invented or unsupported promotional language detected."}`
             : `Hybrid pipeline did not reach premium_ready (finalDecision=${hybridResult.metadata.finalDecision}). ${hybridResult.metadata.fallbackReason || ""}`.trim();
-          logError("[PremiumLeaflet] Hybrid pipeline blocked by brand-asset/fallback gate", { userId, contentPostId, finalDecision: hybridResult.metadata.finalDecision, reason: hybridResult.metadata.fallbackReason });
+          logError("[PremiumLeaflet] Hybrid pipeline blocked by brand-asset/content/fallback gate", { userId, contentPostId, finalDecision: hybridResult.metadata.finalDecision, reason: hybridResult.metadata.fallbackReason, inventedOfferDetected: hybridResult.metadata.inventedOfferDetected });
           await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message, brandAsset: hybridBrandAsset });
           return { status: "failed", jobId: renderResult.providerJobId || "", errorMessage: message, provider: "premium-v2-hybrid" };
         }

@@ -20,7 +20,7 @@
 
 import { env } from "../../env";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
-import { applyBrandAssetGate } from "../brand-asset-resolver";
+import { applyBrandAssetGate, type BrandAssetResolution } from "../brand-asset-resolver";
 import { planCreativeWithAI } from "./plan-ai";
 import { generateBackground } from "./background-generator";
 import { renderHybridLeaflet, type HybridRenderBrief } from "./html-renderer";
@@ -39,6 +39,7 @@ import type {
   VisionCriticResult,
   HybridPipelineAttempt,
 } from "./pipeline-types";
+import { evaluateContentFidelity, type ContentFidelityResult } from "./content-fidelity";
 
 export async function runHybridPipeline(input: HybridPipelineInput): Promise<HybridPipelineResult> {
   if (!env.enableHybridLeafletPipeline || !env.openaiApiKey) {
@@ -99,11 +100,15 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
     let critic: VisionCriticResult | undefined;
     let lastRenderMetrics: import("./pipeline-types").HybridRenderMetrics | undefined;
 
+    let lastContentFidelity: ContentFidelityResult | undefined;
+    let lastBrandFidelity: BrandFidelityAdjudication | undefined;
+
     while (revisionCount <= maxRevisions) {
       const reuseBackground = revisionCount > 0 && shouldReuseBackground(critic?.improvementSuggestions || []);
       if (!reuseBackground) openAICallCount++; // background generation call
       const render = await renderOnce(input, brandKit, brief, visualDirection, reuseBackground ? lastBackgroundBuffer : null);
       lastRenderMetrics = render.metrics;
+      lastContentFidelity = render.contentFidelity;
       stage.background.attempted = true;
       if (render.backgroundBuffer) {
         lastBackgroundBuffer = render.backgroundBuffer;
@@ -119,6 +124,9 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       stage.visionCritic.succeeded = !critic.unavailable;
       openAICallCount++; // critic call
 
+      const brandFidelity = computeBrandFidelityAdjudication(lastRenderMetrics, critic, brandAsset);
+      lastBrandFidelity = brandFidelity;
+
       if (sampleMode) {
         attempts.push({ buffer: render.buffer, critic, visualDirection, metrics: lastRenderMetrics });
       }
@@ -131,12 +139,11 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
         break;
       }
 
-      const realLogoExpected = !!brandAsset && brandAsset.realLogoExpected;
-      const logoRenderedCorrectly =
-        !realLogoExpected ||
-        (critic.realLogoPresent && !critic.fallbackBadgeUsed && critic.logoMatchesBrand && !critic.logoDistortedOrCropped);
+      const generalChecksPassed = critic.passed;
+      const brandChecksPassed = brandFidelity.structuralBrandFidelityPassed && brandFidelity.visionBrandFidelityPassed;
+      const contentChecksPassed = lastContentFidelity?.contentFidelityPassed ?? true;
 
-      if (critic.passed && logoRenderedCorrectly) {
+      if (generalChecksPassed && brandChecksPassed && contentChecksPassed) {
         return buildResult(
           input,
           brandKit,
@@ -149,13 +156,29 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
           stage,
           openAICallCount,
           attempts,
-          lastRenderMetrics
+          lastRenderMetrics,
+          brandFidelity,
+          lastContentFidelity
         );
       }
 
-      if (realLogoExpected && !logoRenderedCorrectly) {
+      if (lastContentFidelity?.inventedOfferDetected) {
         rejectionCritic = critic;
-        fallbackReason = "Hybrid attempt did not render the real brand logo correctly";
+        fallbackReason = `Invented offer detected: ${lastContentFidelity.detectedOfferSnippet || "unsupported promotional language"}`;
+        console.warn(`[HybridPipeline] ${fallbackReason}. Falling back to deterministic V2 renderer.`);
+        break;
+      }
+
+      if (brandFidelity.criticConflict) {
+        rejectionCritic = critic;
+        fallbackReason = brandFidelity.criticConflictReason || "Vision critic contradicted renderer logo diagnostics";
+        console.warn(`[HybridPipeline] ${fallbackReason}. Renderer says real logo rendered; vision critic disagrees. Falling back to deterministic V2 renderer.`);
+        break;
+      }
+
+      if (!brandChecksPassed) {
+        rejectionCritic = critic;
+        fallbackReason = brandFidelity.criticConflictReason || "Hybrid attempt did not render the real brand logo correctly";
         console.warn(`[HybridPipeline] ${fallbackReason}. Falling back to deterministic V2 renderer.`);
         break;
       }
@@ -180,6 +203,8 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       stage,
       rejectionCritic,
       lastRenderMetrics,
+      lastContentFidelity,
+      brandFidelity: lastBrandFidelity,
     });
   } catch (err: any) {
     const reason = `Pipeline failed: ${err.message}`;
@@ -195,7 +220,9 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
 interface RenderOutput {
   buffer: Buffer;
   backgroundBuffer: Buffer | null;
+  html: string;
   metrics?: import("./pipeline-types").HybridRenderMetrics;
+  contentFidelity?: ContentFidelityResult;
 }
 
 async function renderOnce(
@@ -230,9 +257,11 @@ async function renderOnce(
     brandAsset: brandKit.brandAsset,
   };
 
-  const { buffer, metrics } = await renderHybridLeaflet(renderBrief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandKit.brandAsset);
+  const { buffer, metrics, html } = await renderHybridLeaflet(renderBrief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandKit.brandAsset);
+  const contentFidelity = evaluateContentFidelity(input.business as BusinessEvidence, input.campaign || {}, brief, html);
   console.log(`[HybridPipeline renderOnce] render metrics: ${JSON.stringify(metrics)}`);
-  return { buffer, backgroundBuffer, metrics };
+  console.log(`[HybridPipeline renderOnce] content fidelity: ${JSON.stringify(contentFidelity)}`);
+  return { buffer, backgroundBuffer, html, metrics, contentFidelity };
 }
 
 async function fetchLogo(logoUrl: string): Promise<Buffer | null> {
@@ -250,6 +279,61 @@ function shouldReuseBackground(suggestions: string[]): boolean {
   const layoutIssues = ["text", "font", "readability", "contrast", "cta", "clipped", "hierarchy", "logo", "layout", "empty", "crowded", "typography"];
   const backgroundIssues = ["background", "texture", "gradient", "bland", "plain", "boring", "photo"];
   return layoutIssues.some((w) => text.includes(w)) && !backgroundIssues.some((w) => text.includes(w));
+}
+
+interface BrandFidelityAdjudication {
+  structuralBrandFidelityPassed: boolean;
+  visionBrandFidelityPassed: boolean;
+  criticConflict: boolean;
+  criticConflictReason: string | null;
+}
+
+function computeBrandFidelityAdjudication(
+  renderMetrics: import("./pipeline-types").HybridRenderMetrics | undefined,
+  critic: VisionCriticResult,
+  brandAsset: BrandAssetResolution | undefined
+): BrandFidelityAdjudication {
+  const realLogoExpected = !!brandAsset && brandAsset.realLogoExpected;
+
+  // Structural truth comes from the renderer itself.
+  const structuralBrandFidelityPassed =
+    !realLogoExpected ||
+    (renderMetrics?.realLogoRendered === true &&
+      renderMetrics?.fallbackBadgeRendered === false &&
+      renderMetrics?.logoMaskedOrCropped === false);
+
+  // Vision critic's opinion about the logo specifically.
+  const visionBrandFidelityPassed =
+    !realLogoExpected ||
+    (critic.realLogoPresent && !critic.fallbackBadgeUsed && !critic.logoDistortedOrCropped && critic.logoMatchesBrand);
+
+  const criticConflict =
+    realLogoExpected && structuralBrandFidelityPassed && !visionBrandFidelityPassed;
+
+  let criticConflictReason: string | null = null;
+  if (criticConflict) {
+    criticConflictReason = `Vision critic contradicted renderer logo diagnostics. Renderer: realLogoRendered=${renderMetrics?.realLogoRendered}, fallbackBadgeRendered=${renderMetrics?.fallbackBadgeRendered}, logoMaskedOrCropped=${renderMetrics?.logoMaskedOrCropped}. Critic: realLogoPresent=${critic.realLogoPresent}, fallbackBadgeUsed=${critic.fallbackBadgeUsed}, logoDistortedOrCropped=${critic.logoDistortedOrCropped}, logoMatchesBrand=${critic.logoMatchesBrand}, brandFidelityPassed=${critic.brandFidelityPassed}.`;
+  }
+
+  return {
+    structuralBrandFidelityPassed,
+    visionBrandFidelityPassed,
+    criticConflict,
+    criticConflictReason,
+  };
+}
+
+function computeFinalDecision(
+  critic: VisionCriticResult,
+  brandFidelity: BrandFidelityAdjudication,
+  contentFidelity: ContentFidelityResult | undefined
+): HybridFinalDecision {
+  if (contentFidelity?.inventedOfferDetected) return "content_review_required";
+  if (brandFidelity.criticConflict) return "hybrid_review_required";
+  if (!brandFidelity.structuralBrandFidelityPassed || !brandFidelity.visionBrandFidelityPassed) return "hybrid_review_required";
+  if (!critic.passed) return "hybrid_review_required";
+  if (contentFidelity && !contentFidelity.contentFidelityPassed) return "content_review_required";
+  return "premium_ready";
 }
 
 function reviseVisualDirection(visualDirection: VisualDirection, suggestions: string[]): VisualDirection {
@@ -299,6 +383,8 @@ interface FallbackOptions {
   };
   rejectionCritic?: VisionCriticResult | null;
   lastRenderMetrics?: import("./pipeline-types").HybridRenderMetrics;
+  lastContentFidelity?: ContentFidelityResult;
+  brandFidelity?: BrandFidelityAdjudication;
 }
 
 async function runDeterministicFallback(
@@ -350,7 +436,10 @@ async function runDeterministicFallback(
     brandFidelityPassed: false,
   };
 
-  const finalDecision: HybridFinalDecision = options.finalDecisionOverride || (options.quotaError ? "hybrid_review_required" : "fallback_used");
+  let finalDecision: HybridFinalDecision = options.finalDecisionOverride || (options.quotaError ? "hybrid_review_required" : "fallback_used");
+  if (!options.finalDecisionOverride && options.lastContentFidelity?.inventedOfferDetected) {
+    finalDecision = "content_review_required";
+  }
 
   const deterministicBrandKit: HybridBrandKit = brandKit || {
     primary: brief.brandPalette.primary,
@@ -389,6 +478,8 @@ async function runDeterministicFallback(
   };
 
   const lastMetrics = options.lastRenderMetrics;
+  const brandFidelity = options.brandFidelity;
+  const contentFidelity = options.lastContentFidelity;
   const metadata: HybridPipelineMetadata = {
     provider: "premium-v2-deterministic",
     layoutPreset: brief.layoutDensity,
@@ -413,6 +504,15 @@ async function runDeterministicFallback(
     revisionCount: 0,
     finalDecision,
     rejectionCritic: options.rejectionCritic || null,
+    structuralBrandFidelityPassed: brandFidelity?.structuralBrandFidelityPassed,
+    visionBrandFidelityPassed: brandFidelity?.visionBrandFidelityPassed,
+    criticConflict: brandFidelity?.criticConflict,
+    criticConflictReason: brandFidelity?.criticConflictReason ?? null,
+    offerExpected: contentFidelity?.offerExpected,
+    offerSource: contentFidelity?.offerSource ?? null,
+    offerRendered: contentFidelity?.offerRendered,
+    inventedOfferDetected: contentFidelity?.inventedOfferDetected,
+    contentFidelityPassed: contentFidelity?.contentFidelityPassed,
     realLogoExpected: lastMetrics?.realLogoExpected,
     realLogoRendered: lastMetrics?.realLogoRendered,
     logoNaturalWidth: lastMetrics?.logoNaturalWidth,
@@ -466,7 +566,9 @@ function buildResult(
   },
   openAICallCount: number,
   attempts: HybridPipelineAttempt[],
-  renderMetrics?: import("./pipeline-types").HybridRenderMetrics
+  renderMetrics?: import("./pipeline-types").HybridRenderMetrics,
+  brandFidelity?: BrandFidelityAdjudication,
+  contentFidelity?: ContentFidelityResult
 ): HybridPipelineResult {
   const metadata: HybridPipelineMetadata = {
     provider: "premium-v2-hybrid",
@@ -490,8 +592,17 @@ function buildResult(
     quotaError: false,
     openAICallCount,
     revisionCount,
-    finalDecision: critic.passed ? "premium_ready" : "hybrid_review_required",
+    finalDecision: computeFinalDecision(critic, brandFidelity || { structuralBrandFidelityPassed: true, visionBrandFidelityPassed: critic.passed, criticConflict: false, criticConflictReason: null }, contentFidelity),
     rejectionCritic: null,
+    structuralBrandFidelityPassed: brandFidelity?.structuralBrandFidelityPassed,
+    visionBrandFidelityPassed: brandFidelity?.visionBrandFidelityPassed,
+    criticConflict: brandFidelity?.criticConflict,
+    criticConflictReason: brandFidelity?.criticConflictReason ?? null,
+    offerExpected: contentFidelity?.offerExpected,
+    offerSource: contentFidelity?.offerSource ?? null,
+    offerRendered: contentFidelity?.offerRendered,
+    inventedOfferDetected: contentFidelity?.inventedOfferDetected,
+    contentFidelityPassed: contentFidelity?.contentFidelityPassed,
     realLogoExpected: renderMetrics?.realLogoExpected,
     realLogoRendered: renderMetrics?.realLogoRendered,
     logoNaturalWidth: renderMetrics?.logoNaturalWidth,

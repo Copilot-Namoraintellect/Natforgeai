@@ -42,6 +42,8 @@ function buildSystemPrompt(): string {
     "The plan must include: a brand kit, a customer-facing creative brief, and visual direction for a 1080x1350 leaflet.",
     "All hex colours must be 6-digit. Background prompts must be strictly text-free, logo-free, signage-free and contact-detail-free.",
     "Never state the raw customer pain point as the subheadline; convert pain points into positive outcomes.",
+    "Use only the approved campaign offer/copy. Do not invent discounts, percentage-off deals, free offers, coupons, exclusive offers, limited-time deals, or special promotions.",
+    "If no offer is supplied, set offerLine to null and use a non-promotional CTA such as 'Request a Quote Today', 'Visit Us Today', 'Contact Us Today', or 'Get Printing Support'.",
   ].join(" ");
 }
 
@@ -64,7 +66,7 @@ function buildUserPrompt(business: BusinessEvidence, campaign?: CampaignEvidence
     targetCustomer ? `Target customer: ${targetCustomer}` : "",
     mainPainPoint ? `Customer pain point (internal only, do NOT use verbatim): ${mainPainPoint}` : "",
     goal ? `Campaign goal: ${goal}` : "",
-    offerDetails ? `Offer: ${offerDetails}` : "",
+    offerDetails && offerDetails.toLowerCase() !== "none" ? `Approved offer (MUST NOT be modified or exaggerated): ${offerDetails}` : "NO APPROVED OFFER: do not invent discounts, percentage-off deals, free offers, coupons, exclusive offers, limited-time deals, or special promotions.",
     preferredCta ? `Preferred CTA: ${preferredCta}` : "",
   ];
   return parts.filter(Boolean).join("\n");
