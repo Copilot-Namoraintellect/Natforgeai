@@ -95,4 +95,44 @@ describe("evaluateContentFidelity", () => {
     expect(result.inventedOfferDetected).toBe(false);
     expect(result.contentFidelityPassed).toBe(true);
   });
+
+  it.each([
+    { category: "restaurant", productOrService: "Burgers and shakes", cta: "Order Now" },
+    { category: "retail", productOrService: "Handmade jewellery", cta: "Shop Now" },
+    { category: "beauty", productOrService: "Hair styling", cta: "Book Now" },
+    { category: "professional_services", productOrService: "Legal consulting", cta: "Request a Quote" },
+    { category: "print_courier", productOrService: "Business cards and flyers", cta: "Get a Quote" },
+  ])("flags invented offers for $category businesses", ({ category, productOrService, cta }) => {
+    const categoryBusiness: BusinessEvidence = {
+      displayName: `${category} Business`,
+      name: `${category} Business`,
+      industry: category,
+      productOrService,
+    };
+    const categoryBrief = { ...makeBrief(null), cta, primaryServices: [{ name: productOrService, description: "Great service", isPrimary: true }] };
+    const html = `<div>${productOrService}</div><div>Get 15% off today only!</div><div>${cta}</div>`;
+    const result = evaluateContentFidelity(categoryBusiness, {}, categoryBrief, html);
+    expect(result.inventedOfferDetected).toBe(true);
+    expect(result.contentFidelityPassed).toBe(false);
+  });
+
+  it.each([
+    { category: "restaurant", productOrService: "Burgers and shakes", cta: "Order Now" },
+    { category: "retail", productOrService: "Handmade jewellery", cta: "Shop Now" },
+    { category: "beauty", productOrService: "Hair styling", cta: "Book Now" },
+    { category: "professional_services", productOrService: "Legal consulting", cta: "Request a Quote" },
+    { category: "print_courier", productOrService: "Business cards and flyers", cta: "Get a Quote" },
+  ])("passes content fidelity for $category businesses with no offer and generic CTA", ({ category, productOrService, cta }) => {
+    const categoryBusiness: BusinessEvidence = {
+      displayName: `${category} Business`,
+      name: `${category} Business`,
+      industry: category,
+      productOrService,
+    };
+    const categoryBrief = { ...makeBrief(null), cta, primaryServices: [{ name: productOrService, description: "Great service", isPrimary: true }] };
+    const html = `<div>${productOrService}</div><div>${cta}</div>`;
+    const result = evaluateContentFidelity(categoryBusiness, {}, categoryBrief, html);
+    expect(result.inventedOfferDetected).toBe(false);
+    expect(result.contentFidelityPassed).toBe(true);
+  });
 });

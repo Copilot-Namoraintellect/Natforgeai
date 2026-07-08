@@ -115,6 +115,30 @@ function makePlan() {
   };
 }
 
+function makeNoLogoPlan() {
+  const plan = makePlan();
+  return {
+    ...plan,
+    brandKit: {
+      ...plan.brandKit,
+      source: "default" as const,
+      logoUrl: null,
+      logoDescription: null,
+      brandAsset: {
+        logoSourceType: "fallback" as const,
+        logoSourcePath: null,
+        logoSourceUrl: null,
+        logoResolved: false,
+        logoRenderMode: "fallback_badge" as const,
+        realLogoExpected: false,
+        realLogoRendered: false,
+        fallbackReason: "No logo source found on business or campaign",
+        brandAssetWarnings: ["Using fallback monogram because no brand logo exists."],
+      },
+    },
+  };
+}
+
 function makePassingCritic(): any {
   return {
     scores: { brandFidelity: 90, readability: 90, premiumFeel: 85, visualHierarchy: 90, logoUsage: 90, CTAVisibility: 90, genericTemplateRisk: 20 },
@@ -469,5 +493,40 @@ describe("Hybrid pipeline orchestrator", () => {
     expect(result.metadata.offerRendered).toBe(true);
     expect(result.metadata.inventedOfferDetected).toBe(false);
     expect(result.metadata.contentFidelityPassed).toBe(true);
+  });
+
+  it("passes brand fidelity for a business with no logo without requiring a real logo", async () => {
+    mockPlanCreativeWithAI.mockResolvedValue({ value: makeNoLogoPlan(), usedOpenAI: true });
+    mockRenderHybridLeaflet.mockResolvedValue({
+      buffer: Buffer.from("hybrid"),
+      html: "<div>Spotless Home, Zero Stress</div><div>Book Now</div>",
+      metrics: {
+        width: 1080,
+        height: 1350,
+        layoutPreset: "premium_local_service",
+        realLogoExpected: false,
+        realLogoRendered: false,
+        logoRenderMode: "fallback_badge",
+        fallbackBadgeRendered: true,
+        logoMaskedOrCropped: false,
+        logoDataUriUsed: false,
+        logoFetchUsed: false,
+      },
+    });
+    mockCritiqueRenderedLeaflet.mockResolvedValue({
+      ...makePassingCritic(),
+      realLogoPresent: false,
+      logoMatchesBrand: false,
+      fallbackBadgeUsed: true,
+      logoDistortedOrCropped: false,
+      brandFidelityPassed: true,
+    });
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.realLogoExpected).toBe(false);
+    expect(result.metadata.structuralBrandFidelityPassed).toBe(true);
+    expect(result.metadata.visionBrandFidelityPassed).toBe(true);
+    expect(result.metadata.criticConflict).toBe(false);
+    expect(result.metadata.finalDecision).toBe("premium_ready");
   });
 });
