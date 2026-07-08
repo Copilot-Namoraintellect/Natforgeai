@@ -12,7 +12,9 @@ import { env } from "../../env";
 import { asString } from "./curation";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
 import { AICreativeBriefSchema, type AICreativeBrief, type HybridBrandKit, type WithFallback } from "./pipeline-types";
-import { buildCommercialHeadline, buildCommercialSubheadline, buildCommercialBenefits } from "./copy";
+import { buildCommercialHeadline, buildCommercialSubheadline, buildCommercialBenefits, getServiceMicrocopy } from "./copy";
+import { cleanCopy } from "./copy-quality";
+import { inferBusinessCategory } from "./curation";
 
 function buildEvidencePrompt(business: BusinessEvidence, campaign?: CampaignEvidence): string {
   const name = asString(business.displayName || business.name);
@@ -40,7 +42,27 @@ function buildEvidencePrompt(business: BusinessEvidence, campaign?: CampaignEvid
     .join("\n");
 }
 
-function normaliseBrief(raw: AICreativeBrief, business: BusinessEvidence, campaign?: CampaignEvidence): AICreativeBrief {
+function polishBrief(raw: AICreativeBrief): AICreativeBrief {
+  const next: AICreativeBrief = {
+    ...raw,
+    headline: cleanCopy(raw.headline),
+    subheadline: cleanCopy(raw.subheadline),
+    cta: cleanCopy(raw.cta),
+    primaryServices: raw.primaryServices.map((s) => ({
+      ...s,
+      name: cleanCopy(s.name).replace(/\.$/, ""),
+      description: cleanCopy(s.description || ""),
+    })),
+    secondaryServices: raw.secondaryServices.map((s) => ({
+      ...s,
+      name: cleanCopy(s.name).replace(/\.$/, ""),
+    })),
+    benefits: raw.benefits.map((b) => cleanCopy(b)),
+  };
+  return next;
+}
+
+export function normaliseBrief(raw: AICreativeBrief, business: BusinessEvidence, campaign?: CampaignEvidence): AICreativeBrief {
   const painPoint = (asString(campaign?.mainPainPoint) || "").toLowerCase().trim();
   const rawSub = raw.subheadline.trim();
 
@@ -60,7 +82,7 @@ function normaliseBrief(raw: AICreativeBrief, business: BusinessEvidence, campai
   const primaryNames = new Set(raw.primaryServices.map((s) => s.name.toLowerCase()));
   raw.secondaryServices = raw.secondaryServices.filter((s) => !primaryNames.has(s.name.toLowerCase()));
 
-  return raw;
+  return polishBrief(raw);
 }
 
 export async function buildAICreativeBrief(
@@ -98,10 +120,15 @@ export function deterministicBrief(business: BusinessEvidence, campaign?: Campai
     .split(/,|;/)
     .map((s) => s.trim())
     .filter(Boolean);
-  const primary = services.slice(0, 4).map((name) => ({ name, description: "Professional service you can trust.", isPrimary: true as const }));
+  const category = inferBusinessCategory(business, campaign);
+  const primary = services.slice(0, 4).map((name) => ({
+    name,
+    description: getServiceMicrocopy(category, name) || "Professional support you can rely on.",
+    isPrimary: true as const,
+  }));
   const secondary = services.slice(4, 8).map((name) => ({ name, description: null, isPrimary: false as const }));
 
-  return {
+  const brief: AICreativeBrief = {
     angle: buildCommercialSubheadline(business, campaign),
     headline: buildCommercialHeadline(business, campaign),
     subheadline: buildCommercialSubheadline(business, campaign),
@@ -111,4 +138,5 @@ export function deterministicBrief(business: BusinessEvidence, campaign?: Campai
     cta: asString(campaign?.preferredCta) || "Get in Touch",
     offerLine: asString(campaign?.offerDetails) || null,
   };
+  return polishBrief(brief);
 }

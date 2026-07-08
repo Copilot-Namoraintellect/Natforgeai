@@ -14,7 +14,7 @@ import { structuredModel } from "../../agents/openai";
 import { env } from "../../env";
 import { asString } from "./curation";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
-import { deterministicBrief } from "./brief-ai";
+import { deterministicBrief, normaliseBrief } from "./brief-ai";
 import { defaultDirection } from "./visual-direction";
 import { resolveBrandAssets } from "../brand-asset-resolver";
 import {
@@ -44,6 +44,7 @@ function buildSystemPrompt(): string {
     "Never state the raw customer pain point as the subheadline; convert pain points into positive outcomes.",
     "Use only the approved campaign offer/copy. Do not invent discounts, percentage-off deals, free offers, coupons, exclusive offers, limited-time deals, or special promotions.",
     "If no offer is supplied, set offerLine to null and use a non-promotional CTA such as 'Request a Quote Today', 'Visit Us Today', 'Contact Us Today', or 'Get Printing Support'.",
+    "Service descriptions must be complete, natural short sentences. Avoid broken grammar ('with for', 'delivery your convenience'), duplicated words, and generic filler such as 'for all your needs', 'tailored for you', 'boost visibility', or 'expert support every step'.",
   ].join(" ");
 }
 
@@ -134,6 +135,7 @@ export async function planCreativeWithAI(
       object.brandKit.logoUrl = null;
     }
     object.brandKit.brandAsset = brandAsset;
+    object.brief = normaliseBrief(object.brief, business, campaign);
 
     console.log(`[HybridPlanner] brandAsset attached to plan: exists=${!!object.brandKit.brandAsset}, logoSourceType=${object.brandKit.brandAsset?.logoSourceType ?? "n/a"}, realLogoExpected=${object.brandKit.brandAsset?.realLogoExpected ?? "n/a"}, logoResolved=${object.brandKit.brandAsset?.logoResolved ?? "n/a"}, logoBufferLength=${object.brandKit.brandAsset?.logoBuffer?.length ?? 0}`);
 

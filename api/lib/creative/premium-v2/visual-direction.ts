@@ -16,9 +16,13 @@ import type { BusinessEvidence, CampaignEvidence } from "./curation";
 
 export function defaultDirection(business: BusinessEvidence, campaign?: CampaignEvidence): VisualDirection {
   const category = inferBusinessCategory(business, campaign);
+  const base: Omit<VisualDirection, "layoutPreset" | "density" | "heroTreatment" | "backgroundDirection" | "backgroundPrompt" | "ctaTreatment" | "colourUsageNote"> = {
+    serviceLayout: "grid",
+  };
   switch (category) {
     case "food_restaurant":
       return {
+        ...base,
         layoutPreset: "premium_food_offer",
         density: "balanced",
         heroTreatment: "photo_full_bleed",
@@ -29,6 +33,7 @@ export function defaultDirection(business: BusinessEvidence, campaign?: Campaign
       };
     case "retail_product":
       return {
+        ...base,
         layoutPreset: "premium_retail_promo",
         density: "balanced",
         heroTreatment: "shape_accent",
@@ -39,6 +44,7 @@ export function defaultDirection(business: BusinessEvidence, campaign?: Campaign
       };
     case "professional_services":
       return {
+        ...base,
         layoutPreset: "premium_professional_clean",
         density: "minimal",
         heroTreatment: "solid_brand_block",
@@ -49,6 +55,7 @@ export function defaultDirection(business: BusinessEvidence, campaign?: Campaign
       };
     case "beauty_wellness":
       return {
+        ...base,
         layoutPreset: "premium_local_service",
         density: "balanced",
         heroTreatment: "gradient_abstract",
@@ -59,6 +66,7 @@ export function defaultDirection(business: BusinessEvidence, campaign?: Campaign
       };
     case "training_education":
       return {
+        ...base,
         layoutPreset: "premium_professional_clean",
         density: "balanced",
         heroTreatment: "shape_accent",
@@ -70,6 +78,7 @@ export function defaultDirection(business: BusinessEvidence, campaign?: Campaign
     case "local_services":
     default:
       return {
+        ...base,
         layoutPreset: "premium_local_service",
         density: "balanced",
         heroTreatment: "solid_brand_block",

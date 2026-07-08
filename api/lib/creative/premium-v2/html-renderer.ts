@@ -252,8 +252,14 @@ function buildHtml(
         ${s.description ? `<div class="card-desc">${escapeHtml(s.description)}</div>` : ""}
       </div>
     `
-    )
-    .join("");
+    );
+
+  const useFeatured =
+    visualDirection.serviceLayout === "featured" && primaryCards.length >= 2 && visualDirection.density !== "dense";
+
+  const servicesHtml = useFeatured
+    ? `<div class="service-featured">${primaryCards[0]}</div><div class="service-supporting">${primaryCards.slice(1).join("")}</div>`
+    : primaryCards.join("");
 
   const secondaryStrip = brief.secondaryServices.length
     ? `<div class="secondary-strip">${brief.secondaryServices.map((s) => escapeHtml(s.name)).join(" · ")}</div>`
@@ -287,6 +293,7 @@ function buildHtml(
 
   const bgStyle = bg ? `background-image: url('${bg}'); background-size: cover; background-position: center;` : "";
   const hasShapeAccent = visualDirection.heroTreatment === "shape_accent";
+  const servicesWrapperClass = useFeatured ? "services services-featured" : "services services-grid";
 
   return `<!DOCTYPE html>
 <html>
@@ -307,41 +314,74 @@ function buildHtml(
     .bg-pattern {
       position: absolute; inset: 0;
       background-image:
-        radial-gradient(circle at 25% 20%, ${toCssColour(brandKit.primary)}16 0%, transparent 42%),
+        radial-gradient(circle at 25% 20%, ${toCssColour(brandKit.primary)}18 0%, transparent 42%),
         radial-gradient(circle at 80% 75%, ${toCssColour(brandKit.secondary)}12 0%, transparent 40%),
         radial-gradient(circle at 55% 50%, ${toCssColour(brandKit.accent)}0a 0%, transparent 32%);
       z-index: 0;
     }
     .bg-noise {
       position: absolute; inset: 0;
-      opacity: 0.035;
+      opacity: 0.04;
       background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
       z-index: 1;
       pointer-events: none;
     }
-    .bg-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(8,16,30,0.70) 0%, rgba(8,16,30,0.24) 35%, rgba(8,16,30,0.16) 60%, rgba(8,16,30,0.62) 100%); z-index: 1; }
+    .bg-overlay {
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(circle at 50% 30%, transparent 0%, rgba(8,16,30,0.25) 60%, rgba(8,16,30,0.70) 100%),
+        linear-gradient(180deg, rgba(8,16,30,0.68) 0%, rgba(8,16,30,0.22) 35%, rgba(8,16,30,0.14) 60%, rgba(8,16,30,0.64) 100%);
+      z-index: 1;
+    }
     .bg-blob { position: absolute; border-radius: 50%; filter: blur(70px); z-index: 0; pointer-events: none; }
-    .blob-1 { top: -160px; right: -120px; width: 600px; height: 600px; background: radial-gradient(circle at 35% 35%, ${toCssColour(brandKit.primary)}30 0%, transparent 70%); }
-    .blob-2 { bottom: -140px; left: -160px; width: 640px; height: 640px; background: radial-gradient(circle at 65% 65%, ${toCssColour(brandKit.secondary)}26 0%, transparent 70%); }
-    .bg-diagonal { position: absolute; inset: 0; background: linear-gradient(135deg, transparent 38%, ${toCssColour(brandKit.accent)}0d 38%, ${toCssColour(brandKit.accent)}0d 43%, transparent 43%); z-index: 0; pointer-events: none; }
+    .blob-1 { top: -180px; right: -140px; width: 640px; height: 640px; background: radial-gradient(circle at 35% 35%, ${toCssColour(brandKit.primary)}32 0%, transparent 70%); }
+    .blob-2 { bottom: -160px; left: -180px; width: 680px; height: 680px; background: radial-gradient(circle at 65% 65%, ${toCssColour(brandKit.secondary)}28 0%, transparent 70%); }
+    .bg-glow {
+      position: absolute;
+      top: -120px; left: -120px;
+      width: 720px; height: 720px;
+      background: radial-gradient(circle, ${toCssColour(brandKit.accent)}0d 0%, transparent 60%);
+      z-index: 0;
+      pointer-events: none;
+    }
+    .bg-diagonal {
+      position: absolute; inset: 0;
+      background:
+        linear-gradient(135deg, transparent 36%, ${toCssColour(brandKit.accent)}0c 36%, ${toCssColour(brandKit.accent)}0c 41%, transparent 41%),
+        linear-gradient(225deg, transparent 38%, ${toCssColour(brandKit.primary)}0a 38%, ${toCssColour(brandKit.primary)}0a 43%, transparent 43%);
+      z-index: 0;
+      pointer-events: none;
+    }
     .brand-shape {
       position: absolute;
-      bottom: 260px;
-      left: -150px;
-      width: 400px;
-      height: 400px;
+      bottom: 280px;
+      left: -170px;
+      width: 440px;
+      height: 440px;
       border-radius: 50%;
       background: ${toCssColour(brandKit.accent)};
       opacity: 0.12;
-      filter: blur(40px);
+      filter: blur(50px);
       z-index: 1;
+    }
+    .brand-arc {
+      position: absolute;
+      top: 220px;
+      right: -180px;
+      width: 420px;
+      height: 420px;
+      border-radius: 50%;
+      border: 40px solid ${toCssColour(brandKit.secondary)};
+      opacity: 0.08;
+      z-index: 1;
+      pointer-events: none;
     }
     .brand-stripe {
       position: absolute;
-      top: -90px;
-      right: 160px;
-      width: 90px;
-      height: 480px;
+      top: -100px;
+      right: 140px;
+      width: 100px;
+      height: 520px;
       background: ${toCssColour(brandKit.secondary)};
       opacity: 0.14;
       transform: rotate(20deg);
@@ -386,7 +426,7 @@ function buildHtml(
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      padding: 34px 56px 40px;
+      padding: 32px 56px 38px;
       z-index: 3;
       overflow: hidden;
     }
@@ -401,45 +441,58 @@ function buildHtml(
       flex-shrink: 0;
     }
     .hero-panel {
-      background: rgba(8,16,30,0.56);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border-radius: 26px;
-      padding: 34px 40px;
+      position: relative;
+      background: rgba(8,16,30,0.58);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-radius: 28px;
+      padding: 36px 42px;
       border-left: 8px solid ${toCssColour(brandKit.accent)};
-      box-shadow: 0 20px 50px rgba(0,0,0,0.22);
+      box-shadow: 0 24px 60px rgba(0,0,0,0.28), inset 0 0 0 1px rgba(255,255,255,0.08);
       max-width: 920px;
+      overflow: hidden;
     }
+    .hero-panel::before {
+      content: "";
+      position: absolute;
+      top: 0; right: 0; bottom: 0;
+      width: 180px;
+      background: linear-gradient(90deg, transparent, ${toCssColour(brandKit.accent)}0a);
+      pointer-events: none;
+    }
+    .editorial-line { width: 72px; height: 6px; border-radius: 3px; background: ${toCssColour(brandKit.accent)}; margin-bottom: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.18); }
     .hero-shape-accent {
       position: absolute;
       top: 50%;
       left: 58%;
-      width: 380px;
-      height: 380px;
+      width: 400px;
+      height: 400px;
       transform: translate(-50%, -50%) rotate(12deg);
-      border: 16px solid ${toCssColour(brandKit.accent)};
-      opacity: 0.14;
-      border-radius: 36px;
+      border: 18px solid ${toCssColour(brandKit.accent)};
+      opacity: 0.15;
+      border-radius: 40px;
       z-index: 0;
     }
-    .headline { position: relative; z-index: 2; font-size: 62px; font-weight: 900; line-height: 1.02; margin-bottom: 14px; letter-spacing: -0.035em; text-shadow: 0 4px 16px rgba(0,0,0,0.28); }
-    .subheadline { position: relative; z-index: 2; font-size: 26px; font-weight: 500; line-height: 1.4; opacity: 0.96; }
-    .offer-badge { position: relative; z-index: 2; margin-top: 16px; padding: 12px 26px; border-radius: 14px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 26px; font-weight: 900; box-shadow: 0 8px 22px rgba(0,0,0,0.16); display: inline-block; }
-    .services { position: relative; display: grid; ${serviceGridStyle(visualDirection)}; width: 100%; margin: 18px 0; }
+    .headline { position: relative; z-index: 2; font-size: 64px; font-weight: 900; line-height: 1.0; margin-bottom: 14px; letter-spacing: -0.038em; text-shadow: 0 4px 18px rgba(0,0,0,0.30); }
+    .subheadline { position: relative; z-index: 2; font-size: 27px; font-weight: 500; line-height: 1.4; opacity: 0.96; }
+    .offer-badge { position: relative; z-index: 2; margin-top: 18px; padding: 14px 28px; border-radius: 14px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 26px; font-weight: 900; box-shadow: 0 8px 24px rgba(0,0,0,0.18); display: inline-block; }
+    .services { position: relative; width: 100%; margin: 16px 0; }
+    .services-grid { display: grid; ${serviceGridStyle(visualDirection)}; }
+    .services-featured { display: flex; flex-direction: column; gap: 22px; }
     .service-card {
       position: relative;
       background: linear-gradient(145deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.96) 100%);
       border-radius: 22px;
       padding: 26px;
-      box-shadow: 0 12px 32px rgba(0,0,0,0.09), 0 2px 8px rgba(0,0,0,0.04);
-      min-height: 122px;
+      box-shadow: 0 14px 36px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.04);
+      min-height: 118px;
       display: flex;
       flex-direction: column;
       justify-content: center;
       border: 1px solid rgba(255,255,255,0.7);
       border-top: 6px solid ${toCssColour(brandKit.accent)};
     }
-    .service-card:first-child { background: linear-gradient(145deg, #ffffff 0%, rgba(255,255,255,0.98) 100%); box-shadow: 0 16px 40px rgba(0,0,0,0.12); border-left: 4px solid ${toCssColour(brandKit.accent)}; padding: 30px; }
+    .service-card:first-child { background: linear-gradient(145deg, #ffffff 0%, rgba(255,255,255,0.98) 100%); box-shadow: 0 18px 44px rgba(0,0,0,0.12); border-left: 4px solid ${toCssColour(brandKit.accent)}; padding: 30px; }
     .service-card:nth-child(even) { transform: translateY(8px); }
     .service-card:nth-child(3n+1) { border-top-color: ${toCssColour(brandKit.accent)}; }
     .service-card:nth-child(3n+2) { border-top-color: ${toCssColour(brandKit.secondary)}; }
@@ -449,30 +502,57 @@ function buildHtml(
     .service-card:nth-child(3n+3) .card-number { color: ${toCssColour(brandKit.primary)}; }
     .card-title { font-size: 26px; font-weight: 900; color: ${toCssColour(brandKit.text)}; margin-bottom: 8px; line-height: 1.25; letter-spacing: -0.01em; }
     .card-desc { font-size: 18px; color: ${toCssColour(brandKit.textMuted)}; line-height: 1.45; }
-    .secondary-strip { position: relative; padding: 18px 34px; border-radius: 16px; background: rgba(255,255,255,0.94); text-align: center; font-size: 22px; font-weight: 800; color: ${toCssColour(brandKit.text)}; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.6); margin: 12px 0; }
-    .benefits-band { position: relative; padding: 22px 34px; border-radius: 18px; background: rgba(255,255,255,0.94); display: flex; justify-content: space-between; gap: 20px; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.6); margin: 12px 0; }
-    .benefit-item { flex: 1; display: flex; align-items: flex-start; gap: 12px; font-size: 21px; font-weight: 800; line-height: 1.35; color: ${toCssColour(brandKit.text)}; }
+    .service-featured {
+      background: linear-gradient(145deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.96) 100%);
+      border-radius: 28px;
+      padding: 34px;
+      box-shadow: 0 22px 54px rgba(0,0,0,0.13), inset 0 0 0 1px rgba(255,255,255,0.6);
+      border-left: 8px solid ${toCssColour(brandKit.accent)};
+      display: flex;
+      gap: 28px;
+      align-items: center;
+    }
+    .service-featured .service-card { background: transparent; box-shadow: none; border: none; padding: 0; min-height: 0; flex: 1; }
+    .service-featured .card-number { position: static; font-size: 84px; opacity: 0.16; align-self: flex-start; line-height: 0.9; }
+    .service-featured .card-title { font-size: 34px; margin-bottom: 10px; }
+    .service-featured .card-desc { font-size: 20px; }
+    .service-supporting { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .service-supporting .service-card { min-height: 110px; padding: 22px; }
+    .density-minimal .service-supporting { grid-template-columns: repeat(2, 1fr); }
+    .secondary-strip { position: relative; padding: 16px 32px; border-radius: 16px; background: rgba(255,255,255,0.94); text-align: center; font-size: 21px; font-weight: 800; color: ${toCssColour(brandKit.text)}; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.6); margin: 10px 0; }
+    .benefits-band { position: relative; padding: 20px 34px; border-radius: 18px; background: rgba(255,255,255,0.94); display: flex; justify-content: space-between; gap: 20px; z-index: 3; box-shadow: 0 8px 24px rgba(0,0,0,0.08); border: 1px solid rgba(255,255,255,0.6); margin: 12px 0; }
+    .benefit-item { flex: 1; display: flex; align-items: flex-start; gap: 12px; font-size: 20px; font-weight: 800; line-height: 1.35; color: ${toCssColour(brandKit.text)}; }
     .bullet { width: 11px; height: 11px; border-radius: 50%; background: ${toCssColour(brandKit.accent)}; flex-shrink: 0; margin-top: 7px; }
     .cta {
       position: relative;
       display: flex;
       align-items: center;
       justify-content: center;
-      margin-top: 18px;
+      margin-top: 16px;
       flex-shrink: 0;
+    }
+    .cta-anchor {
+      position: absolute;
+      bottom: 130px;
+      left: 0;
+      right: 0;
+      height: 8px;
+      background: ${toCssColour(brandKit.accent)};
+      opacity: 0.25;
+      z-index: 2;
     }
     .cta-button {
       width: 100%;
-      padding: 28px 56px;
+      padding: 30px 56px;
       border-radius: 18px;
       background: ${toCssColour(brandKit.accent)};
       color: ${contrastColor(brandKit.accent)};
-      font-size: 42px;
+      font-size: 44px;
       font-weight: 900;
       text-align: center;
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      box-shadow: 0 18px 44px rgba(0,0,0,0.25), 0 0 0 6px rgba(255,255,255,0.35), inset 0 -5px 0 rgba(0,0,0,0.12);
+      box-shadow: 0 20px 50px rgba(0,0,0,0.28), 0 0 0 6px rgba(255,255,255,0.35), inset 0 -5px 0 rgba(0,0,0,0.12);
       border: none;
       text-shadow: 0 1px 2px rgba(0,0,0,0.12);
       display: inline-flex;
@@ -504,37 +584,39 @@ function buildHtml(
     .footer-line { font-size: 24px; font-weight: 600; opacity: 0.95; letter-spacing: 0.01em; }
 
     /* Visual-direction aware hierarchy tuning */
-    .hero-shape_accent .headline { font-size: 68px; }
-    .hero-solid_brand_block .headline { font-size: 62px; }
-    .hero-gradient_abstract .hero-panel { background: linear-gradient(135deg, rgba(15,23,42,0.64), rgba(15,23,42,0.34)); }
-    .hero-photo_full_bleed .hero-panel { background: rgba(8,16,30,0.62); }
+    .hero-shape_accent .headline { font-size: 70px; }
+    .hero-solid_brand_block .headline { font-size: 64px; }
+    .hero-gradient_abstract .hero-panel { background: linear-gradient(135deg, rgba(15,23,42,0.66), rgba(15,23,42,0.36)); }
+    .hero-photo_full_bleed .hero-panel { background: rgba(8,16,30,0.64); }
     .hero-minimal_centered .hero { align-items: center; text-align: center; }
     .hero-minimal_centered .hero-panel { border-left: none; border-top: 8px solid ${toCssColour(brandKit.accent)}; }
 
-    .density-minimal .services { max-width: 780px; }
-    .density-minimal .service-card { min-height: 140px; }
+    .density-minimal .services-grid { max-width: 780px; }
+    .density-minimal .service-card { min-height: 136px; }
     .density-dense .service-card { padding: 20px; }
     .density-dense .card-title { font-size: 24px; }
     .density-dense .card-desc { font-size: 16px; }
 
     /* Layout presets */
-    .preset-premium_services_brand_panel .headline { font-size: 64px; }
-    .preset-premium_local_service .headline { font-size: 62px; }
+    .preset-premium_services_brand_panel .headline { font-size: 66px; }
+    .preset-premium_local_service .headline { font-size: 64px; }
     .preset-premium_offer_hero .offer-badge { font-size: 30px; padding: 14px 30px; }
-    .preset-premium_retail_promo .headline { font-size: 70px; }
-    .preset-premium_food_offer .hero-panel { background: rgba(15,23,42,0.60); }
-    .preset-premium_professional_clean .hero-panel { background: rgba(15,23,42,0.60); }
+    .preset-premium_retail_promo .headline { font-size: 72px; }
+    .preset-premium_food_offer .hero-panel { background: rgba(15,23,42,0.62); }
+    .preset-premium_professional_clean .hero-panel { background: rgba(15,23,42,0.62); }
   </style>
 </head>
 <body>
-  <div class="canvas preset-${primary} hero-${visualDirection.heroTreatment} density-${visualDirection.density} cta-${visualDirection.ctaTreatment}">
+  <div class="canvas preset-${primary} hero-${visualDirection.heroTreatment} density-${visualDirection.density} cta-${visualDirection.ctaTreatment} service-${visualDirection.serviceLayout}">
     <div class="bg-pattern"></div>
     <div class="bg-noise"></div>
     <div class="bg-overlay"></div>
     <div class="bg-blob blob-1"></div>
     <div class="bg-blob blob-2"></div>
+    <div class="bg-glow"></div>
     <div class="bg-diagonal"></div>
     <div class="brand-shape"></div>
+    <div class="brand-arc"></div>
     <div class="brand-stripe"></div>
     ${hasShapeAccent ? '<div class="hero-shape-accent"></div>' : ""}
 
@@ -550,16 +632,18 @@ function buildHtml(
     <main class="main">
       <div class="hero">
         <div class="hero-panel">
+          <div class="editorial-line"></div>
           <div class="headline">${escapeHtml(brief.headline)}</div>
           <div class="subheadline">${escapeHtml(brief.subheadline)}</div>
           ${offerBadge}
         </div>
       </div>
-      <div class="services">${primaryCards}</div>
-      ${secondaryStrip}
       ${benefits}
+      <div class="${servicesWrapperClass}">${servicesHtml}</div>
+      ${secondaryStrip}
       <div class="cta"><div class="${ctaClasses(visualDirection)}">${escapeHtml(brief.cta)}</div></div>
     </main>
+    <div class="cta-anchor"></div>
     <div class="footer">
       <div class="footer-name">${escapeHtml(brief.businessName)}</div>
       ${footer}

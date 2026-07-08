@@ -23,6 +23,7 @@ const visualDirection: VisualDirection = {
   backgroundDirection: "abstract_brand_gradient",
   backgroundPrompt: "soft gradient no text",
   ctaTreatment: "solid_button",
+  serviceLayout: "grid",
   colourUsageNote: "brand colours",
 };
 

@@ -113,6 +113,7 @@ function makePlan() {
       backgroundDirection: "abstract_brand_gradient" as const,
       backgroundPrompt: "soft gradient no text",
       ctaTreatment: "solid_button" as const,
+      serviceLayout: "grid" as const,
       colourUsageNote: "brand colours",
     },
   };
@@ -680,5 +681,63 @@ describe("Hybrid pipeline orchestrator", () => {
     expect(result.metadata.visionBrandFidelityPassed).toBe(true);
     expect(result.metadata.criticConflict).toBe(false);
     expect(result.metadata.finalDecision).toBe("premium_ready");
+  });
+
+  it("blocks premium_ready when copy quality fails", async () => {
+    mockRenderHybridLeaflet.mockResolvedValue({
+      buffer: await makeLeafletBuffer(),
+      html: "<div>Printing Solutions prints for all your needs</div><div>Contact Today</div>",
+      metrics: {
+        width: 1080,
+        height: 1350,
+        layoutPreset: "premium_local_service",
+        realLogoExpected: true,
+        realLogoRendered: true,
+        logoNaturalWidth: 1432,
+        logoNaturalHeight: 472,
+        logoRenderedWidth: 334,
+        logoRenderedHeight: 110,
+        logoVisibleArea: 334 * 110,
+        logoRenderMode: "image",
+        fallbackBadgeRendered: false,
+        logoMaskedOrCropped: false,
+        logoDataUriUsed: true,
+        logoFetchUsed: false,
+      },
+    });
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.finalDecision).toBe("content_review_required");
+    expect(result.metadata.copyQualityPassed).toBe(false);
+    expect(result.metadata.copyQualityIssues?.length).toBeGreaterThan(0);
+    expect(result.metadata.contentFidelityPassed).toBe(true);
+    expect(result.metadata.inventedOfferDetected).toBe(false);
+  });
+
+  it("design revision for genericTemplateRisk switches to featured layout", async () => {
+    mockCritiqueRenderedLeaflet.mockResolvedValue({
+      ...makeRejectingCritic(),
+      criticalIssues: ["Generic template risk too high"],
+      improvementSuggestions: ["Reduce generic template risk"],
+    });
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.finalDecision).toBe("hybrid_review_required");
+    expect(result.visualDirection.serviceLayout).toBe("featured");
+    expect(result.visualDirection.ctaTreatment).toBe("block_banner");
+    expect(result.visualDirection.density).toBe("minimal");
+  });
+
+  it("design revision for premiumFeel below threshold switches to featured layout", async () => {
+    mockCritiqueRenderedLeaflet.mockResolvedValue({
+      ...makeRejectingCritic(),
+      criticalIssues: ["Premium feel below threshold"],
+      improvementSuggestions: ["Improve premium feel"],
+    });
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.finalDecision).toBe("hybrid_review_required");
+    expect(result.visualDirection.serviceLayout).toBe("featured");
+    expect(["balanced", "minimal"]).toContain(result.visualDirection.density);
   });
 });

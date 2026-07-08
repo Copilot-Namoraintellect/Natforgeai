@@ -41,6 +41,7 @@ import type {
   HybridPipelineAttempt,
 } from "./pipeline-types";
 import { evaluateContentFidelity, type ContentFidelityResult } from "./content-fidelity";
+import { evaluateCopyQuality, visibleTextFromBrief, type CopyQualityResult } from "./copy-quality";
 
 export async function runHybridPipeline(input: HybridPipelineInput): Promise<HybridPipelineResult> {
   if (!env.enableHybridLeafletPipeline || !env.openaiApiKey) {
@@ -103,6 +104,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
     let lastRenderMetrics: import("./pipeline-types").HybridRenderMetrics | undefined;
 
     let lastContentFidelity: ContentFidelityResult | undefined;
+    let lastCopyQuality: CopyQualityResult | undefined;
     let lastBrandFidelity: BrandFidelityAdjudication | undefined;
     let lastLogoCropCritic: LogoCropCriticResult | undefined;
 
@@ -112,6 +114,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       const render = await renderOnce(input, brandKit, brief, visualDirection, reuseBackground ? lastBackgroundBuffer : null);
       lastRenderMetrics = render.metrics;
       lastContentFidelity = render.contentFidelity;
+      lastCopyQuality = evaluateCopyQuality(lastContentFidelity?.visibleRenderedText || "");
       lastLogoCropCritic = render.logoCropCritic;
       stage.background.attempted = true;
       if (render.backgroundBuffer) {
@@ -150,7 +153,9 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       const brandChecksPassed = brandFidelity.structuralBrandFidelityPassed && brandFidelity.visionBrandFidelityPassed;
       const contentChecksPassed = lastContentFidelity?.contentFidelityPassed ?? true;
 
-      if (generalChecksPassed && brandChecksPassed && contentChecksPassed) {
+      const copyQualityPassed = lastCopyQuality?.copyQualityPassed ?? true;
+
+      if (generalChecksPassed && brandChecksPassed && contentChecksPassed && copyQualityPassed) {
         return buildResult(
           input,
           brandKit,
@@ -166,6 +171,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
           lastRenderMetrics,
           brandFidelity,
           lastContentFidelity,
+          lastCopyQuality,
           critic,
           adjudication
         );
@@ -211,6 +217,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
           lastRenderMetrics,
           brandFidelity,
           lastContentFidelity,
+          lastCopyQuality,
           critic,
           adjudication
         );
@@ -230,6 +237,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       rejectionCritic,
       lastRenderMetrics,
       lastContentFidelity,
+      lastCopyQuality,
       brandFidelity: lastBrandFidelity,
     });
   } catch (err: any) {
@@ -487,9 +495,11 @@ function buildAdjudicatedCritic(
 function computeFinalDecision(
   critic: VisionCriticResult,
   brandFidelity: BrandFidelityAdjudication,
-  contentFidelity: ContentFidelityResult | undefined
+  contentFidelity: ContentFidelityResult | undefined,
+  copyQuality?: CopyQualityResult
 ): HybridFinalDecision {
   if (contentFidelity?.inventedOfferDetected) return "content_review_required";
+  if (copyQuality && !copyQuality.copyQualityPassed) return "content_review_required";
   if (brandFidelity.criticConflict) return "hybrid_review_required";
   if (!brandFidelity.structuralBrandFidelityPassed || !brandFidelity.visionBrandFidelityPassed) return "hybrid_review_required";
   if (!critic.passed) return "hybrid_review_required";
@@ -526,15 +536,19 @@ function reviseVisualDirection(visualDirection: VisualDirection, suggestions: st
     next.heroTreatment = "shape_accent";
     next.ctaTreatment = "block_banner";
     next.density = next.density === "dense" ? "balanced" : "minimal";
+    next.serviceLayout = "featured";
     // Only ask for a new background if the critic explicitly complains about it.
     if (/background|texture|gradient|bland|plain/.test(text)) {
       next.backgroundDirection = next.backgroundDirection === "abstract_brand_gradient" ? "dark_premium" : "abstract_brand_gradient";
     }
   }
 
-  // Premium/luxury/flat feel → richer background direction.
+  // Premium/luxury/flat feel → richer background direction and featured layout.
   if (hasPremiumIssue) {
     next.backgroundDirection = next.backgroundDirection === "clean_white" ? "soft_noise_texture" : "dark_premium";
+    next.serviceLayout = "featured";
+    next.density = next.density === "dense" ? "balanced" : "minimal";
+    next.heroTreatment = next.heroTreatment === "minimal_centered" ? "shape_accent" : next.heroTreatment;
   }
 
   // Logo/brand complaints → accent shape around the hero to frame the lockup.
@@ -542,10 +556,12 @@ function reviseVisualDirection(visualDirection: VisualDirection, suggestions: st
     next.heroTreatment = "shape_accent";
   }
 
-  // Weak hierarchy → more whitespace, larger headline (shape_accent), dominant CTA.
+  // Weak hierarchy → more whitespace, larger headline (shape_accent), dominant CTA,
+  // and a featured service layout to break the uniform card grid.
   if (hasHierarchyIssue) {
     next.density = next.density === "dense" ? "balanced" : "minimal";
     next.ctaTreatment = "block_banner";
+    next.serviceLayout = "featured";
     if (next.heroTreatment === "solid_brand_block" || next.heroTreatment === "minimal_centered") {
       next.heroTreatment = "shape_accent";
     }
@@ -569,6 +585,7 @@ interface FallbackOptions {
   rejectionCritic?: VisionCriticResult | null;
   lastRenderMetrics?: import("./pipeline-types").HybridRenderMetrics;
   lastContentFidelity?: ContentFidelityResult;
+  lastCopyQuality?: CopyQualityResult;
   brandFidelity?: BrandFidelityAdjudication;
 }
 
@@ -621,11 +638,6 @@ async function runDeterministicFallback(
     brandFidelityPassed: false,
   };
 
-  let finalDecision: HybridFinalDecision = options.finalDecisionOverride || (options.quotaError ? "hybrid_review_required" : "fallback_used");
-  if (!options.finalDecisionOverride && options.lastContentFidelity?.inventedOfferDetected) {
-    finalDecision = "content_review_required";
-  }
-
   const deterministicBrandKit: HybridBrandKit = brandKit || {
     primary: brief.brandPalette.primary,
     secondary: brief.brandPalette.secondary,
@@ -653,6 +665,15 @@ async function runDeterministicFallback(
     cta: brief.cta,
     offerLine: brief.offer || null,
   };
+
+  const fallbackCopyQuality = options.lastCopyQuality ?? evaluateCopyQuality(visibleTextFromBrief(deterministicBrief));
+
+  let finalDecision: HybridFinalDecision = options.finalDecisionOverride || (options.quotaError ? "hybrid_review_required" : "fallback_used");
+  if (!options.finalDecisionOverride && options.lastContentFidelity?.inventedOfferDetected) {
+    finalDecision = "content_review_required";
+  } else if (!options.finalDecisionOverride && !fallbackCopyQuality.copyQualityPassed) {
+    finalDecision = "content_review_required";
+  }
 
   const stage = options.stage || {
     brandKit: { attempted: false, succeeded: false },
@@ -700,6 +721,10 @@ async function runDeterministicFallback(
     contentFidelityPassed: contentFidelity?.contentFidelityPassed,
     detectedOfferSnippet: contentFidelity?.detectedOfferSnippet ?? null,
     visibleRenderedText: contentFidelity?.visibleRenderedText,
+    copyQualityPassed: fallbackCopyQuality.copyQualityPassed,
+    copyQualityIssues: fallbackCopyQuality.copyQualityIssues.slice(),
+    cleanedVisibleText: fallbackCopyQuality.cleanedVisibleText,
+    copyQualityScore: fallbackCopyQuality.copyQualityScore,
     logoCropRealLogoPresent: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.realLogoPresent : undefined,
     logoCropLogoMatchesExpected: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.logoMatchesExpected : undefined,
     logoCropFallbackBadgeUsed: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.fallbackBadgeUsed : undefined,
@@ -731,6 +756,7 @@ async function runDeterministicFallback(
       backgroundDirection: "abstract_brand_gradient",
       backgroundPrompt: "",
       ctaTreatment: "solid_button",
+      serviceLayout: "grid",
       colourUsageNote: "",
     },
     critic: fallbackCritic,
@@ -762,6 +788,7 @@ function buildResult(
   renderMetrics?: import("./pipeline-types").HybridRenderMetrics,
   brandFidelity?: BrandFidelityAdjudication,
   contentFidelity?: ContentFidelityResult,
+  copyQuality?: CopyQualityResult,
   rawCritic?: VisionCriticResult,
   adjudication?: AdjudicatedCritic
 ): HybridPipelineResult {
@@ -775,7 +802,8 @@ function buildResult(
       fullImageVsCropConflict: false,
       fullImageVsCropConflictReason: null,
     },
-    contentFidelity
+    contentFidelity,
+    copyQuality
   );
 
   let fallbackReason: string | null = null;
@@ -786,8 +814,16 @@ function buildResult(
       : "Design quality review required";
     finalDecisionSource = "adjudicated_effective_critic_non_logo_review";
   } else if (finalDecision === "content_review_required") {
-    fallbackReason = `Invented offer detected: ${contentFidelity?.detectedOfferSnippet || "unsupported promotional language"}`;
-    finalDecisionSource = "content_fidelity_gate";
+    if (contentFidelity?.inventedOfferDetected) {
+      fallbackReason = `Invented offer detected: ${contentFidelity.detectedOfferSnippet || "unsupported promotional language"}`;
+      finalDecisionSource = "content_fidelity_gate";
+    } else if (copyQuality && !copyQuality.copyQualityPassed) {
+      fallbackReason = `Copy quality review required: ${copyQuality.copyQualityIssues.join("; ")}`;
+      finalDecisionSource = "copy_quality_gate";
+    } else {
+      fallbackReason = "Content review required";
+      finalDecisionSource = "content_fidelity_gate";
+    }
   }
 
   const metadata: HybridPipelineMetadata = {
@@ -831,6 +867,10 @@ function buildResult(
     contentFidelityPassed: contentFidelity?.contentFidelityPassed,
     detectedOfferSnippet: contentFidelity?.detectedOfferSnippet ?? null,
     visibleRenderedText: contentFidelity?.visibleRenderedText,
+    copyQualityPassed: copyQuality?.copyQualityPassed,
+    copyQualityIssues: copyQuality ? copyQuality.copyQualityIssues.slice() : undefined,
+    cleanedVisibleText: copyQuality?.cleanedVisibleText,
+    copyQualityScore: copyQuality?.copyQualityScore,
     logoCropRealLogoPresent: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.realLogoPresent : undefined,
     logoCropLogoMatchesExpected: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.logoMatchesExpected : undefined,
     logoCropFallbackBadgeUsed: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.fallbackBadgeUsed : undefined,

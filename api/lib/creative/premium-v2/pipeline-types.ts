@@ -35,6 +35,12 @@ export const CtaTreatment = z.enum([
   "block_banner",
 ]);
 
+export const ServiceLayout = z.enum([
+  "grid",
+  "featured",
+  "stack",
+]);
+
 export const BackgroundDirection = z.enum([
   "abstract_brand_gradient",
   "soft_noise_texture",
@@ -102,6 +108,7 @@ export const VisualDirectionSchema = z
     backgroundDirection: BackgroundDirection.describe("Background direction for the AI image generator"),
     backgroundPrompt: z.string().describe("Detailed prompt for the text-free background generator"),
     ctaTreatment: CtaTreatment.describe("CTA button style"),
+    serviceLayout: ServiceLayout.default("grid").describe("How primary services are arranged: grid, featured hero panel, or vertical stack"),
     colourUsageNote: z.string().describe("How to apply primary/secondary/accent colours in the layout"),
   })
   .strict()
@@ -210,6 +217,11 @@ export interface HybridPipelineMetadata {
   openAICallCount: number;
   revisionCount: number;
   finalDecision: HybridFinalDecision;
+  // Copy-quality gate
+  copyQualityPassed?: boolean;
+  copyQualityIssues?: string[];
+  cleanedVisibleText?: string;
+  copyQualityScore?: number;
   rejectionCritic: VisionCriticResult | null;
   // Brand-asset adjudication
   structuralBrandFidelityPassed?: boolean;

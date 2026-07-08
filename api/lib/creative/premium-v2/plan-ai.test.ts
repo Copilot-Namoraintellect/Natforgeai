@@ -97,6 +97,7 @@ describe("plan-ai OpenAI structured-output schema", () => {
           backgroundDirection: "clean_white",
           backgroundPrompt: "white",
           ctaTreatment: "solid_button",
+          serviceLayout: "grid",
           colourUsageNote: "brand",
         },
       },

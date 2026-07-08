@@ -238,6 +238,8 @@ export function getServiceMicrocopy(category: string, serviceName: string): stri
     copies: "Fast, high-quality copies for business and personal needs.",
     scanning: "Digitise documents quickly and accurately.",
     "custom printing": "Tailored print solutions for unique projects and branding.",
+    "branding products": "Custom branded items that keep your business visible.",
+    "marketing materials": "Flyers, banners and posters designed to promote your message.",
   };
 
   const foodMap: Record<string, string> = {
@@ -306,7 +308,7 @@ export function getServiceMicrocopy(category: string, serviceName: string): stri
   }
 
   const genericByCategory: Record<string, string> = {
-    print_courier: "Quality print and document services for every need.",
+    print_courier: "Quality print and document services for everyday business.",
     food_restaurant: "Delicious food made fresh and served with care.",
     beauty_wellness: "Professional treatment to help you look and feel great.",
     local_services: "Reliable help from experienced local professionals.",

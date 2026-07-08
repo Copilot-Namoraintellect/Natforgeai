@@ -53,6 +53,7 @@ function makeHybridResult(overrides?: Partial<HybridPipelineResult>): HybridPipe
       backgroundDirection: "abstract_brand_gradient" as const,
       backgroundPrompt: "soft gradient no text",
       ctaTreatment: "solid_button" as const,
+      serviceLayout: "grid" as const,
       colourUsageNote: "brand colours",
     },
     critic: {
