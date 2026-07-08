@@ -2,7 +2,7 @@
  * Helpers for writing hybrid sample outputs and generation logs.
  */
 
-import { writeFileSync, mkdirSync } from "fs";
+import { writeFileSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import type { HybridPipelineResult, HybridFinalDecision } from "../../api/lib/creative/premium-v2/pipeline-types";
 import type { BrandAssetResolution } from "../../api/lib/creative/brand-asset-resolver";
@@ -57,6 +57,8 @@ export interface HybridLogEntry {
   attemptPaths: string[];
   finalPath: string;
   brandAsset: BrandAssetDiagnostics;
+  renderDiagnostics: RenderDiagnostics;
+  attemptDiagnostics: RenderDiagnostics[];
 }
 
 export interface DeterministicLogEntry {
@@ -100,6 +102,8 @@ export function buildHybridLogEntry(
     attemptPaths,
     finalPath,
     brandAsset: buildBrandAssetDiagnostics(hybridResult.brandKit.brandAsset),
+    renderDiagnostics: buildRenderDiagnostics(hybridResult.metadata),
+    attemptDiagnostics: (hybridResult.attempts || []).map((attempt) => buildRenderDiagnostics(attempt.metrics)),
   };
 }
 
@@ -134,6 +138,12 @@ export function writeDeterministicGenerationLog(outputDir: string, entries: Dete
   const logPath = join(outputDir, "generation-log.txt");
   writeFileSync(logPath, JSON.stringify(entries, null, 2));
   return logPath;
+}
+
+export function readHybridGenerationLog(outputDir: string): HybridLogEntry[] {
+  const logPath = join(outputDir, "generation-log.txt");
+  const content = readFileSync(logPath, "utf-8");
+  return JSON.parse(content) as HybridLogEntry[];
 }
 
 export function buildRenderDiagnostics(metadata?: HybridPipelineResult["metadata"]): RenderDiagnostics {

@@ -133,6 +133,8 @@ export async function planCreativeWithAI(
     }
     object.brandKit.brandAsset = brandAsset;
 
+    console.log(`[HybridPlanner] brandAsset attached to plan: exists=${!!object.brandKit.brandAsset}, logoSourceType=${object.brandKit.brandAsset?.logoSourceType ?? "n/a"}, realLogoExpected=${object.brandKit.brandAsset?.realLogoExpected ?? "n/a"}, logoResolved=${object.brandKit.brandAsset?.logoResolved ?? "n/a"}, logoBufferLength=${object.brandKit.brandAsset?.logoBuffer?.length ?? 0}`);
+
     return { value: object, usedOpenAI: true };
   } catch (err: any) {
     const reason = `Creative planning failed: ${err.message}`;

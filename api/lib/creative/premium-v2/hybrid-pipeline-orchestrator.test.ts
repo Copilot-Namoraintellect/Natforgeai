@@ -153,7 +153,26 @@ describe("Hybrid pipeline orchestrator", () => {
 
     mockPlanCreativeWithAI.mockResolvedValue({ value: makePlan(), usedOpenAI: true });
     mockGenerateBackground.mockResolvedValue(Buffer.from("background"));
-    mockRenderHybridLeaflet.mockResolvedValue({ buffer: Buffer.from("hybrid") });
+    mockRenderHybridLeaflet.mockResolvedValue({
+      buffer: Buffer.from("hybrid"),
+      metrics: {
+        width: 1080,
+        height: 1350,
+        layoutPreset: "premium_local_service",
+        realLogoExpected: true,
+        realLogoRendered: true,
+        logoNaturalWidth: 1432,
+        logoNaturalHeight: 472,
+        logoRenderedWidth: 334,
+        logoRenderedHeight: 110,
+        logoVisibleArea: 334 * 110,
+        logoRenderMode: "image",
+        fallbackBadgeRendered: false,
+        logoMaskedOrCropped: false,
+        logoDataUriUsed: true,
+        logoFetchUsed: false,
+      },
+    });
     mockCritiqueRenderedLeaflet.mockResolvedValue(makePassingCritic());
 
     mockBuildPremiumV2Brief.mockResolvedValue({
@@ -323,5 +342,40 @@ describe("Hybrid pipeline orchestrator", () => {
     const result = await runHybridPipeline(makeInput() as any);
     expect(result.metadata.finalDecision).not.toBe("premium_ready");
     expect(result.metadata.usedDeterministicFallback).toBe(true);
+  });
+
+  it("includes render diagnostics in metadata on a successful hybrid path", async () => {
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.realLogoExpected).toBe(true);
+    expect(result.metadata.realLogoRendered).toBe(true);
+    expect(result.metadata.logoRenderedWidth).toBeGreaterThan(200);
+    expect(result.metadata.logoRenderedHeight).toBeGreaterThanOrEqual(55);
+    expect(result.metadata.fallbackBadgeRendered).toBe(false);
+    expect(result.metadata.logoRenderMode).toBe("image");
+  });
+
+  it("preserves the last hybrid attempt render diagnostics when falling back", async () => {
+    mockCritiqueRenderedLeaflet.mockResolvedValue(makeRejectingCritic());
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.usedDeterministicFallback).toBe(true);
+    expect(result.metadata.realLogoExpected).toBe(true);
+    expect(result.metadata.realLogoRendered).toBe(true);
+    expect(result.metadata.logoRenderedWidth).toBeGreaterThan(200);
+    expect(result.metadata.logoRenderMode).toBe("image");
+    expect(result.metadata.fallbackBadgeRendered).toBe(false);
+  });
+
+  it("stores render diagnostics on every sampleMode attempt", async () => {
+    mockCritiqueRenderedLeaflet.mockResolvedValue(makeRejectingCritic());
+
+    const result = await runHybridPipeline(makeInput({ sampleMode: true }) as any);
+    expect(result.attempts).toBeDefined();
+    expect(result.attempts!.length).toBeGreaterThanOrEqual(1);
+    const attemptMetrics = result.attempts![0].metrics;
+    expect(attemptMetrics).toBeDefined();
+    expect(attemptMetrics!.realLogoExpected).toBe(true);
+    expect(attemptMetrics!.realLogoRendered).toBe(true);
+    expect(attemptMetrics!.fallbackBadgeRendered).toBe(false);
   });
 });

@@ -177,29 +177,26 @@ describe("renderHybridLeaflet logo handling", () => {
     expect(metrics.fallbackBadgeRendered).toBe(true);
   });
 
-  it("reports no real logo rendered when a real logo was expected but the buffer is missing", async () => {
-    const { metrics } = await renderHybridLeaflet(
-      makeBrief(),
-      brandKit,
-      visualDirection,
-      null,
-      null,
-      {
-        logoSourceType: "uploaded",
-        logoSourcePath: "/uploads/logo/3at1.png",
-        logoSourceUrl: "https://example.com/3at1.png",
-        logoResolved: true,
-        logoRenderMode: "image",
-        realLogoExpected: true,
-        realLogoRendered: false,
-        fallbackReason: "Logo buffer unavailable",
-        brandAssetWarnings: ["Real logo expected but could not be loaded; fallback badge is a placeholder."],
-      }
-    );
-
-    expect(metrics.realLogoExpected).toBe(true);
-    expect(metrics.realLogoRendered).toBe(false);
-    expect(metrics.logoRenderMode).toBe("fallback_badge");
-    expect(metrics.fallbackBadgeRendered).toBe(true);
+  it("throws detailed diagnostics when a real logo was expected but the buffer is missing", async () => {
+    await expect(
+      renderHybridLeaflet(
+        makeBrief(),
+        brandKit,
+        visualDirection,
+        null,
+        null,
+        {
+          logoSourceType: "uploaded",
+          logoSourcePath: "/uploads/logo/3at1.png",
+          logoSourceUrl: "https://example.com/3at1.png",
+          logoResolved: true,
+          logoRenderMode: "image",
+          realLogoExpected: true,
+          realLogoRendered: false,
+          fallbackReason: "Logo buffer unavailable",
+          brandAssetWarnings: ["Real logo expected but could not be loaded; fallback badge is a placeholder."],
+        }
+      )
+    ).rejects.toThrow(/Real logo expected for 3@1 Newmarket but not rendered/);
   });
 });

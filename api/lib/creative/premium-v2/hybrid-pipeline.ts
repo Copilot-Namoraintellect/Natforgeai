@@ -97,12 +97,13 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
     const attempts: HybridPipelineAttempt[] = [];
     let rejectionCritic: VisionCriticResult | null = null;
     let critic: VisionCriticResult | undefined;
+    let lastRenderMetrics: import("./pipeline-types").HybridRenderMetrics | undefined;
 
     while (revisionCount <= maxRevisions) {
       const reuseBackground = revisionCount > 0 && shouldReuseBackground(critic?.improvementSuggestions || []);
       if (!reuseBackground) openAICallCount++; // background generation call
       const render = await renderOnce(input, brandKit, brief, visualDirection, reuseBackground ? lastBackgroundBuffer : null);
-      const renderMetrics = render.metrics;
+      lastRenderMetrics = render.metrics;
       stage.background.attempted = true;
       if (render.backgroundBuffer) {
         lastBackgroundBuffer = render.backgroundBuffer;
@@ -119,7 +120,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       openAICallCount++; // critic call
 
       if (sampleMode) {
-        attempts.push({ buffer: render.buffer, critic, visualDirection });
+        attempts.push({ buffer: render.buffer, critic, visualDirection, metrics: lastRenderMetrics });
       }
 
       if (critic.unavailable) {
@@ -148,7 +149,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
           stage,
           openAICallCount,
           attempts,
-          renderMetrics
+          lastRenderMetrics
         );
       }
 
@@ -178,6 +179,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       openAICallCount,
       stage,
       rejectionCritic,
+      lastRenderMetrics,
     });
   } catch (err: any) {
     const reason = `Pipeline failed: ${err.message}`;
@@ -193,7 +195,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
 interface RenderOutput {
   buffer: Buffer;
   backgroundBuffer: Buffer | null;
-  metrics?: import("./html-renderer").HybridRenderMetrics;
+  metrics?: import("./pipeline-types").HybridRenderMetrics;
 }
 
 async function renderOnce(
@@ -208,6 +210,8 @@ async function renderOnce(
     reuseBackground ? Promise.resolve(reuseBackground) : generateBackground(visualDirection),
     brandAsset?.logoBuffer ? Promise.resolve(brandAsset.logoBuffer) : brandKit.logoUrl ? fetchLogo(brandKit.logoUrl) : Promise.resolve(null),
   ]);
+
+  console.log(`[HybridPipeline renderOnce] brandAsset exists: ${!!brandAsset}, logoSourceType: ${brandAsset?.logoSourceType ?? "n/a"}, realLogoExpected: ${brandAsset?.realLogoExpected ?? "n/a"}, logoResolved: ${brandAsset?.logoResolved ?? "n/a"}, logoBuffer length: ${logoBuffer?.length ?? 0}, brandKit.logoUrl: ${brandKit.logoUrl ?? "n/a"}`);
 
   const renderBrief: HybridRenderBrief = {
     businessName: input.business.displayName || input.business.name || "Business",
@@ -227,6 +231,7 @@ async function renderOnce(
   };
 
   const { buffer, metrics } = await renderHybridLeaflet(renderBrief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandKit.brandAsset);
+  console.log(`[HybridPipeline renderOnce] render metrics: ${JSON.stringify(metrics)}`);
   return { buffer, backgroundBuffer, metrics };
 }
 
@@ -293,6 +298,7 @@ interface FallbackOptions {
     visionCritic: { attempted: boolean; succeeded: boolean };
   };
   rejectionCritic?: VisionCriticResult | null;
+  lastRenderMetrics?: import("./pipeline-types").HybridRenderMetrics;
 }
 
 async function runDeterministicFallback(
@@ -382,6 +388,7 @@ async function runDeterministicFallback(
     visionCritic: { attempted: false, succeeded: false },
   };
 
+  const lastMetrics = options.lastRenderMetrics;
   const metadata: HybridPipelineMetadata = {
     provider: "premium-v2-deterministic",
     layoutPreset: brief.layoutDensity,
@@ -406,6 +413,18 @@ async function runDeterministicFallback(
     revisionCount: 0,
     finalDecision,
     rejectionCritic: options.rejectionCritic || null,
+    realLogoExpected: lastMetrics?.realLogoExpected,
+    realLogoRendered: lastMetrics?.realLogoRendered,
+    logoNaturalWidth: lastMetrics?.logoNaturalWidth,
+    logoNaturalHeight: lastMetrics?.logoNaturalHeight,
+    logoRenderedWidth: lastMetrics?.logoRenderedWidth,
+    logoRenderedHeight: lastMetrics?.logoRenderedHeight,
+    logoVisibleArea: lastMetrics?.logoVisibleArea,
+    logoRenderMode: lastMetrics?.logoRenderMode,
+    fallbackBadgeRendered: lastMetrics?.fallbackBadgeRendered,
+    logoMaskedOrCropped: lastMetrics?.logoMaskedOrCropped,
+    logoDataUriUsed: lastMetrics?.logoDataUriUsed,
+    logoFetchUsed: lastMetrics?.logoFetchUsed,
   };
 
   return {
@@ -447,7 +466,7 @@ function buildResult(
   },
   openAICallCount: number,
   attempts: HybridPipelineAttempt[],
-  renderMetrics?: import("./html-renderer").HybridRenderMetrics
+  renderMetrics?: import("./pipeline-types").HybridRenderMetrics
 ): HybridPipelineResult {
   const metadata: HybridPipelineMetadata = {
     provider: "premium-v2-hybrid",

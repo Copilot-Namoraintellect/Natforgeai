@@ -42,7 +42,11 @@ Evaluate the 1080x1350 leaflet on the 7 score dimensions and also answer these f
 4. logoDistortedOrCropped: is the logo distorted, cropped, circle-cropped, masked, or too small to read (e.g. rendered height clearly below ~55px or width so compressed it is unreadable)?
 5. brandFidelityPassed: should this pass brand fidelity overall?
 
-Be critical. A real logo expected but missing or replaced by a fallback badge MUST fail brand fidelity. A distorted/cropped/masked/circle-cropped/unreadable logo MUST fail brand fidelity. A logo squeezed into a tiny square or circle when it is a wide horizontal mark MUST fail logoDistortedOrCropped. The real logo must be clearly visible and readable, not merely loaded. A brand name/logo mismatch MUST fail brand fidelity. List critical issues and 1-3 concrete improvement suggestions.`;
+Be critical. A real logo expected but missing or replaced by a fallback badge MUST fail brand fidelity. A distorted/cropped/masked/circle-cropped/unreadable logo MUST fail brand fidelity. A logo squeezed into a tiny square or circle when it is a wide horizontal mark MUST fail logoDistortedOrCropped. The real logo must be clearly visible and readable, not merely loaded. A brand name/logo mismatch MUST fail brand fidelity.
+
+Guidance on distinguishing a real logo from a fallback badge: a fallback badge is typically a solid-colour circle or square containing one or two letters (initials/monogram). A real logo is the actual brand artwork, often a wide horizontal wordmark or icon, usually placed inside a light backing panel. If the leaflet shows the real brand artwork (even inside a panel) and not just initials, set realLogoPresent=true and fallbackBadgeUsed=false. If you are unsure because the logo is too small or blurry, set logoDistortedOrCropped=true.
+
+List critical issues and 1-3 concrete improvement suggestions.`;
 
   try {
     const { object } = await generateObject({

@@ -23,6 +23,8 @@ export default defineConfig({
       "src/**/*.spec.ts",
       "db/**/*.test.ts",
       "db/**/*.spec.ts",
+      "scripts/**/*.test.ts",
+      "scripts/**/*.spec.ts",
     ],
   },
 });

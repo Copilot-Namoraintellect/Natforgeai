@@ -7,7 +7,7 @@
 
 import { chromium, type Browser } from "playwright";
 import sharp from "sharp";
-import type { HybridBrandKit, VisualDirection } from "./pipeline-types";
+import type { HybridBrandKit, VisualDirection, HybridRenderMetrics } from "./pipeline-types";
 import type { BrandAssetResolution } from "../brand-asset-resolver";
 
 const WIDTH = 1080;
@@ -26,26 +26,6 @@ export interface HybridRenderBrief {
   offerLine?: string | null;
   contact: { phone?: string; website?: string; location?: string };
   brandAsset?: BrandAssetResolution;
-}
-
-export interface HybridRenderMetrics {
-  width: number;
-  height: number;
-  layoutPreset: string;
-  logoImageErrors?: string[];
-  // Brand-asset render diagnostics
-  realLogoExpected?: boolean;
-  realLogoRendered?: boolean;
-  logoNaturalWidth?: number;
-  logoNaturalHeight?: number;
-  logoRenderedWidth?: number;
-  logoRenderedHeight?: number;
-  logoVisibleArea?: number;
-  logoRenderMode?: "image" | "fallback_badge";
-  fallbackBadgeRendered?: boolean;
-  logoMaskedOrCropped?: boolean;
-  logoDataUriUsed?: boolean;
-  logoFetchUsed?: boolean;
 }
 
 export interface LogoRenderPlan {
@@ -142,11 +122,26 @@ export async function renderHybridLeaflet(
   const renderRealLogo = !!resolvedLogoBuffer && (brandAsset ? brandAsset.logoResolved && brandAsset.realLogoExpected : true);
   const logoRenderPlan = renderRealLogo && resolvedLogoBuffer ? await computeLogoRenderPlan(resolvedLogoBuffer) : null;
 
+  console.log(`[HybridRenderer] realLogoExpected=${realLogoExpected}, renderRealLogo=${renderRealLogo}, logoBufferLength=${resolvedLogoBuffer?.length ?? 0}, logoSourceType=${brandAsset?.logoSourceType ?? "n/a"}, logoResolved=${brandAsset?.logoResolved ?? "n/a"}`);
+
   if (realLogoExpected && !renderRealLogo) {
-    console.warn(`[HybridRenderer] Real logo expected for ${brief.businessName} but not rendered; using fallback badge. Source=${brandAsset?.logoSourceType}, resolved=${brandAsset?.logoResolved}, hasBuffer=${!!logoBuffer}.`);
+    const diagnostics = {
+      logoSourceType: brandAsset?.logoSourceType,
+      logoResolved: brandAsset?.logoResolved,
+      realLogoExpected: brandAsset?.realLogoExpected,
+      logoBufferPresent: !!resolvedLogoBuffer,
+      logoBufferLength: resolvedLogoBuffer?.length ?? 0,
+      brandKitLogoUrl: brandKit.logoUrl,
+      logoSourceUrl: brandAsset?.logoSourceUrl,
+    };
+    throw new Error(`[HybridRenderer] Real logo expected for ${brief.businessName} but not rendered; cannot proceed with fallback badge. Diagnostics: ${JSON.stringify(diagnostics)}`);
   }
 
   const html = buildHtml(brief, brandKit, visualDirection, backgroundBuffer, resolvedLogoBuffer, brandAsset, logoRenderPlan);
+
+  const htmlContainsImgLogo = html.includes('class="logo-img');
+  const htmlContainsFallbackBadge = html.includes('class="logo-fallback"');
+  console.log(`[HybridRenderer] HTML contains img logo: ${htmlContainsImgLogo}, fallback badge: ${htmlContainsFallbackBadge}`);
 
   const page = await (await getBrowser()).newPage({ viewport: { width: WIDTH, height: HEIGHT } });
   const consoleErrors: string[] = [];

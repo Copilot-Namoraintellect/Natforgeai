@@ -159,10 +159,31 @@ export type HybridFinalDecision =
   | "fallback_used"
   | "failed";
 
+export interface HybridRenderMetrics {
+  width: number;
+  height: number;
+  layoutPreset: string;
+  logoImageErrors?: string[];
+  // Brand-asset render diagnostics
+  realLogoExpected?: boolean;
+  realLogoRendered?: boolean;
+  logoNaturalWidth?: number;
+  logoNaturalHeight?: number;
+  logoRenderedWidth?: number;
+  logoRenderedHeight?: number;
+  logoVisibleArea?: number;
+  logoRenderMode?: "image" | "fallback_badge";
+  fallbackBadgeRendered?: boolean;
+  logoMaskedOrCropped?: boolean;
+  logoDataUriUsed?: boolean;
+  logoFetchUsed?: boolean;
+}
+
 export interface HybridPipelineAttempt {
   buffer: Buffer;
   critic: VisionCriticResult;
   visualDirection: VisualDirection;
+  metrics?: HybridRenderMetrics;
 }
 
 export interface HybridPipelineMetadata {
