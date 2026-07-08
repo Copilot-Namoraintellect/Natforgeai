@@ -422,10 +422,11 @@ function buildHtml(
     .main {
       position: absolute;
       top: 170px; left: 0; right: 0;
-      bottom: 130px;
+      bottom: 250px;
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
+      justify-content: flex-start;
+      gap: 18px;
       padding: 32px 56px 38px;
       z-index: 3;
       overflow: hidden;
@@ -473,8 +474,8 @@ function buildHtml(
       border-radius: 40px;
       z-index: 0;
     }
-    .headline { position: relative; z-index: 2; font-size: 64px; font-weight: 900; line-height: 1.0; margin-bottom: 14px; letter-spacing: -0.038em; text-shadow: 0 4px 18px rgba(0,0,0,0.30); }
-    .subheadline { position: relative; z-index: 2; font-size: 27px; font-weight: 500; line-height: 1.4; opacity: 0.96; }
+    .headline { position: relative; z-index: 2; font-size: 70px; font-weight: 900; line-height: 1.0; margin-bottom: 14px; letter-spacing: -0.038em; text-shadow: 0 4px 18px rgba(0,0,0,0.30); }
+    .subheadline { position: relative; z-index: 2; font-size: 28px; font-weight: 600; line-height: 1.45; opacity: 0.98; }
     .offer-badge { position: relative; z-index: 2; margin-top: 18px; padding: 14px 28px; border-radius: 14px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 26px; font-weight: 900; box-shadow: 0 8px 24px rgba(0,0,0,0.18); display: inline-block; }
     .services { position: relative; width: 100%; margin: 16px 0; }
     .services-grid { display: grid; ${serviceGridStyle(visualDirection)}; }
@@ -516,20 +517,22 @@ function buildHtml(
     .service-featured .card-number { position: static; font-size: 84px; opacity: 0.16; align-self: flex-start; line-height: 0.9; }
     .service-featured .card-title { font-size: 34px; margin-bottom: 10px; }
     .service-featured .card-desc { font-size: 20px; }
-    .service-supporting { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .service-supporting { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
     .service-supporting .service-card { min-height: 110px; padding: 22px; }
-    .density-minimal .service-supporting { grid-template-columns: repeat(2, 1fr); }
+    .density-minimal .service-supporting { grid-template-columns: 1fr; }
     .secondary-strip { position: relative; padding: 16px 32px; border-radius: 16px; background: rgba(255,255,255,0.94); text-align: center; font-size: 21px; font-weight: 800; color: ${toCssColour(brandKit.text)}; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.6); margin: 10px 0; }
     .benefits-band { position: relative; padding: 20px 34px; border-radius: 18px; background: rgba(255,255,255,0.94); display: flex; justify-content: space-between; gap: 20px; z-index: 3; box-shadow: 0 8px 24px rgba(0,0,0,0.08); border: 1px solid rgba(255,255,255,0.6); margin: 12px 0; }
     .benefit-item { flex: 1; display: flex; align-items: flex-start; gap: 12px; font-size: 20px; font-weight: 800; line-height: 1.35; color: ${toCssColour(brandKit.text)}; }
     .bullet { width: 11px; height: 11px; border-radius: 50%; background: ${toCssColour(brandKit.accent)}; flex-shrink: 0; margin-top: 7px; }
     .cta {
-      position: relative;
+      position: absolute;
+      bottom: 130px;
+      left: 0;
+      right: 0;
+      z-index: 5;
       display: flex;
       align-items: center;
       justify-content: center;
-      margin-top: 16px;
-      flex-shrink: 0;
     }
     .cta-anchor {
       position: absolute;
@@ -543,25 +546,27 @@ function buildHtml(
     }
     .cta-button {
       width: 100%;
-      padding: 30px 56px;
-      border-radius: 18px;
+      padding: 36px 56px;
+      border-radius: 0;
       background: ${toCssColour(brandKit.accent)};
       color: ${contrastColor(brandKit.accent)};
-      font-size: 44px;
+      font-size: 50px;
       font-weight: 900;
       text-align: center;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
-      box-shadow: 0 20px 50px rgba(0,0,0,0.28), 0 0 0 6px rgba(255,255,255,0.35), inset 0 -5px 0 rgba(0,0,0,0.12);
+      letter-spacing: 0.02em;
+      box-shadow: 0 0 0 8px rgba(255,255,255,0.45), 0 -10px 40px rgba(0,0,0,0.25);
       border: none;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.12);
+      border-top: 6px solid rgba(255,255,255,0.35);
+      border-bottom: 6px solid rgba(0,0,0,0.12);
+      text-shadow: 0 2px 4px rgba(0,0,0,0.18);
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 16px;
+      gap: 18px;
     }
     .cta-button::after { content: "→"; font-size: 0.85em; }
-    .cta-block { width: 100%; border-radius: 0; margin-left: -56px; margin-right: -56px; width: calc(100% + 112px); }
+    .cta-block { width: 100%; border-radius: 0; }
     .cta-block::after { content: "→"; }
     .cta-pill { width: auto; border-radius: 80px; padding: 28px 72px; }
     .cta-outline { background: transparent; color: ${toCssColour(brandKit.accent)}; border: 5px solid ${toCssColour(brandKit.accent)}; box-shadow: 0 0 0 4px rgba(255,255,255,0.25); }

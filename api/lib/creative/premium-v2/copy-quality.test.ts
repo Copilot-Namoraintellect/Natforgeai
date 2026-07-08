@@ -37,6 +37,54 @@ describe("copy-quality gate", () => {
     expect(result.copyQualityPassed).toBe(false);
   });
 
+  it("decodes HTML entities before checking copy", () => {
+    const result = evaluateCopyQuality("Fast Prints &amp; Courier for all your needs");
+    expect(result.copyQualityIssues.some((i) => i.includes("HTML entity"))).toBe(true);
+    expect(result.copyQualityIssues.some((i) => i.includes("for all your needs"))).toBe(true);
+    expect(result.cleanedVisibleText).toContain("Fast Prints & Courier");
+    expect(result.cleanedVisibleText).not.toContain("&amp;");
+  });
+
+  it("catches missing connector between product nouns", () => {
+    const result = evaluateCopyQuality(
+      "From flyers and business cards canvas prints and courier support"
+    );
+    expect(result.copyQualityIssues.some((i) => i.includes("Missing connector"))).toBe(true);
+    expect(result.copyQualityPassed).toBe(false);
+    expect(result.cleanedVisibleText.toLowerCase()).toContain("business cards to canvas");
+  });
+
+  it("catches 'when matters' missing word", () => {
+    const result = evaluateCopyQuality("Reliable local collection and delivery when matters");
+    expect(result.copyQualityIssues.some((i) => i.includes('"when matters"'))).toBe(true);
+    expect(result.copyQualityPassed).toBe(false);
+    expect(result.cleanedVisibleText.toLowerCase()).toContain("when it matters");
+  });
+
+  it("catches broken CTA 'Get Touch'", () => {
+    const result = evaluateCopyQuality("Quality service. Get Touch.");
+    expect(result.copyQualityIssues.some((i) => i.includes('"get touch"'))).toBe(true);
+    expect(result.copyQualityPassed).toBe(false);
+    expect(result.cleanedVisibleText).toContain("Get in Touch");
+  });
+
+  it("catches orphaned lowercase fragments", () => {
+    const result = evaluateCopyQuality(
+      "Professional printing and marketing products branding courier services"
+    );
+    expect(result.copyQualityIssues.some((i) => /Orphaned (fragment|heading)/i.test(i))).toBe(true);
+    expect(result.copyQualityPassed).toBe(false);
+    expect(result.cleanedVisibleText).not.toMatch(/\band marketing products\b/i);
+  });
+
+  it("catches repeated service descriptions", () => {
+    const result = evaluateCopyQuality(
+      "Business Cards Quality print and document services for everyday business. Flyers Quality print and document services for everyday business."
+    );
+    expect(result.copyQualityIssues.some((i) => i.includes("Repeated description"))).toBe(true);
+    expect(result.copyQualityPassed).toBe(false);
+  });
+
   it("passes safe non-promotional CTAs", () => {
     const result = evaluateCopyQuality("Contact Today Request a Quote Visit Us Today Get Started");
     expect(result.copyQualityPassed).toBe(true);
@@ -51,6 +99,8 @@ describe("copy-quality gate", () => {
       "Courier Services delivery for your convenience."
     );
     expect(cleanCopy("A service tailored for you")).toBe("A service made to fit your project.");
+    expect(cleanCopy("and marketing products")).toBe("Marketing products.");
+    expect(cleanCopy("Get Touch")).toBe("Get in Touch.");
   });
 
   it("visibleTextFromBrief joins all customer-facing copy", () => {

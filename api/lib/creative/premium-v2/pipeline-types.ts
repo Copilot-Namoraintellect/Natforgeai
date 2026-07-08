@@ -108,7 +108,7 @@ export const VisualDirectionSchema = z
     backgroundDirection: BackgroundDirection.describe("Background direction for the AI image generator"),
     backgroundPrompt: z.string().describe("Detailed prompt for the text-free background generator"),
     ctaTreatment: CtaTreatment.describe("CTA button style"),
-    serviceLayout: ServiceLayout.default("grid").describe("How primary services are arranged: grid, featured hero panel, or vertical stack"),
+    serviceLayout: ServiceLayout.describe("How primary services are arranged: grid, featured hero panel, or vertical stack"),
     colourUsageNote: z.string().describe("How to apply primary/secondary/accent colours in the layout"),
   })
   .strict()

@@ -62,9 +62,38 @@ function polishBrief(raw: AICreativeBrief): AICreativeBrief {
   return next;
 }
 
+function deduplicateServiceDescriptions(services: { name: string; description: string | null; isPrimary: boolean }[], category: string) {
+  const seen = new Set<string>();
+  for (const s of services) {
+    const key = (s.description || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+    if (!key || !seen.has(key)) {
+      if (key) seen.add(key);
+      continue;
+    }
+    // Duplicate description – rewrite using microcopy or a name-driven fallback.
+    const microcopy = getServiceMicrocopy(category, s.name);
+    if (microcopy.toLowerCase() !== key) {
+      s.description = microcopy;
+    } else {
+      s.description = `Professional ${s.name.toLowerCase()} for everyday business.`;
+    }
+  }
+}
+
+function repairCta(cta: string): string {
+  const cleaned = cleanCopy(cta).replace(/\.$/, "");
+  if (/^get\s+touch$/i.test(cleaned)) return "Get in Touch";
+  if (/^get\s+quote$/i.test(cleaned)) return "Get a Quote";
+  if (/^contact$/i.test(cleaned)) return "Contact Us Today";
+  if (/^request$/i.test(cleaned)) return "Request a Quote Today";
+  if (cleaned.split(/\s+/).length < 2) return "Get in Touch";
+  return cleaned;
+}
+
 export function normaliseBrief(raw: AICreativeBrief, business: BusinessEvidence, campaign?: CampaignEvidence): AICreativeBrief {
   const painPoint = (asString(campaign?.mainPainPoint) || "").toLowerCase().trim();
   const rawSub = raw.subheadline.trim();
+  const category = inferBusinessCategory(business, campaign);
 
   // Guard: subheadline must never be the raw pain point.
   if (painPoint && rawSub.toLowerCase() === painPoint) {
@@ -74,15 +103,24 @@ export function normaliseBrief(raw: AICreativeBrief, business: BusinessEvidence,
   // Ensure at least one primary service.
   if (!raw.primaryServices.length) {
     raw.primaryServices = [
-      { name: (asString(business.productOrService) || "").split(",")[0].trim() || "Our Service", description: "Professional service you can trust.", isPrimary: true },
+      { name: (asString(business.productOrService) || "").split(",")[0].trim() || "Our Service", description: "Professional support you can rely on.", isPrimary: true },
     ];
   }
+
+  // Limit primary cards to reduce generic grid feel and repeated descriptions.
+  raw.primaryServices = raw.primaryServices.slice(0, 3);
 
   // Deduplicate services between primary and secondary.
   const primaryNames = new Set(raw.primaryServices.map((s) => s.name.toLowerCase()));
   raw.secondaryServices = raw.secondaryServices.filter((s) => !primaryNames.has(s.name.toLowerCase()));
 
-  return polishBrief(raw);
+  const polished = polishBrief(raw);
+  polished.cta = repairCta(polished.cta);
+
+  // Ensure no duplicate descriptions across primary service cards.
+  deduplicateServiceDescriptions(polished.primaryServices, category);
+
+  return polished;
 }
 
 export async function buildAICreativeBrief(

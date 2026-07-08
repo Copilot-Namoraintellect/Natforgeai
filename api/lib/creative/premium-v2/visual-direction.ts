@@ -17,7 +17,7 @@ import type { BusinessEvidence, CampaignEvidence } from "./curation";
 export function defaultDirection(business: BusinessEvidence, campaign?: CampaignEvidence): VisualDirection {
   const category = inferBusinessCategory(business, campaign);
   const base: Omit<VisualDirection, "layoutPreset" | "density" | "heroTreatment" | "backgroundDirection" | "backgroundPrompt" | "ctaTreatment" | "colourUsageNote"> = {
-    serviceLayout: "grid",
+    serviceLayout: "featured",
   };
   switch (category) {
     case "food_restaurant":
@@ -81,10 +81,10 @@ export function defaultDirection(business: BusinessEvidence, campaign?: Campaign
         ...base,
         layoutPreset: "premium_local_service",
         density: "balanced",
-        heroTreatment: "solid_brand_block",
+        heroTreatment: "shape_accent",
         backgroundDirection: "abstract_brand_gradient",
         backgroundPrompt: "Abstract gradient in brand colours with subtle texture, no text, no logos, no signage, trustworthy local service feel.",
-        ctaTreatment: "solid_button",
+        ctaTreatment: "block_banner",
         colourUsageNote: "Brand primary for header, accent for CTA, white cards.",
       };
   }
