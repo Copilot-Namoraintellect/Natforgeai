@@ -352,8 +352,8 @@ describe("Hybrid pipeline orchestrator", () => {
 
     const result = await runHybridPipeline(makeInput() as any);
     expect(result.metadata.revisionCount).toBeLessThanOrEqual(1);
-    expect(mockGenerateBackground).toHaveBeenCalledTimes(2); // initial + one revision (background issue triggers regeneration)
-    expect(mockCritiqueRenderedLeaflet).toHaveBeenCalledTimes(2);
+    expect(mockGenerateBackground).toHaveBeenCalledTimes(1); // single shared background across variants
+    expect(mockCritiqueRenderedLeaflet).toHaveBeenCalledTimes(3); // one critic call per variant
   });
 
   it("reuses background for layout/text revisions instead of regenerating", async () => {
@@ -528,7 +528,7 @@ describe("Hybrid pipeline orchestrator", () => {
 
     const result = await runHybridPipeline(makeInput() as any);
     expect(result.metadata.finalDecision).toBe("premium_ready");
-    expect(result.metadata.finalDecisionSource).toBe("adjudicated_effective_critic");
+    expect(result.metadata.finalDecisionSource).toBe("premium_design_contract");
     expect(result.metadata.structuralBrandFidelityPassed).toBe(true);
     expect(result.metadata.visionBrandFidelityPassed).toBe(true);
     expect(result.metadata.criticConflict).toBe(false);

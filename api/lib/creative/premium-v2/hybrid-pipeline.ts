@@ -19,13 +19,9 @@
  */
 
 import { env } from "../../env";
-import sharp from "sharp";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
 import { applyBrandAssetGate, type BrandAssetResolution } from "../brand-asset-resolver";
 import { planCreativeWithAI } from "./plan-ai";
-import { generateBackground } from "./background-generator";
-import { renderHybridLeaflet, type HybridRenderBrief } from "./html-renderer";
-import { critiqueRenderedLeaflet, critiqueLogoCrop, type LogoCropCriticResult } from "./vision-critic";
 import { renderV2FromBrief } from "./renderer";
 import { buildPremiumV2Brief } from "./brief";
 import { validatePremiumV2Quality } from "./quality";
@@ -40,8 +36,12 @@ import type {
   VisionCriticResult,
   HybridPipelineAttempt,
 } from "./pipeline-types";
-import { evaluateContentFidelity, type ContentFidelityResult } from "./content-fidelity";
+import { type ContentFidelityResult } from "./content-fidelity";
 import { evaluateCopyQuality, visibleTextFromBrief, type CopyQualityResult } from "./copy-quality";
+import { selectBestHybridVariant } from "./variant-selector";
+import type { PremiumDesignContractResult } from "./premium-design-contract";
+import type { LayoutScoreResult } from "./layout-scoring";
+import { type LogoCropCriticResult } from "./vision-critic";
 
 export async function runHybridPipeline(input: HybridPipelineInput): Promise<HybridPipelineResult> {
   if (!env.enableHybridLeafletPipeline || !env.openaiApiKey) {
@@ -57,8 +57,6 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
   const sampleMode = input.sampleMode ?? false;
 
   let openAICallCount = 0;
-  let fallbackReason: string | null = null;
-  let quotaError = false;
 
   // Track attempted/succeeded per stage.
   const stage = {
@@ -78,7 +76,6 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
     stage.brief.succeeded = planResult.usedOpenAI;
     stage.visualDirection.succeeded = planResult.usedOpenAI;
     openAICallCount += planResult.usedOpenAI ? 1 : 0;
-    if (planResult.fallbackReason) fallbackReason = planResult.fallbackReason;
 
     const { brandKit, brief, visualDirection: initialVisualDirection } = planResult.value;
     const brandAsset = brandKit.brandAsset;
@@ -92,154 +89,132 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
         finalDecisionOverride: "fallback_used",
       });
     }
-    let visualDirection = initialVisualDirection;
-
-    let revisionCount = 0;
-    const maxRevisions = Math.max(0, env.hybridLeafletMaxRevisions);
-    let lastBackgroundBuffer: Buffer | null = null;
     const attempts: HybridPipelineAttempt[] = [];
-    let rejectionCritic: VisionCriticResult | null = null;
-    let critic: VisionCriticResult | undefined;
-    let effectiveCritic: VisionCriticResult | undefined;
-    let lastRenderMetrics: import("./pipeline-types").HybridRenderMetrics | undefined;
+    const openAICallCountRef = { value: openAICallCount };
 
-    let lastContentFidelity: ContentFidelityResult | undefined;
-    let lastCopyQuality: CopyQualityResult | undefined;
-    let lastBrandFidelity: BrandFidelityAdjudication | undefined;
-    let lastLogoCropCritic: LogoCropCriticResult | undefined;
+    const variantSelection = await selectBestHybridVariant({
+      business,
+      campaign,
+      brandKit,
+      brief,
+      brandAsset,
+      baseVisualDirection: initialVisualDirection,
+      openAICallCountRef,
+      sampleMode,
+      attempts,
+    });
+    openAICallCount = openAICallCountRef.value;
 
-    while (revisionCount <= maxRevisions) {
-      const reuseBackground = revisionCount > 0 && shouldReuseBackground(effectiveCritic?.improvementSuggestions || []);
-      if (!reuseBackground) openAICallCount++; // background generation call
-      const render = await renderOnce(input, brandKit, brief, visualDirection, reuseBackground ? lastBackgroundBuffer : null);
-      lastRenderMetrics = render.metrics;
-      lastContentFidelity = render.contentFidelity;
-      lastCopyQuality = evaluateCopyQuality(lastContentFidelity?.visibleRenderedText || "");
-      lastLogoCropCritic = render.logoCropCritic;
-      stage.background.attempted = true;
-      if (render.backgroundBuffer) {
-        lastBackgroundBuffer = render.backgroundBuffer;
-        stage.background.succeeded = true;
-      }
+    stage.background.attempted = true;
+    stage.background.succeeded = variantSelection.variants.length > 0;
+    stage.visionCritic.attempted = true;
+    stage.visionCritic.succeeded = !variantSelection.best.rawCritic.unavailable;
 
-      critic = await critiqueRenderedLeaflet(
-        render.buffer,
-        business.displayName || business.name || "Business",
-        brandAsset
-      );
-      stage.visionCritic.attempted = true;
-      stage.visionCritic.succeeded = !critic.unavailable;
-      openAICallCount++; // critic call
+    const best = variantSelection.best;
 
-      const brandFidelity = computeBrandFidelityAdjudication(lastRenderMetrics, critic, brandAsset, lastLogoCropCritic);
-      lastBrandFidelity = brandFidelity;
-
-      const adjudication = buildAdjudicatedCritic(critic, brandFidelity, lastContentFidelity, lastLogoCropCritic);
-      effectiveCritic = adjudication.critic;
-
-      if (sampleMode) {
-        attempts.push({ buffer: render.buffer, critic: effectiveCritic, visualDirection, metrics: lastRenderMetrics });
-      }
-
-      if (critic.unavailable) {
-        quotaError = !!critic.quotaError;
-        fallbackReason = critic.criticalIssues[0] || "Vision critic unavailable";
-        rejectionCritic = critic;
-        console.warn(`[HybridPipeline] ${fallbackReason}. Falling back to deterministic V2 renderer.`);
-        break;
-      }
-
-      const generalChecksPassed = effectiveCritic.passed;
-      const brandChecksPassed = brandFidelity.structuralBrandFidelityPassed && brandFidelity.visionBrandFidelityPassed;
-      const contentChecksPassed = lastContentFidelity?.contentFidelityPassed ?? true;
-
-      const copyQualityPassed = lastCopyQuality?.copyQualityPassed ?? true;
-
-      if (generalChecksPassed && brandChecksPassed && contentChecksPassed && copyQualityPassed) {
-        return buildResult(
-          input,
-          brandKit,
-          brief,
-          visualDirection,
-          render.buffer,
-          effectiveCritic,
-          revisionCount,
-          false,
-          stage,
-          openAICallCount,
-          attempts,
-          lastRenderMetrics,
-          brandFidelity,
-          lastContentFidelity,
-          lastCopyQuality,
-          critic,
-          adjudication
-        );
-      }
-
-      if (lastContentFidelity?.inventedOfferDetected) {
-        rejectionCritic = effectiveCritic;
-        fallbackReason = `Invented offer detected: ${lastContentFidelity.detectedOfferSnippet || "unsupported promotional language"}`;
-        console.warn(`[HybridPipeline] ${fallbackReason}. Falling back to deterministic V2 renderer.`);
-        break;
-      }
-
-      if (brandFidelity.criticConflict) {
-        rejectionCritic = effectiveCritic;
-        fallbackReason = brandFidelity.criticConflictReason || "Vision critic contradicted renderer logo diagnostics";
-        console.warn(`[HybridPipeline] ${fallbackReason}. Renderer says real logo rendered; vision critic disagrees. Falling back to deterministic V2 renderer.`);
-        break;
-      }
-
-      if (!brandChecksPassed) {
-        rejectionCritic = effectiveCritic;
-        fallbackReason = brandFidelity.criticConflictReason || "Hybrid attempt did not render the real brand logo correctly";
-        console.warn(`[HybridPipeline] ${fallbackReason}. Falling back to deterministic V2 renderer.`);
-        break;
-      }
-
-      // Non-logo effective-critic issues remain. If we have revisions left, try to fix them.
-      if (revisionCount >= maxRevisions) {
-        // Retain the hybrid output for manual review instead of falling back to deterministic.
-        console.warn(`[HybridPipeline] Effective critic still reports non-logo quality issues after ${revisionCount} revision(s); retaining hybrid output for review.`);
-        return buildResult(
-          input,
-          brandKit,
-          brief,
-          visualDirection,
-          render.buffer,
-          effectiveCritic,
-          revisionCount,
-          false,
-          stage,
-          openAICallCount,
-          attempts,
-          lastRenderMetrics,
-          brandFidelity,
-          lastContentFidelity,
-          lastCopyQuality,
-          critic,
-          adjudication
-        );
-      }
-
-      rejectionCritic = effectiveCritic;
-      console.log(`[HybridPipeline] Revision ${revisionCount + 1} triggered: ${effectiveCritic.improvementSuggestions.join("; ")}`);
-      visualDirection = reviseVisualDirection(visualDirection, effectiveCritic.improvementSuggestions);
-      revisionCount++;
+    if (best.rawCritic.unavailable) {
+      return runDeterministicFallback(input, brandKit, brief, attempts, {
+        reason: best.rawCritic.criticalIssues[0] || "Vision critic unavailable",
+        quotaError: best.rawCritic.quotaError,
+        openAICallCount,
+        stage,
+        rejectionCritic: best.rawCritic,
+        lastRenderMetrics: best.metrics,
+        lastContentFidelity: best.contentFidelity,
+        lastCopyQuality: best.copyQuality,
+      });
     }
 
-    return runDeterministicFallback(input, brandKit, brief, attempts, {
-      reason: fallbackReason || "Hybrid critic did not pass",
-      quotaError,
-      openAICallCount,
+    const brandFidelity = computeBrandFidelityAdjudication(best.metrics, best.rawCritic, brandAsset, best.logoCropCritic);
+    const adjudication = buildAdjudicatedCritic(best.rawCritic, brandFidelity, best.contentFidelity, best.logoCropCritic);
+    const effectiveCritic = adjudication.critic;
+
+    // Final decision is now driven by the Premium Design Contract.
+    if (best.contract.passed) {
+      return buildResult(
+        input,
+        brandKit,
+        brief,
+        best.visualDirection,
+        best.buffer,
+        effectiveCritic,
+        0,
+        false,
+        stage,
+        openAICallCount,
+        attempts,
+        best.metrics,
+        brandFidelity,
+        best.contentFidelity,
+        best.copyQuality,
+        best.rawCritic,
+        adjudication,
+        best.contract,
+        best.layoutScores,
+        variantSelection.selectedIndex,
+        variantSelection.variants.length,
+        "premium_ready"
+      );
+    }
+
+    if (!best.contract.safeToRetainHybrid) {
+      const inventedOffer = best.contentFidelity?.inventedOfferDetected;
+      const copyQualityFailed = !best.copyQuality.copyQualityPassed;
+      const contentIssue = inventedOffer || copyQualityFailed;
+
+      let reason: string;
+      if (inventedOffer) {
+        reason = `Invented offer detected: ${best.contentFidelity?.detectedOfferSnippet || "unsupported promotional language"}`;
+      } else if (copyQualityFailed) {
+        reason = `Copy quality review required: ${best.copyQuality.copyQualityIssues.join("; ")}`;
+      } else if (brandFidelity?.criticConflict && brandFidelity.criticConflictReason) {
+        reason = brandFidelity.criticConflictReason;
+      } else {
+        reason = `Premium Design Contract failed: ${best.contract.issues.join("; ")}`;
+      }
+
+      return runDeterministicFallback(input, brandKit, brief, attempts, {
+        reason,
+        openAICallCount,
+        stage,
+        rejectionCritic: best.rawCritic,
+        lastRenderMetrics: best.metrics,
+        lastContentFidelity: best.contentFidelity,
+        lastCopyQuality: best.copyQuality,
+        brandFidelity,
+        finalDecisionOverride: contentIssue ? "content_review_required" : "fallback_used",
+      });
+    }
+
+    const finalDecision: HybridFinalDecision =
+      best.contentFidelity?.inventedOfferDetected || !best.copyQuality.copyQualityPassed
+        ? "content_review_required"
+        : "hybrid_review_required";
+
+    return buildResult(
+      input,
+      brandKit,
+      brief,
+      best.visualDirection,
+      best.buffer,
+      effectiveCritic,
+      0,
+      false,
       stage,
-      rejectionCritic,
-      lastRenderMetrics,
-      lastContentFidelity,
-      lastCopyQuality,
-      brandFidelity: lastBrandFidelity,
-    });
+      openAICallCount,
+      attempts,
+      best.metrics,
+      brandFidelity,
+      best.contentFidelity,
+      best.copyQuality,
+      best.rawCritic,
+      adjudication,
+      best.contract,
+      best.layoutScores,
+      variantSelection.selectedIndex,
+      variantSelection.variants.length,
+      finalDecision
+    );
   } catch (err: any) {
     const reason = `Pipeline failed: ${err.message}`;
     console.warn(`[HybridPipeline] ${reason}. Falling back to deterministic V2 renderer.`);
@@ -249,102 +224,6 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       stage,
     });
   }
-}
-
-interface RenderOutput {
-  buffer: Buffer;
-  backgroundBuffer: Buffer | null;
-  html: string;
-  metrics?: import("./pipeline-types").HybridRenderMetrics;
-  contentFidelity?: ContentFidelityResult;
-  logoCropBuffer?: Buffer;
-  logoCropCritic?: LogoCropCriticResult;
-}
-
-async function renderOnce(
-  input: HybridPipelineInput,
-  brandKit: HybridBrandKit,
-  brief: AICreativeBrief,
-  visualDirection: VisualDirection,
-  reuseBackground: Buffer | null = null
-): Promise<RenderOutput> {
-  const brandAsset = brandKit.brandAsset;
-  const [backgroundBuffer, logoBuffer] = await Promise.all([
-    reuseBackground ? Promise.resolve(reuseBackground) : generateBackground(visualDirection),
-    brandAsset?.logoBuffer ? Promise.resolve(brandAsset.logoBuffer) : brandKit.logoUrl ? fetchLogo(brandKit.logoUrl) : Promise.resolve(null),
-  ]);
-
-  console.log(`[HybridPipeline renderOnce] brandAsset exists: ${!!brandAsset}, logoSourceType: ${brandAsset?.logoSourceType ?? "n/a"}, realLogoExpected: ${brandAsset?.realLogoExpected ?? "n/a"}, logoResolved: ${brandAsset?.logoResolved ?? "n/a"}, logoBuffer length: ${logoBuffer?.length ?? 0}, brandKit.logoUrl: ${brandKit.logoUrl ?? "n/a"}`);
-
-  const renderBrief: HybridRenderBrief = {
-    businessName: input.business.displayName || input.business.name || "Business",
-    headline: brief.headline,
-    subheadline: brief.subheadline,
-    primaryServices: brief.primaryServices.map((s) => ({ name: s.name, description: s.description })),
-    secondaryServices: brief.secondaryServices.map((s) => ({ name: s.name })),
-    benefits: brief.benefits,
-    cta: brief.cta,
-    offerLine: brief.offerLine,
-    contact: {
-      phone: input.business.phone || undefined,
-      website: input.business.website || undefined,
-      location: input.business.location || undefined,
-    },
-    brandAsset: brandKit.brandAsset,
-  };
-
-  const { buffer, metrics, html } = await renderHybridLeaflet(renderBrief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandKit.brandAsset);
-  const contentFidelity = evaluateContentFidelity(input.business as BusinessEvidence, input.campaign || {}, brief, html);
-
-  // Extract a focused logo/header crop for logo-specific vision verification.
-  let logoCropBuffer: Buffer | undefined;
-  let logoCropCritic: LogoCropCriticResult | undefined;
-  const realLogoExpected = !!brandAsset && brandAsset.realLogoExpected;
-  if (realLogoExpected && logoBuffer) {
-    try {
-      logoCropBuffer = await sharp(buffer)
-        .extract({ left: 0, top: 0, width: 1080, height: 170 })
-        .png()
-        .toBuffer();
-      logoCropCritic = await critiqueLogoCrop(
-        logoCropBuffer,
-        logoBuffer,
-        input.business.displayName || input.business.name || "Business"
-      );
-      console.log(`[HybridPipeline renderOnce] logo crop critic: ${JSON.stringify(logoCropCritic)}`);
-    } catch (err: any) {
-      console.warn(`[HybridPipeline renderOnce] logo crop critique failed: ${err.message}`);
-    }
-  }
-
-  console.log(`[HybridPipeline renderOnce] render metrics: ${JSON.stringify(metrics)}`);
-  console.log(`[HybridPipeline renderOnce] content fidelity: ${JSON.stringify(contentFidelity)}`);
-  console.log(`[HybridPipeline renderOnce] visible rendered text: ${contentFidelity.visibleRenderedText}`);
-  return { buffer, backgroundBuffer, html, metrics, contentFidelity, logoCropBuffer, logoCropCritic };
-}
-
-async function fetchLogo(logoUrl: string): Promise<Buffer | null> {
-  try {
-    const res = await fetch(logoUrl);
-    if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
-  } catch {
-    return null;
-  }
-}
-
-function shouldReuseBackground(suggestions: string[]): boolean {
-  const text = suggestions.join(" ").toLowerCase();
-  // Layout/design issues should be fixed by re-rendering the HTML while keeping
-  // the existing AI-generated background. Only switch backgrounds when the critic
-  // explicitly complains about the background itself.
-  const layoutIssues = [
-    "text", "font", "readability", "contrast", "cta", "clipped", "hierarchy",
-    "logo", "layout", "empty", "crowded", "typography", "generic", "template",
-    "card", "bespoke", "visual flow", "dominant",
-  ];
-  const backgroundIssues = ["background", "texture", "gradient", "bland", "plain", "boring", "photo"];
-  return layoutIssues.some((w) => text.includes(w)) && !backgroundIssues.some((w) => text.includes(w));
 }
 
 interface BrandFidelityAdjudication {
@@ -490,84 +369,6 @@ function buildAdjudicatedCritic(
   effective.passed = effective.criticalIssues.length === 0 && !contentFidelity?.inventedOfferDetected;
 
   return { critic: effective, overruledIssues, notes };
-}
-
-function computeFinalDecision(
-  critic: VisionCriticResult,
-  brandFidelity: BrandFidelityAdjudication,
-  contentFidelity: ContentFidelityResult | undefined,
-  copyQuality?: CopyQualityResult
-): HybridFinalDecision {
-  if (contentFidelity?.inventedOfferDetected) return "content_review_required";
-  if (copyQuality && !copyQuality.copyQualityPassed) return "content_review_required";
-  if (brandFidelity.criticConflict) return "hybrid_review_required";
-  if (!brandFidelity.structuralBrandFidelityPassed || !brandFidelity.visionBrandFidelityPassed) return "hybrid_review_required";
-  if (!critic.passed) return "hybrid_review_required";
-  if (contentFidelity && !contentFidelity.contentFidelityPassed) return "content_review_required";
-  return "premium_ready";
-}
-
-function reviseVisualDirection(visualDirection: VisualDirection, suggestions: string[]): VisualDirection {
-  const text = suggestions.join(" ").toLowerCase();
-  const next: VisualDirection = { ...visualDirection };
-
-  const hasCtaIssue = /cta|clipped|button|small/.test(text);
-  const hasReadabilityIssue = /readability|contrast|font|text|small|blurry|typography/.test(text);
-  const hasGenericIssue = /generic|template|cheap|boring/.test(text);
-  const hasHierarchyIssue = /hierarchy|crowded|clutter|empty space/.test(text);
-  const hasLogoIssue = /\b(logo|brand)\b/.test(text);
-  const hasPremiumIssue = /premium|luxury|rich|flat/.test(text);
-
-  // CTA visibility / clipped CTA → make the CTA a full-width banner.
-  if (hasCtaIssue) {
-    next.ctaTreatment = "block_banner";
-  }
-
-  // Readability issues → strip density back to minimal and use a solid hero block
-  // for maximum text contrast.
-  if (hasReadabilityIssue) {
-    next.density = "minimal";
-    next.heroTreatment = "solid_brand_block";
-  }
-
-  // Generic/template feel → stronger hierarchy, fewer repeated cards, more bespoke
-  // hero shape. Prefer layout/design changes over a brand-new background.
-  if (hasGenericIssue) {
-    next.heroTreatment = "shape_accent";
-    next.ctaTreatment = "block_banner";
-    next.density = next.density === "dense" ? "balanced" : "minimal";
-    next.serviceLayout = "featured";
-    // Only ask for a new background if the critic explicitly complains about it.
-    if (/background|texture|gradient|bland|plain/.test(text)) {
-      next.backgroundDirection = next.backgroundDirection === "abstract_brand_gradient" ? "dark_premium" : "abstract_brand_gradient";
-    }
-  }
-
-  // Premium/luxury/flat feel → richer background direction and featured layout.
-  if (hasPremiumIssue) {
-    next.backgroundDirection = next.backgroundDirection === "clean_white" ? "soft_noise_texture" : "dark_premium";
-    next.serviceLayout = "featured";
-    next.density = next.density === "dense" ? "balanced" : "minimal";
-    next.heroTreatment = next.heroTreatment === "minimal_centered" ? "shape_accent" : next.heroTreatment;
-  }
-
-  // Logo/brand complaints → accent shape around the hero to frame the lockup.
-  if (hasLogoIssue) {
-    next.heroTreatment = "shape_accent";
-  }
-
-  // Weak hierarchy → more whitespace, larger headline (shape_accent), dominant CTA,
-  // and a featured service layout to break the uniform card grid.
-  if (hasHierarchyIssue) {
-    next.density = next.density === "dense" ? "balanced" : "minimal";
-    next.ctaTreatment = "block_banner";
-    next.serviceLayout = "featured";
-    if (next.heroTreatment === "solid_brand_block" || next.heroTreatment === "minimal_centered") {
-      next.heroTreatment = "shape_accent";
-    }
-  }
-
-  return next;
 }
 
 interface FallbackOptions {
@@ -743,6 +544,21 @@ async function runDeterministicFallback(
     logoMaskedOrCropped: lastMetrics?.logoMaskedOrCropped,
     logoDataUriUsed: lastMetrics?.logoDataUriUsed,
     logoFetchUsed: lastMetrics?.logoFetchUsed,
+    // Premium Design Contract (fallback never passes)
+    premiumDesignContractPassed: false,
+    premiumDesignContractIssues: ["Deterministic fallback used"],
+    safeToRetainHybrid: false,
+    safeToAutoPublish: false,
+    safeToChargePremiumCredits: false,
+    needsHumanReview: false,
+    layoutScore: undefined,
+    ctaDominanceScore: undefined,
+    hierarchyScore: undefined,
+    templateRiskScore: undefined,
+    copyScore: undefined,
+    brandScore: undefined,
+    selectedVariantIndex: undefined,
+    variantCount: undefined,
   };
 
   return {
@@ -790,29 +606,30 @@ function buildResult(
   contentFidelity?: ContentFidelityResult,
   copyQuality?: CopyQualityResult,
   rawCritic?: VisionCriticResult,
-  adjudication?: AdjudicatedCritic
+  adjudication?: AdjudicatedCritic,
+  contract?: PremiumDesignContractResult,
+  layoutScores?: LayoutScoreResult,
+  selectedVariantIndex?: number,
+  variantCount?: number,
+  passedFinalDecision?: HybridFinalDecision
 ): HybridPipelineResult {
-  const finalDecision = computeFinalDecision(
-    critic,
-    brandFidelity || {
-      structuralBrandFidelityPassed: true,
-      visionBrandFidelityPassed: critic.passed,
-      criticConflict: false,
-      criticConflictReason: null,
-      fullImageVsCropConflict: false,
-      fullImageVsCropConflictReason: null,
-    },
-    contentFidelity,
-    copyQuality
-  );
+  const finalDecision = passedFinalDecision ?? "hybrid_review_required";
 
   let fallbackReason: string | null = null;
-  let finalDecisionSource = "adjudicated_effective_critic";
+  let finalDecisionSource = "premium_design_contract";
   if (finalDecision === "hybrid_review_required") {
-    fallbackReason = critic.criticalIssues.length
-      ? `Design quality review required: ${critic.criticalIssues.join("; ")}`
-      : "Design quality review required";
-    finalDecisionSource = "adjudicated_effective_critic_non_logo_review";
+    if (brandFidelity?.criticConflict && brandFidelity.criticConflictReason) {
+      fallbackReason = brandFidelity.criticConflictReason;
+      finalDecisionSource = "brand_fidelity_critic_conflict";
+    } else if (contract && !contract.passed) {
+      fallbackReason = `Design quality review required: ${contract.issues.join("; ")}`;
+      finalDecisionSource = "premium_design_contract";
+    } else {
+      fallbackReason = critic.criticalIssues.length
+        ? `Design quality review required: ${critic.criticalIssues.join("; ")}`
+        : "Design quality review required";
+      finalDecisionSource = "adjudicated_effective_critic_non_logo_review";
+    }
   } else if (finalDecision === "content_review_required") {
     if (contentFidelity?.inventedOfferDetected) {
       fallbackReason = `Invented offer detected: ${contentFidelity.detectedOfferSnippet || "unsupported promotional language"}`;
@@ -877,6 +694,25 @@ function buildResult(
     logoCropLogoDistortedOrCropped: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.logoDistortedOrCropped : undefined,
     fullImageVsCropConflict: brandFidelity?.fullImageVsCropConflict,
     fullImageVsCropConflictReason: brandFidelity?.fullImageVsCropConflictReason ?? null,
+    // Premium Design Contract
+    premiumDesignContractPassed: contract?.passed ?? false,
+    premiumDesignContractIssues: contract?.issues.slice() ?? [],
+    safeToRetainHybrid: contract?.safeToRetainHybrid ?? false,
+    safeToAutoPublish: contract?.safeToAutoPublish ?? false,
+    safeToChargePremiumCredits: contract?.safeToChargePremiumCredits ?? false,
+    needsHumanReview: contract?.needsHumanReview ?? false,
+    // Deterministic layout scoring
+    layoutScore: layoutScores?.layoutScore,
+    ctaDominanceScore: layoutScores?.ctaDominanceScore,
+    hierarchyScore: layoutScores?.hierarchyScore,
+    templateRiskScore: layoutScores?.templateRiskScore,
+    copyScore: layoutScores?.copyScore,
+    brandScore: layoutScores?.brandScore,
+    // Variant selection
+    selectedVariantIndex,
+    variantCount,
+
+    // Brand-asset render diagnostics
     realLogoExpected: renderMetrics?.realLogoExpected,
     realLogoRendered: renderMetrics?.realLogoRendered,
     logoNaturalWidth: renderMetrics?.logoNaturalWidth,

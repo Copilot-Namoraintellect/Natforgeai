@@ -7,7 +7,7 @@
 
 import { chromium, type Browser } from "playwright";
 import sharp from "sharp";
-import type { HybridBrandKit, VisualDirection, HybridRenderMetrics } from "./pipeline-types";
+import type { HybridBrandKit, VisualDirection, HybridRenderMetrics, PremiumCopyPack } from "./pipeline-types";
 import type { BrandAssetResolution } from "../brand-asset-resolver";
 
 const WIDTH = 1080;
@@ -26,6 +26,7 @@ export interface HybridRenderBrief {
   offerLine?: string | null;
   contact: { phone?: string; website?: string; location?: string };
   brandAsset?: BrandAssetResolution;
+  copyPack?: PremiumCopyPack;
 }
 
 export interface HybridRenderResult {
@@ -229,6 +230,202 @@ function serviceGridStyle(visualDirection: VisualDirection): string {
   return "grid-template-columns: 1fr 1fr; gap: 24px;";
 }
 
+function buildLogoHtml(
+  brief: HybridRenderBrief,
+  _brandKit: HybridBrandKit,
+  logoBuffer: Buffer | null,
+  brandAsset?: BrandAssetResolution,
+  logoRenderPlan?: LogoRenderPlan | null
+): string {
+  const renderRealLogo = !!logoBuffer && (brandAsset ? brandAsset.logoResolved && brandAsset.realLogoExpected : true);
+  if (renderRealLogo && logoRenderPlan) {
+    const logo = `data:${inferContentType(logoBuffer!)};base64,${logoBuffer!.toString("base64")}`;
+    const treatmentClass = logoRenderPlan.treatment === "horizontal" ? "logo-horizontal" : "logo-compact";
+    return `
+      <div class="logo-panel">
+        <img class="logo-img ${treatmentClass}" src="${logo}" alt="" width="${logoRenderPlan.renderedWidth}" height="${logoRenderPlan.renderedHeight}" onerror="console.error('[HybridRenderer] Logo image failed to load:', this.src)" />
+      </div>`;
+  }
+  const initials = escapeHtml(brief.businessName.split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase());
+  return `<div class="logo-fallback"><span>${initials}</span></div>`;
+}
+
+function buildCuratedHtml(
+  brief: HybridRenderBrief,
+  brandKit: HybridBrandKit,
+  visualDirection: VisualDirection,
+  backgroundBuffer: Buffer | null,
+  logoBuffer: Buffer | null,
+  brandAsset?: BrandAssetResolution,
+  logoRenderPlan?: LogoRenderPlan | null
+): string {
+  const pack = brief.copyPack!;
+  const bg = backgroundBuffer ? `data:image/png;base64,${backgroundBuffer.toString("base64")}` : undefined;
+  const primary = visualDirection.layoutPreset;
+  const split = visualDirection.serviceLayout === "split";
+
+  const logoHtml = buildLogoHtml(brief, brandKit, logoBuffer, brandAsset, logoRenderPlan);
+
+  const servicesHtml = pack.services
+    .map(
+      (s, i) => `
+    <div class="support-card support-card-${i}">
+      <div class="support-title">${escapeHtml(s.title)}</div>
+      <div class="support-body">${escapeHtml(s.body)}</div>
+    </div>`
+    )
+    .join("");
+
+  const proofHtml = pack.proofPoints.length
+    ? `<div class="proof-band">${pack.proofPoints
+        .map((p) => `<div class="proof-item"><span class="proof-dot"></span>${escapeHtml(p)}</div>`)
+        .join("")}</div>`
+    : "";
+
+  const offerBadge = brief.offerLine ? `<div class="offer-badge">${escapeHtml(brief.offerLine)}</div>` : "";
+
+  const footerParts = [brief.contact.phone, brief.contact.website, brief.contact.location].filter((t): t is string => typeof t === "string" && t.length > 0);
+  const footer = footerParts.length ? `<div class="footer-line">${footerParts.map(escapeHtml).join(" · ")}</div>` : "";
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    .curated-canvas {
+      width: ${WIDTH}px; height: ${HEIGHT}px; position: relative; overflow: hidden;
+      color: ${toCssColour(brandKit.text)}; background: ${toCssColour(brandKit.background)};
+      ${bg ? `background-image: url('${bg}'); background-size: cover; background-position: center;` : ""}
+    }
+    .curated-bg { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+    .curated-bg::before {
+      content: "";
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(circle at 20% 20%, ${toCssColour(brandKit.primary)}18 0%, transparent 40%),
+        radial-gradient(circle at 85% 80%, ${toCssColour(brandKit.secondary)}14 0%, transparent 40%),
+        linear-gradient(180deg, rgba(8,16,30,0.55) 0%, rgba(8,16,30,0.20) 40%, rgba(8,16,30,0.55) 100%);
+    }
+    .curated-bg::after {
+      content: "";
+      position: absolute; inset: 0;
+      background: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      opacity: 0.035;
+    }
+    .curated-header {
+      position: absolute; top: 0; left: 0; right: 0; height: 150px;
+      display: flex; align-items: center; padding: 0 56px; z-index: 4;
+      background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.86) 60%, transparent 100%);
+    }
+    .curated-lockup { display: flex; align-items: center; gap: 22px; }
+    .curated-header .logo-panel { background: #fff; border-radius: 16px; padding: 12px 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; border: 1px solid rgba(0,0,0,0.05); }
+    .curated-header .logo-img { display: block; object-fit: contain; }
+    .curated-header .logo-horizontal { max-width: 300px; max-height: 100px; min-height: 50px; }
+    .curated-header .logo-compact { max-width: 200px; max-height: 110px; min-height: 50px; }
+    .curated-header .logo-fallback { height: 90px; width: 90px; border-radius: 16px; background: ${toCssColour(brandKit.accent)}; display: flex; align-items: center; justify-content: center; font-size: 34px; font-weight: 900; color: #fff; }
+    .curated-eyebrow { font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: ${toCssColour(brandKit.textMuted)}; margin-bottom: 4px; }
+    .curated-business { font-size: 22px; font-weight: 900; color: ${toCssColour(brandKit.text)}; }
+    .curated-main {
+      position: absolute; top: 150px; left: 0; right: 0; bottom: 230px;
+      display: flex; flex-direction: column; justify-content: flex-start; gap: 18px;
+      padding: 28px 56px 30px; z-index: 3; overflow: hidden;
+    }
+    .curated-hero { color: #ffffff; }
+    .curated-hero-panel {
+      background: rgba(8,16,30,0.60); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border-radius: 24px; padding: 30px 36px; border-left: 8px solid ${toCssColour(brandKit.accent)};
+      box-shadow: 0 20px 50px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.08);
+    }
+    .curated-headline { font-size: 62px; font-weight: 900; line-height: 1.02; letter-spacing: -0.035em; margin-bottom: 12px; text-shadow: 0 4px 16px rgba(0,0,0,0.28); }
+    .curated-subheadline { font-size: 26px; font-weight: 500; line-height: 1.45; opacity: 0.96; }
+    .curated-featured-row { display: flex; gap: 24px; align-items: stretch; }
+    .curated-featured-row.split { flex-direction: row; }
+    .curated-featured-row:not(.split) { flex-direction: column; }
+    .curated-featured {
+      flex: 1.2; background: linear-gradient(145deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.96) 100%);
+      border-radius: 24px; padding: 28px; box-shadow: 0 16px 42px rgba(0,0,0,0.10);
+      border-left: 6px solid ${toCssColour(brandKit.accent)}; display: flex; flex-direction: column; justify-content: center;
+    }
+    .curated-featured-label { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em; color: ${toCssColour(brandKit.textMuted)}; margin-bottom: 8px; }
+    .curated-featured-title { font-size: 32px; font-weight: 900; color: ${toCssColour(brandKit.text)}; margin-bottom: 10px; line-height: 1.15; }
+    .curated-featured-body { font-size: 20px; color: ${toCssColour(brandKit.textMuted)}; line-height: 1.45; }
+    .curated-services { flex: 1; display: flex; flex-direction: column; gap: 16px; }
+    .support-card {
+      flex: 1; background: linear-gradient(145deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.96) 100%);
+      border-radius: 20px; padding: 22px; box-shadow: 0 12px 32px rgba(0,0,0,0.08);
+      border-top: 5px solid ${toCssColour(brandKit.secondary)}; display: flex; flex-direction: column; justify-content: center;
+    }
+    .support-title { font-size: 22px; font-weight: 900; color: ${toCssColour(brandKit.text)}; margin-bottom: 6px; }
+    .support-body { font-size: 17px; color: ${toCssColour(brandKit.textMuted)}; line-height: 1.4; }
+    .proof-band {
+      display: flex; justify-content: space-between; gap: 16px;
+      background: rgba(255,255,255,0.94); border-radius: 18px; padding: 18px 28px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.07); z-index: 3;
+    }
+    .proof-item { flex: 1; display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 800; color: ${toCssColour(brandKit.text)}; }
+    .proof-dot { width: 10px; height: 10px; border-radius: 50%; background: ${toCssColour(brandKit.accent)}; flex-shrink: 0; }
+    .curated-cta {
+      position: absolute; bottom: 130px; left: 0; right: 0; z-index: 5;
+      background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)};
+      padding: 30px 56px; text-align: center; font-size: 46px; font-weight: 900;
+      text-transform: uppercase; letter-spacing: 0.02em;
+      box-shadow: 0 0 0 8px rgba(255,255,255,0.45), 0 -10px 40px rgba(0,0,0,0.22);
+      border-top: 6px solid rgba(255,255,255,0.35); border-bottom: 6px solid rgba(0,0,0,0.12);
+      display: flex; align-items: center; justify-content: center; gap: 18px;
+    }
+    .curated-cta::after { content: "→"; font-size: 0.85em; }
+    .curated-footer {
+      position: absolute; bottom: 0; left: 0; right: 0; height: 130px;
+      background: linear-gradient(90deg, rgba(15,23,42,0.94) 0%, rgba(15,23,42,0.82) 100%);
+      color: #fff; display: flex; flex-direction: column; justify-content: center; padding: 0 56px; z-index: 3;
+    }
+    .footer-name { font-size: 26px; font-weight: 900; margin-bottom: 6px; }
+    .footer-line { font-size: 22px; font-weight: 600; opacity: 0.95; }
+    .offer-badge { display: inline-block; margin-top: 14px; padding: 12px 24px; border-radius: 12px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 24px; font-weight: 900; }
+  </style>
+</head>
+<body>
+  <div class="curated-canvas preset-${primary}">
+    <div class="curated-bg"></div>
+    <div class="curated-header">
+      <div class="curated-lockup">
+        ${logoHtml}
+        <div>
+          <div class="curated-eyebrow">${escapeHtml(pack.eyebrow)}</div>
+          <div class="curated-business">${escapeHtml(brief.businessName)}</div>
+        </div>
+      </div>
+    </div>
+    <main class="curated-main">
+      <div class="curated-hero">
+        <div class="curated-hero-panel">
+          <div class="curated-headline">${escapeHtml(pack.headline)}</div>
+          <div class="curated-subheadline">${escapeHtml(pack.subheadline)}</div>
+          ${offerBadge}
+        </div>
+      </div>
+      <div class="curated-featured-row ${split ? "split" : ""}">
+        <div class="curated-featured">
+          <div class="curated-featured-label">Featured</div>
+          <div class="curated-featured-title">${escapeHtml(pack.featuredBenefit.title)}</div>
+          <div class="curated-featured-body">${escapeHtml(pack.featuredBenefit.body)}</div>
+        </div>
+        ${servicesHtml ? `<div class="curated-services">${servicesHtml}</div>` : ""}
+      </div>
+      ${proofHtml}
+    </main>
+    <div class="curated-cta">${escapeHtml(pack.cta)}</div>
+    <div class="curated-footer">
+      <div class="footer-name">${escapeHtml(brief.businessName)}</div>
+      ${footer}
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 function buildHtml(
   brief: HybridRenderBrief,
   brandKit: HybridBrandKit,
@@ -238,6 +435,10 @@ function buildHtml(
   brandAsset?: BrandAssetResolution,
   logoRenderPlan?: LogoRenderPlan | null
 ): string {
+  if (brief.copyPack) {
+    return buildCuratedHtml(brief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandAsset, logoRenderPlan);
+  }
+
   const primary = visualDirection.layoutPreset;
   const bg = backgroundBuffer ? `data:image/png;base64,${backgroundBuffer.toString("base64")}` : undefined;
   const logo = logoBuffer ? `data:${inferContentType(logoBuffer)};base64,${logoBuffer.toString("base64")}` : undefined;

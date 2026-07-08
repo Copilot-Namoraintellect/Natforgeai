@@ -79,13 +79,13 @@ export function defaultDirection(business: BusinessEvidence, campaign?: Campaign
     default:
       return {
         ...base,
-        layoutPreset: "premium_local_service",
+        layoutPreset: "premium_local_service_featured",
         density: "balanced",
         heroTreatment: "shape_accent",
         backgroundDirection: "abstract_brand_gradient",
         backgroundPrompt: "Abstract gradient in brand colours with subtle texture, no text, no logos, no signage, trustworthy local service feel.",
         ctaTreatment: "block_banner",
-        colourUsageNote: "Brand primary for header, accent for CTA, white cards.",
+        colourUsageNote: "Brand primary for header, accent for CTA, white featured panel.",
       };
   }
 }

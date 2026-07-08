@@ -17,6 +17,14 @@ export const LayoutPresetId = z.enum([
   "premium_retail_promo",
   "premium_food_offer",
   "premium_professional_clean",
+  // Curated premium recipes
+  "premium_editorial_featured",
+  "premium_local_service_featured",
+  "premium_retail_offer",
+  "premium_product_spotlight",
+  "premium_professional_service",
+  "premium_event_announcement",
+  "premium_corporate_announcement",
 ]);
 
 export const HeroTreatment = z.enum([
@@ -39,6 +47,7 @@ export const ServiceLayout = z.enum([
   "grid",
   "featured",
   "stack",
+  "split",
 ]);
 
 export const BackgroundDirection = z.enum([
@@ -115,6 +124,17 @@ export const VisualDirectionSchema = z
   .describe("Visual direction for the leaflet");
 
 export type VisualDirection = z.infer<typeof VisualDirectionSchema>;
+
+export interface PremiumCopyPack {
+  eyebrow: string;
+  headline: string;
+  subheadline: string;
+  featuredBenefit: { title: string; body: string };
+  services: { title: string; body: string }[];
+  proofPoints: string[];
+  cta: string;
+  footer: string;
+}
 
 export const CreativePlanOpenAISchema = z
   .object({
@@ -263,6 +283,23 @@ export interface HybridPipelineMetadata {
   logoMaskedOrCropped?: boolean;
   logoDataUriUsed?: boolean;
   logoFetchUsed?: boolean;
+  // Premium Design Contract
+  premiumDesignContractPassed?: boolean;
+  premiumDesignContractIssues?: string[];
+  safeToRetainHybrid?: boolean;
+  safeToAutoPublish?: boolean;
+  safeToChargePremiumCredits?: boolean;
+  needsHumanReview?: boolean;
+  // Deterministic layout scoring
+  layoutScore?: number;
+  ctaDominanceScore?: number;
+  hierarchyScore?: number;
+  templateRiskScore?: number;
+  copyScore?: number;
+  brandScore?: number;
+  // Variant selection
+  selectedVariantIndex?: number;
+  variantCount?: number;
 }
 
 export interface HybridPipelineResult {
