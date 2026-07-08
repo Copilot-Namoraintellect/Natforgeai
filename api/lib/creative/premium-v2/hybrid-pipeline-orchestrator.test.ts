@@ -266,33 +266,58 @@ describe("Hybrid pipeline orchestrator", () => {
     expect(result.metadata.openAICallCount).toBeGreaterThan(0);
   });
 
-  it("does not allow perfect scores when deterministic fallback is used", async () => {
+  it("retains the hybrid output as hybrid_review_required when only non-logo design issues remain", async () => {
     mockCritiqueRenderedLeaflet.mockResolvedValue(makeRejectingCritic());
 
     const result = await runHybridPipeline(makeInput() as any);
-    expect(result.metadata.usedDeterministicFallback).toBe(true);
-    expect(result.metadata.finalDecision).toBe("fallback_used");
+    expect(result.metadata.usedDeterministicFallback).toBe(false);
+    expect(result.metadata.finalDecision).toBe("hybrid_review_required");
+    expect(result.metadata.finalUsedOpenAIBackground).toBe(true);
+    expect(result.metadata.finalUsedOpenAIVisionCritic).toBe(true);
     expect(result.critic.passed).toBe(false);
-    expect(result.critic.scores.brandFidelity).toBeLessThanOrEqual(82);
-    expect(result.critic.scores.genericTemplateRisk).toBeGreaterThanOrEqual(25);
+    expect(result.metadata.effectiveCriticPassed).toBe(false);
+    expect(result.metadata.fallbackReason).toMatch(/Design quality review required/i);
   });
 
-  it("records background success even when the final output falls back", async () => {
+  it("retains the AI-generated background when the hybrid output is kept for review", async () => {
     mockCritiqueRenderedLeaflet.mockResolvedValue(makeRejectingCritic());
 
     const result = await runHybridPipeline(makeInput() as any);
     expect(result.metadata.attemptedOpenAIBackground).toBe(true);
     expect(result.metadata.succeededOpenAIBackground).toBe(true);
-    expect(result.metadata.finalUsedOpenAIBackground).toBe(false);
+    expect(result.metadata.finalUsedOpenAIBackground).toBe(true);
+    expect(result.metadata.usedDeterministicFallback).toBe(false);
   });
 
-  it("stores the rejection critic JSON in metadata", async () => {
-    const critic = makeRejectingCritic();
+  it("stores the rejection critic JSON in metadata when falling back for content reasons", async () => {
+    const critic = makePassingCritic();
     mockCritiqueRenderedLeaflet.mockResolvedValue(critic);
+    mockRenderHybridLeaflet.mockResolvedValue({
+      buffer: await makeLeafletBuffer(),
+      html: "<div>Get 10% off your first order!</div><div>Book Now</div>",
+      metrics: {
+        width: 1080,
+        height: 1350,
+        layoutPreset: "premium_local_service",
+        realLogoExpected: true,
+        realLogoRendered: true,
+        logoNaturalWidth: 1432,
+        logoNaturalHeight: 472,
+        logoRenderedWidth: 334,
+        logoRenderedHeight: 110,
+        logoVisibleArea: 334 * 110,
+        logoRenderMode: "image",
+        fallbackBadgeRendered: false,
+        logoMaskedOrCropped: false,
+        logoDataUriUsed: true,
+        logoFetchUsed: false,
+      },
+    });
 
     const result = await runHybridPipeline(makeInput() as any);
     expect(result.metadata.rejectionCritic).not.toBeNull();
-    expect(result.metadata.rejectionCritic?.criticalIssues).toEqual(critic.criticalIssues);
+    expect(result.metadata.finalDecision).toBe("content_review_required");
+    expect(result.metadata.usedDeterministicFallback).toBe(true);
   });
 
   it("marks hybrid_review_required when the vision critic returns an unavailable result", async () => {
@@ -414,8 +439,29 @@ describe("Hybrid pipeline orchestrator", () => {
     expect(result.metadata.logoRenderMode).toBe("image");
   });
 
-  it("preserves the last hybrid attempt render diagnostics when falling back", async () => {
-    mockCritiqueRenderedLeaflet.mockResolvedValue(makeRejectingCritic());
+  it("preserves the last hybrid attempt render diagnostics when falling back for content reasons", async () => {
+    mockCritiqueRenderedLeaflet.mockResolvedValue(makePassingCritic());
+    mockRenderHybridLeaflet.mockResolvedValue({
+      buffer: await makeLeafletBuffer(),
+      html: "<div>Get 10% off your first order!</div><div>Book Now</div>",
+      metrics: {
+        width: 1080,
+        height: 1350,
+        layoutPreset: "premium_local_service",
+        realLogoExpected: true,
+        realLogoRendered: true,
+        logoNaturalWidth: 1432,
+        logoNaturalHeight: 472,
+        logoRenderedWidth: 334,
+        logoRenderedHeight: 110,
+        logoVisibleArea: 334 * 110,
+        logoRenderMode: "image",
+        fallbackBadgeRendered: false,
+        logoMaskedOrCropped: false,
+        logoDataUriUsed: true,
+        logoFetchUsed: false,
+      },
+    });
 
     const result = await runHybridPipeline(makeInput() as any);
     expect(result.metadata.usedDeterministicFallback).toBe(true);
@@ -462,11 +508,14 @@ describe("Hybrid pipeline orchestrator", () => {
   it("overrules a full-image logo false positive when the logo-crop critic confirms the real logo", async () => {
     mockCritiqueRenderedLeaflet.mockResolvedValue({
       ...makePassingCritic(),
+      passed: false,
       realLogoPresent: false,
       logoMatchesBrand: false,
       fallbackBadgeUsed: true,
       logoDistortedOrCropped: false,
       brandFidelityPassed: false,
+      criticalIssues: ["Brand fidelity below threshold", "Logo usage below threshold", "Fallback badge used while a real logo exists"],
+      improvementSuggestions: ["Replace the fallback badge with the real logo"],
     });
     mockCritiqueLogoCrop.mockResolvedValue({
       realLogoPresent: true,
@@ -478,13 +527,52 @@ describe("Hybrid pipeline orchestrator", () => {
 
     const result = await runHybridPipeline(makeInput() as any);
     expect(result.metadata.finalDecision).toBe("premium_ready");
+    expect(result.metadata.finalDecisionSource).toBe("adjudicated_effective_critic");
     expect(result.metadata.structuralBrandFidelityPassed).toBe(true);
     expect(result.metadata.visionBrandFidelityPassed).toBe(true);
     expect(result.metadata.criticConflict).toBe(false);
     expect(result.metadata.fullImageVsCropConflict).toBe(true);
     expect(result.metadata.fullImageVsCropConflictReason).toMatch(/Full-image critic reported logo issues/i);
+    expect(result.metadata.rawFullImageCriticPassed).toBe(false);
+    expect(result.metadata.effectiveCriticPassed).toBe(true);
+    expect(result.metadata.effectiveCriticalIssues).toEqual([]);
+    expect(result.metadata.overruledFullImageLogoIssues?.length).toBeGreaterThan(0);
     expect(result.metadata.logoCropRealLogoPresent).toBe(true);
     expect(result.metadata.logoCropFallbackBadgeUsed).toBe(false);
+    expect(result.metadata.revisionCount).toBe(0);
+    expect(result.metadata.fallbackReason).toBeNull();
+  });
+
+  it("removes logo-related issues and suggestions from the effective critic when the crop overrules them", async () => {
+    mockCritiqueRenderedLeaflet.mockResolvedValue({
+      ...makePassingCritic(),
+      passed: false,
+      realLogoPresent: false,
+      logoMatchesBrand: false,
+      fallbackBadgeUsed: true,
+      logoDistortedOrCropped: false,
+      brandFidelityPassed: false,
+      criticalIssues: ["Readability below threshold", "Logo usage below threshold", "Fallback badge used while a real logo exists"],
+      improvementSuggestions: ["Increase text contrast", "Replace the fallback badge with the real logo"],
+    });
+    mockCritiqueLogoCrop.mockResolvedValue({
+      realLogoPresent: true,
+      logoMatchesExpected: true,
+      fallbackBadgeUsed: false,
+      logoDistortedOrCropped: false,
+      explanation: "Focused crop shows the real logo clearly.",
+    });
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.fullImageVsCropConflict).toBe(true);
+    expect(result.metadata.overruledFullImageLogoIssues).toEqual(
+      expect.arrayContaining(["Logo usage below threshold", "Fallback badge used while a real logo exists"])
+    );
+    expect(result.metadata.effectiveCriticalIssues).toEqual(["Readability below threshold"]);
+    expect(result.critic.improvementSuggestions).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/fallback badge/i)])
+    );
+    expect(result.critic.improvementSuggestions).toEqual(expect.arrayContaining(["Increase text contrast"]));
   });
 
   it("passes content fidelity when no offer is provided and no promotional language is rendered", async () => {

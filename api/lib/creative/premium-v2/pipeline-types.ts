@@ -231,6 +231,13 @@ export interface HybridPipelineMetadata {
   logoCropLogoDistortedOrCropped?: boolean;
   fullImageVsCropConflict?: boolean;
   fullImageVsCropConflictReason?: string | null;
+  // Effective/adjudicated critic
+  rawFullImageCriticPassed?: boolean;
+  effectiveCriticPassed?: boolean;
+  effectiveCriticalIssues?: string[];
+  overruledFullImageLogoIssues?: string[];
+  finalDecisionSource?: string;
+  adjudicationNotes?: string[];
   // Brand-asset render diagnostics
   realLogoExpected?: boolean;
   realLogoRendered?: boolean;
