@@ -327,7 +327,14 @@ async function fetchLogo(logoUrl: string): Promise<Buffer | null> {
 
 function shouldReuseBackground(suggestions: string[]): boolean {
   const text = suggestions.join(" ").toLowerCase();
-  const layoutIssues = ["text", "font", "readability", "contrast", "cta", "clipped", "hierarchy", "logo", "layout", "empty", "crowded", "typography"];
+  // Layout/design issues should be fixed by re-rendering the HTML while keeping
+  // the existing AI-generated background. Only switch backgrounds when the critic
+  // explicitly complains about the background itself.
+  const layoutIssues = [
+    "text", "font", "readability", "contrast", "cta", "clipped", "hierarchy",
+    "logo", "layout", "empty", "crowded", "typography", "generic", "template",
+    "card", "bespoke", "visual flow", "dominant",
+  ];
   const backgroundIssues = ["background", "texture", "gradient", "bland", "plain", "boring", "photo"];
   return layoutIssues.some((w) => text.includes(w)) && !backgroundIssues.some((w) => text.includes(w));
 }
@@ -494,30 +501,54 @@ function reviseVisualDirection(visualDirection: VisualDirection, suggestions: st
   const text = suggestions.join(" ").toLowerCase();
   const next: VisualDirection = { ...visualDirection };
 
-  if (text.match(/cta|clipped|button|small/)) {
+  const hasCtaIssue = /cta|clipped|button|small/.test(text);
+  const hasReadabilityIssue = /readability|contrast|font|text|small|blurry|typography/.test(text);
+  const hasGenericIssue = /generic|template|cheap|boring/.test(text);
+  const hasHierarchyIssue = /hierarchy|crowded|clutter|empty space/.test(text);
+  const hasLogoIssue = /\b(logo|brand)\b/.test(text);
+  const hasPremiumIssue = /premium|luxury|rich|flat/.test(text);
+
+  // CTA visibility / clipped CTA → make the CTA a full-width banner.
+  if (hasCtaIssue) {
     next.ctaTreatment = "block_banner";
   }
 
-  if (text.match(/readability|contrast|font|text|small|blurry|typography/)) {
+  // Readability issues → strip density back to minimal and use a solid hero block
+  // for maximum text contrast.
+  if (hasReadabilityIssue) {
     next.density = "minimal";
     next.heroTreatment = "solid_brand_block";
   }
 
-  if (text.match(/generic|template|cheap|boring/)) {
-    next.heroTreatment = next.heroTreatment === "solid_brand_block" ? "shape_accent" : "solid_brand_block";
-    next.backgroundDirection = next.backgroundDirection === "abstract_brand_gradient" ? "dark_premium" : "abstract_brand_gradient";
+  // Generic/template feel → stronger hierarchy, fewer repeated cards, more bespoke
+  // hero shape. Prefer layout/design changes over a brand-new background.
+  if (hasGenericIssue) {
+    next.heroTreatment = "shape_accent";
+    next.ctaTreatment = "block_banner";
+    next.density = next.density === "dense" ? "balanced" : "minimal";
+    // Only ask for a new background if the critic explicitly complains about it.
+    if (/background|texture|gradient|bland|plain/.test(text)) {
+      next.backgroundDirection = next.backgroundDirection === "abstract_brand_gradient" ? "dark_premium" : "abstract_brand_gradient";
+    }
   }
 
-  if (text.match(/premium|luxury|rich|flat/)) {
+  // Premium/luxury/flat feel → richer background direction.
+  if (hasPremiumIssue) {
     next.backgroundDirection = next.backgroundDirection === "clean_white" ? "soft_noise_texture" : "dark_premium";
   }
 
-  if (text.match(/logo|brand/)) {
+  // Logo/brand complaints → accent shape around the hero to frame the lockup.
+  if (hasLogoIssue) {
     next.heroTreatment = "shape_accent";
   }
 
-  if (text.match(/hierarchy|crowded|clutter|empty space/)) {
+  // Weak hierarchy → more whitespace, larger headline (shape_accent), dominant CTA.
+  if (hasHierarchyIssue) {
     next.density = next.density === "dense" ? "balanced" : "minimal";
+    next.ctaTreatment = "block_banner";
+    if (next.heroTreatment === "solid_brand_block" || next.heroTreatment === "minimal_centered") {
+      next.heroTreatment = "shape_accent";
+    }
   }
 
   return next;

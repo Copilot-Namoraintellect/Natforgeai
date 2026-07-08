@@ -226,7 +226,7 @@ function ctaClasses(visualDirection: VisualDirection): string {
 function serviceGridStyle(visualDirection: VisualDirection): string {
   if (visualDirection.density === "minimal") return "grid-template-columns: 1fr;";
   if (visualDirection.density === "dense") return "grid-template-columns: 1fr 1fr 1fr; gap: 16px;";
-  return "grid-template-columns: 1fr 1fr; gap: 22px;";
+  return "grid-template-columns: 1fr 1fr; gap: 24px;";
 }
 
 function buildHtml(
@@ -307,9 +307,9 @@ function buildHtml(
     .bg-pattern {
       position: absolute; inset: 0;
       background-image:
-        radial-gradient(circle at 20% 15%, ${toCssColour(brandKit.primary)}18 0%, transparent 40%),
-        radial-gradient(circle at 85% 80%, ${toCssColour(brandKit.secondary)}14 0%, transparent 38%),
-        radial-gradient(circle at 60% 55%, ${toCssColour(brandKit.accent)}0c 0%, transparent 30%);
+        radial-gradient(circle at 25% 20%, ${toCssColour(brandKit.primary)}16 0%, transparent 42%),
+        radial-gradient(circle at 80% 75%, ${toCssColour(brandKit.secondary)}12 0%, transparent 40%),
+        radial-gradient(circle at 55% 50%, ${toCssColour(brandKit.accent)}0a 0%, transparent 32%);
       z-index: 0;
     }
     .bg-noise {
@@ -319,26 +319,31 @@ function buildHtml(
       z-index: 1;
       pointer-events: none;
     }
-    .bg-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(15,23,42,0.62) 0%, rgba(15,23,42,0.18) 30%, rgba(15,23,42,0.10) 60%, rgba(15,23,42,0.50) 100%); z-index: 1; }
+    .bg-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(8,16,30,0.70) 0%, rgba(8,16,30,0.24) 35%, rgba(8,16,30,0.16) 60%, rgba(8,16,30,0.62) 100%); z-index: 1; }
+    .bg-blob { position: absolute; border-radius: 50%; filter: blur(70px); z-index: 0; pointer-events: none; }
+    .blob-1 { top: -160px; right: -120px; width: 600px; height: 600px; background: radial-gradient(circle at 35% 35%, ${toCssColour(brandKit.primary)}30 0%, transparent 70%); }
+    .blob-2 { bottom: -140px; left: -160px; width: 640px; height: 640px; background: radial-gradient(circle at 65% 65%, ${toCssColour(brandKit.secondary)}26 0%, transparent 70%); }
+    .bg-diagonal { position: absolute; inset: 0; background: linear-gradient(135deg, transparent 38%, ${toCssColour(brandKit.accent)}0d 38%, ${toCssColour(brandKit.accent)}0d 43%, transparent 43%); z-index: 0; pointer-events: none; }
     .brand-shape {
       position: absolute;
-      bottom: 220px;
-      left: -120px;
-      width: 320px;
-      height: 320px;
+      bottom: 260px;
+      left: -150px;
+      width: 400px;
+      height: 400px;
       border-radius: 50%;
       background: ${toCssColour(brandKit.accent)};
-      opacity: 0.10;
+      opacity: 0.12;
+      filter: blur(40px);
       z-index: 1;
     }
     .brand-stripe {
       position: absolute;
-      top: -60px;
-      right: 180px;
-      width: 70px;
-      height: 420px;
+      top: -90px;
+      right: 160px;
+      width: 90px;
+      height: 480px;
       background: ${toCssColour(brandKit.secondary)};
-      opacity: 0.10;
+      opacity: 0.14;
       transform: rotate(20deg);
       border-radius: 50px;
       z-index: 1;
@@ -351,7 +356,7 @@ function buildHtml(
       align-items: center;
       justify-content: space-between;
       padding: 0 56px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.97) 0%, rgba(255,255,255,0.92) 55%, rgba(255,255,255,0) 100%);
+      background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.92) 55%, rgba(255,255,255,0) 100%);
       border-bottom: 1px solid rgba(255,255,255,0.35);
       z-index: 4;
     }
@@ -374,27 +379,35 @@ function buildHtml(
     .brand-wordmark { display: flex; flex-direction: column; }
     .business-name { font-size: 20px; font-weight: 900; letter-spacing: -0.01em; line-height: 1.15; color: ${toCssColour(brandKit.text)}; }
     .business-label { font-size: 12px; font-weight: 700; opacity: 0.58; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.06em; color: ${toCssColour(brandKit.textMuted)}; }
-    .hero {
+    .main {
       position: absolute;
       top: 170px; left: 0; right: 0;
-      min-height: 300px;
-      padding: 44px 56px;
+      bottom: 130px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 34px 56px 40px;
+      z-index: 3;
+      overflow: hidden;
+    }
+    .hero {
+      position: relative;
       display: flex;
       flex-direction: column;
       justify-content: center;
       align-items: flex-start;
       text-align: left;
       color: #ffffff;
-      z-index: 3;
+      flex-shrink: 0;
     }
     .hero-panel {
-      background: rgba(15,23,42,0.46);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border-radius: 24px;
-      padding: 26px 32px;
-      border-left: 6px solid ${toCssColour(brandKit.accent)};
-      box-shadow: 0 16px 40px rgba(0,0,0,0.18);
+      background: rgba(8,16,30,0.56);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-radius: 26px;
+      padding: 34px 40px;
+      border-left: 8px solid ${toCssColour(brandKit.accent)};
+      box-shadow: 0 20px 50px rgba(0,0,0,0.22);
       max-width: 920px;
     }
     .hero-shape-accent {
@@ -409,44 +422,70 @@ function buildHtml(
       border-radius: 36px;
       z-index: 0;
     }
-    .headline { position: relative; z-index: 2; font-size: 56px; font-weight: 900; line-height: 1.05; margin-bottom: 12px; letter-spacing: -0.03em; text-shadow: 0 3px 12px rgba(0,0,0,0.25); }
-    .subheadline { position: relative; z-index: 2; font-size: 24px; font-weight: 500; line-height: 1.4; opacity: 0.96; }
-    .offer-badge { position: relative; z-index: 2; margin-top: 14px; padding: 10px 22px; border-radius: 12px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 24px; font-weight: 900; box-shadow: 0 6px 18px rgba(0,0,0,0.15); display: inline-block; }
-    .services { position: absolute; top: 610px; left: 56px; right: 56px; display: grid; ${serviceGridStyle(visualDirection)}; z-index: 3; }
+    .headline { position: relative; z-index: 2; font-size: 62px; font-weight: 900; line-height: 1.02; margin-bottom: 14px; letter-spacing: -0.035em; text-shadow: 0 4px 16px rgba(0,0,0,0.28); }
+    .subheadline { position: relative; z-index: 2; font-size: 26px; font-weight: 500; line-height: 1.4; opacity: 0.96; }
+    .offer-badge { position: relative; z-index: 2; margin-top: 16px; padding: 12px 26px; border-radius: 14px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 26px; font-weight: 900; box-shadow: 0 8px 22px rgba(0,0,0,0.16); display: inline-block; }
+    .services { position: relative; display: grid; ${serviceGridStyle(visualDirection)}; width: 100%; margin: 18px 0; }
     .service-card {
       position: relative;
       background: linear-gradient(145deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.96) 100%);
-      border-radius: 20px;
-      padding: 24px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04);
-      min-height: 120px;
+      border-radius: 22px;
+      padding: 26px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.09), 0 2px 8px rgba(0,0,0,0.04);
+      min-height: 122px;
       display: flex;
       flex-direction: column;
       justify-content: center;
       border: 1px solid rgba(255,255,255,0.7);
-      border-top: 5px solid ${toCssColour(brandKit.accent)};
+      border-top: 6px solid ${toCssColour(brandKit.accent)};
     }
-    .card-number { position: absolute; top: 10px; right: 16px; font-size: 44px; font-weight: 900; color: ${toCssColour(brandKit.accent)}; opacity: 0.10; line-height: 1; }
-    .card-title { font-size: 25px; font-weight: 900; color: ${toCssColour(brandKit.text)}; margin-bottom: 7px; line-height: 1.25; letter-spacing: -0.01em; }
-    .card-desc { font-size: 17px; color: ${toCssColour(brandKit.textMuted)}; line-height: 1.45; }
-    .secondary-strip { position: absolute; top: 900px; left: 56px; right: 56px; padding: 16px 32px; border-radius: 14px; background: rgba(255,255,255,0.94); text-align: center; font-size: 22px; font-weight: 800; color: ${toCssColour(brandKit.text)}; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.6); }
-    .benefits-band { position: absolute; top: 980px; left: 56px; right: 56px; padding: 22px 34px; border-radius: 18px; background: rgba(255,255,255,0.94); display: flex; justify-content: space-between; gap: 20px; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.6); }
+    .service-card:first-child { background: linear-gradient(145deg, #ffffff 0%, rgba(255,255,255,0.98) 100%); box-shadow: 0 16px 40px rgba(0,0,0,0.12); border-left: 4px solid ${toCssColour(brandKit.accent)}; padding: 30px; }
+    .service-card:nth-child(even) { transform: translateY(8px); }
+    .service-card:nth-child(3n+1) { border-top-color: ${toCssColour(brandKit.accent)}; }
+    .service-card:nth-child(3n+2) { border-top-color: ${toCssColour(brandKit.secondary)}; }
+    .service-card:nth-child(3n+3) { border-top-color: ${toCssColour(brandKit.primary)}; }
+    .card-number { position: absolute; top: 12px; right: 18px; font-size: 48px; font-weight: 900; color: ${toCssColour(brandKit.accent)}; opacity: 0.12; line-height: 1; }
+    .service-card:nth-child(3n+2) .card-number { color: ${toCssColour(brandKit.secondary)}; }
+    .service-card:nth-child(3n+3) .card-number { color: ${toCssColour(brandKit.primary)}; }
+    .card-title { font-size: 26px; font-weight: 900; color: ${toCssColour(brandKit.text)}; margin-bottom: 8px; line-height: 1.25; letter-spacing: -0.01em; }
+    .card-desc { font-size: 18px; color: ${toCssColour(brandKit.textMuted)}; line-height: 1.45; }
+    .secondary-strip { position: relative; padding: 18px 34px; border-radius: 16px; background: rgba(255,255,255,0.94); text-align: center; font-size: 22px; font-weight: 800; color: ${toCssColour(brandKit.text)}; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.6); margin: 12px 0; }
+    .benefits-band { position: relative; padding: 22px 34px; border-radius: 18px; background: rgba(255,255,255,0.94); display: flex; justify-content: space-between; gap: 20px; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.6); margin: 12px 0; }
     .benefit-item { flex: 1; display: flex; align-items: flex-start; gap: 12px; font-size: 21px; font-weight: 800; line-height: 1.35; color: ${toCssColour(brandKit.text)}; }
     .bullet { width: 11px; height: 11px; border-radius: 50%; background: ${toCssColour(brandKit.accent)}; flex-shrink: 0; margin-top: 7px; }
     .cta {
-      position: absolute;
-      bottom: 150px;
-      left: 56px;
-      right: 56px;
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 3;
+      margin-top: 18px;
+      flex-shrink: 0;
     }
-    .cta-button { padding: 24px 64px; border-radius: 16px; background: ${toCssColour(brandKit.accent)}; color: ${contrastColor(brandKit.accent)}; font-size: 38px; font-weight: 900; text-align: center; box-shadow: 0 10px 28px rgba(0,0,0,0.20), 0 0 0 4px rgba(255,255,255,0.25); border: 3px solid rgba(255,255,255,0.35); text-shadow: 0 1px 2px rgba(0,0,0,0.12); }
-    .cta-block { width: 100%; border-radius: 0; }
-    .cta-pill { border-radius: 80px; }
-    .cta-outline { background: transparent; color: ${toCssColour(brandKit.accent)}; border: 4px solid ${toCssColour(brandKit.accent)}; }
+    .cta-button {
+      width: 100%;
+      padding: 28px 56px;
+      border-radius: 18px;
+      background: ${toCssColour(brandKit.accent)};
+      color: ${contrastColor(brandKit.accent)};
+      font-size: 42px;
+      font-weight: 900;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      box-shadow: 0 18px 44px rgba(0,0,0,0.25), 0 0 0 6px rgba(255,255,255,0.35), inset 0 -5px 0 rgba(0,0,0,0.12);
+      border: none;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.12);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+    .cta-button::after { content: "→"; font-size: 0.85em; }
+    .cta-block { width: 100%; border-radius: 0; margin-left: -56px; margin-right: -56px; width: calc(100% + 112px); }
+    .cta-block::after { content: "→"; }
+    .cta-pill { width: auto; border-radius: 80px; padding: 28px 72px; }
+    .cta-outline { background: transparent; color: ${toCssColour(brandKit.accent)}; border: 5px solid ${toCssColour(brandKit.accent)}; box-shadow: 0 0 0 4px rgba(255,255,255,0.25); }
+    .cta-outline::after { content: "→"; }
     .footer {
       position: absolute;
       bottom: 0; left: 0; right: 0;
@@ -464,20 +503,37 @@ function buildHtml(
     .footer-name { font-size: 28px; font-weight: 900; margin-bottom: 8px; text-shadow: 0 2px 8px rgba(0,0,0,0.25); }
     .footer-line { font-size: 24px; font-weight: 600; opacity: 0.95; letter-spacing: 0.01em; }
 
+    /* Visual-direction aware hierarchy tuning */
+    .hero-shape_accent .headline { font-size: 68px; }
+    .hero-solid_brand_block .headline { font-size: 62px; }
+    .hero-gradient_abstract .hero-panel { background: linear-gradient(135deg, rgba(15,23,42,0.64), rgba(15,23,42,0.34)); }
+    .hero-photo_full_bleed .hero-panel { background: rgba(8,16,30,0.62); }
+    .hero-minimal_centered .hero { align-items: center; text-align: center; }
+    .hero-minimal_centered .hero-panel { border-left: none; border-top: 8px solid ${toCssColour(brandKit.accent)}; }
+
+    .density-minimal .services { max-width: 780px; }
+    .density-minimal .service-card { min-height: 140px; }
+    .density-dense .service-card { padding: 20px; }
+    .density-dense .card-title { font-size: 24px; }
+    .density-dense .card-desc { font-size: 16px; }
+
     /* Layout presets */
-    .preset-premium_services_brand_panel .hero { min-height: 320px; }
-    .preset-premium_local_service .hero { min-height: 340px; }
+    .preset-premium_services_brand_panel .headline { font-size: 64px; }
+    .preset-premium_local_service .headline { font-size: 62px; }
     .preset-premium_offer_hero .offer-badge { font-size: 30px; padding: 14px 30px; }
-    .preset-premium_retail_promo .headline { font-size: 64px; }
-    .preset-premium_food_offer .hero-panel { background: rgba(15,23,42,0.52); }
-    .preset-premium_professional_clean .hero-panel { background: rgba(15,23,42,0.52); }
+    .preset-premium_retail_promo .headline { font-size: 70px; }
+    .preset-premium_food_offer .hero-panel { background: rgba(15,23,42,0.60); }
+    .preset-premium_professional_clean .hero-panel { background: rgba(15,23,42,0.60); }
   </style>
 </head>
 <body>
-  <div class="canvas preset-${primary}">
+  <div class="canvas preset-${primary} hero-${visualDirection.heroTreatment} density-${visualDirection.density} cta-${visualDirection.ctaTreatment}">
     <div class="bg-pattern"></div>
     <div class="bg-noise"></div>
     <div class="bg-overlay"></div>
+    <div class="bg-blob blob-1"></div>
+    <div class="bg-blob blob-2"></div>
+    <div class="bg-diagonal"></div>
     <div class="brand-shape"></div>
     <div class="brand-stripe"></div>
     ${hasShapeAccent ? '<div class="hero-shape-accent"></div>' : ""}
@@ -491,17 +547,19 @@ function buildHtml(
         </div>
       </div>
     </div>
-    <div class="hero">
-      <div class="hero-panel">
-        <div class="headline">${escapeHtml(brief.headline)}</div>
-        <div class="subheadline">${escapeHtml(brief.subheadline)}</div>
-        ${offerBadge}
+    <main class="main">
+      <div class="hero">
+        <div class="hero-panel">
+          <div class="headline">${escapeHtml(brief.headline)}</div>
+          <div class="subheadline">${escapeHtml(brief.subheadline)}</div>
+          ${offerBadge}
+        </div>
       </div>
-    </div>
-    <div class="services">${primaryCards}</div>
-    ${secondaryStrip}
-    ${benefits}
-    <div class="cta"><div class="${ctaClasses(visualDirection)}">${escapeHtml(brief.cta)}</div></div>
+      <div class="services">${primaryCards}</div>
+      ${secondaryStrip}
+      ${benefits}
+      <div class="cta"><div class="${ctaClasses(visualDirection)}">${escapeHtml(brief.cta)}</div></div>
+    </main>
     <div class="footer">
       <div class="footer-name">${escapeHtml(brief.businessName)}</div>
       ${footer}

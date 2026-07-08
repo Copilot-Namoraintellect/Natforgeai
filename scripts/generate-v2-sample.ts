@@ -96,7 +96,7 @@ async function renderFixture(
     hybridResult = hybrid;
     buffer = hybrid.buffer;
     passed = hybrid.metadata.finalDecision === "premium_ready";
-    label = decisionLabel(hybrid.metadata.finalDecision);
+    label = decisionLabel(hybrid.metadata.finalDecision, hybrid.metadata);
 
     console.log(`\n[${fixtureName}] Hybrid brief:`, JSON.stringify(hybrid.brief, null, 2));
     console.log(`[${fixtureName}] Hybrid visual direction:`, JSON.stringify(hybrid.visualDirection, null, 2));

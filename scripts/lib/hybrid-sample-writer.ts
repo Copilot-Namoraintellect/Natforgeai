@@ -8,12 +8,22 @@ import sharp from "sharp";
 import type { HybridPipelineResult, HybridFinalDecision } from "../../api/lib/creative/premium-v2/pipeline-types";
 import type { BrandAssetResolution } from "../../api/lib/creative/brand-asset-resolver";
 
-export function decisionLabel(finalDecision: HybridFinalDecision): string {
+export function decisionLabel(
+  finalDecision: HybridFinalDecision,
+  metadata?: Pick<HybridPipelineMetadata, "succeededOpenAIVisionCritic" | "usedDeterministicFallback">
+): string {
   switch (finalDecision) {
     case "premium_ready":
       return "Hybrid Premium Ready";
-    case "hybrid_review_required":
-      return "Vision Critic Unavailable - Needs Review";
+    case "hybrid_review_required": {
+      // Only say the critic is unavailable when it actually failed.
+      // A successful critic that still flags design-quality issues is a normal
+      // hybrid review queue, not a critic outage.
+      const criticUnavailable =
+        metadata?.succeededOpenAIVisionCritic === false ||
+        (metadata?.usedDeterministicFallback && metadata?.succeededOpenAIVisionCritic === false);
+      return criticUnavailable ? "Vision Critic Unavailable - Needs Review" : "Hybrid Review Required";
+    }
     case "content_review_required":
       return "Content Review Required";
     case "fallback_used":
@@ -105,7 +115,7 @@ export function buildHybridLogEntry(
 ): HybridLogEntry {
   return {
     fixture: fixtureName,
-    label: decisionLabel(hybridResult.metadata.finalDecision),
+    label: decisionLabel(hybridResult.metadata.finalDecision, hybridResult.metadata),
     passed:
       hybridResult.metadata.finalDecision === "premium_ready" &&
       !hybridResult.metadata.usedDeterministicFallback,
