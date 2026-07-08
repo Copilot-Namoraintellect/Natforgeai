@@ -19,12 +19,13 @@
  */
 
 import { env } from "../../env";
+import sharp from "sharp";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
 import { applyBrandAssetGate, type BrandAssetResolution } from "../brand-asset-resolver";
 import { planCreativeWithAI } from "./plan-ai";
 import { generateBackground } from "./background-generator";
 import { renderHybridLeaflet, type HybridRenderBrief } from "./html-renderer";
-import { critiqueRenderedLeaflet } from "./vision-critic";
+import { critiqueRenderedLeaflet, critiqueLogoCrop, type LogoCropCriticResult } from "./vision-critic";
 import { renderV2FromBrief } from "./renderer";
 import { buildPremiumV2Brief } from "./brief";
 import { validatePremiumV2Quality } from "./quality";
@@ -102,6 +103,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
 
     let lastContentFidelity: ContentFidelityResult | undefined;
     let lastBrandFidelity: BrandFidelityAdjudication | undefined;
+    let lastLogoCropCritic: LogoCropCriticResult | undefined;
 
     while (revisionCount <= maxRevisions) {
       const reuseBackground = revisionCount > 0 && shouldReuseBackground(critic?.improvementSuggestions || []);
@@ -109,6 +111,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       const render = await renderOnce(input, brandKit, brief, visualDirection, reuseBackground ? lastBackgroundBuffer : null);
       lastRenderMetrics = render.metrics;
       lastContentFidelity = render.contentFidelity;
+      lastLogoCropCritic = render.logoCropCritic;
       stage.background.attempted = true;
       if (render.backgroundBuffer) {
         lastBackgroundBuffer = render.backgroundBuffer;
@@ -124,7 +127,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
       stage.visionCritic.succeeded = !critic.unavailable;
       openAICallCount++; // critic call
 
-      const brandFidelity = computeBrandFidelityAdjudication(lastRenderMetrics, critic, brandAsset);
+      const brandFidelity = computeBrandFidelityAdjudication(lastRenderMetrics, critic, brandAsset, lastLogoCropCritic);
       lastBrandFidelity = brandFidelity;
 
       if (sampleMode) {
@@ -223,6 +226,8 @@ interface RenderOutput {
   html: string;
   metrics?: import("./pipeline-types").HybridRenderMetrics;
   contentFidelity?: ContentFidelityResult;
+  logoCropBuffer?: Buffer;
+  logoCropCritic?: LogoCropCriticResult;
 }
 
 async function renderOnce(
@@ -259,9 +264,32 @@ async function renderOnce(
 
   const { buffer, metrics, html } = await renderHybridLeaflet(renderBrief, brandKit, visualDirection, backgroundBuffer, logoBuffer, brandKit.brandAsset);
   const contentFidelity = evaluateContentFidelity(input.business as BusinessEvidence, input.campaign || {}, brief, html);
+
+  // Extract a focused logo/header crop for logo-specific vision verification.
+  let logoCropBuffer: Buffer | undefined;
+  let logoCropCritic: LogoCropCriticResult | undefined;
+  const realLogoExpected = !!brandAsset && brandAsset.realLogoExpected;
+  if (realLogoExpected && logoBuffer) {
+    try {
+      logoCropBuffer = await sharp(buffer)
+        .extract({ left: 0, top: 0, width: 1080, height: 170 })
+        .png()
+        .toBuffer();
+      logoCropCritic = await critiqueLogoCrop(
+        logoCropBuffer,
+        logoBuffer,
+        input.business.displayName || input.business.name || "Business"
+      );
+      console.log(`[HybridPipeline renderOnce] logo crop critic: ${JSON.stringify(logoCropCritic)}`);
+    } catch (err: any) {
+      console.warn(`[HybridPipeline renderOnce] logo crop critique failed: ${err.message}`);
+    }
+  }
+
   console.log(`[HybridPipeline renderOnce] render metrics: ${JSON.stringify(metrics)}`);
   console.log(`[HybridPipeline renderOnce] content fidelity: ${JSON.stringify(contentFidelity)}`);
-  return { buffer, backgroundBuffer, html, metrics, contentFidelity };
+  console.log(`[HybridPipeline renderOnce] visible rendered text: ${contentFidelity.visibleRenderedText}`);
+  return { buffer, backgroundBuffer, html, metrics, contentFidelity, logoCropBuffer, logoCropCritic };
 }
 
 async function fetchLogo(logoUrl: string): Promise<Buffer | null> {
@@ -286,12 +314,16 @@ interface BrandFidelityAdjudication {
   visionBrandFidelityPassed: boolean;
   criticConflict: boolean;
   criticConflictReason: string | null;
+  fullImageVsCropConflict: boolean;
+  fullImageVsCropConflictReason: string | null;
+  logoCropCritic?: LogoCropCriticResult;
 }
 
 function computeBrandFidelityAdjudication(
   renderMetrics: import("./pipeline-types").HybridRenderMetrics | undefined,
   critic: VisionCriticResult,
-  brandAsset: BrandAssetResolution | undefined
+  brandAsset: BrandAssetResolution | undefined,
+  logoCropCritic?: LogoCropCriticResult
 ): BrandFidelityAdjudication {
   const realLogoExpected = !!brandAsset && brandAsset.realLogoExpected;
 
@@ -302,17 +334,39 @@ function computeBrandFidelityAdjudication(
       renderMetrics?.fallbackBadgeRendered === false &&
       renderMetrics?.logoMaskedOrCropped === false);
 
-  // Vision critic's opinion about the logo specifically.
-  const visionBrandFidelityPassed =
+  // What the full-image critic thinks about the logo on its own.
+  const fullImageLogoPassed =
     !realLogoExpected ||
     (critic.realLogoPresent && !critic.fallbackBadgeUsed && !critic.logoDistortedOrCropped && critic.logoMatchesBrand);
 
-  const criticConflict =
-    realLogoExpected && structuralBrandFidelityPassed && !visionBrandFidelityPassed;
+  // Focused logo-crop critic result, when available.
+  const cropLogoPassed = logoCropCritic
+    ? logoCropCritic.realLogoPresent && !logoCropCritic.fallbackBadgeUsed && !logoCropCritic.logoDistortedOrCropped && logoCropCritic.logoMatchesExpected
+    : undefined;
+
+  // Prefer the focused logo-crop critic when available; otherwise fall back to the full-image critic's logo fields.
+  const visionBrandFidelityPassed = cropLogoPassed ?? fullImageLogoPassed;
+
+  // Critic conflict occurs when structural renderer truth says logo is fine but the final vision verdict disagrees.
+  const criticConflict = realLogoExpected && structuralBrandFidelityPassed && !visionBrandFidelityPassed;
 
   let criticConflictReason: string | null = null;
   if (criticConflict) {
-    criticConflictReason = `Vision critic contradicted renderer logo diagnostics. Renderer: realLogoRendered=${renderMetrics?.realLogoRendered}, fallbackBadgeRendered=${renderMetrics?.fallbackBadgeRendered}, logoMaskedOrCropped=${renderMetrics?.logoMaskedOrCropped}. Critic: realLogoPresent=${critic.realLogoPresent}, fallbackBadgeUsed=${critic.fallbackBadgeUsed}, logoDistortedOrCropped=${critic.logoDistortedOrCropped}, logoMatchesBrand=${critic.logoMatchesBrand}, brandFidelityPassed=${critic.brandFidelityPassed}.`;
+    const source = cropLogoPassed !== undefined ? "logo-crop critic" : "full-image critic";
+    if (cropLogoPassed !== undefined) {
+      criticConflictReason = `Vision ${source} contradicted renderer logo diagnostics. Renderer: realLogoRendered=${renderMetrics?.realLogoRendered}, fallbackBadgeRendered=${renderMetrics?.fallbackBadgeRendered}, logoMaskedOrCropped=${renderMetrics?.logoMaskedOrCropped}. Logo-crop critic: realLogoPresent=${logoCropCritic!.realLogoPresent}, fallbackBadgeUsed=${logoCropCritic!.fallbackBadgeUsed}, logoDistortedOrCropped=${logoCropCritic!.logoDistortedOrCropped}, logoMatchesExpected=${logoCropCritic!.logoMatchesExpected}.`;
+    } else {
+      criticConflictReason = `Vision ${source} contradicted renderer logo diagnostics. Renderer: realLogoRendered=${renderMetrics?.realLogoRendered}, fallbackBadgeRendered=${renderMetrics?.fallbackBadgeRendered}, logoMaskedOrCropped=${renderMetrics?.logoMaskedOrCropped}. Critic: realLogoPresent=${critic.realLogoPresent}, fallbackBadgeUsed=${critic.fallbackBadgeUsed}, logoDistortedOrCropped=${critic.logoDistortedOrCropped}, logoMatchesBrand=${critic.logoMatchesBrand}, brandFidelityPassed=${critic.brandFidelityPassed}.`;
+    }
+  }
+
+  // Record when the full-image critic disagrees with the logo-crop/reference evidence, even though the crop resolves the final verdict.
+  const fullImageVsCropConflict =
+    realLogoExpected && !!logoCropCritic && !fullImageLogoPassed && cropLogoPassed === true;
+
+  let fullImageVsCropConflictReason: string | null = null;
+  if (fullImageVsCropConflict) {
+    fullImageVsCropConflictReason = `Full-image critic reported logo issues but logo-crop/reference check overruled it. Full-image: realLogoPresent=${critic.realLogoPresent}, fallbackBadgeUsed=${critic.fallbackBadgeUsed}, logoDistortedOrCropped=${critic.logoDistortedOrCropped}, logoMatchesBrand=${critic.logoMatchesBrand}. Logo-crop: realLogoPresent=${logoCropCritic!.realLogoPresent}, fallbackBadgeUsed=${logoCropCritic!.fallbackBadgeUsed}, logoDistortedOrCropped=${logoCropCritic!.logoDistortedOrCropped}, logoMatchesExpected=${logoCropCritic!.logoMatchesExpected}.`;
   }
 
   return {
@@ -320,6 +374,9 @@ function computeBrandFidelityAdjudication(
     visionBrandFidelityPassed,
     criticConflict,
     criticConflictReason,
+    fullImageVsCropConflict,
+    fullImageVsCropConflictReason,
+    logoCropCritic,
   };
 }
 
@@ -513,6 +570,14 @@ async function runDeterministicFallback(
     offerRendered: contentFidelity?.offerRendered,
     inventedOfferDetected: contentFidelity?.inventedOfferDetected,
     contentFidelityPassed: contentFidelity?.contentFidelityPassed,
+    detectedOfferSnippet: contentFidelity?.detectedOfferSnippet ?? null,
+    visibleRenderedText: contentFidelity?.visibleRenderedText,
+    logoCropRealLogoPresent: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.realLogoPresent : undefined,
+    logoCropLogoMatchesExpected: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.logoMatchesExpected : undefined,
+    logoCropFallbackBadgeUsed: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.fallbackBadgeUsed : undefined,
+    logoCropLogoDistortedOrCropped: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.logoDistortedOrCropped : undefined,
+    fullImageVsCropConflict: brandFidelity?.fullImageVsCropConflict,
+    fullImageVsCropConflictReason: brandFidelity?.fullImageVsCropConflictReason ?? null,
     realLogoExpected: lastMetrics?.realLogoExpected,
     realLogoRendered: lastMetrics?.realLogoRendered,
     logoNaturalWidth: lastMetrics?.logoNaturalWidth,
@@ -592,7 +657,7 @@ function buildResult(
     quotaError: false,
     openAICallCount,
     revisionCount,
-    finalDecision: computeFinalDecision(critic, brandFidelity || { structuralBrandFidelityPassed: true, visionBrandFidelityPassed: critic.passed, criticConflict: false, criticConflictReason: null }, contentFidelity),
+    finalDecision: computeFinalDecision(critic, brandFidelity || { structuralBrandFidelityPassed: true, visionBrandFidelityPassed: critic.passed, criticConflict: false, criticConflictReason: null, fullImageVsCropConflict: false, fullImageVsCropConflictReason: null }, contentFidelity),
     rejectionCritic: null,
     structuralBrandFidelityPassed: brandFidelity?.structuralBrandFidelityPassed,
     visionBrandFidelityPassed: brandFidelity?.visionBrandFidelityPassed,
@@ -603,6 +668,14 @@ function buildResult(
     offerRendered: contentFidelity?.offerRendered,
     inventedOfferDetected: contentFidelity?.inventedOfferDetected,
     contentFidelityPassed: contentFidelity?.contentFidelityPassed,
+    detectedOfferSnippet: contentFidelity?.detectedOfferSnippet ?? null,
+    visibleRenderedText: contentFidelity?.visibleRenderedText,
+    logoCropRealLogoPresent: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.realLogoPresent : undefined,
+    logoCropLogoMatchesExpected: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.logoMatchesExpected : undefined,
+    logoCropFallbackBadgeUsed: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.fallbackBadgeUsed : undefined,
+    logoCropLogoDistortedOrCropped: brandFidelity?.fullImageVsCropConflict ? brandFidelity.logoCropCritic?.logoDistortedOrCropped : undefined,
+    fullImageVsCropConflict: brandFidelity?.fullImageVsCropConflict,
+    fullImageVsCropConflictReason: brandFidelity?.fullImageVsCropConflictReason ?? null,
     realLogoExpected: renderMetrics?.realLogoExpected,
     realLogoRendered: renderMetrics?.realLogoRendered,
     logoNaturalWidth: renderMetrics?.logoNaturalWidth,

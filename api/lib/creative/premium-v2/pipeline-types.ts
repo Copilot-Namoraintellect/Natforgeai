@@ -222,6 +222,15 @@ export interface HybridPipelineMetadata {
   offerRendered?: boolean;
   inventedOfferDetected?: boolean;
   contentFidelityPassed?: boolean;
+  detectedOfferSnippet?: string | null;
+  visibleRenderedText?: string;
+  // Logo-crop critic (focused verification when full-image critic is unreliable)
+  logoCropRealLogoPresent?: boolean;
+  logoCropLogoMatchesExpected?: boolean;
+  logoCropFallbackBadgeUsed?: boolean;
+  logoCropLogoDistortedOrCropped?: boolean;
+  fullImageVsCropConflict?: boolean;
+  fullImageVsCropConflictReason?: string | null;
   // Brand-asset render diagnostics
   realLogoExpected?: boolean;
   realLogoRendered?: boolean;

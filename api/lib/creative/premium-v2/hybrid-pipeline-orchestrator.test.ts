@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import sharp from "sharp";
 
 const mockPlanCreativeWithAI = vi.fn();
 const mockGenerateBackground = vi.fn();
 const mockRenderHybridLeaflet = vi.fn();
 const mockCritiqueRenderedLeaflet = vi.fn();
+const mockCritiqueLogoCrop = vi.fn();
 const mockRenderV2FromBrief = vi.fn();
 const mockValidatePremiumV2Quality = vi.fn();
 const mockBuildPremiumV2Brief = vi.fn();
@@ -22,6 +24,7 @@ vi.mock("./html-renderer", () => ({
 
 vi.mock("./vision-critic", () => ({
   critiqueRenderedLeaflet: (...args: any[]) => mockCritiqueRenderedLeaflet(...args),
+  critiqueLogoCrop: (...args: any[]) => mockCritiqueLogoCrop(...args),
 }));
 
 vi.mock("./renderer", () => ({
@@ -115,6 +118,19 @@ function makePlan() {
   };
 }
 
+async function makeLeafletBuffer(): Promise<Buffer> {
+  return sharp({
+    create: {
+      width: 1080,
+      height: 1350,
+      channels: 4,
+      background: { r: 255, g: 255, b: 255, alpha: 1 },
+    },
+  })
+    .png()
+    .toBuffer();
+}
+
 function makeNoLogoPlan() {
   const plan = makePlan();
   return {
@@ -155,6 +171,16 @@ function makePassingCritic(): any {
   };
 }
 
+function makeFailingLogoCropCritic(): any {
+  return {
+    realLogoPresent: false,
+    logoMatchesExpected: false,
+    fallbackBadgeUsed: true,
+    logoDistortedOrCropped: false,
+    explanation: "Focused crop does not show the real logo.",
+  };
+}
+
 function makeRejectingCritic(): any {
   return {
     scores: { brandFidelity: 60, readability: 60, premiumFeel: 60, visualHierarchy: 60, logoUsage: 60, CTAVisibility: 60, genericTemplateRisk: 60 },
@@ -172,13 +198,13 @@ function makeRejectingCritic(): any {
 }
 
 describe("Hybrid pipeline orchestrator", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
 
     mockPlanCreativeWithAI.mockResolvedValue({ value: makePlan(), usedOpenAI: true });
     mockGenerateBackground.mockResolvedValue(Buffer.from("background"));
     mockRenderHybridLeaflet.mockResolvedValue({
-      buffer: Buffer.from("hybrid"),
+      buffer: await makeLeafletBuffer(),
       html: "<div>Spotless Home, Zero Stress</div><div>Book Now</div>",
       metrics: {
         width: 1080,
@@ -199,6 +225,13 @@ describe("Hybrid pipeline orchestrator", () => {
       },
     });
     mockCritiqueRenderedLeaflet.mockResolvedValue(makePassingCritic());
+    mockCritiqueLogoCrop.mockResolvedValue({
+      realLogoPresent: true,
+      logoMatchesExpected: true,
+      fallbackBadgeUsed: false,
+      logoDistortedOrCropped: false,
+      explanation: "Crop matches expected logo.",
+    });
 
     mockBuildPremiumV2Brief.mockResolvedValue({
       headline: "Fallback headline",
@@ -347,6 +380,7 @@ describe("Hybrid pipeline orchestrator", () => {
       logoDistortedOrCropped: false,
       brandFidelityPassed: false,
     });
+    mockCritiqueLogoCrop.mockResolvedValue(makeFailingLogoCropCritic());
 
     const result = await runHybridPipeline(makeInput() as any);
     expect(result.metadata.finalDecision).not.toBe("premium_ready");
@@ -363,6 +397,7 @@ describe("Hybrid pipeline orchestrator", () => {
       logoDistortedOrCropped: true,
       brandFidelityPassed: false,
     });
+    mockCritiqueLogoCrop.mockResolvedValue(makeFailingLogoCropCritic());
 
     const result = await runHybridPipeline(makeInput() as any);
     expect(result.metadata.finalDecision).not.toBe("premium_ready");
@@ -413,14 +448,43 @@ describe("Hybrid pipeline orchestrator", () => {
       logoDistortedOrCropped: false,
       brandFidelityPassed: false,
     });
+    mockCritiqueLogoCrop.mockResolvedValue(makeFailingLogoCropCritic());
 
     const result = await runHybridPipeline(makeInput() as any);
     expect(result.metadata.finalDecision).not.toBe("premium_ready");
     expect(result.metadata.criticConflict).toBe(true);
     expect(result.metadata.structuralBrandFidelityPassed).toBe(true);
     expect(result.metadata.visionBrandFidelityPassed).toBe(false);
-    expect(result.metadata.criticConflictReason).toMatch(/Vision critic contradicted renderer logo diagnostics/i);
-    expect(result.metadata.fallbackReason).toMatch(/Vision critic contradicted renderer logo diagnostics/i);
+    expect(result.metadata.criticConflictReason).toMatch(/Vision .*critic contradicted renderer logo diagnostics/i);
+    expect(result.metadata.fallbackReason).toMatch(/Vision .*critic contradicted renderer logo diagnostics/i);
+  });
+
+  it("overrules a full-image logo false positive when the logo-crop critic confirms the real logo", async () => {
+    mockCritiqueRenderedLeaflet.mockResolvedValue({
+      ...makePassingCritic(),
+      realLogoPresent: false,
+      logoMatchesBrand: false,
+      fallbackBadgeUsed: true,
+      logoDistortedOrCropped: false,
+      brandFidelityPassed: false,
+    });
+    mockCritiqueLogoCrop.mockResolvedValue({
+      realLogoPresent: true,
+      logoMatchesExpected: true,
+      fallbackBadgeUsed: false,
+      logoDistortedOrCropped: false,
+      explanation: "Focused crop clearly shows the real logo.",
+    });
+
+    const result = await runHybridPipeline(makeInput() as any);
+    expect(result.metadata.finalDecision).toBe("premium_ready");
+    expect(result.metadata.structuralBrandFidelityPassed).toBe(true);
+    expect(result.metadata.visionBrandFidelityPassed).toBe(true);
+    expect(result.metadata.criticConflict).toBe(false);
+    expect(result.metadata.fullImageVsCropConflict).toBe(true);
+    expect(result.metadata.fullImageVsCropConflictReason).toMatch(/Full-image critic reported logo issues/i);
+    expect(result.metadata.logoCropRealLogoPresent).toBe(true);
+    expect(result.metadata.logoCropFallbackBadgeUsed).toBe(false);
   });
 
   it("passes content fidelity when no offer is provided and no promotional language is rendered", async () => {

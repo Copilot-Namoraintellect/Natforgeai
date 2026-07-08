@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { evaluateContentFidelity } from "./content-fidelity";
+import { evaluateContentFidelity, extractVisibleText } from "./content-fidelity";
 import type { BusinessEvidence, CampaignEvidence } from "./curation";
 import type { AICreativeBrief } from "./pipeline-types";
 
@@ -66,6 +66,23 @@ describe("evaluateContentFidelity", () => {
     const result = evaluateContentFidelity(business, campaign, makeBrief("special discount"), html);
     expect(result.inventedOfferDetected).toBe(true);
     expect(result.contentFidelityPassed).toBe(false);
+  });
+
+  it("does not flag base64, CSS, or random alphanumeric fragments as invented offers", () => {
+    const campaign: CampaignEvidence = {};
+    const html = `
+      <style>.cls-r43 { color: red; }</style>
+      <div style="background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==)">
+        Professional cleaning you can trust.
+      </div>
+      <div>Contact Us Today</div>
+    `;
+    const result = evaluateContentFidelity(business, campaign, makeBrief(null), html);
+    expect(result.inventedOfferDetected).toBe(false);
+    expect(result.contentFidelityPassed).toBe(true);
+    expect(result.visibleRenderedText).toContain("Professional cleaning you can trust");
+    expect(result.visibleRenderedText).not.toContain("r43");
+    expect(result.detectedOfferSnippet).toBeNull();
   });
 
   it("does not flag an approved campaign offer that matches the rendered text", () => {

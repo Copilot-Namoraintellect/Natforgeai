@@ -15,6 +15,19 @@ import { structuredModel } from "../../agents/openai";
 import { env } from "../../env";
 import { VisionCriticResultSchema, type VisionCriticResult } from "./pipeline-types";
 import type { BrandAssetResolution } from "../brand-asset-resolver";
+import { z } from "zod";
+
+export const LogoCropCriticResultSchema = z
+  .object({
+    realLogoPresent: z.boolean().describe("Does the crop clearly show the real uploaded brand logo (not a fallback monogram badge)?"),
+    logoMatchesExpected: z.boolean().describe("Does the logo in the crop match the expected logo image provided?"),
+    fallbackBadgeUsed: z.boolean().describe("Is the crop showing a fallback initials/monogram badge instead of the real logo?"),
+    logoDistortedOrCropped: z.boolean().describe("Is the logo distorted, partially cropped, or too small/blurry to read?"),
+    explanation: z.string().describe("Brief explanation of what you see in the crop and expected-logo comparison"),
+  })
+  .strict();
+
+export type LogoCropCriticResult = z.infer<typeof LogoCropCriticResultSchema>;
 
 const MIN_SCORE = 70;
 
@@ -94,6 +107,74 @@ List critical issues and 1-3 concrete improvement suggestions.`;
     const isQuota = /quota|rate|billing|insufficient|limit/i.test(message);
     console.warn(`[HybridCritic] Vision critique failed: ${message}. Marking critic as unavailable.`);
     return unavailableResult(message, isQuota);
+  }
+}
+
+export async function critiqueLogoCrop(
+  logoCropBuffer: Buffer,
+  expectedLogoBuffer: Buffer,
+  businessName: string
+): Promise<LogoCropCriticResult> {
+  if (!env.openaiApiKey || !env.enableHybridLeafletPipeline) {
+    return {
+      realLogoPresent: false,
+      logoMatchesExpected: false,
+      fallbackBadgeUsed: true,
+      logoDistortedOrCropped: true,
+      explanation: "OpenAI vision critic disabled; deterministic checks used.",
+    };
+  }
+
+  const cropDataUri = `data:image/png;base64,${logoCropBuffer.toString("base64")}`;
+  const expectedDataUri = `data:image/png;base64,${expectedLogoBuffer.toString("base64")}`;
+
+  const system = `You are a precise logo-verification vision model. Compare the two attached images. Image 1 is a cropped region from a marketing leaflet header. Image 2 is the expected uploaded brand logo for ${businessName}. Answer the four JSON questions strictly. A fallback badge is a solid-colour circle or square containing one or two letters (initials/monogram). The real logo is the actual brand artwork, often a wide horizontal wordmark or icon.`;
+
+  const prompt = `Business: ${businessName}.
+
+Image 1 (left) shows a crop of the leaflet header/logo area.
+Image 2 (right) shows the expected uploaded brand logo.
+
+Determine:
+1. Does Image 1 contain the real uploaded logo (not a fallback initials badge)?
+2. Does the logo in Image 1 match Image 2 (same brand artwork)?
+3. Is Image 1 showing a fallback initials/monogram badge instead of the real logo?
+4. Is the logo in Image 1 distorted, partially cropped, or too small/blurry to read?
+
+Be decisive. If Image 1 clearly shows the same artwork as Image 2, set realLogoPresent=true, logoMatchesExpected=true, fallbackBadgeUsed=false. If Image 1 shows only a monogram badge or the logo is unreadable, set fallbackBadgeUsed=true or logoDistortedOrCropped=true accordingly.`;
+
+  try {
+    const { object } = await generateObject({
+      model: structuredModel,
+      schema: LogoCropCriticResultSchema,
+      system,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            { type: "image", image: cropDataUri },
+            { type: "image", image: expectedDataUri },
+          ],
+        },
+      ],
+      temperature: 0.1,
+    });
+
+    return {
+      ...object,
+      explanation: object.explanation || "No explanation provided.",
+    };
+  } catch (err: any) {
+    const message = err.message || String(err);
+    console.warn(`[HybridCritic] Logo crop critique failed: ${message}.`);
+    return {
+      realLogoPresent: false,
+      logoMatchesExpected: false,
+      fallbackBadgeUsed: true,
+      logoDistortedOrCropped: true,
+      explanation: `Logo crop critique failed: ${message}`,
+    };
   }
 }
 

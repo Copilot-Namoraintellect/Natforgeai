@@ -154,13 +154,13 @@ export async function saveHybridLogoArtifacts(
     result.expectedLogoPath = expectedLogoPath;
   }
 
-  // Crop the header/logo region from the final rendered leaflet for visual inspection.
-  // The header spans the full width, top 170px, with the logo panel on the left.
+  // Crop the full header/logo region from the final rendered leaflet for visual inspection.
+  // The header spans the full width and top 170px, containing the logo panel and business name.
   const finalBuffer = hybridResult.buffer;
   try {
     const logoCropPath = join(outputDir, `${safeName}-logo-region-crop.png`);
     await sharp(finalBuffer)
-      .extract({ left: 40, top: 20, width: 440, height: 150 })
+      .extract({ left: 0, top: 0, width: 1080, height: 170 })
       .toFile(logoCropPath);
     result.logoCropPath = logoCropPath;
   } catch (err: any) {
