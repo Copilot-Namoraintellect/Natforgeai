@@ -88,6 +88,13 @@ const SERVICE_INVENTION_BLOCKLIST = [
   "digital marketing", "restaurant services", "salon services", "consulting",
 ];
 
+export const GENERIC_FALLBACK_PHRASES = [
+  "dynamic marketing platform",
+  "marketing automation tools",
+  "analytics, content creation services",
+  "social media management solutions",
+];
+
 const KEY_INTERNAL_PATHS = [
   "/about", "/about-us", "/our-story",
   "/services", "/what-we-do", "/solutions",
@@ -677,8 +684,31 @@ export function extractBusinessEvidence(pages: CrawledPage[]): BusinessEvidence 
   };
 }
 
+export function getEvidenceText(evidence: BusinessEvidence): string {
+  return [
+    evidence.businessCategory,
+    evidence.productsServices.join(" "),
+    evidence.targetCustomers.join(" "),
+    evidence.location,
+    evidence.repeatedKeywords.map((k) => `${k.keyword} ${k.count}`).join(" "),
+    evidence.evidenceSnippets.join(" "),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+export function evidenceContainsPhrase(evidence: BusinessEvidence, phrase: string): boolean {
+  return getEvidenceText(evidence).includes(phrase.toLowerCase());
+}
+
+export function containsGenericFallbackPhrases(text: string): string[] {
+  const lower = text.toLowerCase();
+  return GENERIC_FALLBACK_PHRASES.filter((phrase) => lower.includes(phrase.toLowerCase()));
+}
+
 export function buildWebsiteAnalysisPrompt(evidence: BusinessEvidence): string {
-  return `Analyse the following structured website evidence and return marketing insights.\n\nBUSINESS EVIDENCE\n- Category: ${evidence.businessCategory}\n- Products/Services Mentioned: ${evidence.productsServices.join(", ")}\n- Target Customers Mentioned: ${evidence.targetCustomers.join(", ")}\n- Location: ${evidence.location || "Not detected"}\n- Repeated Keywords: ${evidence.repeatedKeywords.slice(0, 15).map((k) => `${k.keyword}(${k.count})`).join(", ")}\n- Evidence Snippets:\n${evidence.evidenceSnippets.map((s) => "  - " + s).join("\n")}\n\nCRITICAL RULES:\n1. NEVER classify the business as SEO, digital marketing, social media management, data analytics, restaurant services, salon services, or consulting unless the evidence explicitly and repeatedly supports it.\n2. Only list products/services actually mentioned in the evidence above.\n3. Do not invent contact details, prices, offers, or locations.\n4. If information is missing, make a reasonable assumption and list it.\n\nReturn your analysis in the requested structured format.`;
+  return `Analyse the following structured website evidence and return marketing insights.\n\nBUSINESS EVIDENCE\n- Category: ${evidence.businessCategory}\n- Products/Services Mentioned: ${evidence.productsServices.join(", ")}\n- Target Customers Mentioned: ${evidence.targetCustomers.join(", ")}\n- Location: ${evidence.location || "Not detected"}\n- Repeated Keywords: ${evidence.repeatedKeywords.slice(0, 15).map((k) => `${k.keyword}(${k.count})`).join(", ")}\n- Evidence Snippets:\n${evidence.evidenceSnippets.map((s) => "  - " + s).join("\n")}\n\nCRITICAL RULES:\n1. Return only facts supported by the supplied website evidence. If unsupported, return null/empty and include a warning.\n2. Do not infer unrelated SaaS/marketing-platform details.\n3. NEVER classify the business as SEO, digital marketing, social media management, data analytics, restaurant services, salon services, or consulting unless the evidence explicitly and repeatedly supports it.\n4. Only list products/services actually mentioned in the evidence above.\n5. Do not invent contact details, prices, offers, or locations.\n6. For each field, include a confidence score 0-1 and the evidence snippet that supports it where practical.\n\nReturn your analysis in the requested structured format.`;
 }
 
 export function isUnsupportedServiceInEvidence(evidence: BusinessEvidence): boolean {

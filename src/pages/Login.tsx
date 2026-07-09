@@ -37,6 +37,8 @@ export default function Login() {
   // 2FA challenge state
   const [challengeToken, setChallengeToken] = useState<string | null>(null);
   const [challengeSource, setChallengeSource] = useState<"login" | "firebase" | "register" | null>(null);
+  const [challengePurpose, setChallengePurpose] = useState<"email_verification" | "login_2fa" | null>(null);
+  const [challengeMessage, setChallengeMessage] = useState<string | null>(null);
   const [otpEmail, setOtpEmail] = useState<string>("");
   const [otpCode, setOtpCode] = useState("");
   const [resendCooldown, setResendCooldown] = useState(0);
@@ -62,8 +64,10 @@ export default function Login() {
       if ("requiresTwoFactor" in data && data.requiresTwoFactor) {
         setChallengeToken(data.challengeToken);
         setChallengeSource("login");
+        setChallengePurpose((data.purpose as "email_verification" | "login_2fa") ?? "login_2fa");
+        setChallengeMessage(data.message ?? null);
         setOtpEmail(data.user?.email || loginForm.usernameOrEmail);
-        toast.info("A verification code has been sent to your email.");
+        if (data.message) toast.info(data.message);
         return;
       }
       if ("token" in data && data.token) {
@@ -84,6 +88,28 @@ export default function Login() {
     },
     onError: (err) => {
       toast.error(err.message || "Login failed");
+    },
+  });
+
+  const resendVerificationCodeMutation = trpc.auth.resendVerificationCode.useMutation({
+    onSuccess: async (data) => {
+      setChallengeToken(data.challengeToken);
+      setChallengePurpose((data.purpose as "email_verification" | "login_2fa") ?? "email_verification");
+      setChallengeMessage(data.message ?? null);
+      setResendCooldown(60);
+      if (data.message) toast.success(data.message);
+      const interval = setInterval(() => {
+        setResendCooldown((prev) => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    },
+    onError: (err) => {
+      toast.error(err.message || "Could not resend code");
     },
   });
 
@@ -118,8 +144,10 @@ export default function Login() {
       if ("requiresTwoFactor" in data && data.requiresTwoFactor) {
         setChallengeToken(data.challengeToken);
         setChallengeSource("register");
+        setChallengePurpose((data.purpose as "email_verification" | "login_2fa") ?? "email_verification");
+        setChallengeMessage(data.message ?? null);
         setOtpEmail(data.user?.email || registerForm.email);
-        toast.info("Account created. A verification code has been sent to your email.");
+        if (data.message) toast.info(data.message);
         return;
       }
 
@@ -151,8 +179,10 @@ export default function Login() {
       if ("requiresTwoFactor" in data && data.requiresTwoFactor) {
         setChallengeToken(data.challengeToken);
         setChallengeSource("firebase");
+        setChallengePurpose((data.purpose as "email_verification" | "login_2fa") ?? "login_2fa");
+        setChallengeMessage(data.message ?? null);
         setOtpEmail(data.user?.email || "");
-        toast.info("Please verify your Google login to continue. A code has been sent to your email.");
+        if (data.message) toast.info(data.message);
         return;
       }
 
@@ -220,37 +250,18 @@ export default function Login() {
 
   function handleResendCode() {
     if (resendCooldown > 0) return;
-    if (challengeSource === "login") {
-      loginMutation.mutate({
-        usernameOrEmail: loginForm.usernameOrEmail,
-        password: loginForm.password,
-      });
-    } else if (challengeSource === "register") {
-      loginMutation.mutate({
-        usernameOrEmail: registerForm.email,
-        password: registerForm.password,
-      });
-    } else if (challengeSource === "firebase") {
-      handleFirebaseGoogleAuth();
-    } else {
+    if (!challengeToken) {
       toast.info("Please sign in again to receive a new verification code.");
       return;
     }
-    setResendCooldown(60);
-    const interval = setInterval(() => {
-      setResendCooldown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    resendVerificationCodeMutation.mutate({ challengeToken });
   }
 
   function handleBackToLogin() {
     setChallengeToken(null);
     setChallengeSource(null);
+    setChallengePurpose(null);
+    setChallengeMessage(null);
     setOtpEmail("");
     setOtpCode("");
     if (verificationRequired) {
@@ -375,8 +386,13 @@ export default function Login() {
               <div className="text-center mb-4">
                 <Lock className="w-8 h-8 text-[#00D4FF] mx-auto mb-2" />
                 <h3 className="text-lg font-semibold">
-                  {challengeSource === "register" ? "Verify Your Account" : "Verify Your Login"}
+                  {challengePurpose === "email_verification" ? "Verify Your Account" : "Verify Your Login"}
                 </h3>
+                {challengeMessage && (
+                  <p className="text-sm text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-2">
+                    {challengeMessage}
+                  </p>
+                )}
                 <p className="text-sm text-muted-foreground mt-1">
                   A verification code has been sent to:
                 </p>

@@ -8,11 +8,14 @@ import { eq, and, sql } from "drizzle-orm";
 import { defaultModel } from "./lib/agents/openai";
 import { storeUploadedAsset } from "./lib/creative/storage";
 import { createAlert } from "./lib/alerts";
+import { logInfo, logWarn } from "./lib/logger";
 import {
   crawlWebsitePages,
   buildWebsiteAnalysisPrompt,
+  getEvidenceText,
   type BusinessEvidence,
 } from "./lib/website-analyser";
+import { guardProfileSuggestions } from "./lib/business-profile-guard";
 
 type OperationName =
   | "business.list"
@@ -530,18 +533,13 @@ export const businessRouter = createRouter({
           };
         }
 
-        // Low confidence gate: ask the user to confirm instead of guessing.
-        if (evidence.confidence < 0.5) {
-          return {
-            success: false,
-            error: "LOW_CONFIDENCE",
-            message: "We could not find enough useful information on this website to fill your profile automatically. You can complete the details manually.",
-            evidence,
-            log,
-          };
-        }
+        // Low-confidence evidence is no longer rejected outright; the grounding
+        // guard below blanks unsupported/generated fields and returns warnings.
 
         const prompt = buildWebsiteAnalysisPrompt(evidence);
+
+        const evidenceCharCount = getEvidenceText(evidence).length;
+        const selectedSnippets = evidence.evidenceSnippets.slice(0, 10);
 
         const analysisSchema = z.object({
           businessCategory: z.string().describe("Confirmed business category"),
@@ -571,7 +569,9 @@ export const businessRouter = createRouter({
             model: defaultModel,
             system:
               "You are an expert marketing analyst. Analyse the structured website evidence and return actionable marketing insights. " +
-              "CRITICAL: Do not classify the business as SEO, digital marketing, social media management, data analytics, restaurant, salon, or consulting " +
+              "CRITICAL: Return only facts supported by the supplied website evidence. If unsupported, return null/empty and include a warning. " +
+              "Do not infer unrelated SaaS/marketing-platform details. " +
+              "Do not classify the business as SEO, digital marketing, social media management, data analytics, restaurant, salon, or consulting " +
               "unless the evidence explicitly and repeatedly supports that classification. Only list products/services actually mentioned in the evidence. " +
               "Always use USD for prices. Be concise.",
             prompt,
@@ -593,6 +593,30 @@ export const businessRouter = createRouter({
           }
         }
 
+        // Grounding guard: clear unsupported generic/NatForgeAI copy and low-confidence fields.
+        const {
+          suggestions: guardedSuggestions,
+          warnings,
+          genericGuardTriggered,
+        } = guardProfileSuggestions(suggestions, evidence);
+
+        logInfo("[businessRouter.analyseWebsite] suggestions guarded", {
+          userId: ctx.user.id,
+          businessId: input.businessId ?? null,
+          rawWebsiteInput: log.rawWebsiteInput,
+          normalizedUrl: log.normalizedUrl,
+          redirectUrl: log.redirectUrl || null,
+          pagesCrawled: log.pagesCrawled,
+          pagesFetched: log.pagesFetched,
+          confidence: log.confidence,
+          failureReason: log.failureReason || null,
+          evidenceCharCount,
+          selectedEvidenceSnippets: selectedSnippets,
+          generatedProfileFields: Object.keys(guardedSuggestions),
+          genericGuardTriggered,
+          warningCount: warnings.length,
+        });
+
         // Persist structured evidence on the business row for downstream gates.
         const db = getDb();
         if (input.businessId) {
@@ -607,9 +631,10 @@ export const businessRouter = createRouter({
 
         return {
           success: true,
-          suggestions,
+          suggestions: guardedSuggestions,
           evidence,
           log,
+          warnings,
         };
       } catch (err: any) {
         console.error(`${logPrefix} error`, err);
@@ -651,12 +676,34 @@ export const businessRouter = createRouter({
           existing = biz;
         }
 
+        const websiteUrl = input.website ?? existing?.website;
+        let evidence: BusinessEvidence | undefined;
+        let crawlLog: { normalizedUrl?: string; redirectUrl?: string; confidence?: number; failureReason?: string; pagesCrawled?: number } | undefined;
+
+        if (websiteUrl) {
+          try {
+            const analysis = await crawlWebsitePages(websiteUrl, { maxPages: 8, timeoutMs: 5000 });
+            if (analysis.pages[0]?.fetched) {
+              evidence = analysis.evidence;
+              crawlLog = analysis.log;
+            }
+          } catch (crawlErr: any) {
+            logWarn("[businessRouter.completeProfileWithAi] website crawl failed", {
+              userId: ctx.user.id,
+              businessId: input.id ?? null,
+              websiteUrl,
+              error: crawlErr?.message || String(crawlErr),
+            });
+          }
+        }
+
         const essentials = {
           name: input.name ?? existing?.name,
-          website: input.website ?? existing?.website,
+          website: websiteUrl,
           email: existing?.email,
           whatsappNumber: existing?.whatsappNumber,
           location: input.location ?? existing?.location,
+          description: input.description,
         };
 
         const contextParts = [
@@ -665,46 +712,87 @@ export const businessRouter = createRouter({
           essentials.email ? `Email: ${essentials.email}` : "",
           essentials.whatsappNumber ? `WhatsApp number: ${essentials.whatsappNumber}` : "",
           essentials.location ? `Location: ${essentials.location}` : "",
-          input.description ? `Provided description: ${input.description}` : "",
-          existing?.description ? `Existing description: ${existing.description}` : "",
-          existing?.industry ? `Existing industry: ${existing.industry}` : "",
-          existing?.productOrService ? `Products/services: ${existing.productOrService}` : "",
+          essentials.description ? `Provided description: ${essentials.description}` : "",
           input.logo ? "A logo has been provided." : "",
         ].filter(Boolean);
 
+        const evidenceSection = evidence
+          ? `\nWEBSITE EVIDENCE (use this as the only source of truth for products/services/industry/audience):\n` +
+            `- Business category: ${evidence.businessCategory}\n` +
+            `- Products/Services mentioned: ${evidence.productsServices.join(", ")}\n` +
+            `- Target customers mentioned: ${evidence.targetCustomers.join(", ")}\n` +
+            `- Location: ${evidence.location || "Not detected"}\n` +
+            `- Evidence snippets:\n${evidence.evidenceSnippets.map((s) => "  - " + s).join("\n")}\n` +
+            `- Confidence: ${evidence.confidence}\n` +
+            `CRITICAL: Only use facts from the WEBSITE EVIDENCE above. If a field is unsupported by the evidence, return it empty/null and explain in warnings. Do not use NatForgeAI product copy, generic SaaS marketing copy, placeholder text, or another business profile.`
+          : "";
+
         const prompt = `You are helping complete a business profile for a marketing platform.
 
-Use only the information below. Do not invent website URLs, email addresses, phone numbers, physical addresses, or any other contact details that are not already provided. Do not overwrite fields the user has already supplied.
+Use only the information below. Do not invent website URLs, email addresses, phone numbers, physical addresses, or any other contact details that are not already provided.
 
-${contextParts.join("\n")}
+${contextParts.join("\n")}${evidenceSection}
 
-Suggest values for the remaining profile fields. Be concise and realistic. If something is unknown, make a reasonable, clearly-marked assumption or leave it generic.`;
+Suggest values for the remaining profile fields. Be concise and realistic. If something is unknown, leave it empty and include a warning. Do not make assumptions or invent content.`;
 
         const completionSchema = z.object({
-          description: z.string().describe("A clear business description"),
-          industry: z.string().describe("The industry this business operates in"),
-          targetAudience: z.string().describe("The ideal target audience"),
-          brandTone: z.string().describe("Suggested brand tone, e.g. professional, friendly, premium, bold"),
-          productOrService: z.string().describe("What the business sells or offers"),
-          brandColors: z.array(z.string()).describe("Suggested brand colours as hex codes"),
-          visualStyle: z.string().describe("Suggested visual style, e.g. modern, minimal, bold, luxury"),
-          brandVoiceNotes: z.string().describe("Notes on how the brand should sound"),
-          avoidWords: z.string().describe("Words or phrases the brand should avoid"),
-          mainGoal: z.string().describe("The primary marketing goal"),
-          premiumContentPreferences: z.string().describe("Preferences for premium content types or formats"),
+          description: z.string().nullable().describe("A clear business description, or null if unsupported"),
+          industry: z.string().nullable().describe("The industry this business operates in, or null if unsupported"),
+          targetAudience: z.string().nullable().describe("The ideal target audience, or null if unsupported"),
+          brandTone: z.string().nullable().describe("Suggested brand tone, or null if unsupported"),
+          productOrService: z.string().nullable().describe("What the business sells or offers, or null if unsupported"),
+          brandColors: z.array(z.string()).nullable().describe("Suggested brand colours as hex codes, or null"),
+          visualStyle: z.string().nullable().describe("Suggested visual style, or null if unsupported"),
+          brandVoiceNotes: z.string().nullable().describe("Notes on how the brand should sound, or null"),
+          avoidWords: z.string().nullable().describe("Words or phrases the brand should avoid, or null"),
+          mainGoal: z.string().nullable().describe("The primary marketing goal, or null"),
+          premiumContentPreferences: z.string().nullable().describe("Preferences for premium content types or formats, or null"),
+          warnings: z.array(z.string()).describe("Any unsupported fields or assumptions"),
         });
 
         const result = await generateObject({
           model: defaultModel,
           system:
-            "You are an expert marketing strategist. Complete business profiles with structured, actionable suggestions. Never invent contact details or URLs.",
+            "You are an expert marketing strategist. Complete business profiles with structured, actionable suggestions. " +
+            "Return only facts supported by the supplied website evidence or explicit user input. " +
+            "If unsupported, return null/empty and include a warning. Never invent contact details or URLs.",
           prompt,
           schema: completionSchema,
         });
 
+        let suggestions = result.object;
+        let warnings = suggestions.warnings ?? [];
+        let genericGuardTriggered = false;
+
+        if (evidence) {
+          const guarded = guardProfileSuggestions(suggestions, evidence, {
+            fieldsToCheck: ["description", "industry", "productOrService", "targetAudience", "brandVoiceNotes", "mainGoal"],
+          });
+          suggestions = guarded.suggestions;
+          warnings = [...warnings, ...guarded.warnings];
+          genericGuardTriggered = guarded.genericGuardTriggered;
+        }
+
+        logInfo("[businessRouter.completeProfileWithAi] profile completed", {
+          userId: ctx.user.id,
+          businessId: input.id ?? null,
+          rawWebsiteInput: websiteUrl ?? null,
+          normalizedUrl: crawlLog?.normalizedUrl ?? null,
+          redirectUrl: crawlLog?.redirectUrl ?? null,
+          pagesCrawled: crawlLog?.pagesCrawled ?? null,
+          confidence: crawlLog?.confidence ?? null,
+          failureReason: crawlLog?.failureReason ?? null,
+          evidenceCharCount: evidence ? getEvidenceText(evidence).length : 0,
+          selectedEvidenceSnippets: evidence ? evidence.evidenceSnippets.slice(0, 10) : [],
+          generatedProfileFields: Object.keys(suggestions),
+          genericGuardTriggered,
+          warningCount: warnings.length,
+        });
+
         return {
           success: true,
-          suggestions: result.object,
+          suggestions,
+          warnings,
         };
       } catch (err) {
         logError(ctx, "business.completeProfileWithAi", input, err);

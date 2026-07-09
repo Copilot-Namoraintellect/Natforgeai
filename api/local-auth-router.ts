@@ -1,14 +1,20 @@
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { randomBytes } from "crypto";
 import { createRouter, publicQuery, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { users, businesses, twoFactorChallenges } from "@db/schema";
-import { eq, or, and, gt, isNull } from "drizzle-orm";
+import { eq, or, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { signLocalToken, verifyLocalToken, type LocalSessionPayload } from "./lib/session";
 import { env } from "./lib/env";
 import { ensureFreeSubscription } from "./lib/subscription";
+import {
+  getChallengePurpose,
+  isAccountVerified,
+  createAndSendChallenge,
+  verifyChallenge,
+  markUserVerified,
+} from "./lib/auth/otp";
 
 function requiresTwoFactorPolicy(user: { twoFactorEnabled: boolean }): boolean {
   // Product-level mandatory verification can be disabled with REQUIRE_TWO_FACTOR=false.
@@ -16,40 +22,21 @@ function requiresTwoFactorPolicy(user: { twoFactorEnabled: boolean }): boolean {
   return env.requireTwoFactor || user.twoFactorEnabled;
 }
 
-async function createTwoFactorChallenge(
-  userId: number,
-  email: string,
-  ctx: { req: Request }
-): Promise<string> {
-  const db = getDb();
-  const otpCode = String(Math.floor(100000 + Math.random() * 900000));
-  const otpHash = await bcrypt.hash(otpCode, 10);
-  const challengeToken = randomBytes(32).toString("hex");
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-  await db.insert(twoFactorChallenges).values({
-    userId,
-    challengeToken,
-    otpHash,
-    expiresAt,
-    sentToEmail: email,
-    ipAddress: ctx.req.headers.get("x-forwarded-for") || ctx.req.headers.get("host") || undefined,
-    userAgent: ctx.req.headers.get("user-agent") || undefined,
-  });
-
-  try {
-    await sendTwoFactorCodeEmail({ to: email, code: otpCode });
-  } catch (err: any) {
-    console.error("[2FA] Failed to send email:", err.message);
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Could not send verification code. Please try again.",
-    });
-  }
-
-  return challengeToken;
+function publicUser(user: {
+  id: number;
+  username: string | null;
+  email: string | null;
+  name: string | null;
+  role: string;
+}) {
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+  };
 }
-import { sendTwoFactorCodeEmail } from "./lib/email";
 
 // ─── Local Auth Router ───
 export const localAuthRouter = createRouter({
@@ -77,17 +64,40 @@ export const localAuthRouter = createRouter({
 
       if (existing.length > 0) {
         const match = existing[0];
+
         if (match.username === input.username) {
           throw new TRPCError({
             code: "CONFLICT",
             message: "Username already taken",
           });
         }
+
         if (match.email === input.email) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: "Email already registered",
+          // Verified account → direct them to login.
+          if (isAccountVerified(match)) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "Account already exists, please log in",
+            });
+          }
+
+          // Unverified account → resend verification code instead of trapping them.
+          const purpose = getChallengePurpose(match);
+          const { challengeToken } = await createAndSendChallenge(db, {
+            userId: match.id,
+            email: match.email!,
+            purpose,
+            ctx,
           });
+
+          return {
+            requiresTwoFactor: true,
+            challengeToken,
+            purpose,
+            user: publicUser(match),
+            message:
+              "An account with this email exists but is not verified. A new verification code has been sent.",
+          };
         }
       }
 
@@ -111,11 +121,17 @@ export const localAuthRouter = createRouter({
       await ensureFreeSubscription(userId);
 
       // Verification is required for new registrations under the current policy
-      const challengeToken = await createTwoFactorChallenge(userId, input.email, ctx);
+      const { challengeToken } = await createAndSendChallenge(db, {
+        userId,
+        email: input.email,
+        purpose: "email_verification",
+        ctx,
+      });
 
       return {
         requiresTwoFactor: true,
         challengeToken,
+        purpose: "email_verification",
         user: {
           id: userId,
           username: input.username,
@@ -123,6 +139,7 @@ export const localAuthRouter = createRouter({
           name: input.name,
           role: "user",
         },
+        message: "A verification code has been sent to your email.",
       };
     }),
 
@@ -171,6 +188,32 @@ export const localAuthRouter = createRouter({
         .set({ lastSignInAt: new Date() })
         .where(eq(users.id, user.id));
 
+      // Account email verification takes precedence over login 2FA.
+      if (!isAccountVerified(user)) {
+        const email = user.email;
+        if (!email) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "An email address is required to verify your account.",
+          });
+        }
+
+        const { challengeToken } = await createAndSendChallenge(db, {
+          userId: user.id,
+          email,
+          purpose: "email_verification",
+          ctx,
+        });
+
+        return {
+          requiresTwoFactor: true,
+          challengeToken,
+          purpose: "email_verification",
+          user: publicUser(user),
+          message: "Account not verified. We sent a new verification code.",
+        };
+      }
+
       // If verification is required by product policy or user preference, create a challenge
       if (requiresTwoFactorPolicy(user)) {
         const email = user.email;
@@ -181,18 +224,19 @@ export const localAuthRouter = createRouter({
           });
         }
 
-        const challengeToken = await createTwoFactorChallenge(user.id, email, ctx);
+        const { challengeToken } = await createAndSendChallenge(db, {
+          userId: user.id,
+          email,
+          purpose: "login_2fa",
+          ctx,
+        });
 
         return {
           requiresTwoFactor: true,
           challengeToken,
-          user: {
-            id: user.id,
-            username: user.username,
-            email: user.email,
-            name: user.name,
-            role: user.role,
-          },
+          purpose: "login_2fa",
+          user: publicUser(user),
+          message: "A verification code has been sent to your email.",
         };
       }
 
@@ -201,13 +245,7 @@ export const localAuthRouter = createRouter({
 
       return {
         token,
-        user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-        },
+        user: publicUser(user),
       };
     }),
 
@@ -220,65 +258,14 @@ export const localAuthRouter = createRouter({
     )
     .mutation(async ({ input }) => {
       const db = getDb();
+      const user = await verifyChallenge(db, {
+        challengeToken: input.challengeToken,
+        code: input.otpCode,
+      });
 
-      const [challenge] = await db
-        .select()
-        .from(twoFactorChallenges)
-        .where(
-          and(
-            eq(twoFactorChallenges.challengeToken, input.challengeToken),
-            gt(twoFactorChallenges.expiresAt, new Date()),
-            isNull(twoFactorChallenges.consumedAt)
-          )
-        )
-        .limit(1);
-
-      if (!challenge) {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Invalid or expired verification code",
-        });
-      }
-
-      if (challenge.attempts >= challenge.maxAttempts) {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Too many attempts. Please request a new code.",
-        });
-      }
-
-      // Increment attempts
-      await db
-        .update(twoFactorChallenges)
-        .set({ attempts: challenge.attempts + 1 })
-        .where(eq(twoFactorChallenges.id, challenge.id));
-
-      const valid = await bcrypt.compare(input.otpCode, challenge.otpHash);
-      if (!valid) {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Invalid verification code",
-        });
-      }
-
-      // Mark as consumed
-      await db
-        .update(twoFactorChallenges)
-        .set({ consumedAt: new Date() })
-        .where(eq(twoFactorChallenges.id, challenge.id));
-
-      const [user] = await db
-        .select()
-        .from(users)
-        .where(eq(users.id, challenge.userId))
-        .limit(1);
-
-      if (!user) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Verification failed. Please try again.",
-        });
-      }
+      // Mark account/email verified on first successful verification and record the
+      // most recent 2FA verification time.
+      await markUserVerified(db, user.id);
 
       const token = await signLocalToken({
         userId: user.id,
@@ -288,13 +275,58 @@ export const localAuthRouter = createRouter({
 
       return {
         token,
-        user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-        },
+        user: publicUser(user),
+      };
+    }),
+
+  resendVerificationCode: publicQuery
+    .input(
+      z.object({
+        challengeToken: z.string().min(1),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+
+      const [challenge] = await db
+        .select()
+        .from(twoFactorChallenges)
+        .where(eq(twoFactorChallenges.challengeToken, input.challengeToken))
+        .limit(1);
+
+      if (!challenge) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Invalid verification session. Please sign in again.",
+        });
+      }
+
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, challenge.userId))
+        .limit(1);
+
+      if (!user || !user.email) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Could not resend verification code. Please try again.",
+        });
+      }
+
+      const purpose = challenge.purpose as "email_verification" | "login_2fa";
+
+      const { challengeToken } = await createAndSendChallenge(db, {
+        userId: user.id,
+        email: user.email,
+        purpose,
+        ctx,
+      });
+
+      return {
+        challengeToken,
+        purpose,
+        message: "A new verification code has been sent.",
       };
     }),
 
@@ -307,7 +339,7 @@ export const localAuthRouter = createRouter({
         .set({
           twoFactorEnabled: true,
           twoFactorMethod: input.method,
-          twoFactorVerifiedAt: new Date(),
+          lastTwoFactorVerifiedAt: new Date(),
         })
         .where(eq(users.id, ctx.user.id));
       return { success: true };
@@ -321,7 +353,7 @@ export const localAuthRouter = createRouter({
         .set({
           twoFactorEnabled: false,
           twoFactorMethod: null,
-          twoFactorVerifiedAt: null,
+          lastTwoFactorVerifiedAt: null,
         })
         .where(eq(users.id, ctx.user.id));
       return { success: true };
@@ -391,6 +423,8 @@ export const localAuthRouter = createRouter({
             twoFactorEnabled: false,
             twoFactorMethod: null,
             twoFactorVerifiedAt: null,
+            emailVerifiedAt: null,
+            lastTwoFactorVerifiedAt: null,
             createdAt: new Date(),
             updatedAt: new Date(),
             lastSignInAt: new Date(),
@@ -416,17 +450,19 @@ export const localAuthRouter = createRouter({
             message: "An email address is required to verify your Google login.",
           });
         }
-        const challengeToken = await createTwoFactorChallenge(user.id, email, { req: ctx.req });
+        const purpose = getChallengePurpose(user);
+        const { challengeToken } = await createAndSendChallenge(db, {
+          userId: user.id,
+          email,
+          purpose,
+          ctx: { req: ctx.req },
+        });
         return {
           requiresTwoFactor: true,
           challengeToken,
-          user: {
-            id: user.id,
-            username: user.username,
-            email: user.email,
-            name: user.name,
-            role: user.role,
-          },
+          purpose,
+          user: publicUser(user),
+          message: "A verification code has been sent to your email.",
         };
       }
 
@@ -435,13 +471,7 @@ export const localAuthRouter = createRouter({
 
       return {
         token,
-        user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-        },
+        user: publicUser(user),
       };
     }),
 
@@ -512,6 +542,8 @@ export const localAuthRouter = createRouter({
             twoFactorEnabled: false,
             twoFactorMethod: null,
             twoFactorVerifiedAt: null,
+            emailVerifiedAt: null,
+            lastTwoFactorVerifiedAt: null,
             createdAt: new Date(),
             updatedAt: new Date(),
             lastSignInAt: new Date(),
@@ -546,17 +578,19 @@ export const localAuthRouter = createRouter({
             message: "An email address is required to verify your Google login.",
           });
         }
-        const challengeToken = await createTwoFactorChallenge(user.id, email, { req: ctx.req });
+        const purpose = getChallengePurpose(user);
+        const { challengeToken } = await createAndSendChallenge(db, {
+          userId: user.id,
+          email,
+          purpose,
+          ctx: { req: ctx.req },
+        });
         return {
           requiresTwoFactor: true,
           challengeToken,
-          user: {
-            id: user.id,
-            username: user.username,
-            email: user.email,
-            name: user.name,
-            role: user.role,
-          },
+          purpose,
+          user: publicUser(user),
+          message: "A verification code has been sent to your email.",
         };
       }
 
@@ -564,13 +598,7 @@ export const localAuthRouter = createRouter({
 
       return {
         token,
-        user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-        },
+        user: publicUser(user),
       };
     }),
 

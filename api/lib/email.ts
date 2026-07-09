@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import type { SentMessageInfo } from "nodemailer";
 import { env } from "./env";
 
 const transporter = nodemailer.createTransport({
@@ -21,12 +22,12 @@ export async function sendEmail({
   subject: string;
   html: string;
   text?: string;
-}) {
+}): Promise<SentMessageInfo> {
   if (!env.smtpHost || !env.smtpUser || !env.smtpPass) {
     throw new Error("SMTP is not configured");
   }
 
-  await transporter.sendMail({
+  return transporter.sendMail({
     from: `"${env.smtpFromName || "NatForgeAI"}" <${env.smtpFromEmail || env.smtpUser}>`,
     to,
     subject,
@@ -41,7 +42,7 @@ export function sendTwoFactorCodeEmail({
 }: {
   to: string;
   code: string;
-}) {
+}): Promise<SentMessageInfo> {
   return sendEmail({
     to,
     subject: "Your NatForgeAI verification code",

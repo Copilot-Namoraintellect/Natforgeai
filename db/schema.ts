@@ -53,7 +53,11 @@ export const users = mysqlTable("users", {
   // - Settings UI to enable/disable 2FA
   twoFactorEnabled: boolean("twoFactorEnabled").default(false).notNull(),
   twoFactorMethod: varchar("twoFactorMethod", { length: 20 }),
+  // Legacy field. Prefer emailVerifiedAt for account verification and
+  // lastTwoFactorVerifiedAt for login-2FA verification.
   twoFactorVerifiedAt: timestamp("twoFactorVerifiedAt"),
+  emailVerifiedAt: timestamp("emailVerifiedAt"),
+  lastTwoFactorVerifiedAt: timestamp("lastTwoFactorVerifiedAt"),
 });
 
 export type User = typeof users.$inferSelect;
@@ -1058,6 +1062,7 @@ export const twoFactorChallenges = mysqlTable("two_factor_challenges", {
   attempts: int("attempts").default(0).notNull(),
   maxAttempts: int("maxAttempts").default(5).notNull(),
   consumedAt: timestamp("consumedAt"),
+  purpose: varchar("purpose", { length: 50 }).default("login_2fa").notNull(),
   sentToEmail: varchar("sentToEmail", { length: 320 }).notNull(),
   ipAddress: varchar("ipAddress", { length: 45 }),
   userAgent: text("userAgent"),
