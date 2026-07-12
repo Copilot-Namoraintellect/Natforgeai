@@ -120,6 +120,23 @@ describe("message pack selection and generic detection", () => {
     expect(best?.messagePackSource).toBe("fallback_user_pack");
   });
 
+  it("never selects invalidated packs", () => {
+    const invalidatedSpecific: CampaignMessagePack = {
+      ...specificPack,
+      invalidatedAt: new Date("2026-07-10T00:00:00Z").toISOString(),
+      invalidationReason: "generic_pack_blocked",
+    };
+
+    const items = [
+      { pack: invalidatedSpecific, assetId: 2, createdAt: new Date("2026-07-11T00:00:00Z") },
+      { pack: genericPack, assetId: 1, createdAt: new Date("2026-07-09T00:00:00Z") },
+    ];
+
+    const best = selectBestApprovedMessagePack(items);
+    expect(best?.headline).toBe(genericPack.headline);
+    expect(best?.invalidatedAt).toBeUndefined();
+  });
+
   it("loadApprovedMessagePack ranks multiple saved packs and returns the best", async () => {
     const { getDb } = await import("../../queries/connection");
     vi.mocked(getDb).mockReturnValue(

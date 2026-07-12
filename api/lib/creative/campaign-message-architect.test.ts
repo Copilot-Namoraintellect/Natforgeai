@@ -345,9 +345,34 @@ describe("validateCampaignCopy", () => {
     expect(result.rejections.some((r) => r.includes("target customer or their pain point"))).toBe(true);
   });
 
-  it("rejects generic CTAs", () => {
-    const bad = pack({ cta: "Learn more" });
-    const result = validateCampaignCopy(bad, ctx());
+  it("allows a generic-looking CTA when it matches the selected stage CTA", () => {
+    const result = validateCampaignCopy(
+      pack({ cta: "Learn more" }),
+      ctx({
+        campaignObjective: "awareness",
+        funnelStage: "awareness",
+        preferredCta: [
+          "Awareness: Learn More",
+          "Consideration: Sign Up for a Free Consultation",
+          "Conversion: Get Started Today",
+          "Retention: Join Our Community",
+        ].join("\n"),
+      })
+    );
+
+    expect(result.passed).toBe(true);
+  });
+
+  it("rejects Learn More when it is not the selected stage CTA", () => {
+    const result = validateCampaignCopy(
+      pack({ cta: "Learn more" }),
+      ctx({
+        campaignObjective: "conversion",
+        funnelStage: "conversion",
+        preferredCta: ["Awareness: Learn More", "Conversion: Get Started Today"].join("\n"),
+      })
+    );
+
     expect(result.passed).toBe(false);
     expect(result.rejections.some((r) => r.includes("CTA") && r.includes("generic"))).toBe(true);
   });

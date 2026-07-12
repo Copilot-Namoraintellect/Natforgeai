@@ -383,4 +383,46 @@ describe("runCreativeAgent post-save failure handling", () => {
     });
     expect(deductCredits).not.toHaveBeenCalled();
   });
+
+  it("uses grounded fallback-like message pack copy and charges only after successful save", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack).mockResolvedValue({
+      headline: "Simplify Staff, Restaurant and Delivery Payouts",
+      subheadline:
+        "Zuto Hub helps service-based employers manage tips, commissions and approved payouts with less manual reconciliation.",
+      benefitBullets: [
+        "Manage staff tips and commissions from one platform.",
+        "Streamline restaurant and supplier payouts.",
+        "Settle approved delivery orders with less manual administration.",
+      ],
+      cta: "Learn More",
+      footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "South Africa" },
+      proofPoints: [],
+      platformCaptions: [
+        {
+          platform: "Instagram",
+          caption: "Manage staff tips and commissions with less manual reconciliation.",
+          cta: "Learn More",
+          hashtags: ["#payouts", "#fintech"],
+        },
+      ],
+      validation: { passed: true, score: 96, rejections: [], warnings: [] },
+      messagePackSource: "fallback_deterministic",
+    } as any);
+    vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 302));
+
+    const result = await runCreativeAgent({ userId: 18, campaignId: 30 });
+
+    expect(result.savedPosts).toBe(2);
+    expect(deductCredits).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deductCredits).mock.calls[0]?.[0]).toMatchObject({
+      type: "agent_deduction",
+    });
+  });
 });

@@ -878,7 +878,8 @@ export async function runCreativeAgent({
       });
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: `Campaign copy did not meet quality standards: ${approvedMessagePack.validation.rejections.join("; ")}`,
+        message:
+          "We could not produce sufficiently business-specific campaign copy. No credits were charged. Your previous content was preserved.",
       });
     }
 
@@ -899,7 +900,8 @@ export async function runCreativeAgent({
     if (architectErr instanceof TRPCError) throw architectErr;
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
-      message: "Failed to build approved campaign copy. Please retry.",
+      message:
+        "We could not produce sufficiently business-specific campaign copy. No credits were charged. Your previous content was preserved.",
     });
   }
 

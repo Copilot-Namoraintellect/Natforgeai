@@ -59,6 +59,9 @@ export interface CampaignMessagePack {
   specificityScore?: number;
   /** Set when a newer, better pack replaces this one. */
   supersededBy?: number;
+  /** Set when this pack was explicitly invalidated and should never be reused. */
+  invalidatedAt?: string;
+  invalidationReason?: string;
 }
 
 export interface CopyValidationResult {
@@ -188,6 +191,18 @@ export const GENERIC_PHRASES = [
   "welcome",
   "hello",
   "thanks",
+  "streamlined financial solutions",
+  "comprehensive solutions",
+  "grow and succeed",
+];
+
+const EXPLICITLY_BANNED_PROMPT_PHRASES = [
+  "your business",
+  "transform your business",
+  "revolutionize your business",
+  "streamlined financial solutions",
+  "comprehensive solutions",
+  "grow and succeed",
 ];
 
 export const GENERIC_CTA_PATTERNS = [
@@ -368,15 +383,112 @@ function extractProductTerms(ctx: ValidationContext): string[] {
   const terms = new Set<string>();
   const addTerms = (source?: string) => {
     if (!source) return;
-    source
-      .split(/[,;]+/)
-      .map((t) => t.trim().toLowerCase())
-      .filter((t) => t.length > 3)
-      .forEach((t) => terms.add(t));
+    const cleaned = sanitize(source).toLowerCase();
+    const chunks = cleaned
+      .split(/[,;|]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 3);
+    for (const chunk of chunks) {
+      terms.add(chunk);
+      chunk
+        .split(/\s+(?:and|or|with|for)\s+|\//)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 3)
+        .forEach((t) => terms.add(t));
+    }
   };
   addTerms(ctx.productOrService);
   (ctx.websiteEvidence?.productsServices || []).forEach(addTerms);
   return Array.from(terms);
+}
+
+function extractGroundedServiceTerms(ctx: ValidationContext): string[] {
+  const genericStopWords = new Set([
+    "business",
+    "services",
+    "service",
+    "solutions",
+    "solution",
+    "platform",
+    "support",
+    "quality",
+    "professional",
+    "trusted",
+    "local",
+    "modern",
+  ]);
+
+  const terms = new Set<string>();
+  const add = (value?: string) => {
+    if (!value) return;
+    const cleaned = sanitize(value).toLowerCase();
+    if (!cleaned) return;
+    const chunks = cleaned
+      .split(/[,;|]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 3);
+
+    for (const chunk of chunks) {
+      terms.add(chunk);
+      chunk
+        .split(/\s+(?:and|or|with|for)\s+|\//)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 3 && !genericStopWords.has(t))
+        .forEach((t) => terms.add(t));
+    }
+  };
+
+  add(ctx.productOrService);
+  (ctx.websiteEvidence?.productsServices || []).forEach(add);
+  return Array.from(terms).filter((t) => t.length > 3 && !genericStopWords.has(t));
+}
+
+function extractQuotedPhrases(issues: string[]): string[] {
+  const phrases = new Set<string>();
+  for (const issue of issues) {
+    const matches = issue.match(/"([^"]+)"/g) || [];
+    for (const m of matches) {
+      const cleaned = sanitize(m.replace(/^"|"$/g, ""));
+      if (cleaned) phrases.add(cleaned);
+    }
+  }
+  return Array.from(phrases);
+}
+
+function buildGroundedFacts(ctx: ValidationContext): {
+  businessName: string;
+  industry: string;
+  productOrService: string;
+  targetCustomers: string[];
+  capabilities: string[];
+  selectedStageCta: string;
+} {
+  const targetCustomers = [
+    ...(ctx.websiteEvidence?.targetCustomers || []),
+    ctx.targetCustomer || "",
+  ]
+    .flatMap((v) => sanitize(v).split(/[,;|]+/))
+    .map((t) => t.trim())
+    .filter((t, i, arr) => t.length > 2 && arr.indexOf(t) === i)
+    .slice(0, 6);
+
+  const capabilities = [
+    ...(ctx.websiteEvidence?.productsServices || []),
+    ctx.productOrService || "",
+  ]
+    .flatMap((v) => sanitize(v).split(/[,;|]+/))
+    .map((t) => t.trim())
+    .filter((t, i, arr) => t.length > 3 && arr.indexOf(t) === i)
+    .slice(0, 8);
+
+  return {
+    businessName: sanitize(ctx.businessName) || "Not specified",
+    industry: sanitize(ctx.industry || ctx.websiteEvidence?.businessCategory) || "Not specified",
+    productOrService: sanitize(ctx.productOrService) || "Not specified",
+    targetCustomers,
+    capabilities,
+    selectedStageCta: selectFunnelCta(ctx.preferredCta, ctx.funnelStage || ctx.campaignObjective),
+  };
 }
 
 function extractTargetCustomerTerms(ctx: ValidationContext): string[] {
@@ -503,6 +615,14 @@ export function validateCampaignCopy(
     score -= 35;
   }
 
+  // 2b. Must mention at least one grounded service/use-case from evidence.
+  const groundedServiceTerms = extractGroundedServiceTerms(ctx);
+  const hasGroundedService = groundedServiceTerms.some((t) => termMatches(allCopy, t));
+  if (!hasGroundedService && groundedServiceTerms.length > 0) {
+    rejections.push("Copy must mention at least one real service or use case from business evidence.");
+    score -= 30;
+  }
+
   // 3. Must reference target customer or pain point
   const customerTerms = extractTargetCustomerTerms(ctx);
   const painTerms = extractPainPointTerms(ctx);
@@ -517,13 +637,18 @@ export function validateCampaignCopy(
   const cta = sanitize(pack.cta);
   const category = detectBusinessCategory(ctx);
   const expectedCtas = expectedCtasForCategory(category);
+  const selectedPreferredCta = selectFunnelCta(
+    ctx.preferredCta,
+    ctx.funnelStage || ctx.campaignObjective
+  ).toLowerCase();
+  const matchesPreferred = selectedPreferredCta.length > 0 && cta.toLowerCase().includes(selectedPreferredCta);
   const isGenericCta = GENERIC_CTA_PATTERNS.some((p) => p.test(cta));
   const isGenericHead = isGenericHeadline(pack.headline);
   if (isGenericHead) {
     rejections.push(`Headline "${sanitize(pack.headline)}" is too generic for this business context.`);
     score -= 30;
   }
-  if (isGenericCta) {
+  if (isGenericCta && !matchesPreferred) {
     rejections.push(`CTA "${cta}" is too generic for this business type.`);
     score -= 30;
   }
@@ -532,11 +657,6 @@ export function validateCampaignCopy(
   // The preferred CTA field sometimes contains a funnel-stage strategy list
   // (e.g. "Awareness: Learn more... Consideration: Join... Conversion: Get started...").
   // Treat that as a set of acceptable CTAs rather than one exact required string.
-  const selectedPreferredCta = selectFunnelCta(
-    ctx.preferredCta,
-    ctx.funnelStage || ctx.campaignObjective
-  ).toLowerCase();
-  const matchesPreferred = selectedPreferredCta.length > 0 && cta.toLowerCase().includes(selectedPreferredCta);
   if (!matchesExpected && !matchesPreferred && expectedCtas.length > 0) {
     warnings.push(`CTA "${cta}" may not match the expected action for a ${category} business (${expectedCtas.join(", ")}).`);
     score -= 10;
@@ -656,15 +776,22 @@ export function buildDeterministicMessagePack(
   const category = detectBusinessCategory(ctx);
   const product = sanitize(ctx.productOrService) || "our service";
   const customer = sanitize(ctx.targetCustomer) || "our customers";
-  const pain = sanitize(ctx.mainPainPoint) || "save time and reduce hassle";
+  const pain = sanitize(ctx.mainPainPoint) || "reduce manual administration";
   const offer = hasExplicitOffer(ctx) ? sanitize(ctx.offerDetails) : "";
   const location = sanitize(ctx.location) || sanitize(ctx.websiteEvidence?.location);
   const cta = ctx.preferredCta
     ? selectFunnelCta(ctx.preferredCta, ctx.funnelStage || ctx.campaignObjective)
     : expectedCtasForCategory(category)[0];
 
-  let headline = `${product} for ${customer}`;
-  let subheadline = `We help ${customer.toLowerCase()} ${pain.toLowerCase()}.`;
+  const groundedFacts = buildGroundedFacts(ctx);
+  const capabilities = groundedFacts.capabilities.length > 0 ? groundedFacts.capabilities : [product];
+  const targetCustomers = groundedFacts.targetCustomers.length > 0 ? groundedFacts.targetCustomers : [customer];
+
+  let headline = `Simplify ${capabilities.slice(0, 3).join(", ")}`;
+  let subheadline = `${groundedFacts.businessName} helps ${targetCustomers.slice(0, 2).join(" and ").toLowerCase()} manage ${capabilities
+    .slice(0, 2)
+    .join(" and ")
+    .toLowerCase()} with less manual reconciliation.`;
 
   if (offer) {
     headline = `${product} — ${offer}`;
@@ -677,9 +804,9 @@ export function buildDeterministicMessagePack(
   }
 
   const benefitBullets = [
-    `Targeted to ${customer.toLowerCase()} and the way you actually work.`,
-    `Clear, upfront process so you avoid delays and confusion.`,
-    `${location ? `Based in ${location} and ready when you are.` : "Built to fit your schedule and priorities."}`,
+    `${sanitize(capabilities[0]) || product} from one platform for ${targetCustomers[0].toLowerCase()}.`,
+    `${sanitize(capabilities[1]) || "Approved payouts and settlement flows"} with reduced manual reconciliation.`,
+    `${location ? `${sanitize(capabilities[2] || "Operational support")} for teams in ${location}.` : `${sanitize(capabilities[2] || "Operational support")} aligned to real business workflows.`}`,
   ];
 
   const pack: CampaignMessagePack = {
@@ -768,6 +895,9 @@ function architectPrompt(ctx: ValidationContext, platforms: string[]): string {
   const category = detectBusinessCategory(ctx);
   const categoryCtas = expectedCtasForCategory(category).join('", "');
   const explicitOffer = hasExplicitOffer(ctx) ? ctx.offerDetails : "None — do NOT invent offers, discounts, free trials, free assessments, guarantees, same-day service, limited-time deals, loans, BNPL or loyalty programmes.";
+  const groundedFacts = buildGroundedFacts(ctx);
+  const groundedCapabilities = groundedFacts.capabilities.length > 0 ? groundedFacts.capabilities : [ctx.productOrService];
+  const selectedStageCta = groundedFacts.selectedStageCta || "Learn More";
 
   return `You are a senior conversion copywriter for NatForgeAI. Write a customer-facing campaign message pack for the business below.
 
@@ -786,8 +916,19 @@ CAMPAIGN BRIEF:
 - Main pain point: ${ctx.mainPainPoint || "Not specified"}
 - Explicit offer (use ONLY this): ${explicitOffer}
 - Preferred CTA: ${ctx.preferredCta || "Not specified"}
+- Campaign stage CTA: ${selectedStageCta}
 - Exclusions (never use): ${ctx.excludedOffers || "None"}
 - Platforms: ${platforms.join(", ")}
+
+GROUNDED FACTS (MUST BE REFLECTED IN COPY):
+- Business: ${groundedFacts.businessName}
+- Industry: ${groundedFacts.industry}
+- Product/service: ${groundedFacts.productOrService}
+- Target customers: ${(groundedFacts.targetCustomers || []).join(", ") || "Not specified"}
+- Core capabilities:
+${groundedCapabilities.map((cap) => `  - ${cap}`).join("\n")}
+
+You must mention at least one core capability above in the headline, subheadline, benefits or platform captions.
 
 REQUIRED OUTPUT:
 1. Headline — customer-facing, specific, never the campaign name only, never "Marketing Campaign".
@@ -800,9 +941,12 @@ REQUIRED OUTPUT:
 
 COPY RULES:
 - NEVER use generic phrases such as "Marketing Campaign", "Transform your business", "Revolutionise", "Unlock success", "Unlock your potential", "Discover the best", "Join thousands" or similar.
+- EXPLICITLY BANNED PHRASES:
+${EXPLICITLY_BANNED_PROMPT_PHRASES.map((p) => `  - ${p}`).join("\n")}
 - NEVER invent offers, discounts, free items, loans, BNPL, guarantees, same-day service, or limited-time deals unless the explicit offer above includes them.
 - ALWAYS explain what the business does, who it helps, and why the customer should act.
 - ALWAYS ground claims in the business evidence and brief above.
+- NEVER invent percentages, savings rates, speed claims, or performance claims unless directly supported by provided evidence.
 - NEVER use placeholders like [Your Business], YourBrandName, [Company] or [Product].
 - If the location is South Africa, use South African Rand (R) only if a real price exists in the offer.
 
@@ -866,7 +1010,10 @@ export async function buildApprovedMessagePack(
   let attempt = 0;
   let lastPack: CampaignMessagePack | undefined;
   let usedDeterministicFallback = false;
-  let prompt = architectPrompt(ctx, platforms);
+  const basePrompt = architectPrompt(ctx, platforms);
+  let prompt = basePrompt;
+  let retryQualityIssues: string[] = [];
+  const groundedFactsUsed = buildGroundedFacts(ctx);
 
   while (attempt < maxAttempts) {
     attempt++;
@@ -875,6 +1022,8 @@ export async function buildApprovedMessagePack(
       userId,
       attempt,
       skipBilling: !!skipBilling,
+      selectedStageCta: groundedFactsUsed.selectedStageCta,
+      groundedFactsUsed,
     });
 
     let raw: any;
@@ -926,16 +1075,40 @@ export async function buildApprovedMessagePack(
       warnings: pack.validation.warnings,
     });
 
+    retryQualityIssues = [...pack.validation.rejections, ...pack.validation.warnings];
+
     if (attempt < maxAttempts) {
-      prompt = `${prompt}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${pack.validation.rejections
+      const rejectedPhrases = extractQuotedPhrases(retryQualityIssues);
+      logInfo("[CampaignMessageArchitect] retrying message pack generation", {
+        campaignId,
+        userId,
+        attempt,
+        retryQualityIssues,
+        rejectedPhrases,
+      });
+      prompt = `${basePrompt}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE EXACT ISSUES AND REGENERATE:\n${pack.validation.rejections
         .map((r) => `- ${r}`)
-        .join("\n")}\n\nAlso address warnings where possible. Never invent offers or use generic phrases.`;
+        .join("\n")}\n\nVALIDATION WARNINGS TO ADDRESS:\n${pack.validation.warnings
+        .map((w) => `- ${w}`)
+        .join("\n") || "- None"}\n\nEXACT REJECTED PHRASES TO AVOID:\n${rejectedPhrases.map((p) => `- ${p}`).join("\n") || "- None"}\n\nAlso address warnings where possible. Never invent offers or use generic phrases.`;
     }
   }
 
-  if (!lastPack) {
+  if (!lastPack || !lastPack.validation.passed) {
     usedDeterministicFallback = true;
     lastPack = buildDeterministicMessagePack(ctx);
+    const fallbackValidation = validateCampaignCopy(lastPack, ctx);
+    lastPack.validation = fallbackValidation;
+    logInfo("[CampaignMessageArchitect] deterministic fallback generated", {
+      campaignId,
+      userId,
+      fallbackUsed: true,
+      fallbackValidationScore: fallbackValidation.score,
+      fallbackValidationRejections: fallbackValidation.rejections,
+      retryQualityIssues,
+      groundedFactsUsed,
+      selectedStageCta: groundedFactsUsed.selectedStageCta,
+    });
   }
 
   lastPack.messagePackSource = usedDeterministicFallback ? "fallback_deterministic" : "ai_refined_pack";
@@ -973,6 +1146,8 @@ export async function loadAllApprovedMessagePacks(
         pack: enrichMessagePackMetadata({
           ...pack,
           messagePackSource: pack.messagePackSource || meta.messagePackSource || "ai_refined_pack",
+          invalidatedAt: pack.invalidatedAt || meta.invalidatedAt,
+          invalidationReason: pack.invalidationReason || meta.invalidationReason,
         }),
         assetId: row.id,
         createdAt: new Date(row.createdAt || Date.now()),
@@ -996,7 +1171,10 @@ export function selectBestApprovedMessagePack(
 ): CampaignMessagePack | null {
   if (!items.length) return null;
 
-  const scored = items.map((item) => {
+  const activeItems = items.filter((item) => !item.pack.invalidatedAt);
+  if (!activeItems.length) return null;
+
+  const scored = activeItems.map((item) => {
     const pack = item.pack;
     const sourceRank = SOURCE_RANK[pack.messagePackSource || "ai_refined_pack"] ?? 99;
     const genericPenalty = pack.isGeneric ? 10_000 : 0;
@@ -1171,6 +1349,8 @@ export async function invalidateApprovedMessagePack(
         invalidationIssues: issues,
         approvedMessagePack: {
           ...existingPack,
+          invalidatedAt: new Date().toISOString(),
+          invalidationReason: reason,
           validation: {
             ...(existingPack.validation || { passed: false, score: 0, rejections: [], warnings: [] }),
             passed: false,
@@ -1805,6 +1985,20 @@ export async function ensureApprovedMessagePack(
   opts: BuildApprovedMessagePackOptions
 ): Promise<CampaignMessagePack> {
   const existing = await loadApprovedMessagePack(opts.campaignId);
+
+  if (existing?.isGeneric) {
+    const invalidatedId = await invalidateApprovedMessagePack(
+      opts.campaignId,
+      "generic_pack_blocked",
+      ["Previously approved pack is generic and cannot be reused."]
+    );
+    logWarn("[CampaignMessageArchitect] invalidated generic approved pack", {
+      campaignId: opts.campaignId,
+      userId: opts.userId,
+      oldPackInvalidated: invalidatedId > 0,
+    });
+  }
+
   const canReuseExisting =
     !!existing &&
     existing.validation?.passed &&
@@ -1820,7 +2014,13 @@ export async function ensureApprovedMessagePack(
   }
 
   if (opts.forceRebuild && existing) {
-    await invalidateApprovedMessagePack(opts.campaignId, "creative_quality_gate_failed", opts.qualityIssues || []);
+    const invalidatedId = await invalidateApprovedMessagePack(opts.campaignId, "creative_quality_gate_failed", opts.qualityIssues || []);
+    logInfo("[CampaignMessageArchitect] force rebuild requested", {
+      campaignId: opts.campaignId,
+      userId: opts.userId,
+      oldPackInvalidated: invalidatedId > 0,
+      retryQualityIssues: opts.qualityIssues || [],
+    });
 
     const refinementInstruction = [
       "Refine the message pack to resolve these exact issues:",
