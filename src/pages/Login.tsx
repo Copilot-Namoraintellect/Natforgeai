@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { signInWithPopup } from "firebase/auth";
 import { auth, googleProvider } from "@/lib/firebase";
+import { getGooglePopupOutcome, shouldShowGoogleErrorBanner } from "@/lib/google-auth";
 import { Logo } from "@/components/Logo";
 import {
   Mail,
@@ -29,6 +30,7 @@ export default function Login() {
   const [tab, setTab] = useState<"login" | "register">("login");
   const [showPassword, setShowPassword] = useState(false);
   const [firebaseError, setFirebaseError] = useState<string | null>(null);
+  const [firebaseInfo, setFirebaseInfo] = useState<string | null>(null);
   const [diagnosticResult, setDiagnosticResult] = useState<any>(null);
   const [runningDiagnostic, setRunningDiagnostic] = useState(false);
 
@@ -295,6 +297,7 @@ export default function Login() {
 
   async function handleFirebaseGoogleAuth() {
     setFirebaseError(null);
+    setFirebaseInfo(null);
 
     try {
       const result = await signInWithPopup(auth, googleProvider);
@@ -302,28 +305,24 @@ export default function Login() {
       await firebaseAuthMutation.mutateAsync({ idToken });
     } catch (err: any) {
       // tRPC/backend errors are handled by the mutation's onError.
-      if (err.code && !err.code.startsWith("auth/")) return;
+      const outcome = getGooglePopupOutcome(err);
 
-      let userMessage = err.message || "Google sign-in failed";
-
-      if (err.code === "auth/popup-closed-by-user") {
-        userMessage = "Sign-in popup was closed. Please try again.";
-      } else if (err.code === "auth/popup-blocked") {
-        userMessage = "Popup was blocked by your browser. Please allow popups for this site.";
-      } else if (err.code === "auth/unauthorized-domain") {
-        userMessage = "This domain is not authorized for Firebase Auth. Please add it in your Firebase Console > Authentication > Settings > Authorized domains.";
-      } else if (err.code === "auth/operation-not-supported-in-this-environment") {
-        userMessage = "Google sign-in is not supported in this environment.";
-      } else if (err.code === "auth/cancelled-popup-request") {
-        userMessage = "Sign-in was cancelled. Please try again.";
-      } else if (err.code === "auth/account-exists-with-different-credential") {
-        userMessage = "An account already exists with the same email address but different sign-in credentials.";
-      } else if (err.code === "auth/network-request-failed") {
-        userMessage = "Network error. Please check your internet connection.";
+      if (outcome.kind === "cancelled") {
+        setFirebaseInfo(outcome.message);
+        toast.info(outcome.message);
+        return;
       }
 
-      setFirebaseError(userMessage);
-      toast.error(userMessage);
+      if (outcome.kind === "blocked") {
+        setFirebaseInfo(outcome.message);
+        toast.info(outcome.message);
+        return;
+      }
+
+      if (shouldShowGoogleErrorBanner(outcome)) {
+        setFirebaseError(outcome.message);
+      }
+      toast.error(outcome.message);
     }
   }
 
@@ -376,6 +375,23 @@ export default function Login() {
                 <pre>{JSON.stringify(diagnosticResult, null, 2)}</pre>
               </div>
             )}
+          </div>
+        )}
+
+        {firebaseInfo && (
+          <div className="mb-4 p-4 rounded-xl bg-sky-50 border border-sky-200 text-sky-700 text-sm">
+            <p className="font-semibold mb-1">Google Sign-in Update</p>
+            <p>{firebaseInfo}</p>
+            <div className="mt-3 flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                onClick={() => setFirebaseInfo(null)}
+              >
+                Dismiss
+              </Button>
+            </div>
           </div>
         )}
 

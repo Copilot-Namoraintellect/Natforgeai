@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router";
 import { buildFailedCreativeMessage, groupCampaignActivity } from "@/lib/agent-activity";
+import { getWorkflowNextActionMessage } from "@/lib/workflow";
 
 const agentTypeConfig: Record<string, { label: string }> = {
   strategy: { label: "Strategy Agent" },
@@ -127,10 +128,10 @@ export default function AgentActivity() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
             <Activity className="w-6 h-6 text-[#00D4FF]" />
-            Agent Activity
+            AI Operations
           </h1>
           <p className="text-slate-600 mt-1">
-            Timeline of all AI agent executions and tasks
+            Campaign Control Room for supervised autonomous execution
           </p>
         </div>
       </div>
@@ -196,6 +197,7 @@ export default function AgentActivity() {
                       <p className="text-xs text-gray-400 mt-1">
                         {campaign ? `Workflow: ${campaign.workflowState}` : "Workflow status loading"}
                       </p>
+                      <p className="text-xs text-[#00D4FF] mt-1">Current stage: {timeline.currentCampaignStage}</p>
                     </div>
                     <Badge className={statusItem.color}>
                       <StatusIcon className="w-3 h-3 mr-1" />
@@ -204,10 +206,11 @@ export default function AgentActivity() {
                   </div>
 
                   <div className="rounded-lg border border-[#334155] bg-[#0F172A] p-3 space-y-2">
-                    <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">Campaign Timeline</p>
+                    <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">AI Operations Timeline</p>
                     <p className="text-sm text-gray-200">What is happening now: {timeline.currentStatus === "running" ? "Agents are processing this campaign." : timeline.currentStatus === "completed" ? "Content is ready for review." : timeline.currentStatus === "failed" ? "Creative generation failed and needs attention." : "Waiting for workflow progression."}</p>
                     <p className="text-sm text-gray-300">What has been completed: {timeline.completedSteps.length > 0 ? timeline.completedSteps.join(" -> ") : "No completed agent steps yet."}</p>
-                    <p className="text-sm text-gray-300">What you need to do next: {timeline.nextAction}</p>
+                    <p className="text-sm text-gray-300">Pending work: {timeline.pendingWork}</p>
+                    <p className="text-sm text-gray-300">What you need to do next: {campaign ? getWorkflowNextActionMessage(campaign.workflowState) : timeline.nextAction}</p>
                     <p className="text-sm text-gray-300">What happens after the next action: {timeline.currentStatus === "completed" ? "Content Studio opens with generated drafts and assets." : "Workflow advances to the next campaign stage."}</p>
                   </div>
 

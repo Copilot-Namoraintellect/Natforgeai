@@ -13,9 +13,13 @@ export interface CampaignActivityTimeline {
   campaignId: number;
   strategyRun: AgentRunLike | null;
   creativeRun: AgentRunLike | null;
+  audienceRun: AgentRunLike | null;
+  distributionRun: AgentRunLike | null;
   creativeRunHistory: AgentRunLike[];
+  currentCampaignStage: string;
   currentStatus: ActivityStatus;
   completedSteps: string[];
+  pendingWork: string;
   nextAction: string;
   errorMessage: string | null;
 }
@@ -42,31 +46,67 @@ export function groupCampaignActivity(runs: AgentRunLike[]): CampaignActivityTim
         .filter((run) => run.agentType === "creative")
         .sort((a, b) => Number(b.id) - Number(a.id));
       const creativeRun = creativeRuns[0] ?? null;
+      const audienceRun = getLatestRun(campaignRuns, "audience");
+      const distributionRun = getLatestRun(campaignRuns, "distribution");
       const creativeRunHistory = creativeRuns.slice(1);
 
       const completedSteps: string[] = [];
       if (strategyRun?.status === "completed") completedSteps.push("Strategy Agent completed");
       if (creativeRun?.status === "completed") completedSteps.push("Creative Agent completed");
+      if (audienceRun?.status === "completed") completedSteps.push("Audience Agent completed");
+      if (distributionRun?.status === "completed") completedSteps.push("Distribution Agent completed");
 
       let currentStatus: ActivityStatus = "waiting";
+      let currentCampaignStage = "Strategy setup";
+      let pendingWork = "Waiting for campaign workflow signals.";
       let nextAction = "Awaiting next workflow action";
       let errorMessage: string | null = null;
 
-      if (creativeRun?.status === "failed") {
+      if (distributionRun?.status === "completed") {
+        currentCampaignStage = "Distribution ready";
+        currentStatus = "completed";
+        pendingWork = "Publishing and engagement follow-up.";
+        nextAction = "Open Content Studio";
+      } else if (distributionRun?.status === "running") {
+        currentCampaignStage = "Distribution scheduling";
+        currentStatus = "running";
+        pendingWork = "Finalizing channel schedule and publishing instructions.";
+        nextAction = "Wait for distribution generation to finish";
+      } else if (audienceRun?.status === "completed") {
+        currentCampaignStage = "Audience complete";
+        currentStatus = "waiting";
+        pendingWork = "Distribution scheduling is next.";
+        nextAction = "Approve and continue to distribution";
+      } else if (audienceRun?.status === "running") {
+        currentCampaignStage = "Audience intelligence";
+        currentStatus = "running";
+        pendingWork = "AI is identifying and scoring audience segments.";
+        nextAction = "Wait for audience generation to finish";
+      } else if (creativeRun?.status === "failed") {
+        currentCampaignStage = "Creative generation";
         currentStatus = "failed";
+        pendingWork = "Creative output failed validation and needs a retry.";
         nextAction = "Retry creative generation";
         errorMessage = creativeRun.error || "Creative generation failed.";
       } else if (creativeRun?.status === "running") {
+        currentCampaignStage = "Creative generation";
         currentStatus = "running";
+        pendingWork = "AI is generating posts and campaign assets.";
         nextAction = "Wait for creative generation to finish";
       } else if (creativeRun?.status === "completed") {
+        currentCampaignStage = "Creative review";
         currentStatus = "completed";
+        pendingWork = "Creative content is ready for approval and channel preparation.";
         nextAction = "Open Content Studio";
       } else if (strategyRun?.status === "completed") {
+        currentCampaignStage = "Strategy approved";
         currentStatus = "waiting";
+        pendingWork = "Creative generation has not started yet.";
         nextAction = "Approve strategy to start creative generation";
       } else if (strategyRun?.status === "running") {
+        currentCampaignStage = "Strategy generation";
         currentStatus = "running";
+        pendingWork = "AI is building campaign strategy.";
         nextAction = "Wait for strategy generation to finish";
       }
 
@@ -74,9 +114,13 @@ export function groupCampaignActivity(runs: AgentRunLike[]): CampaignActivityTim
         campaignId,
         strategyRun,
         creativeRun,
+        audienceRun,
+        distributionRun,
         creativeRunHistory,
+        currentCampaignStage,
         currentStatus,
         completedSteps,
+        pendingWork,
         nextAction,
         errorMessage,
       };

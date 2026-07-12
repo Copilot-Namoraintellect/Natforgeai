@@ -39,6 +39,11 @@ export const workflowGuidance: Record<string, { explanation: string; nextAction:
   completed: { explanation: "This campaign has completed its cycle.", nextAction: "Review results or create a new campaign." },
 };
 
+export function getWorkflowNextActionMessage(state: string | null | undefined): string {
+  if (!state) return "Complete the current step to continue the autonomous workflow.";
+  return workflowGuidance[state]?.nextAction || "Continue the campaign workflow from Mission Control.";
+}
+
 export const journeyStage: Record<string, string> = {
   business_onboarding: "Draft",
   strategy_pending: "Strategy Generating",

@@ -47,6 +47,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { shouldScrollToTop, scrollToTop } from "@/lib/onboarding-navigation";
+import {
+  calculateOnboardingReadiness,
+  isLiveOrLaterWorkflowState,
+} from "@/lib/onboarding-readiness";
 
 const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
 const ENABLE_BASIC_DRAFT_VIDEO = import.meta.env.VITE_ENABLE_BASIC_DRAFT_VIDEO === "true";
@@ -415,6 +419,11 @@ export default function Onboarding() {
 
   const { data: platformConfigStatus } = trpc.integration.getPlatformConfigStatus.useQuery();
   const { data: connectedPlatforms } = trpc.integration.getConnectedPlatforms.useQuery();
+  const { data: campaigns } = trpc.campaign.list.useQuery();
+  const { data: completedAudienceRuns } = trpc.agent.getAgentRuns.useQuery({
+    agentType: "audience",
+    status: "completed",
+  });
 
   const connectedIntegrations = useMemo(
     () =>
@@ -642,6 +651,50 @@ export default function Onboarding() {
 
   const totalSteps = 6;
   const progress = (step / totalSteps) * 100;
+
+  const aiReadiness = useMemo(() => {
+    const hasWebsiteAnalysis = !!aiSuggestions || (businessForm.website.trim().length > 0 && Object.keys(aiSuggestedFields).length > 0);
+    const businessProfileBuilt =
+      businessForm.name.trim().length > 0 &&
+      (businessForm.description.trim().length > 0 || businessForm.shortDescription.trim().length > 0) &&
+      businessForm.location.trim().length > 0;
+    const brandVoiceDetected =
+      brandForm.brandTone.trim().length > 0 ||
+      businessForm.brandTone.trim().length > 0 ||
+      brandForm.brandVoiceNotes.trim().length > 0;
+    const productsServicesUnderstood =
+      businessForm.productOrService.trim().length > 0 ||
+      assetForm.productDescription.trim().length > 0 ||
+      assetForm.uniqueSellingPoint.trim().length > 0;
+    const campaignGoalSelected =
+      goalForm.primaryGoal.trim().length > 0 || businessForm.mainGoal.trim().length > 0;
+    const socialChannelsConnected = connectedIntegrations.some((integration) => integration.status === "connected");
+    const audienceIntelligenceActive =
+      (completedAudienceRuns?.length || 0) > 0 ||
+      (campaigns || []).some((campaign) => ["audience_ready", "schedule_generated", "launch_approval_required"].includes(campaign.workflowState));
+    const firstCampaignLaunched = (campaigns || []).some((campaign) => isLiveOrLaterWorkflowState(campaign.workflowState));
+
+    return calculateOnboardingReadiness({
+      websiteAnalysed: hasWebsiteAnalysis,
+      businessProfileBuilt,
+      brandVoiceDetected,
+      productsServicesUnderstood,
+      campaignGoalSelected,
+      socialChannelsConnected,
+      audienceIntelligenceActive,
+      firstCampaignLaunched,
+    });
+  }, [
+    aiSuggestions,
+    aiSuggestedFields,
+    businessForm,
+    brandForm,
+    assetForm,
+    goalForm,
+    connectedIntegrations,
+    completedAudienceRuns,
+    campaigns,
+  ]);
 
   const stepLabels = [
     "Business Profile",
@@ -1082,8 +1135,56 @@ export default function Onboarding() {
   }
 
   function renderStepIndicator() {
+    const checkpointIconMap: Record<string, any> = {
+      website_analysed: Globe,
+      business_profile_built: Building2,
+      brand_voice_detected: MessageSquare,
+      products_services_understood: Package,
+      campaign_goal_selected: TrendingUp,
+      social_channels_connected: Plug,
+      audience_intelligence_active: Sparkles,
+      first_campaign_launched: Rocket,
+    };
+
     return (
       <div className="mb-8">
+        <div className="mb-5 rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
+          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-3">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">AI Readiness</p>
+              <p className="text-sm text-gray-300">NatForgeAI business intelligence profile progress</p>
+            </div>
+            <p className="text-lg font-semibold text-white">{aiReadiness.percentage}% ready</p>
+          </div>
+          <Progress value={aiReadiness.percentage} className="h-2" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mt-3">
+            {aiReadiness.checkpoints.map((checkpoint) => {
+              const Icon = checkpointIconMap[checkpoint.key] || Info;
+              return (
+                <div
+                  key={checkpoint.key}
+                  className={`rounded-lg border p-2.5 flex items-center gap-2 ${
+                    checkpoint.completed
+                      ? "border-emerald-500/30 bg-emerald-500/10"
+                      : "border-[#334155] bg-[#1E293B]/50"
+                  }`}
+                >
+                  <div
+                    className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                      checkpoint.completed ? "bg-emerald-500 text-white" : "bg-[#1E293B] text-gray-400"
+                    }`}
+                  >
+                    {checkpoint.completed ? <Check className="w-3.5 h-3.5" /> : <Icon className="w-3.5 h-3.5" />}
+                  </div>
+                  <p className={`text-xs ${checkpoint.completed ? "text-emerald-100" : "text-gray-300"}`}>
+                    {checkpoint.label}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="flex justify-between text-xs sm:text-sm text-gray-400 mb-3">
           {stepLabels.map((label, idx) => {
             const s = idx + 1;

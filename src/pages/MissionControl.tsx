@@ -10,7 +10,9 @@ import {
   workflowGuidance,
   journeyStage,
   getContinueAction,
+  getWorkflowNextActionMessage,
 } from "@/lib/workflow";
+import { buildMissionCommandSummary } from "@/lib/mission-control";
 import {
   Rocket,
   Megaphone,
@@ -56,6 +58,7 @@ export default function MissionControl() {
   );
   const { data: leads } = trpc.lead.list.useQuery();
   const { data: wallet } = trpc.billing.myWallet.useQuery();
+  const { data: queue } = trpc.publishing.getPublishingQueue.useQuery();
 
   const aiCampaigns = useMemo(
     () => campaigns?.filter((c) => c.aiGenerated) || [],
@@ -81,6 +84,19 @@ export default function MissionControl() {
 
   const approvalCount = pendingApprovals?.length ?? 0;
   const completedAgentRuns = agentRuns?.length ?? 0;
+
+  const missionSummary = useMemo(
+    () =>
+      buildMissionCommandSummary({
+        campaigns: aiCampaigns,
+        approvals: pendingApprovals || [],
+        runningRuns: runningAgents || [],
+        completedRuns: agentRuns || [],
+        leads: leads || [],
+        queue: queue || [],
+      }),
+    [aiCampaigns, pendingApprovals, runningAgents, agentRuns, leads, queue]
+  );
 
   const dailySummary = useMemo(() => {
     const runningCount = runningAgents?.length ?? 0;
@@ -227,6 +243,45 @@ export default function MissionControl() {
         </Card>
       )}
 
+      {!campaignsLoading && (
+        <Card className="bg-[#1E293B] border-[#334155]">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-white text-base flex items-center gap-2">
+              <Target className="w-4 h-4 text-[#00D4FF]" />
+              Command Centre Snapshot
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="rounded-lg border border-[#334155] bg-[#0F172A] p-3 space-y-2">
+              <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">Active Mission</p>
+              <p className="text-sm text-gray-200">{missionSummary.activeCampaignName}</p>
+              <p className="text-sm text-gray-300">What is happening: {missionSummary.currentlyDoing}</p>
+              <p className="text-sm text-gray-300">What has completed: {missionSummary.completedByAi.length > 0 ? missionSummary.completedByAi.join(" -> ") : "No completed AI milestones yet."}</p>
+              <p className="text-sm text-gray-300">What you need to do next: {missionSummary.nextRecommendedAction}</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="rounded-lg border border-[#334155] bg-[#0F172A] p-3">
+                <p className="text-xs text-gray-400">Needs user approval</p>
+                <p className="text-sm text-white mt-1">{missionSummary.approvalsNeeded} pending</p>
+              </div>
+              <div className="rounded-lg border border-[#334155] bg-[#0F172A] p-3">
+                <p className="text-xs text-gray-400">Content readiness</p>
+                <p className="text-sm text-white mt-1">{missionSummary.contentReadiness}</p>
+              </div>
+              <div className="rounded-lg border border-[#334155] bg-[#0F172A] p-3">
+                <p className="text-xs text-gray-400">Publishing readiness</p>
+                <p className="text-sm text-white mt-1">{missionSummary.publishingReadiness}</p>
+              </div>
+              <div className="rounded-lg border border-[#334155] bg-[#0F172A] p-3">
+                <p className="text-xs text-gray-400">Leads and audience</p>
+                <p className="text-sm text-white mt-1">{missionSummary.leadsAudienceStatus}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((stat) => {
@@ -315,6 +370,10 @@ export default function MissionControl() {
                         {nextAction.explanation}
                       </p>
                     )}
+
+                    <p className="text-xs text-gray-500 mt-2">
+                      Next action: {getWorkflowNextActionMessage(campaign.workflowState)}
+                    </p>
 
                     <div className="flex items-center gap-3 mt-3">
                       {continueAction ? (

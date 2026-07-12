@@ -15,6 +15,21 @@ describe("agent activity grouping and deduplication", () => {
     expect(campaign29?.creativeRun?.id).toBe(22);
     expect(campaign29?.creativeRunHistory.length).toBe(1);
     expect(campaign29?.creativeRunHistory[0]?.id).toBe(21);
+    expect(campaign29?.currentCampaignStage).toBe("Creative generation");
+    expect(campaign29?.pendingWork.toLowerCase()).toContain("generating posts");
+  });
+
+  it("builds grouped ai operations timeline through audience stage", () => {
+    const timelines = groupCampaignActivity([
+      { id: 1, campaignId: 101, agentType: "strategy", status: "completed" },
+      { id: 2, campaignId: 101, agentType: "creative", status: "completed" },
+      { id: 3, campaignId: 101, agentType: "audience", status: "running" },
+    ]);
+
+    expect(timelines[0]?.currentCampaignStage).toBe("Audience intelligence");
+    expect(timelines[0]?.completedSteps).toContain("Strategy Agent completed");
+    expect(timelines[0]?.completedSteps).toContain("Creative Agent completed");
+    expect(timelines[0]?.nextAction.toLowerCase()).toContain("audience generation");
   });
 
   it("returns clear credit messaging for failed creative errors", () => {
