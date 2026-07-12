@@ -46,6 +46,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { shouldScrollToTop, scrollToTop } from "@/lib/onboarding-navigation";
 
 const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
 const ENABLE_BASIC_DRAFT_VIDEO = import.meta.env.VITE_ENABLE_BASIC_DRAFT_VIDEO === "true";
@@ -302,6 +303,8 @@ function mapAiPlatforms(aiPlatforms: string[]): string[] {
 }
 
 interface AiSuggestions {
+  shortDescription: string;
+  businessDescription: string;
   productOrService: string;
   targetCustomer: string;
   productDescription: string;
@@ -326,6 +329,7 @@ export default function Onboarding() {
   const navigate = useNavigate();
   const utils = trpc.useUtils();
   const [step, setStep] = useState(1);
+  const previousStepRef = useRef(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [limitBlocked, setLimitBlocked] = useState(false);
   const [duplicateDialog, setDuplicateDialog] = useState<{ open: boolean; existingId: number | null }>({
@@ -481,6 +485,14 @@ export default function Onboarding() {
 
       setBusinessForm((prev) => {
         const next = { ...prev };
+        if (!next.shortDescription && sug.shortDescription) {
+          next.shortDescription = sug.shortDescription;
+          newAiSuggested["shortDescription"] = true;
+        }
+        if (!next.description && sug.businessDescription) {
+          next.description = sug.businessDescription;
+          newAiSuggested["description"] = true;
+        }
         if (!next.productOrService && sug.productOrService) {
           next.productOrService = sug.productOrService;
           newAiSuggested["productOrService"] = true;
@@ -991,6 +1003,14 @@ export default function Onboarding() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    const previous = previousStepRef.current;
+    if (shouldScrollToTop(previous, step)) {
+      scrollToTop(typeof window !== "undefined" ? window.scrollTo.bind(window) : null);
+    }
+    previousStepRef.current = step;
+  }, [step]);
+
   function renderAiBadge(field: string) {
     if (!aiSuggestedFields[field]) return null;
     return (
@@ -1299,11 +1319,14 @@ export default function Onboarding() {
           <div className="space-y-2">
             <Label className="text-gray-300">Short description (optional)</Label>
             <Textarea
-              placeholder="A brief description of your business"
+              placeholder="1-2 lines for compact cards and quick previews"
               value={businessForm.shortDescription}
               onChange={(e) => setBusinessForm((p) => ({ ...p, shortDescription: e.target.value }))}
               className="bg-[#0F172A] border-[#334155] text-white"
             />
+            <p className="text-xs text-gray-500">
+              This appears in compact UI cards. Use the full profile below for campaign grounding.
+            </p>
           </div>
         </div>
 
@@ -1335,13 +1358,16 @@ export default function Onboarding() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2 md:col-span-2">
-              <Label className="text-gray-300">Description</Label>
+              <Label className="text-gray-300">Full business profile</Label>
               <Textarea
-                placeholder="AI will suggest a business description"
+                placeholder="AI will generate an 80-150 word profile grounded in your website evidence"
                 value={businessForm.description}
                 onChange={(e) => setBusinessForm((p) => ({ ...p, description: e.target.value }))}
                 className="bg-[#0F172A] border-[#334155] text-white min-h-[100px]"
               />
+              <p className="text-xs text-gray-500">
+                Include what you do, who you serve, your key products/services, value proposition, service area, and tone.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -2253,6 +2279,14 @@ export default function Onboarding() {
         </div>
 
         {renderStepIndicator()}
+
+        <div className="mb-4 rounded-xl border border-[#334155] bg-[#0F172A]/70 p-4">
+          <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">Workflow Guidance</p>
+          <p className="text-sm text-gray-200 mt-2">What is happening now: You are setting up the business and campaign context NatForge AI needs.</p>
+          <p className="text-sm text-gray-300 mt-1">What has been completed: All previous onboarding steps are saved as you progress.</p>
+          <p className="text-sm text-gray-300 mt-1">What you need to do next: Complete the current step, then click Next.</p>
+          <p className="text-sm text-gray-300 mt-1">What happens after next action: NatForge AI moves to the next step and uses your inputs to generate strategy and creatives.</p>
+        </div>
 
         {/* Step Content */}
         <Card className="border-[#334155] bg-[#1E293B]/80 backdrop-blur">

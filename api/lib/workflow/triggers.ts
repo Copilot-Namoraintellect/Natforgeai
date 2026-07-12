@@ -1,7 +1,8 @@
 import { getDb } from "../../queries/connection";
 import { agentRuns, campaigns, approvalRequests, publishingQueue } from "@db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { transitionCampaignState, createApprovalRequest } from "./engine";
+import { resolveCreativeWorkflowState } from "./progress-logic";
 import { runCreativeAgent } from "../agents/creative-agent";
 import { runDistributionAgent } from "../agents/distribution-agent";
 import { runAudienceAgent } from "../agents/audience-agent";
@@ -55,15 +56,35 @@ export async function onAgentRunComplete(runId: number) {
         riskLevel: "low",
       });
     }
-  } else if (state === "creatives_generating" && run.agentType === "creative") {
+  } else if (["strategy_approved", "creatives_generating"].includes(state) && run.agentType === "creative") {
+    if (state === "strategy_approved") {
+      await transitionCampaignState(run.campaignId, run.userId, "generate_creatives");
+    }
+
+    const [latestCampaign] = await db
+      .select()
+      .from(campaigns)
+      .where(eq(campaigns.id, run.campaignId))
+      .limit(1);
+
     // Verify that the creative agent actually saved posts before transitioning
-    const ctx = (campaign.workflowContext || {}) as any;
+    const ctx = ((latestCampaign?.workflowContext || campaign.workflowContext) || {}) as any;
     const savedPosts = ctx.savedPosts ?? 0;
     if (savedPosts === 0) {
       console.error(`[Workflow] Creative agent for campaign ${run.campaignId} completed but savedPosts=0. Not transitioning state.`);
       return;
     }
-    await transitionCampaignState(run.campaignId, run.userId, "creatives_complete");
+
+    const resolvedCreativeState = resolveCreativeWorkflowState({
+      currentState: state,
+      strategyApproved: state === "strategy_approved" || state === "creatives_generating",
+      creativeRunStatus: "completed",
+      savedPosts,
+    });
+
+    if (resolvedCreativeState === "creatives_ready") {
+      await transitionCampaignState(run.campaignId, run.userId, "creatives_complete");
+    }
 
     // Auto-trigger audience agent after creatives are ready — with dedup guard
     try {
@@ -77,7 +98,7 @@ export async function onAgentRunComplete(runId: number) {
             eq(agentRuns.userId, run.userId)
           )
         )
-        .orderBy(agentRuns.createdAt)
+        .orderBy(desc(agentRuns.createdAt))
         .limit(1);
 
       if (existingAudience.length > 0 && ["running", "completed"].includes(existingAudience[0].status)) {
@@ -107,7 +128,7 @@ export async function onAgentRunComplete(runId: number) {
             eq(agentRuns.userId, run.userId)
           )
         )
-        .orderBy(agentRuns.createdAt)
+        .orderBy(desc(agentRuns.createdAt))
         .limit(1);
 
       if (existingDist.length > 0 && ["running", "completed"].includes(existingDist[0].status)) {
@@ -228,7 +249,7 @@ export async function onStrategyApproved(campaignId: number, userId: number) {
         eq(agentRuns.userId, userId)
       )
     )
-    .orderBy(agentRuns.createdAt)
+    .orderBy(desc(agentRuns.createdAt))
     .limit(1);
 
   if (existingCreative.length > 0 && ["running", "completed"].includes(existingCreative[0].status)) {
@@ -262,7 +283,7 @@ export async function onStrategyApproved(campaignId: number, userId: number) {
             eq(agentRuns.userId, userId)
           )
         )
-        .orderBy(agentRuns.createdAt)
+        .orderBy(desc(agentRuns.createdAt))
         .limit(1);
 
       if (existingAiRun.length > 0 && ["running", "completed"].includes(existingAiRun[0].status)) {

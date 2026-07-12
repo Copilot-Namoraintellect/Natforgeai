@@ -16,6 +16,7 @@ import {
   type BusinessEvidence,
 } from "./lib/website-analyser";
 import { guardProfileSuggestions } from "./lib/business-profile-guard";
+import { buildBusinessDescriptionsFromEvidence } from "./lib/business-description";
 
 type OperationName =
   | "business.list"
@@ -104,9 +105,17 @@ function buildDeterministicProfileSuggestions(
   };
 
   const preferredPlatforms = platformMap[category] || ["facebook", "instagram", "linkedin"];
+  const descriptions = buildBusinessDescriptionsFromEvidence(evidence, {
+    businessName: input.businessName,
+    businessCategory: category,
+    location: input.location || evidence.location,
+    tone: "professional",
+  });
 
   return {
     businessCategory: category,
+    shortDescription: descriptions.shortDescription,
+    businessDescription: descriptions.businessDescription,
     productOrService: firstProduct,
     targetCustomer: customers.join(", "),
     productDescription,
@@ -543,6 +552,8 @@ export const businessRouter = createRouter({
 
         const analysisSchema = z.object({
           businessCategory: z.string().describe("Confirmed business category"),
+          shortDescription: z.string().describe("A compact one-line summary for UI cards"),
+          businessDescription: z.string().describe("A rich 80-150 word business profile grounded in website evidence that includes what the business does, target customers, key products/services, value proposition, location/service area if available, and tone"),
           productOrService: z.string().describe("What the business sells or offers"),
           targetCustomer: z.string().describe("The ideal customer profile"),
           productDescription: z.string().describe("A rich description of the main product or service"),
@@ -570,6 +581,8 @@ export const businessRouter = createRouter({
             system:
               "You are an expert marketing analyst. Analyse the structured website evidence and return actionable marketing insights. " +
               "CRITICAL: Return only facts supported by the supplied website evidence. If unsupported, return null/empty and include a warning. " +
+              "Generate a shortDescription for compact UI and a separate businessDescription between 80 and 150 words for campaign grounding. " +
+              "The businessDescription must explicitly cover what the business does, target customers, key products/services, value proposition, service area/location when available, and brand tone. " +
               "Do not infer unrelated SaaS/marketing-platform details. " +
               "Do not classify the business as SEO, digital marketing, social media management, data analytics, restaurant, salon, or consulting " +
               "unless the evidence explicitly and repeatedly supports that classification. Only list products/services actually mentioned in the evidence. " +
@@ -599,6 +612,19 @@ export const businessRouter = createRouter({
           warnings,
           genericGuardTriggered,
         } = guardProfileSuggestions(suggestions, evidence);
+
+        const descriptions = buildBusinessDescriptionsFromEvidence(evidence, {
+          businessName: input.businessName,
+          businessCategory: (guardedSuggestions as any).businessCategory,
+          valueProposition: (guardedSuggestions as any).uniqueSellingPoint,
+          location: input.location || evidence.location,
+          tone: (guardedSuggestions as any).brandTone,
+        });
+
+        if (!(guardedSuggestions as any).shortDescription) {
+          (guardedSuggestions as any).shortDescription = descriptions.shortDescription;
+        }
+        (guardedSuggestions as any).businessDescription = descriptions.businessDescription;
 
         logInfo("[businessRouter.analyseWebsite] suggestions guarded", {
           userId: ctx.user.id,

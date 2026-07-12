@@ -123,7 +123,7 @@ export const agentRouter = createRouter({
             eq(agentRuns.userId, ctx.user.id)
           )
         )
-        .orderBy(agentRuns.createdAt)
+        .orderBy(desc(agentRuns.createdAt))
         .limit(1);
 
       if (existingRun.length > 0 && ["running", "completed"].includes(existingRun[0].status)) {
@@ -222,7 +222,7 @@ export const agentRouter = createRouter({
             eq(agentRuns.userId, ctx.user.id)
           )
         )
-        .orderBy(agentRuns.createdAt)
+        .orderBy(desc(agentRuns.createdAt))
         .limit(1);
 
       const workflowContext = (campaign.workflowContext || {}) as { savedPosts?: number } | undefined;
@@ -306,7 +306,7 @@ export const agentRouter = createRouter({
             eq(agentRuns.userId, ctx.user.id)
           )
         )
-        .orderBy(agentRuns.createdAt)
+        .orderBy(desc(agentRuns.createdAt))
         .limit(1);
 
       if (existingAudience.length > 0 && ["running", "completed"].includes(existingAudience[0].status)) {
@@ -366,7 +366,7 @@ export const agentRouter = createRouter({
             eq(agentRuns.userId, ctx.user.id)
           )
         )
-        .orderBy(agentRuns.createdAt)
+        .orderBy(desc(agentRuns.createdAt))
         .limit(1);
 
       if (existingDist.length > 0 && ["running", "completed"].includes(existingDist[0].status)) {
@@ -523,7 +523,7 @@ export const agentRouter = createRouter({
             eq(agentRuns.status, "running")
           )
         )
-        .orderBy(agentRuns.createdAt)
+        .orderBy(desc(agentRuns.createdAt))
         .limit(1);
 
       if (existingRun.length > 0) {

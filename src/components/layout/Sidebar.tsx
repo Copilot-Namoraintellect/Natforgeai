@@ -5,6 +5,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/hooks/useAuth";
 import { Logo } from "@/components/Logo";
 import { trpc } from "@/providers/trpc";
+import { workflowStateLabels } from "@/lib/workflow";
 import {
   Megaphone,
   PenTool,
@@ -12,7 +13,7 @@ import {
   Users,
   Brain,
   Zap,
-  FileText,
+  Building2,
   BarChart3,
   ChevronLeft,
   ChevronRight,
@@ -25,6 +26,7 @@ import {
   Plug,
   Settings2,
   Coins,
+  CircleDot,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -34,15 +36,15 @@ interface SidebarProps {
 
 const mainNavItems = [
   { path: "/mission-control", label: "Mission Control", icon: Rocket },
+  { path: "/onboarding", label: "Onboarding", icon: Building2 },
   { path: "/campaigns", label: "Campaigns", icon: Megaphone },
   { path: "/approvals", label: "Approval Centre", icon: CheckCircle, badge: "pendingApprovals" },
+  { path: "/agent-activity", label: "Agent Activity", icon: Activity },
   { path: "/content", label: "Content Studio", icon: PenTool },
   { path: "/calendar", label: "Calendar", icon: CalendarDays },
   { path: "/leads", label: "Leads", icon: Users },
   { path: "/audience-intelligence", label: "Audience Intelligence", icon: Brain },
-  { path: "/agent-activity", label: "Agent Activity", icon: Activity },
   { path: "/analytics", label: "Analytics", icon: BarChart3 },
-  { path: "/templates", label: "Templates", icon: FileText },
   { path: "/integrations", label: "Integrations", icon: Plug },
   { path: "/automations", label: "Automations", icon: Zap },
   { path: "/credits", label: "Credits", icon: Coins },
@@ -69,8 +71,32 @@ export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
     enabled: !!user,
     refetchInterval: 30000,
   });
+  const { data: campaigns } = trpc.campaign.list.useQuery(undefined, {
+    enabled: !!user,
+    refetchInterval: 10000,
+  });
 
   const approvalCount = pendingApprovals?.length ?? 0;
+  const activeCampaign =
+    campaigns?.find((c) =>
+      !["completed", "campaign_live", "engagement_active", "leads_converting", "optimisation_active"].includes(
+        c.workflowState
+      )
+    ) || campaigns?.[0] || null;
+
+  const workflowStep = activeCampaign?.workflowState
+    ? workflowStateLabels[activeCampaign.workflowState]?.step ?? 1
+    : user?.onboardingComplete
+      ? 2
+      : 1;
+
+  const journeySteps = [
+    { label: "Onboarding", path: "/onboarding", done: !!user?.onboardingComplete, step: 1 },
+    { label: "Campaigns", path: "/campaigns", done: workflowStep >= 2, step: 2 },
+    { label: "Approval Centre", path: "/approvals", done: workflowStep >= 3, step: 3 },
+    { label: "Agent Activity", path: "/agent-activity", done: workflowStep >= 5, step: 4 },
+    { label: "Content Studio", path: "/content", done: workflowStep >= 6, step: 5 },
+  ];
 
   return (
     <div
@@ -95,6 +121,33 @@ export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
       {/* Main Navigation */}
       <ScrollArea className="flex-1 py-3">
         <nav className="flex flex-col gap-1 px-2">
+          {!collapsed && (
+            <div className="mb-3 rounded-xl border border-[#334155] bg-[#0B1220] p-3">
+              <p className="text-[10px] font-semibold text-[#00D4FF] uppercase tracking-wider">Workflow Progress</p>
+              <p className="text-[11px] text-gray-400 mt-1">
+                {activeCampaign ? `Campaign #${activeCampaign.id}: ${workflowStateLabels[activeCampaign.workflowState]?.label || activeCampaign.workflowState}` : "Start with onboarding, then launch your first campaign."}
+              </p>
+              <div className="mt-2 space-y-1.5">
+                {journeySteps.map((step) => {
+                  const isCurrent = workflowStep === step.step;
+                  return (
+                    <Link
+                      key={step.path}
+                      to={step.path}
+                      className={cn(
+                        "flex items-center gap-2 text-[11px] rounded-md px-2 py-1.5 transition-colors",
+                        isCurrent ? "bg-[#1E293B] text-white" : "text-gray-400 hover:bg-[#1E293B] hover:text-gray-200"
+                      )}
+                    >
+                      {step.done ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <CircleDot className="w-3.5 h-3.5 text-amber-400" />}
+                      <span className="truncate">{step.label}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {mainNavItems.map((item) => {
             const isActive = location.pathname === item.path;
             const Icon = item.icon;

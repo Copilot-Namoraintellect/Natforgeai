@@ -1605,49 +1605,9 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     failedInserts,
   });
 
-  // Step 2: Generate additional creative assets (best-effort)
-  const assetsPrompt = `You are a conversion-focused creative director. Generate supplementary high-performing sales assets for this campaign.
-
-CAMPAIGN:
-- Name: ${campaign.name}
-- Goal: ${campaign.goal}
-- Core Message: ${coreMessage || "Not specified"}
-- CTA Strategy: ${ctaStrategy || "Not specified"}
-- Target Audience: ${campaign.targetAudience || "Not specified"}
-- Platforms: ${campaign.platforms || "Instagram, Facebook, TikTok"}
-
-Generate:
-1. 5 image generation prompts for conversion-focused hero visuals (exact scene, colours, text overlay, emotional trigger)
-2. 3 CTA variations for different funnel stages (awareness, consideration, decision)
-3. A hashtag strategy document (10 core + 10 trending + 10 niche per platform)
-4. 2 testimonial frameworks (before/after structure)
-5. A competitor response angle (how to counter common objections)
-
-CRITICAL: Every object must include EVERY key. Use null when a field does not apply. Never omit a key.
-Respond with structured data.`;
-
-  let assetsResult: { runId: number; output: z.infer<typeof CreativeAssetsSchema> } | undefined;
-  let assetsError: string | undefined;
-  try {
-    assetsResult = await runAgent({
-      userId,
-      campaignId,
-      agentType: "creative",
-      prompt: assetsPrompt,
-      schema: CreativeAssetsSchema,
-      system:
-        "You are an expert copywriter and creative director. You create high-converting marketing assets across all channels. Always respond with valid structured data. CRITICAL: Every object must include EVERY key. Use null when a field does not apply. Never omit a key.",
-    });
-  } catch (err: any) {
-    assetsError = err.message || String(err);
-    logError("[CreativeAgent] assets generation failed", {
-      campaignId,
-      userId,
-      stage: "asset_generation",
-      provider: "openai",
-      error: assetsError,
-    });
-  }
+  // Step 2 intentionally disabled to avoid creating duplicate "creative" agent runs
+  // that confuse campaign timelines. The primary Hero Campaign Pack already contains
+  // the assets required for Content Studio.
 
   // Update campaign with final context
   await db
@@ -1657,8 +1617,8 @@ Respond with structured data.`;
         ...(strategyContext || {}),
         creativeGeneratedAt: new Date().toISOString(),
         creativeRunId: packResult.runId,
-        assetsRunId: assetsResult?.runId ?? null,
-        assetsGenerationError: assetsError ?? null,
+        assetsRunId: null,
+        assetsGenerationError: null,
         savedPosts,
         failedInserts,
         premiumPack: true,
@@ -1666,38 +1626,6 @@ Respond with structured data.`;
     })
     .where(eq(campaigns.id, campaignId));
 
-  // Save campaign_assets records from Step 2 (best-effort)
-  if (assetsResult?.output?.assets && Array.isArray(assetsResult.output.assets)) {
-    for (const asset of assetsResult.output.assets) {
-      try {
-        await db.insert(campaignAssets).values({
-          userId,
-          campaignId,
-          assetType: asset.assetType as any,
-          title: asset.title,
-          prompt: asset.prompt ?? null,
-          status: "ready",
-          metadata: {
-            content: asset.content,
-            platform: asset.platform,
-            variations: asset.variations,
-          } as any,
-        });
-        savedAssets++;
-      } catch (err: any) {
-        const errorDetail = err.message || String(err);
-        insertErrors.push({ type: asset.assetType, title: asset.title, error: errorDetail });
-        logError("[CreativeAgent] failed to save supplementary asset", {
-          campaignId,
-          userId,
-          stage: "asset_save",
-          assetType: asset.assetType,
-          title: asset.title,
-          error: errorDetail,
-        });
-      }
-    }
-  }
   logInfo("[CreativeAgent] supplementary assets saved", {
     campaignId,
     userId,
@@ -1717,9 +1645,9 @@ Respond with structured data.`;
 
   return {
     packRunId: packResult.runId,
-    assetsRunId: assetsResult?.runId ?? null,
+    assetsRunId: null,
     pack,
-    assets: assetsResult?.output ?? null,
+    assets: null,
     savedPosts,
     savedAssets,
   };

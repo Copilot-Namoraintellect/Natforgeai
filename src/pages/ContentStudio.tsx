@@ -5014,6 +5014,16 @@ Include:
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Content Studio</h1>
+
+        <Card className="border-[#334155] bg-[#0F172A] text-white">
+          <CardContent className="p-4 space-y-1">
+            <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">Workflow Guidance</p>
+            <p className="text-sm text-gray-200">What is happening now: You are reviewing generated creative outputs and publish-ready assets.</p>
+            <p className="text-sm text-gray-300">What has been completed: Strategy and creative generation are complete for this stage.</p>
+            <p className="text-sm text-gray-300">What you need to do next: Approve, refine, or regenerate content for the selected campaign.</p>
+            <p className="text-sm text-gray-300">What happens after the next action: Approved content moves to scheduling and publishing workflows.</p>
+          </CardContent>
+        </Card>
           <p className="text-muted-foreground mt-1">
             Approve, schedule, and publish content that converts.
           </p>

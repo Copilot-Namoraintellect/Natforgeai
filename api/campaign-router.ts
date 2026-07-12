@@ -197,7 +197,7 @@ export const campaignRouter = createRouter({
                   eq(agentRuns.agentType, "strategy")
                 )
               )
-              .orderBy(agentRuns.createdAt)
+              .orderBy(desc(agentRuns.createdAt))
               .limit(1);
 
             if (existing.length > 0 && ["running", "completed"].includes(existing[0].status)) {

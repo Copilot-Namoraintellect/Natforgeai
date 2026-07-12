@@ -284,6 +284,16 @@ export default function ApprovalCentre() {
         </Badge>
       </div>
 
+      <Card className="bg-[#1E293B] border-[#334155]">
+        <CardContent className="p-4 space-y-1">
+          <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">Workflow Guidance</p>
+          <p className="text-sm text-gray-200">What is happening now: NatForgeAI is waiting for approval on strategy or launch decisions.</p>
+          <p className="text-sm text-gray-300">What has been completed: Agent generation steps attached to each request are already finished.</p>
+          <p className="text-sm text-gray-300">What you need to do next: Approve, reject, or edit each pending request.</p>
+          <p className="text-sm text-gray-300">What happens after the next action: Workflow resumes automatically into Agent Activity or campaign launch.</p>
+        </CardContent>
+      </Card>
+
       {/* Pending Approvals */}
       <div className="space-y-4">
         <h2 className="text-lg font-semibold text-white">Pending Approvals</h2>

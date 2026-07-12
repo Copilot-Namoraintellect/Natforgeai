@@ -511,7 +511,19 @@ export default function Campaigns() {
           New Campaign
         </Button>
 
-        {/* Campaign Intent quick-start modal */}
+      </div>
+
+      <Card className="border-[#334155] bg-[#0F172A] text-white">
+        <CardContent className="p-4 space-y-1">
+          <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">Workflow Guidance</p>
+          <p className="text-sm text-gray-200">What is happening now: You are defining campaign intent and launch settings.</p>
+          <p className="text-sm text-gray-300">What has been completed: Business onboarding and any previously approved strategy steps.</p>
+          <p className="text-sm text-gray-300">What you need to do next: Create or open a campaign, then move to approvals when strategy is ready.</p>
+          <p className="text-sm text-gray-300">What happens after the next action: NatForgeAI triggers strategy, then agent activity and content generation.</p>
+        </CardContent>
+      </Card>
+
+      {/* Campaign Intent quick-start modal */}
         <Dialog open={intentOpen} onOpenChange={setIntentOpen}>
           <DialogContent className="max-w-md">
             <DialogHeader>
@@ -829,7 +841,6 @@ export default function Campaigns() {
             )}
           </DialogContent>
         </Dialog>
-      </div>
 
       {/* Filters & Search */}
       <div className="flex flex-col sm:flex-row gap-4">
