@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { TRPCError } from "@trpc/server";
 
 vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
@@ -165,5 +166,13 @@ describe("message pack selection and generic detection", () => {
     expect(values.metadata.isGeneric).toBe(false);
     expect(typeof values.metadata.specificityScore).toBe("number");
     expect(values.metadata.approvedMessagePack.isGeneric).toBe(false);
+  });
+
+  it("saveApprovedMessagePack rejects generic copy", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const db = createMockDb([]);
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await expect(saveApprovedMessagePack(10, 28, genericPack)).rejects.toBeInstanceOf(TRPCError);
   });
 });

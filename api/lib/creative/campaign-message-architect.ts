@@ -85,6 +85,8 @@ export interface ValidationContext {
     targetCustomers?: string[];
     location?: string;
   };
+  campaignObjective?: string;
+  funnelStage?: "awareness" | "consideration" | "conversion" | "retention";
   /**
    * Optional raw refinement instruction. When provided, the validator may
    * extract additional target-customer and pain-point terms from it so the
@@ -92,6 +94,66 @@ export interface ValidationContext {
    * original campaign brief.
    */
   refinementInstruction?: string;
+}
+
+const DEFAULT_FUNNEL_CTAS: Record<"awareness" | "consideration" | "conversion" | "retention", string> = {
+  awareness: "Learn More",
+  consideration: "Sign Up for a Free Consultation",
+  conversion: "Get Started Today",
+  retention: "Join Our Community",
+};
+
+function normaliseFunnelStage(value: string | null | undefined): "awareness" | "consideration" | "conversion" | "retention" {
+  const v = sanitize(value).toLowerCase();
+  if (["awareness", "consideration", "conversion", "retention"].includes(v)) {
+    return v as "awareness" | "consideration" | "conversion" | "retention";
+  }
+  return "awareness";
+}
+
+function inferFunnelStageFromObjective(value: string | null | undefined): "awareness" | "consideration" | "conversion" | "retention" {
+  const objective = sanitize(value).toLowerCase();
+  if (/(retain|loyal|renew|upsell|community)/i.test(objective)) return "retention";
+  if (/(sale|revenue|convert|purchase|get started|book|quote|lead)/i.test(objective)) return "conversion";
+  if (/(consider|evaluate|consult|demo|trial|comparison|research)/i.test(objective)) return "consideration";
+  return "awareness";
+}
+
+export function extractFunnelCtaMap(raw: string | null | undefined): Record<"awareness" | "consideration" | "conversion" | "retention", string> {
+  const map = { ...DEFAULT_FUNNEL_CTAS };
+  const text = sanitize(raw);
+  if (!text) return map;
+
+  let matched = false;
+  const stagedPattern = /(Awareness|Consideration|Conversion|Retention)\s*:\s*(.+?)(?=(?:\s+(?:Awareness|Consideration|Conversion|Retention)\s*:)|$)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = stagedPattern.exec(text)) !== null) {
+    const stage = normaliseFunnelStage(match[1]);
+    const cta = sanitize(match[2]);
+    if (cta) {
+      map[stage] = cta;
+      matched = true;
+    }
+  }
+
+  // If no explicit staged lines were found, treat the full text as a single preferred CTA.
+  if (!matched) {
+    const fallback = sanitize(text);
+    if (fallback) {
+      const stage = inferFunnelStageFromObjective(text);
+      map[stage] = fallback;
+    }
+  }
+
+  return map;
+}
+
+export function selectFunnelCta(raw: string | null | undefined, objectiveOrStage?: string | null): string {
+  const map = extractFunnelCtaMap(raw);
+  const stage = ["awareness", "consideration", "conversion", "retention"].includes((objectiveOrStage || "").toLowerCase())
+    ? normaliseFunnelStage(objectiveOrStage)
+    : inferFunnelStageFromObjective(objectiveOrStage);
+  return map[stage];
 }
 
 // ─── Shared constants ───
@@ -456,6 +518,11 @@ export function validateCampaignCopy(
   const category = detectBusinessCategory(ctx);
   const expectedCtas = expectedCtasForCategory(category);
   const isGenericCta = GENERIC_CTA_PATTERNS.some((p) => p.test(cta));
+  const isGenericHead = isGenericHeadline(pack.headline);
+  if (isGenericHead) {
+    rejections.push(`Headline "${sanitize(pack.headline)}" is too generic for this business context.`);
+    score -= 30;
+  }
   if (isGenericCta) {
     rejections.push(`CTA "${cta}" is too generic for this business type.`);
     score -= 30;
@@ -465,26 +532,18 @@ export function validateCampaignCopy(
   // The preferred CTA field sometimes contains a funnel-stage strategy list
   // (e.g. "Awareness: Learn more... Consideration: Join... Conversion: Get started...").
   // Treat that as a set of acceptable CTAs rather than one exact required string.
-  function extractPreferredCtas(raw?: string): string[] {
-    if (!raw) return [];
-    const text = sanitize(raw);
-    if (/\b(Awareness|Consideration|Conversion|Retention)\s*:/i.test(text)) {
-      return text
-        .split(/\n|;/)
-        .map((line) => line.replace(/^\s*[A-Za-z]+\s*:\s*/, "").trim())
-        .filter((c) => c.length > 0);
-    }
-    return [text];
-  }
-  const preferredCtas = extractPreferredCtas(ctx.preferredCta).map((c) => c.toLowerCase());
-  const matchesPreferred = preferredCtas.length > 0 && preferredCtas.some((p) => cta.toLowerCase().includes(p));
+  const selectedPreferredCta = selectFunnelCta(
+    ctx.preferredCta,
+    ctx.funnelStage || ctx.campaignObjective
+  ).toLowerCase();
+  const matchesPreferred = selectedPreferredCta.length > 0 && cta.toLowerCase().includes(selectedPreferredCta);
   if (!matchesExpected && !matchesPreferred && expectedCtas.length > 0) {
     warnings.push(`CTA "${cta}" may not match the expected action for a ${category} business (${expectedCtas.join(", ")}).`);
     score -= 10;
   }
   // Preferred CTA wins if provided
   if (ctx.preferredCta && !matchesPreferred) {
-    warnings.push(`CTA does not reflect the preferred CTA "${ctx.preferredCta}".`);
+    warnings.push(`CTA does not reflect the preferred CTA for this campaign stage: "${selectedPreferredCta}".`);
     score -= 10;
   }
 
@@ -539,9 +598,13 @@ export function validateCampaignCopy(
   // 9. Measurable/concrete benefit warning
   const benefitText = [...pack.benefitBullets, pack.subheadline].join(" ").toLowerCase();
   const concreteMarkers = /\b(save|reduce|cut|faster|quicker|more|increase|improve|less|hours|minutes|r\d|percent|%|days|weeks)\b/i;
-  if (!concreteMarkers.test(benefitText)) {
-    warnings.push("Copy lacks a measurable or concrete benefit (e.g. save time, reduce cost, faster results).");
-    score -= 10;
+  const concreteBusinessTerms = [...productTerms, ...painTerms, ...customerTerms].filter((t) => t.length > 3);
+  const hasConcreteBenefit =
+    concreteMarkers.test(benefitText) ||
+    concreteBusinessTerms.some((term) => termMatches(benefitText, term));
+  if (!hasConcreteBenefit) {
+    rejections.push("Benefit bullets are too generic. Add concrete customer outcomes grounded in the business context.");
+    score -= 20;
   }
 
   // 10. Could apply to any business warning
@@ -597,7 +660,7 @@ export function buildDeterministicMessagePack(
   const offer = hasExplicitOffer(ctx) ? sanitize(ctx.offerDetails) : "";
   const location = sanitize(ctx.location) || sanitize(ctx.websiteEvidence?.location);
   const cta = ctx.preferredCta
-    ? sanitize(ctx.preferredCta)
+    ? selectFunnelCta(ctx.preferredCta, ctx.funnelStage || ctx.campaignObjective)
     : expectedCtasForCategory(category)[0];
 
   let headline = `${product} for ${customer}`;
@@ -670,10 +733,15 @@ export interface BuildApprovedMessagePackOptions {
   campaignId: number;
   skipBilling?: boolean;
   maxAttempts?: number;
+  forceRebuild?: boolean;
+  qualityIssues?: string[];
 }
 
 function buildValidationContext(business: any, campaign: any): ValidationContext {
   const evidence = (business?.websiteEvidence || {}) as any;
+  const firstFunnelStage = Array.isArray(campaign?.funnelStages) && campaign.funnelStages.length > 0
+    ? sanitize(campaign.funnelStages[0]?.stage)
+    : "";
   return {
     businessName: sanitize(business?.name),
     campaignName: sanitize(campaign?.name),
@@ -683,6 +751,8 @@ function buildValidationContext(business: any, campaign: any): ValidationContext
     offerDetails: sanitize(campaign?.offerDetails),
     excludedOffers: sanitize(campaign?.excludedOffers || business?.avoidWords),
     preferredCta: sanitize(campaign?.preferredCta || campaign?.ctaStrategy),
+    campaignObjective: sanitize(campaign?.goal || campaign?.primaryOutcome),
+    funnelStage: normaliseFunnelStage(firstFunnelStage || sanitize(campaign?.primaryOutcome || campaign?.goal)),
     location: sanitize(campaign?.location || business?.location || evidence?.location),
     industry: sanitize(business?.industry || evidence?.businessCategory),
     websiteEvidence: {
@@ -974,6 +1044,13 @@ export async function saveApprovedMessagePack(
     messagePackSource: pack.messagePackSource || "ai_refined_pack",
   });
 
+  if (enriched.isGeneric) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Generic message packs cannot be approved. Please regenerate with business-specific copy.",
+    });
+  }
+
   const [{ insertId }] = await db.insert(campaignAssets).values({
     userId,
     campaignId,
@@ -1062,6 +1139,52 @@ export async function restorePreferredMessagePackForCampaign(
   });
 
   return saveApprovedMessagePack(userId, campaignId, enriched);
+}
+
+export async function invalidateApprovedMessagePack(
+  campaignId: number,
+  reason: string,
+  issues: string[] = []
+): Promise<number> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: campaignAssets.id, metadata: campaignAssets.metadata })
+    .from(campaignAssets)
+    .where(and(eq(campaignAssets.campaignId, campaignId), eq(campaignAssets.assetType, "message_pack" as any)))
+    .orderBy(desc(campaignAssets.createdAt))
+    .limit(1);
+
+  const target = rows[0];
+  if (!target) return 0;
+
+  const meta = (target.metadata || {}) as any;
+  const existingPack = (meta.approvedMessagePack || {}) as CampaignMessagePack;
+
+  await db
+    .update(campaignAssets)
+    .set({
+      metadata: {
+        ...meta,
+        passed: false,
+        invalidatedAt: new Date().toISOString(),
+        invalidationReason: reason,
+        invalidationIssues: issues,
+        approvedMessagePack: {
+          ...existingPack,
+          validation: {
+            ...(existingPack.validation || { passed: false, score: 0, rejections: [], warnings: [] }),
+            passed: false,
+            rejections: [
+              ...((existingPack.validation?.rejections || []) as string[]),
+              ...issues,
+            ],
+          },
+        },
+      } as any,
+    })
+    .where(eq(campaignAssets.id, target.id));
+
+  return target.id;
 }
 
 export interface RefineMessagePackOptions {
@@ -1682,16 +1805,50 @@ export async function ensureApprovedMessagePack(
   opts: BuildApprovedMessagePackOptions
 ): Promise<CampaignMessagePack> {
   const existing = await loadApprovedMessagePack(opts.campaignId);
-  if (existing && existing.validation?.passed) {
+  const canReuseExisting =
+    !!existing &&
+    existing.validation?.passed &&
+    !existing.isGeneric &&
+    !opts.forceRebuild;
+
+  if (canReuseExisting) {
     logInfo("[CampaignMessageArchitect] reusing approved message pack", {
       campaignId: opts.campaignId,
       userId: opts.userId,
     });
     return existing;
   }
-  const pack = await buildApprovedMessagePack(opts);
-  if (pack.validation.passed) {
-    await saveApprovedMessagePack(opts.userId, opts.campaignId, pack);
+
+  if (opts.forceRebuild && existing) {
+    await invalidateApprovedMessagePack(opts.campaignId, "creative_quality_gate_failed", opts.qualityIssues || []);
+
+    const refinementInstruction = [
+      "Refine the message pack to resolve these exact issues:",
+      ...(opts.qualityIssues || []).map((issue) => `- ${issue}`),
+      "Do not produce generic copy.",
+      "Ensure the copy explicitly references the business product or service.",
+    ].join("\n");
+
+    const refined = await refineApprovedMessagePack({
+      userId: opts.userId,
+      campaignId: opts.campaignId,
+      existingPack: existing,
+      refinementInstruction,
+      skipBilling: opts.skipBilling,
+      maxAttempts: opts.maxAttempts,
+    });
+
+    const enrichedRefined = enrichMessagePackMetadata(refined);
+    if (enrichedRefined.validation.passed && !enrichedRefined.isGeneric) {
+      await saveApprovedMessagePack(opts.userId, opts.campaignId, enrichedRefined);
+      return enrichedRefined;
+    }
   }
-  return pack;
+
+  const pack = await buildApprovedMessagePack(opts);
+  const enrichedPack = enrichMessagePackMetadata(pack);
+  if (enrichedPack.validation.passed && !enrichedPack.isGeneric) {
+    await saveApprovedMessagePack(opts.userId, opts.campaignId, enrichedPack);
+  }
+  return enrichedPack;
 }

@@ -2,9 +2,12 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { runAgent } from "./runner";
 import { getDb } from "../../queries/connection";
-import { campaigns, contentPosts, campaignAssets, businesses, agentRuns } from "@db/schema";
-import { eq, and } from "drizzle-orm";
+import { campaigns, contentPosts, campaignAssets, businesses, agentRuns, creditTransactions } from "@db/schema";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { logInfo, logError, logWarn } from "../logger";
+import { checkCredits, deductCredits } from "../billing/credit-engine";
+import { getEstimatedAgentCost } from "../billing/cost-tracker";
+import { enforceCostControl } from "../billing/cost-control";
 import {
   ensureApprovedMessagePack,
   validateCampaignCopy,
@@ -521,6 +524,9 @@ function buildValidationContextFromCampaign(
   business: any
 ): ValidationContext {
   const evidence = (business?.websiteEvidence || {}) as any;
+  const firstFunnelStage = Array.isArray(campaign?.funnelStages) && campaign.funnelStages.length > 0
+    ? String(campaign.funnelStages[0]?.stage || "")
+    : "";
   return {
     businessName: String(business?.name ?? ""),
     campaignName: String(campaign?.name ?? ""),
@@ -530,6 +536,8 @@ function buildValidationContextFromCampaign(
     offerDetails: String(campaign?.offerDetails || ""),
     excludedOffers: String(campaign?.excludedOffers || business?.avoidWords || ""),
     preferredCta: String(campaign?.preferredCta || campaign?.ctaStrategy || ""),
+    campaignObjective: String(campaign?.goal || campaign?.primaryOutcome || ""),
+    funnelStage: firstFunnelStage as ValidationContext["funnelStage"],
     location: String(campaign?.location || business?.location || evidence?.location || ""),
     industry: String(business?.industry || evidence?.businessCategory || ""),
     websiteEvidence: {
@@ -664,6 +672,85 @@ function assessPackQuality(
   return { passed: issues.length === 0, issues };
 }
 
+async function assertCreativeCreditsAvailable(userId: number): Promise<number> {
+  const estimatedCost = getEstimatedAgentCost("creative");
+
+  const costControl = await enforceCostControl(userId, estimatedCost);
+  if (!costControl.allowed) {
+    throw new TRPCError({
+      code: "PAYMENT_REQUIRED",
+      message: costControl.reason || "Insufficient credits.",
+    });
+  }
+
+  const preCheck = await checkCredits(userId, estimatedCost);
+  if (!preCheck.hasCredits) {
+    throw new TRPCError({
+      code: "PAYMENT_REQUIRED",
+      message: `Insufficient credits. You have ${preCheck.balance} credits. This operation requires ${estimatedCost} credits. Upgrade your plan or purchase more credits.`,
+    });
+  }
+
+  return estimatedCost;
+}
+
+async function deductCreativeCreditsOnce({
+  userId,
+  campaignId,
+  agentRunId,
+  generationRunId,
+  estimatedCost,
+}: {
+  userId: number;
+  campaignId: number;
+  agentRunId: number;
+  generationRunId: string;
+  estimatedCost: number;
+}): Promise<void> {
+  const db = getDb();
+  const idempotencyKey = `creative-success:${campaignId}:${agentRunId}`;
+
+  const existingTx = await db
+    .select({ id: creditTransactions.id })
+    .from(creditTransactions)
+    .where(
+      and(
+        eq(creditTransactions.userId, userId),
+        eq(creditTransactions.type, "agent_deduction" as any),
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${creditTransactions.metadata}, '$.idempotencyKey')) = ${idempotencyKey}`
+      )
+    )
+    .orderBy(desc(creditTransactions.id))
+    .limit(1);
+
+  if (existingTx.length > 0) {
+    logInfo("[CreativeAgent] billing already deducted for run", {
+      userId,
+      campaignId,
+      agentRunId,
+      idempotencyKey,
+    });
+    return;
+  }
+
+  await deductCredits({
+    userId,
+    amount: estimatedCost,
+    type: "agent_deduction",
+    description: "creative agent execution (post-success)",
+    metadata: {
+      campaignId,
+      agentRunId,
+      generationRunId,
+      provider: "openai",
+      billingStage: "post_success",
+      estimatedCost,
+      agentType: "creative",
+      idempotencyKey,
+    },
+  });
+}
+
 export async function runCreativeAgent({
   userId,
   campaignId,
@@ -695,12 +782,31 @@ export async function runCreativeAgent({
     throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
   }
 
+  const estimatedCreativeCost = await assertCreativeCreditsAvailable(userId);
+
+  const existingDraftIdsToDelete = deleteExistingDrafts
+    ? (
+        await db
+          .select({ id: contentPosts.id })
+          .from(contentPosts)
+          .where(
+            and(
+              eq(contentPosts.campaignId, campaignId),
+              eq(contentPosts.aiGenerated, true),
+              eq(contentPosts.status, "draft")
+            )
+          )
+      ).map((row) => row.id)
+    : [];
+
   logInfo("[CreativeAgent] campaign loaded", {
     campaignId,
     userId,
     stage: "load",
     workflowState: campaign.workflowState,
     businessId: campaign.businessId,
+    estimatedCreativeCost,
+    existingDraftsQueuedForCleanup: existingDraftIdsToDelete.length,
   });
 
   const strategyContext = campaign.workflowContext as any;
@@ -975,6 +1081,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       agentType: "creative",
       prompt: packPrompt,
       schema: PremiumCampaignPackSchema,
+      skipBilling: true,
       system:
         "You are an elite creative director for a premium marketing agency. You create Hero Campaign Packs: one strong campaign idea expressed as one Master Campaign Post and one Master Video Ad, plus platform adaptations and collapsed supporting assets. You specialise in Instagram Reels, TikTok, Facebook ads, carousel ads, direct-response copywriting, and launch sequences. Every asset must be emotionally engaging, visually specific, platform-native, and conversion-focused. You do not create separate cards for each persona; personas guide tone only. You do not invent offers, discounts, free trials, limited spots or free e-books. If no offer is provided, use neutral CTAs like 'Book a demo' or 'See how it works'. CRITICAL: You must include EVERY key in every object. Use null for fields that do not apply. Never omit a key.",
     });
@@ -1026,15 +1133,32 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       provider: "openai",
       issues: combinedIssues,
     });
-    // One regeneration attempt with stricter instructions
+    // One regeneration attempt with stricter instructions and a forced architect rebuild.
     try {
-      const retryPrompt = `${packPrompt}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${combinedIssues.map((i) => `- ${i}`).join("\n")}\n\nDo not invent offers. Do not use generic motivational language. Ground every line in the campaign brief above. Crucially, the Master Campaign Post must use the Approved Message Pack headline and CTA.`;
+      approvedMessagePack = await ensureApprovedMessagePack({
+        userId,
+        campaignId,
+        skipBilling: true,
+        maxAttempts: 2,
+        forceRebuild: true,
+        qualityIssues: combinedIssues,
+      });
+
+      if (!approvedMessagePack.validation.passed || approvedMessagePack.isGeneric) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Regenerated campaign copy still failed quality standards.",
+        });
+      }
+
+      const retryPrompt = `${packPrompt}\n\nUPDATED APPROVED CAMPAIGN MESSAGE PACK (REPLACES PRIOR COPY SOURCE):\n- Headline: ${approvedMessagePack.headline}\n- Subheadline: ${approvedMessagePack.subheadline}\n- Benefit Bullets: ${approvedMessagePack.benefitBullets.join(" | ")}\n- CTA: ${approvedMessagePack.cta}\n- Footer/Contact: ${JSON.stringify(approvedMessagePack.footerContact)}\n- Proof Points: ${(approvedMessagePack.proofPoints || []).join(" | ") || "None"}\n- Platform Captions: ${approvedMessagePack.platformCaptions.map((c) => `${c.platform}: ${c.caption}`).join(" | ")}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${combinedIssues.map((i) => `- ${i}`).join("\n")}\n\nDo not invent offers. Do not use generic motivational language. Ground every line in the campaign brief above. The Master Campaign Post must use the UPDATED Approved Message Pack headline and CTA.`;
       const retryResult = await runAgent({
         userId,
         campaignId,
         agentType: "creative",
         prompt: retryPrompt,
         schema: PremiumCampaignPackSchema,
+        skipBilling: true,
         system:
           "You are an elite creative director. Your previous output was rejected for being generic or inventing offers. Regenerate a tight, premium Hero Campaign Pack that is specific to the business and campaign brief. Do not invent discounts or offers. Use the approved headline and CTA. Every word must earn its place.",
       });
@@ -1152,30 +1276,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
   ].filter((n) => typeof n === "number") as number[];
   const nextIterationNumber = allExistingIterations.length > 0 ? Math.max(...allExistingIterations) + 1 : 1;
 
-  // Prevent duplicate content posts on retry (skip when caller will manage old content itself)
-  if (deleteExistingDrafts) {
-    const existingDrafts = await db
-      .select()
-      .from(contentPosts)
-      .where(
-        and(
-          eq(contentPosts.campaignId, campaignId),
-          eq(contentPosts.aiGenerated, true),
-          eq(contentPosts.status, "draft")
-        )
-      );
-
-    for (const draft of existingDrafts) {
-      await db.delete(contentPosts).where(eq(contentPosts.id, draft.id));
-    }
-
-    logInfo("[CreativeAgent] existing drafts deleted", {
-      campaignId,
-      userId,
-      stage: "post_save",
-      count: existingDrafts.length,
-    });
-  }
+  // We intentionally defer old-draft cleanup until new content is safely saved.
 
   let savedPosts = 0;
   let failedInserts = 0;
@@ -1593,6 +1694,36 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
       message: `The Creative Agent ran but no posts were saved. ${detail}`,
+    });
+  }
+
+  if (existingDraftIdsToDelete.length > 0) {
+    for (const draftId of existingDraftIdsToDelete) {
+      await db.delete(contentPosts).where(eq(contentPosts.id, draftId));
+    }
+
+    logInfo("[CreativeAgent] previous drafts cleaned after successful save", {
+      campaignId,
+      userId,
+      stage: "post_save",
+      deletedCount: existingDraftIdsToDelete.length,
+    });
+  }
+
+  try {
+    await deductCreativeCreditsOnce({
+      userId,
+      campaignId,
+      agentRunId: packResult.runId,
+      generationRunId: `pack-${packResult.runId}`,
+      estimatedCost: estimatedCreativeCost,
+    });
+  } catch (billingErr: any) {
+    const errorMessage = billingErr?.message || "Post-success credit deduction failed.";
+    await markPackRunFailed(errorMessage);
+    throw new TRPCError({
+      code: "PAYMENT_REQUIRED",
+      message: errorMessage,
     });
   }
 

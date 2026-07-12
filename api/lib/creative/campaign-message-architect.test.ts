@@ -273,6 +273,19 @@ describe("Campaign Message Architect — industry fixtures", () => {
     expect(messagePack.cta.toLowerCase()).toContain(expectedCta.toLowerCase().split(" ")[0]);
     expect(messagePack.benefitBullets.length).toBeGreaterThanOrEqual(3);
   });
+
+  it("selects the conversion CTA from multi-stage preferred CTA mapping", () => {
+    const messagePack = buildDeterministicMessagePack(
+      ctx({
+        preferredCta: "Awareness: Learn More\nConsideration: Get Pricing\nConversion: Book a Demo",
+        campaignObjective: "conversion",
+        funnelStage: "conversion",
+      })
+    );
+
+    expect(messagePack.cta).toBe("Book a Demo");
+    expect(messagePack.validation.passed).toBe(true);
+  });
 });
 
 // ─── Validation rules ───
@@ -393,12 +406,19 @@ describe("validateCampaignCopy", () => {
     expect(result.warnings.some((w) => w.includes("any business"))).toBe(true);
   });
 
-  it("warns when there is no measurable benefit", () => {
+  it("allows grounded benefits even without numeric claims", () => {
     const vague = pack({
       benefitBullets: ["We care", "We are professional", "We are local"],
     });
-    const result = validateCampaignCopy(vague, ctx());
-    expect(result.warnings.some((w) => w.includes("measurable"))).toBe(true);
+    const result = validateCampaignCopy(
+      vague,
+      ctx({
+        productOrService: "Automated payroll software",
+        targetCustomer: "HR managers",
+        mainPainPoint: "manual spreadsheet errors",
+      })
+    );
+    expect(result.passed).toBe(true);
   });
 
   it("rejects invented loan/BNPL claim", () => {

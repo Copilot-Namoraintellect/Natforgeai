@@ -5135,7 +5135,7 @@ Include:
             <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md text-center">
               {hasFailedStrategyRun
                 ? "The Strategy Agent failed while regenerating from your updated business profile. You can retry the full regeneration."
-                : "The Creative Agent ran but no posts were saved. You can retry content generation for this campaign."}
+                : "The Creative Agent quality check failed before posts were saved. We preserved your previous drafts and you can retry content generation for this campaign."}
             </p>
             <div className="flex gap-2 flex-wrap justify-center">
               {hasFailedStrategyRun ? (

@@ -5,6 +5,24 @@ vi.mock("../runner", () => ({
   runAgent: vi.fn(),
 }));
 
+vi.mock("../../creative/campaign-message-architect", () => ({
+  ensureApprovedMessagePack: vi.fn(),
+  validateCampaignCopy: vi.fn(() => ({ passed: true, score: 100, rejections: [], warnings: [] })),
+}));
+
+vi.mock("../../billing/credit-engine", () => ({
+  checkCredits: vi.fn(async () => ({ hasCredits: true, balance: 1000, required: 8 })),
+  deductCredits: vi.fn(async () => ({ newBalance: 992 })),
+}));
+
+vi.mock("../../billing/cost-tracker", () => ({
+  getEstimatedAgentCost: vi.fn(() => 8),
+}));
+
+vi.mock("../../billing/cost-control", () => ({
+  enforceCostControl: vi.fn(async () => ({ allowed: true })),
+}));
+
 vi.mock("../../../queries/connection", () => ({
   getDb: vi.fn(),
 }));
@@ -261,12 +279,40 @@ describe("runCreativeAgent post-save failure handling", () => {
     vi.clearAllMocks();
   });
 
+  function approvedPack() {
+    return {
+      headline: "Payout platform for small businesses in Randburg",
+      subheadline: "Move staff earnings faster and cut manual payout admin.",
+      benefitBullets: [
+        "Automated tip and commission payouts.",
+        "Less admin time for owners.",
+        "Staff get paid faster and more reliably.",
+      ],
+      cta: "Book a demo",
+      footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Randburg" },
+      proofPoints: [],
+      platformCaptions: [
+        {
+          platform: "Instagram",
+          caption: "Stop losing staff to slow manual payouts. Zutohub moves earnings faster.",
+          cta: "Book a demo",
+          hashtags: ["#fintech", "#smallbiz"],
+        },
+      ],
+      validation: { passed: true, score: 100, rejections: [], warnings: [] },
+    };
+  }
+
   it("throws a clear TRPCError when content_posts inserts fail", async () => {
     const { getDb } = await import("../../../queries/connection");
     const { runAgent } = await import("../runner");
     const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+    const { deductCredits } = await import("../../billing/credit-engine");
 
-    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: true }) as unknown as ReturnType<typeof getDb>);
+    const db = createMockDb({ insertShouldFail: true });
+    vi.mocked(getDb).mockReturnValue(db as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
     vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 91));
 
     let thrownError: unknown;
@@ -281,18 +327,60 @@ describe("runCreativeAgent post-save failure handling", () => {
     expect(trpcError.code).toBe("INTERNAL_SERVER_ERROR");
     expect(trpcError.message).toContain("The Creative Agent ran but no posts were saved");
     expect(trpcError.message).toContain("ER_WARN_DATA_OUT_OF_RANGE");
+    expect(deductCredits).not.toHaveBeenCalled();
+    expect(db.delete).not.toHaveBeenCalled();
   });
 
   it("returns successfully when at least one content post is saved", async () => {
     const { getDb } = await import("../../../queries/connection");
     const { runAgent } = await import("../runner");
     const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+    const { deductCredits } = await import("../../billing/credit-engine");
 
     vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
     vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 92));
 
     const result = await runCreativeAgent({ userId: 18, campaignId: 28 });
 
     expect(result.savedPosts).toBe(2);
+    expect(deductCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces message-pack rebuild on quality failure and does not charge when retry still fails", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack)
+      .mockResolvedValueOnce(approvedPack() as any)
+      .mockResolvedValueOnce(approvedPack() as any);
+
+    const lowQualityPack = {
+      ...buildPackOutput(),
+      socialPosts: [
+        {
+          ...(buildPackOutput().socialPosts as any[])[0],
+          hook: "Join the Trading Revolution",
+          caption: "Join thousands and unlock your potential with this offer.",
+        },
+      ],
+    };
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce({ runId: 300, output: lowQualityPack } as any)
+      .mockResolvedValueOnce({ runId: 301, output: lowQualityPack } as any);
+
+    await expect(runCreativeAgent({ userId: 18, campaignId: 28 })).rejects.toBeInstanceOf(TRPCError);
+
+    expect(ensureApprovedMessagePack).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(ensureApprovedMessagePack).mock.calls[1]?.[0]).toMatchObject({
+      forceRebuild: true,
+    });
+    expect(deductCredits).not.toHaveBeenCalled();
   });
 });
