@@ -30,6 +30,13 @@ export interface OnboardingReadiness {
   checkpoints: ReadinessCheckpoint[];
 }
 
+const primaryReadinessKeys: ReadinessCheckpoint["key"][] = [
+  "website_analysed",
+  "business_profile_built",
+  "brand_voice_detected",
+  "campaign_goal_selected",
+];
+
 export function calculateOnboardingReadiness(input: OnboardingReadinessInput): OnboardingReadiness {
   const checkpoints: ReadinessCheckpoint[] = [
     {
@@ -94,4 +101,15 @@ export function isLiveOrLaterWorkflowState(state: string | null | undefined): bo
     "optimisation_active",
     "completed",
   ].includes(state || "");
+}
+
+export function splitReadinessChecks(checkpoints: ReadinessCheckpoint[]) {
+  const primary = checkpoints.filter((checkpoint) =>
+    primaryReadinessKeys.includes(checkpoint.key)
+  );
+  const secondary = checkpoints.filter(
+    (checkpoint) => !primaryReadinessKeys.includes(checkpoint.key)
+  );
+
+  return { primary, secondary };
 }

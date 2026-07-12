@@ -1,4 +1,5 @@
 import { Link, useLocation } from "react-router";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -59,6 +60,7 @@ const adminNavItems = [
 
 export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
   const location = useLocation();
+  const [workflowExpanded, setWorkflowExpanded] = useState(false);
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
 
@@ -77,6 +79,7 @@ export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
   });
 
   const approvalCount = pendingApprovals?.length ?? 0;
+  const isOnboardingRoute = location.pathname.startsWith("/onboarding");
   const activeCampaign =
     campaigns?.find((c) =>
       !["completed", "campaign_live", "engagement_active", "leads_converting", "optimisation_active"].includes(
@@ -127,24 +130,45 @@ export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
               <p className="text-[11px] text-gray-400 mt-1">
                 {activeCampaign ? `Campaign #${activeCampaign.id}: ${workflowStateLabels[activeCampaign.workflowState]?.label || activeCampaign.workflowState}` : "Start with onboarding, then launch your first campaign."}
               </p>
-              <div className="mt-2 space-y-1.5">
-                {journeySteps.map((step) => {
-                  const isCurrent = workflowStep === step.step;
-                  return (
-                    <Link
-                      key={step.path}
-                      to={step.path}
-                      className={cn(
-                        "flex items-center gap-2 text-[11px] rounded-md px-2 py-1.5 transition-colors",
-                        isCurrent ? "bg-[#1E293B] text-white" : "text-gray-400 hover:bg-[#1E293B] hover:text-gray-200"
-                      )}
+              {isOnboardingRoute && !workflowExpanded ? (
+                <button
+                  type="button"
+                  onClick={() => setWorkflowExpanded(true)}
+                  className="mt-2 text-[11px] text-[#00D4FF] hover:underline"
+                >
+                  Show workflow steps
+                </button>
+              ) : (
+                <>
+                  <div className="mt-2 space-y-1.5">
+                    {journeySteps.map((step) => {
+                      const isCurrent = workflowStep === step.step;
+                      return (
+                        <Link
+                          key={step.path}
+                          to={step.path}
+                          className={cn(
+                            "flex items-center gap-2 text-[11px] rounded-md px-2 py-1.5 transition-colors",
+                            isCurrent ? "bg-[#1E293B] text-white" : "text-gray-400 hover:bg-[#1E293B] hover:text-gray-200"
+                          )}
+                        >
+                          {step.done ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <CircleDot className="w-3.5 h-3.5 text-amber-400" />}
+                          <span className="truncate">{step.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                  {isOnboardingRoute && (
+                    <button
+                      type="button"
+                      onClick={() => setWorkflowExpanded(false)}
+                      className="mt-2 text-[11px] text-gray-400 hover:text-gray-200"
                     >
-                      {step.done ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : <CircleDot className="w-3.5 h-3.5 text-amber-400" />}
-                      <span className="truncate">{step.label}</span>
-                    </Link>
-                  );
-                })}
-              </div>
+                      Hide workflow steps
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           )}
 

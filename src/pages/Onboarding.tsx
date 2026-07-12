@@ -38,6 +38,7 @@ import {
   Info,
   Wand2,
   Upload,
+  Circle,
 } from "lucide-react";
 import {
   Dialog,
@@ -50,6 +51,7 @@ import { shouldScrollToTop, scrollToTop } from "@/lib/onboarding-navigation";
 import {
   calculateOnboardingReadiness,
   isLiveOrLaterWorkflowState,
+  splitReadinessChecks,
 } from "@/lib/onboarding-readiness";
 
 const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
@@ -336,6 +338,8 @@ export default function Onboarding() {
   const previousStepRef = useRef(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [limitBlocked, setLimitBlocked] = useState(false);
+  const [readinessExpanded, setReadinessExpanded] = useState(false);
+  const [workflowDetailsExpanded, setWorkflowDetailsExpanded] = useState(false);
   const [duplicateDialog, setDuplicateDialog] = useState<{ open: boolean; existingId: number | null }>({
     open: false,
     existingId: null,
@@ -706,6 +710,29 @@ export default function Onboarding() {
   ];
 
   const stepIcons = [Building2, Package, TrendingUp, Palette, Plug, Check];
+  const readinessGroups = useMemo(
+    () => splitReadinessChecks(aiReadiness.checkpoints),
+    [aiReadiness.checkpoints]
+  );
+
+  const nextOnboardingAction = useMemo(() => {
+    if (step === 1) {
+      return "Complete your business profile so NatForgeAI can build your marketing intelligence.";
+    }
+    if (step === 2) {
+      return "Add product assets and content inputs for stronger AI-generated campaigns.";
+    }
+    if (step === 3) {
+      return "Select your campaign goal so NatForgeAI can optimize toward clear outcomes.";
+    }
+    if (step === 4) {
+      return "Confirm your brand style so generated content stays on-brand.";
+    }
+    if (step === 5) {
+      return "Confirm publishing channels and platform setup before launch.";
+    }
+    return "Review your setup and launch your first campaign mission.";
+  }, [step]);
 
   function togglePlatform(platform: string) {
     setBusinessForm((prev) => ({
@@ -1135,75 +1162,63 @@ export default function Onboarding() {
   }
 
   function renderStepIndicator() {
-    const checkpointIconMap: Record<string, any> = {
-      website_analysed: Globe,
-      business_profile_built: Building2,
-      brand_voice_detected: MessageSquare,
-      products_services_understood: Package,
-      campaign_goal_selected: TrendingUp,
-      social_channels_connected: Plug,
-      audience_intelligence_active: Sparkles,
-      first_campaign_launched: Rocket,
-    };
-
     return (
-      <div className="mb-8">
-        <div className="mb-5 rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
-          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-3">
+      <div className="mb-5">
+        <div className="mb-3 rounded-xl border border-[#334155] bg-[#0F172A]/70 p-3">
+          <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">AI Readiness</p>
-              <p className="text-sm text-gray-300">NatForgeAI business intelligence profile progress</p>
+              <p className="text-xs text-gray-400 mt-1">NatForgeAI business intelligence profile</p>
             </div>
-            <p className="text-lg font-semibold text-white">{aiReadiness.percentage}% ready</p>
+            <p className="text-xl font-semibold text-white leading-none">{aiReadiness.percentage}%</p>
           </div>
-          <Progress value={aiReadiness.percentage} className="h-2" />
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mt-3">
-            {aiReadiness.checkpoints.map((checkpoint) => {
-              const Icon = checkpointIconMap[checkpoint.key] || Info;
-              return (
-                <div
-                  key={checkpoint.key}
-                  className={`rounded-lg border p-2.5 flex items-center gap-2 ${
-                    checkpoint.completed
-                      ? "border-emerald-500/30 bg-emerald-500/10"
-                      : "border-[#334155] bg-[#1E293B]/50"
-                  }`}
-                >
-                  <div
-                    className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                      checkpoint.completed ? "bg-emerald-500 text-white" : "bg-[#1E293B] text-gray-400"
-                    }`}
-                  >
-                    {checkpoint.completed ? <Check className="w-3.5 h-3.5" /> : <Icon className="w-3.5 h-3.5" />}
-                  </div>
-                  <p className={`text-xs ${checkpoint.completed ? "text-emerald-100" : "text-gray-300"}`}>
-                    {checkpoint.label}
-                  </p>
+          <Progress value={aiReadiness.percentage} className="h-1.5 mt-2" />
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 mt-3">
+            {readinessGroups.primary.map((checkpoint) => (
+              <div key={checkpoint.key} className="flex items-center gap-2 text-xs">
+                {checkpoint.completed ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                ) : (
+                  <Circle className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                )}
+                <span className={checkpoint.completed ? "text-gray-200" : "text-gray-400"}>{checkpoint.label}</span>
+              </div>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setReadinessExpanded((v) => !v)}
+            className="text-xs text-[#00D4FF] hover:underline mt-2"
+          >
+            {readinessExpanded ? "Hide extra readiness checks" : "View all readiness checks"}
+          </button>
+
+          {readinessExpanded && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 mt-2 pt-2 border-t border-[#334155]">
+              {readinessGroups.secondary.map((checkpoint) => (
+                <div key={checkpoint.key} className="flex items-center gap-2 text-xs">
+                  {checkpoint.completed ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  ) : (
+                    <Circle className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                  )}
+                  <span className={checkpoint.completed ? "text-gray-200" : "text-gray-400"}>{checkpoint.label}</span>
                 </div>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="flex justify-between text-xs sm:text-sm text-gray-400 mb-3">
-          {stepLabels.map((label, idx) => {
-            const s = idx + 1;
-            const active = s === step;
-            const completed = s < step;
-            return (
-              <div
-                key={label}
-                className={`hidden sm:flex flex-col items-center gap-1 min-w-[80px] ${
-                  active ? "text-[#00D4FF]" : completed ? "text-emerald-400" : ""
-                }`}
-              >
-                <span className="font-medium">{label}</span>
-              </div>
-            );
-          })}
+        <div className="flex items-center justify-between text-xs text-gray-400 mb-2">
+          <span>
+            Step {step} of {totalSteps}
+          </span>
+          <span className="text-[#00D4FF]">{stepLabels[step - 1]}</span>
         </div>
         <div className="relative">
-          <Progress value={progress} className="h-2" />
+          <Progress value={progress} className="h-1.5" />
           <div className="absolute top-0 left-0 w-full h-full flex justify-between items-center px-0">
             {stepLabels.map((_, idx) => {
               const s = idx + 1;
@@ -1213,7 +1228,7 @@ export default function Onboarding() {
               return (
                 <div
                   key={s}
-                  className={`w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center text-[10px] sm:text-xs border-2 -mt-2.5 ${
+                  className={`w-5 h-5 sm:w-6 sm:h-6 rounded-full flex items-center justify-center text-[10px] sm:text-xs border -mt-2 ${
                     active
                       ? "bg-[#00D4FF] border-[#00D4FF] text-white"
                       : completed
@@ -1221,15 +1236,12 @@ export default function Onboarding() {
                       : "bg-[#1E293B] border-[#334155] text-gray-500"
                   }`}
                 >
-                  {completed ? <Check className="w-3.5 h-3.5" /> : <Icon className="w-3 h-3 sm:w-3.5 sm:h-3.5" />}
+                  {completed ? <Check className="w-3 h-3" /> : <Icon className="w-2.5 h-2.5 sm:w-3 sm:h-3" />}
                 </div>
               );
             })}
           </div>
         </div>
-        <p className="text-center text-sm text-[#00D4FF] mt-3 font-medium sm:hidden">
-          Step {step} of {totalSteps}: {stepLabels[step - 1]}
-        </p>
       </div>
     );
   }
@@ -2368,25 +2380,35 @@ export default function Onboarding() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#0F172A] via-[#1E293B] to-[#0F172A] flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-[#0F172A] via-[#1E293B] to-[#0F172A] flex items-start justify-center p-4 pt-6 pb-8">
       <div className="w-full max-w-4xl">
         {/* Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-[#00D4FF] to-[#7C3AED] mb-4">
-            <Rocket className="w-8 h-8 text-white" />
-          </div>
-          <h1 className="text-3xl font-bold text-white mb-2">Welcome to NatForge AI</h1>
-          <p className="text-gray-400">Set up your autonomous marketing system in {totalSteps} steps</p>
+        <div className="mb-4">
+          <h1 className="text-2xl font-semibold text-white">Business Setup</h1>
+          <p className="text-sm text-gray-400 mt-1">NatForgeAI will use this to build your marketing intelligence.</p>
         </div>
 
         {renderStepIndicator()}
 
-        <div className="mb-4 rounded-xl border border-[#334155] bg-[#0F172A]/70 p-4">
-          <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">Workflow Guidance</p>
-          <p className="text-sm text-gray-200 mt-2">What is happening now: You are setting up the business and campaign context NatForge AI needs.</p>
-          <p className="text-sm text-gray-300 mt-1">What has been completed: All previous onboarding steps are saved as you progress.</p>
-          <p className="text-sm text-gray-300 mt-1">What you need to do next: Complete the current step, then click Next.</p>
-          <p className="text-sm text-gray-300 mt-1">What happens after next action: NatForge AI moves to the next step and uses your inputs to generate strategy and creatives.</p>
+        <div className="mb-4 rounded-lg bg-[#0F172A]/55 px-3 py-2.5 border border-[#334155]/70">
+          <p className="text-sm text-gray-200">
+            <span className="text-[#00D4FF] font-medium">Next:</span> {nextOnboardingAction}
+          </p>
+          <button
+            type="button"
+            onClick={() => setWorkflowDetailsExpanded((v) => !v)}
+            className="text-xs text-[#00D4FF] hover:underline mt-1.5"
+          >
+            {workflowDetailsExpanded ? "Hide workflow details" : "View workflow details"}
+          </button>
+          {workflowDetailsExpanded && (
+            <div className="mt-2 pt-2 border-t border-[#334155]">
+              <p className="text-xs text-gray-300">What is happening now: You are setting up the business and campaign context NatForgeAI needs.</p>
+              <p className="text-xs text-gray-400 mt-1">What has completed: All previous onboarding steps are saved as you progress.</p>
+              <p className="text-xs text-gray-400 mt-1">What you do next: Complete the current step, then click Next.</p>
+              <p className="text-xs text-gray-400 mt-1">What happens after: NatForgeAI moves to the next step and uses your inputs to generate strategy and creatives.</p>
+            </div>
+          )}
         </div>
 
         {/* Step Content */}
