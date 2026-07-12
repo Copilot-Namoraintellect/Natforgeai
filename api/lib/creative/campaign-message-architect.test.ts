@@ -286,6 +286,42 @@ describe("Campaign Message Architect — industry fixtures", () => {
     expect(messagePack.cta).toBe("Book a Demo");
     expect(messagePack.validation.passed).toBe(true);
   });
+
+  it("keeps authoritative business name and removes slogan-like non-actionable capabilities", () => {
+    const messagePack = buildDeterministicMessagePack(
+      ctx({
+        businessName: "Zuto Hub Pty Ltd",
+        productOrService: "Payout operations",
+        websiteEvidence: {
+          businessCategory: "fintech payouts",
+          productsServices: [
+            "Comprehensive Financial Solutions",
+            "Transform your business",
+            "restaurant payouts",
+            "supplier settlement",
+            "delivery disbursement",
+          ],
+          targetCustomers: ["restaurants", "delivery operators"],
+          location: "South Africa",
+        },
+      })
+    );
+
+    expect(messagePack.subheadline).toContain("Zuto Hub Pty Ltd");
+    const copy = [messagePack.headline, messagePack.subheadline, ...messagePack.benefitBullets]
+      .join(" ")
+      .toLowerCase();
+    expect(copy).not.toContain("comprehensive financial solutions");
+    expect(copy).not.toContain("transform your business");
+    expect(copy).toContain("restaurant payouts");
+    expect(copy).toContain("supplier settlement");
+  });
+
+  it("uses controlled fallback headline template instead of concatenating capability list", () => {
+    const messagePack = buildDeterministicMessagePack(fintechPayouts);
+    expect(messagePack.headline).toBe("Simplify Staff and Business Payouts");
+    expect(messagePack.headline).not.toContain(",");
+  });
 });
 
 // ─── Validation rules ───

@@ -17,7 +17,7 @@ import {
 } from "./registry";
 import { storeImageBuffer, downloadAndStoreVideo } from "./storage";
 import { generateFallbackLeafletImage, defaultServiceBullets, selectTemplate, type TemplateId } from "./composition";
-import { renderOffer, offerToHeadline, normalizeCta, normaliseOfferInText } from "./text-formatter";
+import { renderOffer, offerToHeadline, normalizeCtaWithContext, normaliseOfferInText } from "./text-formatter";
 import { resolveBrandPalette } from "./brand-palette";
 import {
   getPremiumImageInternalCredits,
@@ -292,7 +292,16 @@ export async function normalizeLeafletInputs({
 
   const leafletHeadline = approvedMessagePack?.headline || offerToHeadline(campaign.offerDetails) || campaign.primaryOutcome || post?.title || business.name;
   const leafletSubheadline = approvedMessagePack?.subheadline || campaign.mainPainPoint || campaign.coreMessage || post?.hook || "";
-  const leafletCta = approvedMessagePack?.cta || normalizeCta(campaign.preferredCta || post.cta, businessCategory);
+    const leafletCta = approvedMessagePack?.cta || normalizeCtaWithContext(
+      campaign.preferredCta || post.cta,
+      businessCategory,
+      {
+        preferredCta: campaign.preferredCta || campaign.ctaStrategy || null,
+        objectiveOrStage: Array.isArray(campaign.funnelStages) && campaign.funnelStages.length > 0
+          ? String((campaign.funnelStages as any[])[0]?.stage || campaign.goal || "")
+          : String(campaign.goal || ""),
+      }
+    );
   const serviceBullets = approvedMessagePack?.benefitBullets?.length
     ? approvedMessagePack.benefitBullets
     : defaultServiceBullets(business, campaign);
@@ -1912,7 +1921,12 @@ export async function generateCaptionPack({
 
   const formattedOffer = renderOffer(campaign.offerDetails, business.name);
   const leafletHeadline = offerToHeadline(campaign.offerDetails);
-  const normalizedCta = normalizeCta(campaign.preferredCta || post.cta);
+    const normalizedCta = normalizeCtaWithContext(campaign.preferredCta || post.cta, undefined, {
+      preferredCta: campaign.preferredCta || campaign.ctaStrategy || null,
+      objectiveOrStage: Array.isArray(campaign.funnelStages) && campaign.funnelStages.length > 0
+        ? String((campaign.funnelStages as any[])[0]?.stage || campaign.goal || "")
+        : String(campaign.goal || ""),
+    });
 
   const evidence = (business.websiteEvidence || {}) as {
     businessCategory?: string;

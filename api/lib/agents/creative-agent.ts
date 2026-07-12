@@ -10,10 +10,12 @@ import { getEstimatedAgentCost } from "../billing/cost-tracker";
 import { enforceCostControl } from "../billing/cost-control";
 import {
   ensureApprovedMessagePack,
+  selectFunnelCta,
   validateCampaignCopy,
   type CampaignMessagePack,
   type ValidationContext,
 } from "../creative/campaign-message-architect";
+import { ctaMatchesSelectedStage } from "../creative/cta-utils";
 
 // Valid content_posts.type enum values from db/schema.ts
 const CONTENT_POST_TYPES = new Set([
@@ -591,6 +593,8 @@ function assessPackQuality(
     excludedOffers?: string | null;
     productOrService?: string | null;
     mainPainPoint?: string | null;
+    campaignObjective?: string | null;
+    funnelStage?: string | null;
   }
 ): { passed: boolean; issues: string[] } {
   const issues: string[] = [];
@@ -639,9 +643,20 @@ function assessPackQuality(
 
   // Preferred CTA check (if provided and not an offer-based CTA)
   if (brief.preferredCta && !hasExplicitOffer) {
-    const preferred = brief.preferredCta.toLowerCase();
-    if (!textToCheck.includes(preferred)) {
+    const selected = selectFunnelCta(
+      brief.preferredCta,
+      brief.funnelStage || brief.campaignObjective
+    );
+    const hasStageCta = ctaMatchesSelectedStage({
+      cta: masterPost?.cta || video?.cta || "",
+      preferredCta: brief.preferredCta,
+      objectiveOrStage: brief.funnelStage || brief.campaignObjective,
+    });
+    if (!hasStageCta) {
       issues.push(`Preferred CTA "${brief.preferredCta}" was not used`);
+      if (selected) {
+        issues.push(`Selected stage CTA "${selected}" was not used`);
+      }
     }
   }
 
@@ -761,6 +776,14 @@ export async function runCreativeAgent({
   deleteExistingDrafts?: boolean;
 }) {
   const db = getDb();
+  const totalStartedAt = Date.now();
+  const timing = {
+    messageArchitectDurationMs: 0,
+    creativeGenerationDurationMs: 0,
+    qualityRetryDurationMs: 0,
+    fallbackDurationMs: 0,
+    totalDurationMs: 0,
+  };
 
   logInfo("[CreativeAgent] started", {
     campaignId,
@@ -819,11 +842,16 @@ export async function runCreativeAgent({
   // Campaign brief precision fields
   const brief = {
     primaryOutcome: campaign.primaryOutcome,
+    campaignObjective: campaign.goal,
     targetBuyer: campaign.targetBuyer,
     mainPainPoint: campaign.mainPainPoint,
     productOrService: campaign.productOrService,
     offerDetails: campaign.offerDetails,
     preferredCta: campaign.preferredCta,
+    funnelStage:
+      Array.isArray(campaign.funnelStages) && campaign.funnelStages.length > 0
+        ? String((campaign.funnelStages as any[])[0]?.stage || "")
+        : null,
     excludedOffers: campaign.excludedOffers,
     referenceStyle: campaign.referenceStyle,
     contentStyle: campaign.contentStyle,
@@ -860,6 +888,7 @@ export async function runCreativeAgent({
 
   // Step 0: Build / reuse approved campaign message pack
   let approvedMessagePack: CampaignMessagePack | null = null;
+  const architectStartedAt = Date.now();
   try {
     approvedMessagePack = await ensureApprovedMessagePack({
       userId,
@@ -883,6 +912,11 @@ export async function runCreativeAgent({
       });
     }
 
+    timing.messageArchitectDurationMs = Date.now() - architectStartedAt;
+    if (approvedMessagePack.messagePackSource === "fallback_deterministic") {
+      timing.fallbackDurationMs += timing.messageArchitectDurationMs;
+    }
+
     logInfo("[CreativeAgent] approved message pack loaded", {
       campaignId,
       userId,
@@ -891,6 +925,7 @@ export async function runCreativeAgent({
       score: approvedMessagePack.validation.score,
     });
   } catch (architectErr: any) {
+    timing.messageArchitectDurationMs = Date.now() - architectStartedAt;
     logError("[CreativeAgent] message architect failed", {
       campaignId,
       userId,
@@ -1075,6 +1110,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
 
   let packResult: { runId: number; output: any } | undefined;
   let packError: string | undefined;
+  const generationStartedAt = Date.now();
 
   try {
     packResult = await runAgent({
@@ -1110,6 +1146,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     });
   }
 
+  timing.creativeGenerationDurationMs = Date.now() - generationStartedAt;
+
   logInfo("[CreativeAgent] pack generated", {
     campaignId,
     userId,
@@ -1136,6 +1174,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       issues: combinedIssues,
     });
     // One regeneration attempt with stricter instructions and a forced architect rebuild.
+    const retryStartedAt = Date.now();
     try {
       approvedMessagePack = await ensureApprovedMessagePack({
         userId,
@@ -1151,6 +1190,9 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           code: "BAD_REQUEST",
           message: "Regenerated campaign copy still failed quality standards.",
         });
+      }
+      if (approvedMessagePack.messagePackSource === "fallback_deterministic") {
+        timing.fallbackDurationMs += Date.now() - retryStartedAt;
       }
 
       const retryPrompt = `${packPrompt}\n\nUPDATED APPROVED CAMPAIGN MESSAGE PACK (REPLACES PRIOR COPY SOURCE):\n- Headline: ${approvedMessagePack.headline}\n- Subheadline: ${approvedMessagePack.subheadline}\n- Benefit Bullets: ${approvedMessagePack.benefitBullets.join(" | ")}\n- CTA: ${approvedMessagePack.cta}\n- Footer/Contact: ${JSON.stringify(approvedMessagePack.footerContact)}\n- Proof Points: ${(approvedMessagePack.proofPoints || []).join(" | ") || "None"}\n- Platform Captions: ${approvedMessagePack.platformCaptions.map((c) => `${c.platform}: ${c.caption}`).join(" | ")}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${combinedIssues.map((i) => `- ${i}`).join("\n")}\n\nDo not invent offers. Do not use generic motivational language. Ground every line in the campaign brief above. The Master Campaign Post must use the UPDATED Approved Message Pack headline and CTA.`;
@@ -1181,7 +1223,9 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           message: `Generated content did not meet quality standards: ${retryIssues.join("; ")}`,
         });
       }
+      timing.qualityRetryDurationMs = Date.now() - retryStartedAt;
     } catch (err: any) {
+      timing.qualityRetryDurationMs = Date.now() - retryStartedAt;
       const failMsg = err.message?.includes("Generated content did not meet quality standards")
         ? err.message
         : `Content generation needs to be retried. The first draft did not meet quality standards: ${err.message}`;
@@ -1776,6 +1820,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     savedAssets,
   });
 
+  timing.totalDurationMs = Date.now() - totalStartedAt;
+
   return {
     packRunId: packResult.runId,
     assetsRunId: null,
@@ -1783,5 +1829,6 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     assets: null,
     savedPosts,
     savedAssets,
+    metrics: timing,
   };
 }

@@ -15,6 +15,12 @@ import { campaigns, campaignAssets, businesses } from "@db/schema";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { logInfo, logWarn, logError } from "../logger";
 import { safeText } from "./brand-palette";
+import {
+  ctaMatchesSelectedStage,
+  extractFunnelCtaMap as extractFunnelCtaMapShared,
+  normalizeFunnelStage,
+  selectStageCta,
+} from "./cta-utils";
 
 // ─── Public types ───
 
@@ -99,64 +105,12 @@ export interface ValidationContext {
   refinementInstruction?: string;
 }
 
-const DEFAULT_FUNNEL_CTAS: Record<"awareness" | "consideration" | "conversion" | "retention", string> = {
-  awareness: "Learn More",
-  consideration: "Sign Up for a Free Consultation",
-  conversion: "Get Started Today",
-  retention: "Join Our Community",
-};
-
-function normaliseFunnelStage(value: string | null | undefined): "awareness" | "consideration" | "conversion" | "retention" {
-  const v = sanitize(value).toLowerCase();
-  if (["awareness", "consideration", "conversion", "retention"].includes(v)) {
-    return v as "awareness" | "consideration" | "conversion" | "retention";
-  }
-  return "awareness";
-}
-
-function inferFunnelStageFromObjective(value: string | null | undefined): "awareness" | "consideration" | "conversion" | "retention" {
-  const objective = sanitize(value).toLowerCase();
-  if (/(retain|loyal|renew|upsell|community)/i.test(objective)) return "retention";
-  if (/(sale|revenue|convert|purchase|get started|book|quote|lead)/i.test(objective)) return "conversion";
-  if (/(consider|evaluate|consult|demo|trial|comparison|research)/i.test(objective)) return "consideration";
-  return "awareness";
-}
-
 export function extractFunnelCtaMap(raw: string | null | undefined): Record<"awareness" | "consideration" | "conversion" | "retention", string> {
-  const map = { ...DEFAULT_FUNNEL_CTAS };
-  const text = sanitize(raw);
-  if (!text) return map;
-
-  let matched = false;
-  const stagedPattern = /(Awareness|Consideration|Conversion|Retention)\s*:\s*(.+?)(?=(?:\s+(?:Awareness|Consideration|Conversion|Retention)\s*:)|$)/gi;
-  let match: RegExpExecArray | null;
-  while ((match = stagedPattern.exec(text)) !== null) {
-    const stage = normaliseFunnelStage(match[1]);
-    const cta = sanitize(match[2]);
-    if (cta) {
-      map[stage] = cta;
-      matched = true;
-    }
-  }
-
-  // If no explicit staged lines were found, treat the full text as a single preferred CTA.
-  if (!matched) {
-    const fallback = sanitize(text);
-    if (fallback) {
-      const stage = inferFunnelStageFromObjective(text);
-      map[stage] = fallback;
-    }
-  }
-
-  return map;
+  return extractFunnelCtaMapShared(raw);
 }
 
 export function selectFunnelCta(raw: string | null | undefined, objectiveOrStage?: string | null): string {
-  const map = extractFunnelCtaMap(raw);
-  const stage = ["awareness", "consideration", "conversion", "retention"].includes((objectiveOrStage || "").toLowerCase())
-    ? normaliseFunnelStage(objectiveOrStage)
-    : inferFunnelStageFromObjective(objectiveOrStage);
-  return map[stage];
+  return selectStageCta(raw, objectiveOrStage);
 }
 
 // ─── Shared constants ───
@@ -455,6 +409,34 @@ function extractQuotedPhrases(issues: string[]): string[] {
   return Array.from(phrases);
 }
 
+function sanitiseGroundedCapability(value: string): string {
+  let clean = sanitize(value);
+  if (!clean) return "";
+
+  const lower = clean.toLowerCase();
+  if (EXPLICITLY_BANNED_PROMPT_PHRASES.some((p) => lower.includes(p.toLowerCase()))) {
+    return "";
+  }
+
+  // Drop category headings and slogans that are not actionable capabilities.
+  if (/(comprehensive|streamlined|modern|trusted|premium)\s+(financial\s+)?solutions?/i.test(clean)) return "";
+  if (/(transform|grow|succeed|dignifying|empower)\b/i.test(clean) && !/(payout|disbursement|settlement|commission|tip|reconciliation|supplier|delivery)/i.test(clean)) {
+    return "";
+  }
+  if (/^zuto\s*hub$/i.test(clean) || /^zurohub$/i.test(clean)) return "";
+
+  clean = clean.replace(/[.!?]+$/g, "").trim();
+  return clean;
+}
+
+function isActionableCapability(value: string): boolean {
+  const clean = sanitize(value).toLowerCase();
+  if (!clean || clean.length < 8) return false;
+  if (/(your\s+business|transform\s+your\s+business|comprehensive\s+solutions|grow\s+and\s+succeed)/i.test(clean)) return false;
+
+  return /(payout|disbursement|settlement|commission|tip|reconciliation|supplier|delivery|tracking|payroll|payments?)/i.test(clean);
+}
+
 function buildGroundedFacts(ctx: ValidationContext): {
   businessName: string;
   industry: string;
@@ -477,12 +459,13 @@ function buildGroundedFacts(ctx: ValidationContext): {
     ctx.productOrService || "",
   ]
     .flatMap((v) => sanitize(v).split(/[,;|]+/))
-    .map((t) => t.trim())
+    .map((t) => sanitiseGroundedCapability(t.trim()))
     .filter((t, i, arr) => t.length > 3 && arr.indexOf(t) === i)
+    .filter((t) => isActionableCapability(t))
     .slice(0, 8);
 
   return {
-    businessName: sanitize(ctx.businessName) || "Not specified",
+    businessName: String(ctx.businessName || "").trim() || "Not specified",
     industry: sanitize(ctx.industry || ctx.websiteEvidence?.businessCategory) || "Not specified",
     productOrService: sanitize(ctx.productOrService) || "Not specified",
     targetCustomers,
@@ -637,11 +620,12 @@ export function validateCampaignCopy(
   const cta = sanitize(pack.cta);
   const category = detectBusinessCategory(ctx);
   const expectedCtas = expectedCtasForCategory(category);
-  const selectedPreferredCta = selectFunnelCta(
-    ctx.preferredCta,
-    ctx.funnelStage || ctx.campaignObjective
-  ).toLowerCase();
-  const matchesPreferred = selectedPreferredCta.length > 0 && cta.toLowerCase().includes(selectedPreferredCta);
+  const selectedPreferredCta = selectFunnelCta(ctx.preferredCta, ctx.funnelStage || ctx.campaignObjective);
+  const matchesPreferred = ctaMatchesSelectedStage({
+    cta,
+    preferredCta: ctx.preferredCta,
+    objectiveOrStage: ctx.funnelStage || ctx.campaignObjective,
+  });
   const isGenericCta = GENERIC_CTA_PATTERNS.some((p) => p.test(cta));
   const isGenericHead = isGenericHeadline(pack.headline);
   if (isGenericHead) {
@@ -787,7 +771,7 @@ export function buildDeterministicMessagePack(
   const capabilities = groundedFacts.capabilities.length > 0 ? groundedFacts.capabilities : [product];
   const targetCustomers = groundedFacts.targetCustomers.length > 0 ? groundedFacts.targetCustomers : [customer];
 
-  let headline = `Simplify ${capabilities.slice(0, 3).join(", ")}`;
+  let headline = category === "fintech" ? "Simplify Staff and Business Payouts" : `Simplify ${product}`;
   let subheadline = `${groundedFacts.businessName} helps ${targetCustomers.slice(0, 2).join(" and ").toLowerCase()} manage ${capabilities
     .slice(0, 2)
     .join(" and ")
@@ -803,10 +787,14 @@ export function buildDeterministicMessagePack(
     headline = `Reliable ${product} for ${customer}`;
   }
 
+  const capabilityA = sanitize(capabilities[0] || product);
+  const capabilityB = sanitize(capabilities[1] || "restaurant and supplier payouts");
+  const capabilityC = sanitize(capabilities[2] || "payout tracking and reconciliation");
+
   const benefitBullets = [
-    `${sanitize(capabilities[0]) || product} from one platform for ${targetCustomers[0].toLowerCase()}.`,
-    `${sanitize(capabilities[1]) || "Approved payouts and settlement flows"} with reduced manual reconciliation.`,
-    `${location ? `${sanitize(capabilities[2] || "Operational support")} for teams in ${location}.` : `${sanitize(capabilities[2] || "Operational support")} aligned to real business workflows.`}`,
+    `Manage ${capabilityA.toLowerCase()} from one platform.`,
+    `Streamline ${capabilityB.toLowerCase()} with less manual administration.`,
+    `Track ${capabilityC.toLowerCase()}${location ? ` for teams in ${location}` : ""}.`,
   ];
 
   const pack: CampaignMessagePack = {
@@ -879,7 +867,7 @@ function buildValidationContext(business: any, campaign: any): ValidationContext
     excludedOffers: sanitize(campaign?.excludedOffers || business?.avoidWords),
     preferredCta: sanitize(campaign?.preferredCta || campaign?.ctaStrategy),
     campaignObjective: sanitize(campaign?.goal || campaign?.primaryOutcome),
-    funnelStage: normaliseFunnelStage(firstFunnelStage || sanitize(campaign?.primaryOutcome || campaign?.goal)),
+    funnelStage: normalizeFunnelStage(firstFunnelStage || sanitize(campaign?.primaryOutcome || campaign?.goal)),
     location: sanitize(campaign?.location || business?.location || evidence?.location),
     industry: sanitize(business?.industry || evidence?.businessCategory),
     websiteEvidence: {

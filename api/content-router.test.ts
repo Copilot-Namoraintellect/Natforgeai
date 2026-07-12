@@ -32,6 +32,15 @@ vi.mock("./lib/workflow/triggers", () => ({
   onAgentRunComplete: vi.fn(),
 }));
 
+vi.mock("./lib/queue/bullmq", () => ({
+  scheduleContentGenerationJob: vi.fn(async () => ({ id: "content-generate:28" })),
+  isBullMQAvailable: vi.fn(() => true),
+}));
+
+vi.mock("./lib/jobs/content-generation-job", () => ({
+  processContentGenerationJob: vi.fn(async () => undefined),
+}));
+
 vi.mock("./lib/rate-limiter", () => ({
   rateLimitUser: vi.fn().mockResolvedValue(undefined),
   rateLimitPublic: vi.fn().mockResolvedValue(undefined),
@@ -162,7 +171,7 @@ function makeChainable(rows: unknown[]) {
   return {
     limit: vi.fn(async () => limitResult),
     orderBy: vi.fn(() => ({
-      limit: vi.fn(async () => []),
+      limit: vi.fn(async () => limitResult),
     })),
     then: (resolve: (value: unknown[]) => unknown, reject?: (reason?: unknown) => unknown) =>
       Promise.resolve(limitResult).then(resolve, reject),
@@ -193,6 +202,7 @@ interface MockDbConfig {
   queue?: Record<string, unknown>[];
   assets?: Record<string, unknown>[];
   approvals?: Record<string, unknown>[];
+  agentRunsRows?: Record<string, unknown>[];
   insertId?: number;
 }
 
@@ -204,6 +214,7 @@ function createMockDb({
   queue = [],
   assets = [],
   approvals = [],
+  agentRunsRows = [],
   insertId = 123,
 }: MockDbConfig = {}): MockDb & {
   insertValuesSpies: Map<unknown, ReturnType<typeof vi.fn>>;
@@ -256,6 +267,8 @@ function createMockDb({
       limitResult = assets;
     } else if (tableName === "approval_requests") {
       limitResult = approvals;
+    } else if (tableName === "agent_runs") {
+      limitResult = agentRunsRows;
     }
 
     const parsed = condition ? parseWhereCondition(condition) : null;
@@ -321,9 +334,9 @@ describe("contentRouter.generateForCampaign", () => {
     vi.clearAllMocks();
   });
 
-  it("returns idempotently and does not call runCreativeAgent when posts already exist", async () => {
+  it("queues a background content-generation job and returns quickly", async () => {
     const { getDb } = await import("./queries/connection");
-    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { scheduleContentGenerationJob } = await import("./lib/queue/bullmq");
     const { contentRouter } = await import("./content-router");
 
     vi.mocked(getDb).mockReturnValue(
@@ -337,116 +350,23 @@ describe("contentRouter.generateForCampaign", () => {
           personas: [{ name: "Small Business Owner" }],
           coreMessage: "Empower your workforce",
         },
-        postCount: 2,
+        postCount: 0,
       }) as unknown as ReturnType<typeof getDb>
     );
 
     const caller = contentRouter.createCaller(buildCtx());
     const result = await caller.generateForCampaign({ campaignId: 28 });
 
-    expect(result.success).toBe(true);
-    expect(result.postCount).toBe(2);
-    expect(result.idempotent).toBe(true);
-    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(result.status).toBe("queued");
+    expect(result.jobId).toBeGreaterThan(0);
+    expect(result.campaignId).toBe(28);
+    expect(scheduleContentGenerationJob).toHaveBeenCalledTimes(1);
   });
 
-  it("repairs creatives_generating to creatives_ready when posts already exist", async () => {
+  it("returns queued when duplicate click finds a pending active job", async () => {
     const { getDb } = await import("./queries/connection");
-    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { scheduleContentGenerationJob } = await import("./lib/queue/bullmq");
     const { contentRouter } = await import("./content-router");
-
-    const mockDb = createMockDb({
-      campaign: {
-        id: 28,
-        userId: 18,
-        businessId: 24,
-        workflowState: "creatives_generating",
-        workflowContext: { coreMessage: "Empower your workforce" },
-        personas: [{ name: "Small Business Owner" }],
-        coreMessage: "Empower your workforce",
-      },
-      postCount: 3,
-    });
-    const updateSpy = vi.fn(() => ({ where: vi.fn(async () => []) }));
-    mockDb.update = vi.fn(() => ({ set: updateSpy })) as unknown as MockDb["update"];
-
-    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
-
-    const caller = contentRouter.createCaller(buildCtx());
-    const result = await caller.generateForCampaign({ campaignId: 28 });
-
-    expect(result.success).toBe(true);
-    expect(result.postCount).toBe(3);
-    expect(result.idempotent).toBe(true);
-    expect(runCreativeAgent).not.toHaveBeenCalled();
-
-    // Verify the repair update was issued
-    expect(mockDb.update).toHaveBeenCalled();
-    const setCall = (updateSpy.mock.calls as any[])[0]?.[0];
-    expect(setCall?.workflowState).toBe("creatives_ready");
-  });
-
-  it("advances workflowState to creatives_ready after saving posts", async () => {
-    const { getDb } = await import("./queries/connection");
-    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
-    const { onAgentRunComplete } = await import("./lib/workflow/triggers");
-    const { contentRouter } = await import("./content-router");
-
-    vi.mocked(runCreativeAgent).mockResolvedValue({
-      packRunId: 91,
-      assetsRunId: 92,
-      pack: {},
-      assets: {},
-      savedPosts: 2,
-      savedAssets: 8,
-    } as any);
-
-    const mockDb = createMockDb({
-      campaign: {
-        id: 28,
-        userId: 18,
-        businessId: 24,
-        workflowState: "strategy_approved",
-        workflowContext: { coreMessage: "Empower your workforce" },
-        personas: [{ name: "Small Business Owner" }],
-        coreMessage: "Empower your workforce",
-      },
-      postCount: 0,
-    });
-    const updateSpy = vi.fn(() => ({ where: vi.fn(async () => []) }));
-    mockDb.update = vi.fn(() => ({ set: updateSpy })) as unknown as MockDb["update"];
-
-    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
-
-    const caller = contentRouter.createCaller(buildCtx());
-    const result = await caller.generateForCampaign({ campaignId: 28 });
-
-    expect(result.success).toBe(true);
-    expect(result.postCount).toBe(2);
-    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
-    expect(onAgentRunComplete).toHaveBeenCalledWith(91);
-
-    // Verify state transition to creatives_ready
-    expect(mockDb.update).toHaveBeenCalled();
-    const stateUpdate = (updateSpy.mock.calls as any[]).find(
-      (call) => call[0]?.workflowState === "creatives_ready"
-    );
-    expect(stateUpdate).toBeTruthy();
-  });
-
-  it("throws when runCreativeAgent saves zero posts", async () => {
-    const { getDb } = await import("./queries/connection");
-    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
-    const { contentRouter } = await import("./content-router");
-
-    vi.mocked(runCreativeAgent).mockResolvedValue({
-      packRunId: 91,
-      assetsRunId: 92,
-      pack: {},
-      assets: {},
-      savedPosts: 0,
-      savedAssets: 0,
-    } as any);
 
     vi.mocked(getDb).mockReturnValue(
       createMockDb({
@@ -460,48 +380,211 @@ describe("contentRouter.generateForCampaign", () => {
           coreMessage: "Empower your workforce",
         },
         postCount: 0,
+        agentRunsRows: [
+          {
+            id: 777,
+            userId: 18,
+            campaignId: 28,
+            agentType: "creative",
+            status: "pending",
+            input: { jobType: "content_generation_job", regenerate: false },
+            createdAt: new Date(),
+          },
+        ],
       }) as unknown as ReturnType<typeof getDb>
     );
 
     const caller = contentRouter.createCaller(buildCtx());
-    await expect(caller.generateForCampaign({ campaignId: 28 })).rejects.toThrow(TRPCError);
+    const result = await caller.generateForCampaign({ campaignId: 28 });
+
+    expect(result.status).toBe("queued");
+    expect(result.jobId).toBe(777);
+    expect(result.reused).toBe(true);
+    expect(scheduleContentGenerationJob).not.toHaveBeenCalled();
   });
 
-  it("Campaign #28 regression: older failed runs + latest success + existing posts + stuck creatives_generating stays usable", async () => {
+  it("returns processing when duplicate click finds a running active job", async () => {
     const { getDb } = await import("./queries/connection");
-    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { scheduleContentGenerationJob } = await import("./lib/queue/bullmq");
     const { contentRouter } = await import("./content-router");
 
-    const mockDb = createMockDb({
-      campaign: {
-        id: 28,
-        userId: 18,
-        businessId: 24,
-        workflowState: "creatives_generating",
-        workflowContext: { coreMessage: "Empower your workforce" },
-        personas: [{ name: "Small Business Owner" }],
-        coreMessage: "Empower your workforce",
-      },
-      postCount: 2,
-    });
-    const updateSpy = vi.fn(() => ({ where: vi.fn(async () => []) }));
-    mockDb.update = vi.fn(() => ({ set: updateSpy })) as unknown as MockDb["update"];
-
-    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+        campaign: {
+          id: 28,
+          userId: 18,
+          businessId: 24,
+          workflowState: "strategy_approved",
+          workflowContext: { coreMessage: "Empower your workforce" },
+          personas: [{ name: "Small Business Owner" }],
+          coreMessage: "Empower your workforce",
+        },
+        postCount: 0,
+        agentRunsRows: [
+          {
+            id: 778,
+            userId: 18,
+            campaignId: 28,
+            agentType: "creative",
+            status: "running",
+            input: { jobType: "content_generation_job", regenerate: false },
+            createdAt: new Date(),
+          },
+        ],
+      }) as unknown as ReturnType<typeof getDb>
+    );
 
     const caller = contentRouter.createCaller(buildCtx());
     const result = await caller.generateForCampaign({ campaignId: 28 });
 
-    // No credit-charging agent run should happen
-    expect(runCreativeAgent).not.toHaveBeenCalled();
-    expect(result.success).toBe(true);
-    expect(result.idempotent).toBe(true);
+    expect(result.status).toBe("processing");
+    expect(result.jobId).toBe(778);
+    expect(result.reused).toBe(true);
+    expect(scheduleContentGenerationJob).not.toHaveBeenCalled();
+  });
 
-    // State should be repaired to creatives_ready
-    const stateUpdate = (updateSpy.mock.calls as any[]).find(
-      (call) => call[0]?.workflowState === "creatives_ready"
+  it("rejects generation when campaign is not in an eligible workflow state", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+        campaign: {
+          id: 28,
+          userId: 18,
+          businessId: 24,
+          workflowState: "strategy_pending",
+          workflowContext: {},
+          personas: [{ name: "Small Business Owner" }],
+          coreMessage: "Empower your workforce",
+        },
+        postCount: 0,
+      }) as unknown as ReturnType<typeof getDb>
     );
-    expect(stateUpdate).toBeTruthy();
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.generateForCampaign({ campaignId: 28 })).rejects.toBeInstanceOf(TRPCError);
+  });
+
+  it("returns generation job status including stage durations", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+      campaign: {
+        id: 28,
+        userId: 18,
+        businessId: 24,
+          workflowState: "creatives_ready",
+          workflowContext: {},
+        personas: [{ name: "Small Business Owner" }],
+        coreMessage: "Empower your workforce",
+      },
+        postCount: 2,
+        agentRunsRows: [
+          {
+            id: 901,
+            userId: 18,
+            campaignId: 28,
+            agentType: "creative",
+            status: "completed",
+            input: { jobType: "content_generation_job" },
+            output: {
+              postCount: 2,
+              durations: {
+                messageArchitectDurationMs: 120,
+                creativeGenerationDurationMs: 420,
+                qualityRetryDurationMs: 0,
+                fallbackDurationMs: 40,
+                totalDurationMs: 600,
+              },
+            },
+            createdAt: new Date(),
+            startedAt: new Date(),
+            completedAt: new Date(),
+          },
+        ],
+      }) as unknown as ReturnType<typeof getDb>
+    );
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const status = await caller.getGenerationJobStatus({ campaignId: 28, jobId: 901 });
+    expect(status?.status).toBe("completed");
+    expect(status?.jobId).toBe(901);
+    expect(status?.messageArchitectDurationMs).toBe(120);
+    expect(status?.creativeGenerationDurationMs).toBe(420);
+    expect(status?.fallbackDurationMs).toBe(40);
+  });
+
+  it("returns null when requested jobId is not owned by authenticated user", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+        campaign: {
+          id: 28,
+          userId: 18,
+          businessId: 24,
+          workflowState: "creatives_ready",
+          workflowContext: {},
+          personas: [{ name: "Small Business Owner" }],
+          coreMessage: "Empower your workforce",
+        },
+        postCount: 0,
+        agentRunsRows: [
+          {
+            id: 902,
+            userId: 99,
+            campaignId: 28,
+            agentType: "creative",
+            status: "running",
+            input: { jobType: "content_generation_job" },
+            createdAt: new Date(),
+          },
+        ],
+      }) as unknown as ReturnType<typeof getDb>
+    );
+
+    const caller = contentRouter.createCaller(buildCtx(18));
+    const status = await caller.getGenerationJobStatus({ campaignId: 28, jobId: 902 });
+    expect(status).toBeNull();
+  });
+
+  it("returns null when a creative run is not a content_generation_job", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+        campaign: {
+          id: 28,
+          userId: 18,
+          businessId: 24,
+          workflowState: "creatives_ready",
+          workflowContext: {},
+          personas: [{ name: "Small Business Owner" }],
+          coreMessage: "Empower your workforce",
+        },
+        postCount: 0,
+        agentRunsRows: [
+          {
+            id: 903,
+            userId: 18,
+            campaignId: 28,
+            agentType: "creative",
+            status: "completed",
+            input: { jobType: "other_job" },
+            createdAt: new Date(),
+          },
+        ],
+      }) as unknown as ReturnType<typeof getDb>
+    );
+
+    const caller = contentRouter.createCaller(buildCtx(18));
+    const status = await caller.getGenerationJobStatus({ campaignId: 28, jobId: 903 });
+    expect(status).toBeNull();
   });
 });
 

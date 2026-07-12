@@ -1,21 +1,17 @@
 import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations, approvalRequests } from "@db/schema";
+import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations, approvalRequests, agentRuns } from "@db/schema";
 import { eq, and, or, desc, count, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { runCreativeAgent } from "./lib/agents/creative-agent";
-import {
-  ensureApprovedMessagePack,
-  saveApprovedMessagePack,
-} from "./lib/creative/campaign-message-architect";
 import { env } from "./lib/env";
-import { onAgentRunComplete } from "./lib/workflow/triggers";
 import { createApprovalRequest } from "./lib/workflow/engine";
 import { logInfo, logError } from "./lib/logger";
 import { publishSinglePost, finalizeCampaignPublishState } from "./lib/workflow/publishing-runner";
 import { checkContentSafety } from "./lib/safety/checker";
 import { isFacebookPublishingReady, isInstagramPublishingReady } from "./lib/integrations/platforms";
+import { scheduleContentGenerationJob, isBullMQAvailable } from "./lib/queue/bullmq";
+import { processContentGenerationJob } from "./lib/jobs/content-generation-job";
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
@@ -57,6 +53,19 @@ function isApprovedImageReadySocialPost(post: any): boolean {
   if (meta.imageStatus !== "ready") return false;
   if (!meta.imageUrl) return false;
   return true;
+}
+
+function mapGenerationStatus(status: string | null | undefined): "queued" | "processing" | "completed" | "failed" {
+  if (status === "pending") return "queued";
+  if (status === "running") return "processing";
+  if (status === "completed") return "completed";
+  if (status === "failed") return "failed";
+  return "failed";
+}
+
+function isContentGenerationJobRun(run: any): boolean {
+  const meta = (run?.input || {}) as any;
+  return meta.jobType === "content_generation_job";
 }
 
 export const contentRouter = createRouter({
@@ -236,205 +245,154 @@ export const contentRouter = createRouter({
       logInfo("[content.generateForCampaign] prerequisites validated", {
         campaignId,
         userId,
-        stage: "agent_run",
+        stage: "job_enqueue",
         provider: "openai",
         businessId: campaign.businessId,
         workflowState: campaign.workflowState,
       });
 
-      // Idempotency + repair guard: if the campaign already has saved posts and a
-      // valid approved message pack, do not charge credits or rerun unless regenerate
-      // is explicitly requested.
-      const [existingPostCountResult] = await db
-        .select({ value: count() })
-        .from(contentPosts)
+      const recentCreativeRuns = await db
+        .select()
+        .from(agentRuns)
         .where(
           and(
-            eq(contentPosts.userId, userId),
-            eq(contentPosts.campaignId, campaignId)
+            eq(agentRuns.userId, userId),
+            eq(agentRuns.campaignId, campaignId),
+            eq(agentRuns.agentType, "creative")
           )
+        )
+        .orderBy(desc(agentRuns.createdAt))
+        .limit(25);
+
+      const activeJob = recentCreativeRuns.find((run) => {
+        return (
+          isContentGenerationJobRun(run) &&
+          (run.status === "pending" || run.status === "running")
         );
-      const existingPostCount = existingPostCountResult?.value ?? 0;
+      });
 
-      const [existingMessagePack] = existingPostCount > 0
-        ? await db
-            .select({ metadata: campaignAssets.metadata })
-            .from(campaignAssets)
-            .where(
-              and(
-                eq(campaignAssets.userId, userId),
-                eq(campaignAssets.campaignId, campaignId),
-                eq(campaignAssets.assetType, "message_pack" as any)
-              )
-            )
-            .orderBy(desc(campaignAssets.createdAt))
-            .limit(1)
-        : [null];
-      const hasValidMessagePack =
-        existingMessagePack?.metadata &&
-        (existingMessagePack.metadata as any)?.passed === true;
+      if (activeJob) {
+        return {
+          jobId: activeJob.id,
+          campaignId,
+          status: mapGenerationStatus(activeJob.status),
+          reused: true,
+        };
+      }
 
-      if (existingPostCount > 0 && !input.regenerate) {
-        if (campaign.workflowState === "creatives_generating") {
-          await db
-            .update(campaigns)
-            .set({
-              workflowState: "creatives_ready",
-              workflowContext: {
-                ...(campaign.workflowContext || {}),
-                repairedAt: new Date().toISOString(),
-                repairedReason: "existing_content_posts_found",
-              } as any,
-              updatedAt: new Date(),
-            })
-            .where(eq(campaigns.id, campaignId));
-          logInfo("[content.generateForCampaign] repaired stuck workflow state", {
-            campaignId,
+      const [jobInsert] = await db
+        .insert(agentRuns)
+        .values({
+          userId,
+          campaignId,
+          agentType: "creative",
+          status: "pending",
+          input: {
+            jobType: "content_generation_job",
+            regenerate: !!input.regenerate,
+          } as any,
+        });
+
+      const jobId = Number((jobInsert as any).insertId);
+
+      try {
+        if (isBullMQAvailable()) {
+          await scheduleContentGenerationJob({
+            jobId,
             userId,
-            stage: "idempotency_guard",
-            fromState: "creatives_generating",
-            toState: "creatives_ready",
-            postCount: existingPostCount,
+            campaignId,
+            regenerate: !!input.regenerate,
           });
         } else {
-          logInfo("[content.generateForCampaign] idempotent skip: posts already exist", {
-            campaignId,
-            userId,
-            stage: "idempotency_guard",
-            postCount: existingPostCount,
-            hasValidMessagePack,
-          });
+          setTimeout(() => {
+            void processContentGenerationJob({
+              jobId,
+              userId,
+              campaignId,
+              regenerate: !!input.regenerate,
+            });
+          }, 0);
         }
-        return { success: true, postCount: existingPostCount, idempotent: true };
-      }
+      } catch (enqueueErr: any) {
+        await db
+          .update(agentRuns)
+          .set({
+            status: "failed",
+            error: enqueueErr?.message || "Failed to enqueue content generation job.",
+            completedAt: new Date(),
+          })
+          .where(eq(agentRuns.id, jobId));
 
-      // If regenerating, ensure the message pack is also rebuilt.
-      if (input.regenerate && campaign.businessId) {
-        try {
-          const freshPack = await ensureApprovedMessagePack({
-            userId,
-            campaignId,
-            skipBilling: true,
-            maxAttempts: 2,
-          });
-          if (freshPack.validation.passed) {
-            await saveApprovedMessagePack(userId, campaignId, freshPack);
-          }
-        } catch (regenErr: any) {
-          logError("[content.generateForCampaign] failed to regenerate message pack", {
-            campaignId,
-            userId,
-            error: regenErr.message,
-          });
-        }
-      }
-
-      let result: Awaited<ReturnType<typeof runCreativeAgent>>;
-      try {
-        result = await runCreativeAgent({
-          userId,
-          campaignId,
-        });
-      } catch (err: any) {
-        const errorMessage = err instanceof TRPCError ? err.message : err.message || String(err);
-        logError("[content.generateForCampaign] creative agent failed", {
-          campaignId,
-          userId,
-          stage: "agent_run",
-          provider: "openai",
-          error: errorMessage,
-          trpcCode: err instanceof TRPCError ? err.code : undefined,
-        });
-        throw new TRPCError({
-          code: err instanceof TRPCError ? err.code : "INTERNAL_SERVER_ERROR",
-          message: errorMessage,
-        });
-      }
-
-      logInfo("[content.generateForCampaign] creative agent completed", {
-        campaignId,
-        userId,
-        stage: "workflow_trigger",
-        provider: "openai",
-        packRunId: result.packRunId,
-        savedPosts: result.savedPosts,
-        savedAssets: result.savedAssets,
-      });
-
-      // Ensure the campaign advances to creatives_ready as soon as posts were saved.
-      // Do not rely solely on the fire-and-forget onAgentRunComplete handler.
-      if (result.savedPosts > 0 && campaign.workflowState !== "creatives_ready") {
-        try {
-          await db
-            .update(campaigns)
-            .set({
-              workflowState: "creatives_ready",
-              workflowContext: {
-                ...(campaign.workflowContext || {}),
-                creativeGeneratedAt: new Date().toISOString(),
-                creativeRunId: result.packRunId,
-                savedPosts: result.savedPosts,
-                savedAssets: result.savedAssets,
-              } as any,
-              updatedAt: new Date(),
-            })
-            .where(eq(campaigns.id, campaignId));
-          logInfo("[content.generateForCampaign] advanced workflow state", {
-            campaignId,
-            userId,
-            stage: "state_transition",
-            fromState: campaign.workflowState,
-            toState: "creatives_ready",
-            savedPosts: result.savedPosts,
-          });
-        } catch (stateErr: any) {
-          logError("[content.generateForCampaign] failed to advance workflow state", {
-            campaignId,
-            userId,
-            stage: "state_transition",
-            error: stateErr.message || String(stateErr),
-          });
-        }
-      }
-
-      try {
-        await onAgentRunComplete(result.packRunId);
-      } catch (err: any) {
-        logError("[content.generateForCampaign] workflow trigger failed", {
-          campaignId,
-          userId,
-          stage: "workflow_trigger",
-          provider: "openai",
-          packRunId: result.packRunId,
-          error: err.message || String(err),
-        });
-        // Non-fatal: posts were saved even if workflow transition failed
-      }
-
-      if (result.savedPosts === 0) {
-        logError("[content.generateForCampaign] no posts saved", {
-          campaignId,
-          userId,
-          stage: "post_save",
-          provider: "openai",
-          savedAssets: result.savedAssets,
-        });
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "The Creative Agent ran but no posts were saved. Please retry or contact support if the issue persists.",
+          message: "Failed to queue content generation. Please retry.",
         });
       }
 
-      logInfo("[content.generateForCampaign] completed", {
+      return {
+        jobId,
         campaignId,
-        userId,
-        stage: "complete",
-        provider: "openai",
-        savedPosts: result.savedPosts,
-        savedAssets: result.savedAssets,
-      });
+        status: "queued",
+      };
+    }),
 
-      return { success: true, postCount: result.savedPosts };
+  getGenerationJobStatus: authedQuery
+    .input(z.object({ campaignId: z.number(), jobId: z.number().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+
+      let selected: any | null = null;
+      if (input.jobId) {
+        const rows = await db
+          .select()
+          .from(agentRuns)
+          .where(
+            and(
+              eq(agentRuns.id, input.jobId),
+              eq(agentRuns.userId, ctx.user.id),
+              eq(agentRuns.campaignId, input.campaignId),
+              eq(agentRuns.agentType, "creative")
+            )
+          )
+          .limit(1);
+        const first = rows[0] || null;
+        selected = first && isContentGenerationJobRun(first) ? first : null;
+      } else {
+        const rows = await db
+          .select()
+          .from(agentRuns)
+          .where(
+            and(
+              eq(agentRuns.userId, ctx.user.id),
+              eq(agentRuns.campaignId, input.campaignId),
+              eq(agentRuns.agentType, "creative")
+            )
+          )
+          .orderBy(desc(agentRuns.createdAt))
+          .limit(50);
+        selected = rows.find((row) => isContentGenerationJobRun(row)) || null;
+      }
+
+      if (!selected) {
+        return null;
+      }
+
+      const output = (selected.output || {}) as any;
+      const durations = (output.durations || {}) as any;
+      return {
+        jobId: selected.id,
+        campaignId: Number(selected.campaignId || input.campaignId),
+        status: mapGenerationStatus(selected.status),
+        error: selected.error || null,
+        startedAt: selected.startedAt,
+        completedAt: selected.completedAt,
+        postCount: Number(output.postCount || 0),
+        messageArchitectDurationMs: Number(durations.messageArchitectDurationMs || 0),
+        creativeGenerationDurationMs: Number(durations.creativeGenerationDurationMs || 0),
+        qualityRetryDurationMs: Number(durations.qualityRetryDurationMs || 0),
+        fallbackDurationMs: Number(durations.fallbackDurationMs || 0),
+        totalDurationMs: Number(durations.totalDurationMs || 0),
+      };
     }),
 
   get: authedQuery

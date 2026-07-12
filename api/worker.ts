@@ -4,6 +4,7 @@
  */
 import { connectRedis, isRedisConfigured } from "./lib/redis";
 import { startPublishingWorker, stopPublishingWorker } from "./lib/queue/publishing-worker";
+import { startContentGenerationWorker } from "./lib/queue/content-generation-worker";
 import { env } from "./lib/env";
 
 async function main() {
@@ -16,6 +17,7 @@ async function main() {
   console.log("[Worker] Redis connected");
 
   startPublishingWorker();
+  startContentGenerationWorker();
 
   // Graceful shutdown
   process.on("SIGINT", async () => {

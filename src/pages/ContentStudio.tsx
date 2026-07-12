@@ -68,6 +68,7 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/component
 import { PremiumTemplateGallery } from "@/components/content/PremiumTemplateGallery";
 import type { GalleryTemplate } from "@/components/content/PremiumTemplateGallery";
 import { toast } from "sonner";
+import { formatContentGenerationError } from "@/lib/content-generation-errors";
 
 const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
 const ENABLE_BASIC_DRAFT_VIDEO = import.meta.env.VITE_ENABLE_BASIC_DRAFT_VIDEO === "true";
@@ -594,6 +595,8 @@ export default function ContentStudio() {
   const [creativeGuidanceById, setCreativeGuidanceById] = useState<Record<number, string>>({});
   const [refinementById, setRefinementById] = useState<Record<number, string>>({});
   const [allowNoLogoById, setAllowNoLogoById] = useState<Record<number, boolean>>({});
+  const [activeGenerationJobId, setActiveGenerationJobId] = useState<number | null>(null);
+  const [lastNotifiedGenerationJobId, setLastNotifiedGenerationJobId] = useState<number | null>(null);
 
   const LEAFLET_TEMPLATE_OPTIONS: { value: LeafletTemplateId; label: string; description: string; icon: LucideIcon }[] = [
     { value: "auto", label: "Auto-detect", description: "Pick the best layout from your business category", icon: LayoutTemplate },
@@ -716,6 +719,17 @@ export default function ContentStudio() {
     { enabled: hasCampaignId, refetchInterval: 10000 }
   );
 
+  const { data: generationJobStatus } = trpc.content.getGenerationJobStatus.useQuery(
+    { campaignId: numericCampaignId, jobId: activeGenerationJobId ?? undefined },
+    {
+      enabled: hasCampaignId,
+      refetchInterval: (query) => {
+        const status = (query.state.data as any)?.status;
+        return status === "queued" || status === "processing" ? 2500 : false;
+      },
+    }
+  );
+
   const connectedIntegrations = useMemo(
     () =>
       connectedPlatforms?.map((i) => ({
@@ -746,23 +760,70 @@ export default function ContentStudio() {
     creativeAgentRuns,
     strategyAgentRuns
   );
+  const generationJobIsActive =
+    generationJobStatus?.status === "queued" || generationJobStatus?.status === "processing";
 
   const generateForCampaignMutation = trpc.content.generateForCampaign.useMutation({
     onSuccess: (data) => {
-      utils.content.list.invalidate();
-      utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
-      utils.campaign.get.invalidate({ id: numericCampaignId });
+      setActiveGenerationJobId(data.jobId);
+      setLastNotifiedGenerationJobId(null);
       utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
-      toast.success(`Content generated successfully. ${data.postCount} posts created.`);
+      if (data.reused) {
+        toast.info("Content generation is already in progress. Tracking the existing job in Agent Activity.");
+      } else {
+        toast.info("Content generation queued. You can track live progress in Agent Activity.");
+      }
     },
     onError: (err) => {
       utils.content.list.invalidate();
       utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
       utils.campaign.get.invalidate({ id: numericCampaignId });
       utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
-      toast.error(err.message || "Failed to generate content for campaign");
+      toast.error(formatContentGenerationError(err));
     },
   });
+  const isGeneratingContent = generateForCampaignMutation.isPending || generationJobIsActive;
+
+  useEffect(() => {
+    if (!generationJobStatus?.jobId) return;
+
+    const status = generationJobStatus.status;
+    if (status === "queued" || status === "processing") {
+      if (activeGenerationJobId !== generationJobStatus.jobId) {
+        setActiveGenerationJobId(generationJobStatus.jobId);
+      }
+      return;
+    }
+
+    if (lastNotifiedGenerationJobId === generationJobStatus.jobId) return;
+
+    utils.content.list.invalidate();
+    utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
+    utils.campaign.get.invalidate({ id: numericCampaignId });
+    utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
+
+    if (status === "completed") {
+      const postCount = generationJobStatus.postCount || 0;
+      toast.success(`Content generated successfully. ${postCount} posts created.`);
+    } else if (status === "failed") {
+      toast.error(
+        generationJobStatus.error ||
+          "We could not complete content generation. No credits were charged. Check Agent Activity for details."
+      );
+    }
+
+    setLastNotifiedGenerationJobId(generationJobStatus.jobId);
+    setActiveGenerationJobId(null);
+  }, [
+    generationJobStatus,
+    lastNotifiedGenerationJobId,
+    activeGenerationJobId,
+    utils.content.list,
+    utils.content.countForCampaign,
+    utils.campaign.get,
+    utils.agent.getAgentRuns,
+    numericCampaignId,
+  ]);
 
   const createMutation = trpc.content.create.useMutation({
     onSuccess: () => {
@@ -5059,14 +5120,18 @@ Include:
                   toast.info("Please approve the strategy first before generating content.");
                 }
               }}
-              disabled={generateForCampaignMutation.isPending}
+              disabled={isGeneratingContent}
             >
-              {generateForCampaignMutation.isPending ? (
+              {isGeneratingContent ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : (
                 <Sparkles className="w-4 h-4 mr-2" />
               )}
-              {campaignNeedsRecovery ? "Retry Content Generation" : "Generate from Approved Strategy"}
+              {isGeneratingContent
+                ? "Generating..."
+                : campaignNeedsRecovery
+                ? "Retry Content Generation"
+                : "Generate from Approved Strategy"}
             </Button>
           )}
         </div>
@@ -5155,9 +5220,9 @@ Include:
                 <Button
                   variant="outline"
                   onClick={() => generateForCampaignMutation.mutate({ campaignId: numericCampaignId })}
-                  disabled={generateForCampaignMutation.isPending}
+                  disabled={isGeneratingContent}
                 >
-                  {generateForCampaignMutation.isPending ? (
+                  {isGeneratingContent ? (
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   ) : (
                     <Sparkles className="w-4 h-4 mr-2" />

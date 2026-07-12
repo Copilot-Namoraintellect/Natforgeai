@@ -9,6 +9,7 @@ import { startPublishingRunner } from "./lib/workflow/publishing-runner";
 import { startCreditRenewalScheduler } from "./lib/jobs/credit-renewal";
 import { connectRedis, isRedisConfigured } from "./lib/redis";
 import { startPublishingWorker } from "./lib/queue/publishing-worker";
+import { startContentGenerationWorker } from "./lib/queue/content-generation-worker";
 import { handleOAuthCallback } from "./lib/integrations/oauth-callback";
 import { getDb } from "./queries/connection";
 import { videoRenderJobs } from "@db/schema";
@@ -32,6 +33,7 @@ if (isRedisConfigured()) {
 // Start publishing worker in production, cron runner in dev
 if (env.isProduction && isRedisConfigured()) {
   startPublishingWorker();
+  startContentGenerationWorker();
 } else {
   startPublishingRunner();
 }

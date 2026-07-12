@@ -5,10 +5,14 @@ vi.mock("../runner", () => ({
   runAgent: vi.fn(),
 }));
 
-vi.mock("../../creative/campaign-message-architect", () => ({
-  ensureApprovedMessagePack: vi.fn(),
-  validateCampaignCopy: vi.fn(() => ({ passed: true, score: 100, rejections: [], warnings: [] })),
-}));
+vi.mock("../../creative/campaign-message-architect", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../creative/campaign-message-architect")>();
+  return {
+    ...actual,
+    ensureApprovedMessagePack: vi.fn(),
+    validateCampaignCopy: vi.fn(() => ({ passed: true, score: 100, rejections: [], warnings: [] })),
+  };
+});
 
 vi.mock("../../billing/credit-engine", () => ({
   checkCredits: vi.fn(async () => ({ hasCredits: true, balance: 1000, required: 8 })),
@@ -68,7 +72,7 @@ function createMockDb({ insertShouldFail = false }: { insertShouldFail?: boolean
           coreMessage: "Empower your workforce",
           platforms: "Instagram, Facebook",
           targetAudience: "Small businesses",
-          ctaStrategy: "Book a demo",
+          ctaStrategy: "Awareness: Learn More\nConsideration: Get Pricing\nConversion: Book a Demo",
           contentCalendar: null,
           offers: null,
           primaryOutcome: "Leads",
@@ -76,7 +80,7 @@ function createMockDb({ insertShouldFail = false }: { insertShouldFail?: boolean
           mainPainPoint: "Manual payouts",
           productOrService: "Payout platform",
           offerDetails: "",
-          preferredCta: "Book a demo",
+          preferredCta: "Awareness: Learn More\nConsideration: Get Pricing\nConversion: Book a Demo",
           excludedOffers: "",
           referenceStyle: "",
           contentStyle: "professional",
@@ -153,7 +157,7 @@ function buildPackOutput(): Record<string, unknown> {
         openingHook3Sec: "Open",
         scenes: [{ sceneNumber: 1, durationSeconds: 5, visualDescription: "Scene 1" }],
         backgroundMusicMood: "Upbeat",
-        cta: "Book a demo",
+        cta: "Learn More",
         visualStyle: "Clean",
         targetPersona: "Owner",
         funnelStage: "awareness",
@@ -167,7 +171,7 @@ function buildPackOutput(): Record<string, unknown> {
         platform: "Instagram",
         hook: "Stop losing staff to slow manual payouts",
         slides: [{ slideNumber: 1, headline: "H", visualDirection: "V", bodyText: "B", cta: null }],
-        overallCta: "Book",
+        overallCta: "Learn More",
         visualStyle: "Clean",
         targetPersona: "Owner",
         funnelStage: "awareness",
@@ -182,7 +186,7 @@ function buildPackOutput(): Record<string, unknown> {
         hook: "Stop losing staff to slow manual payouts",
         caption:
           "Every week your team waits for manual payout paperwork. Zutohub's payout platform moves earnings faster, cuts admin, and keeps staff happy without extra salary cost. Manual payouts drain morale and time. Switch to automated payouts designed for small businesses in Randburg.",
-        cta: "Book a demo",
+        cta: "Learn More",
         hashtags: ["#fintech", "#smallbiz"],
         visualPrompt: "A clean visual",
         bestTimeToPost: "9am",
@@ -200,19 +204,19 @@ function buildPackOutput(): Record<string, unknown> {
       subjectLine: "Subject",
       preheader: "Preheader",
       body: "Body",
-      cta: "Book",
+      cta: "Learn More",
       tone: "professional",
       segment: "Owners",
     },
     launchSequence: {
       title: "Launch",
-      sequenceSteps: [{ stepNumber: 1, channel: "email", timing: "Day 1", message: "Hi", cta: "Book" }],
+      sequenceSteps: [{ stepNumber: 1, channel: "email", timing: "Day 1", message: "Hi", cta: "Learn More" }],
     },
     platformAdaptations: [
       {
         platform: "Instagram",
         adaptedCaption: "Caption",
-        adaptedCta: "Book",
+        adaptedCta: "Learn More",
         adaptedHashtags: ["#fintech"],
         bestTimeToPost: "9am",
         formatNotes: null,
@@ -220,7 +224,7 @@ function buildPackOutput(): Record<string, unknown> {
     ],
     hashtagSet: { core: ["#fintech"], trending: [], niche: [], platformSpecific: [] },
     hooks: [{ text: "Hook 1", angle: null }],
-    ctaVariations: [{ text: "Book now", angle: null }],
+    ctaVariations: [{ text: "Learn More", angle: null }],
     packSummary: "Pack summary",
   };
 }
@@ -251,20 +255,20 @@ function mockRunAgentResponse(opts: { prompt: string }, runId: number): { runId:
           "Less admin time for owners.",
           "Staff get paid faster and more reliably.",
         ],
-        cta: "Book a demo",
+        cta: "Learn More",
         footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Randburg" },
         proofPoints: null,
         platformCaptions: [
           {
             platform: "Instagram",
             caption: "Stop losing staff to slow manual payouts. Zutohub moves earnings faster.",
-            cta: "Book a demo",
+            cta: "Learn More",
             hashtags: ["#fintech", "#smallbiz"],
           },
           {
             platform: "Facebook",
             caption: "Randburg small businesses: cut payout admin and keep staff happy.",
-            cta: "Book a demo",
+            cta: "Learn More",
             hashtags: ["#fintech", "#smallbiz"],
           },
         ],
@@ -288,14 +292,14 @@ describe("runCreativeAgent post-save failure handling", () => {
         "Less admin time for owners.",
         "Staff get paid faster and more reliably.",
       ],
-      cta: "Book a demo",
+      cta: "Learn More",
       footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Randburg" },
       proofPoints: [],
       platformCaptions: [
         {
           platform: "Instagram",
           caption: "Stop losing staff to slow manual payouts. Zutohub moves earnings faster.",
-          cta: "Book a demo",
+          cta: "Learn More",
           hashtags: ["#fintech", "#smallbiz"],
         },
       ],

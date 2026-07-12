@@ -1,5 +1,6 @@
 import { safeText } from "./brand-palette";
 import { detectBusinessCategory, expectedCtasForCategory } from "./campaign-message-architect";
+import { ctaMatchesSelectedStage } from "./cta-utils";
 
 /**
  * Marketing text formatting helpers for leaflets.
@@ -206,8 +207,24 @@ function defaultCtaForCategory(businessCategory?: string): string {
  * ellipsis, replace it with a category-aware strong default.
  */
 export function normalizeCta(cta?: string | null, businessCategory?: string): string {
+  return normalizeCtaWithContext(cta, businessCategory);
+}
+
+export function normalizeCtaWithContext(
+  cta?: string | null,
+  businessCategory?: string,
+  opts?: { preferredCta?: string | null; objectiveOrStage?: string | null }
+): string {
   const clean = sanitize(cta);
   if (!clean) return defaultCtaForCategory(businessCategory);
+
+  if (opts?.preferredCta && ctaMatchesSelectedStage({
+    cta: clean,
+    preferredCta: opts.preferredCta,
+    objectiveOrStage: opts.objectiveOrStage,
+  })) {
+    return clean;
+  }
 
   const isWeak = WEAK_CTA_PATTERNS.some((p) => p.test(clean));
   const tooLong = clean.length > 35;
@@ -226,6 +243,8 @@ export function validateMarketingText(opts: {
   offer?: string;
   cta?: string;
   businessName?: string;
+  preferredCta?: string;
+  objectiveOrStage?: string;
 }): { scorePenalty: number; issues: string[] } {
   const issues: string[] = [];
   let scorePenalty = 0;
@@ -242,7 +261,14 @@ export function validateMarketingText(opts: {
 
   // CTA quality.
   if (ctaText) {
-    if (WEAK_CTA_PATTERNS.some((p) => p.test(ctaText))) {
+    const stageAllowed = opts.preferredCta
+      ? ctaMatchesSelectedStage({
+          cta: ctaText,
+          preferredCta: opts.preferredCta,
+          objectiveOrStage: opts.objectiveOrStage,
+        })
+      : false;
+    if (WEAK_CTA_PATTERNS.some((p) => p.test(ctaText)) && !stageAllowed) {
       issues.push("CTA is vague or ends with ellipsis.");
       scorePenalty += 15;
     }
