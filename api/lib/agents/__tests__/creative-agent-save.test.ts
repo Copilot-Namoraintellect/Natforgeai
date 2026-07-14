@@ -10,6 +10,7 @@ vi.mock("../../creative/campaign-message-architect", async (importOriginal) => {
   return {
     ...actual,
     ensureApprovedMessagePack: vi.fn(),
+    saveApprovedMessagePack: vi.fn(),
     validateCampaignCopy: vi.fn(() => ({ passed: true, score: 100, rejections: [], warnings: [] })),
   };
 });
@@ -428,5 +429,83 @@ describe("runCreativeAgent post-save failure handling", () => {
     expect(vi.mocked(deductCredits).mock.calls[0]?.[0]).toMatchObject({
       type: "agent_deduction",
     });
+  });
+
+  it("accepts validated deterministic fallback, regenerates creative output, saves posts, and charges once", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack, saveApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+
+    vi.mocked(ensureApprovedMessagePack)
+      .mockResolvedValueOnce(approvedPack() as any)
+      .mockResolvedValueOnce({
+        ...approvedPack(),
+        messagePackSource: "fallback_deterministic",
+        validation: { passed: true, score: 100, rejections: [], warnings: [] },
+      } as any);
+
+    const lowQualityPack = {
+      ...buildPackOutput(),
+      socialPosts: [
+        {
+          ...(buildPackOutput().socialPosts as any[])[0],
+          hook: "Join the Trading Revolution",
+          caption: "Join thousands and unlock your potential with this offer.",
+        },
+      ],
+    };
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce({ runId: 410, output: lowQualityPack } as any)
+      .mockResolvedValueOnce({ runId: 411, output: buildPackOutput() } as any);
+
+    const result = await runCreativeAgent({ userId: 18, campaignId: 30 });
+
+    expect(result.packRunId).toBe(411);
+    expect(result.savedPosts).toBe(2);
+    expect(saveApprovedMessagePack).toHaveBeenCalledTimes(1);
+    expect(deductCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not charge when creative regeneration from validated fallback still fails", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack, saveApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+
+    vi.mocked(ensureApprovedMessagePack)
+      .mockResolvedValueOnce(approvedPack() as any)
+      .mockResolvedValueOnce({
+        ...approvedPack(),
+        messagePackSource: "fallback_deterministic",
+        validation: { passed: true, score: 100, rejections: [], warnings: [] },
+      } as any);
+
+    const lowQualityPack = {
+      ...buildPackOutput(),
+      socialPosts: [
+        {
+          ...(buildPackOutput().socialPosts as any[])[0],
+          hook: "Join the Trading Revolution",
+          caption: "Join thousands and unlock your potential with this offer.",
+        },
+      ],
+    };
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce({ runId: 510, output: lowQualityPack } as any)
+      .mockResolvedValueOnce({ runId: 511, output: lowQualityPack } as any);
+
+    await expect(runCreativeAgent({ userId: 18, campaignId: 30 })).rejects.toBeInstanceOf(TRPCError);
+
+    expect(saveApprovedMessagePack).toHaveBeenCalledTimes(1);
+    expect(deductCredits).not.toHaveBeenCalled();
   });
 });

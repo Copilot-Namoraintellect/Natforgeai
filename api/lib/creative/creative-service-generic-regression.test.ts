@@ -288,8 +288,8 @@ describe("generatePremiumLeaflet generic regression", () => {
     expect(renderReq.subheadline).toBe(specificPack.subheadline);
     expect(renderReq.services).toEqual(specificPack.benefitBullets);
 
-    // Business display name should be preferred over the raw business.name.
-    expect(renderReq.businessName).toBe("Zuto Hub");
+    // Use the authoritative business record name, not derived display/slugs.
+    expect(renderReq.businessName).toBe("Zuto");
 
     // No generic placeholder language should leak into the rendered inputs.
     const inputs = JSON.stringify(renderReq).toLowerCase();

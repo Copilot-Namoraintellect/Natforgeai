@@ -154,4 +154,18 @@ describe("buildPremiumV2Brief", () => {
     expect(brief.headline).toBeTruthy();
     expect(brief.cta).toBe("Get a Quote");
   });
+
+  it("uses authoritative business record name over derived display name", async () => {
+    const brief = await buildPremiumV2Brief({
+      business: {
+        ...baseBusiness,
+        name: "Zuto Hub",
+        displayName: "zurohub",
+      },
+      campaign: baseCampaign,
+      post: basePost,
+    });
+
+    expect(brief.businessName).toBe("Zuto Hub");
+  });
 });

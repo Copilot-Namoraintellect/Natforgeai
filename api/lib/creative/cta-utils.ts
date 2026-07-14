@@ -38,12 +38,28 @@ export function extractFunnelCtaMap(raw: string | null | undefined): Record<Funn
   if (!text) return map;
 
   let matched = false;
-  const stagedPattern = /(Awareness|Consideration|Conversion|Retention)\s*:\s*(.+?)(?=(?:\s+(?:Awareness|Consideration|Conversion|Retention)\s*:)|$)/gi;
+  const stagedPattern = /(Awareness|Consideration|Conversion|Retention)\s*[:\-]\s*(.+?)(?=(?:\s+(?:Awareness|Consideration|Conversion|Retention)\s*[:\-])|$)/gi;
   let match: RegExpExecArray | null;
   while ((match = stagedPattern.exec(text)) !== null) {
     const stage = normalizeFunnelStage(match[1]);
     const cta = safeText(match[2]);
     if (cta) {
+      map[stage] = cta;
+      matched = true;
+    }
+  }
+
+  if (!matched) {
+    const lines = text
+      .split(/\r?\n|\|/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      const lineMatch = line.match(/^(awareness|consideration|conversion|retention)\s*[:\-]\s*(.+)$/i);
+      if (!lineMatch) continue;
+      const stage = normalizeFunnelStage(lineMatch[1]);
+      const cta = safeText(lineMatch[2]);
+      if (!cta) continue;
       map[stage] = cta;
       matched = true;
     }
@@ -78,5 +94,5 @@ export function ctaMatchesSelectedStage(opts: {
   if (!selected) return false;
   const cta = normalizeCtaText(opts.cta);
   if (!cta) return false;
-  return cta.includes(selected) || selected.includes(cta);
+  return cta === selected || cta.includes(selected) || selected.includes(cta);
 }

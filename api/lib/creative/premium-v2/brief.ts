@@ -31,6 +31,12 @@ import type { BusinessEvidence, CampaignEvidence, ApprovedCopyPack } from "./cur
 import { resolveBrandKit } from "./brand-kit";
 import { buildCommercialBenefits, buildCommercialHeadline, buildCommercialSubheadline, isWeak, rejectWeakCopy } from "./copy";
 
+function getAuthoritativeBusinessName(business: Record<string, any>): string {
+  const fromRecord = asString(business.name);
+  if (fromRecord) return fromRecord;
+  return asString(business.displayName) || "Your Business";
+}
+
 export interface BuildPremiumV2BriefInput {
   business: any;
   campaign?: any;
@@ -265,7 +271,7 @@ export async function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): Prom
   const logoUrl = brandKit.logoUrl;
 
   const brief: PremiumLeafletV2Brief = {
-    businessName: asString(business.displayName || business.name) || "Your Business",
+    businessName: getAuthoritativeBusinessName(business),
     businessCategory: category,
     campaignGoal: asString(campaign.goal || campaign.primaryOutcome),
     targetCustomer: asString(campaign.targetBuyer || business.targetCustomer),
@@ -344,7 +350,7 @@ export function buildPremiumV2BriefSync(input: BuildPremiumV2BriefInput & { bran
   const visualStyle: PremiumV2VisualStyle = inferVisualStyle(business, campaign);
 
   return {
-    businessName: asString(business.displayName || business.name) || "Your Business",
+    businessName: getAuthoritativeBusinessName(business),
     businessCategory: category,
     campaignGoal: asString(campaign.goal || campaign.primaryOutcome),
     targetCustomer: asString(campaign.targetBuyer || business.targetCustomer),

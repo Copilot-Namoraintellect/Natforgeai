@@ -100,6 +100,13 @@ function toJobStatus(status: ProviderStatus): "queued" | "rendering" | "complete
   }
 }
 
+function getAuthoritativeBusinessName(business: any): string {
+  const fromRecord = typeof business?.name === "string" ? business.name.trim() : "";
+  if (fromRecord) return fromRecord;
+  const fromDisplay = typeof business?.displayName === "string" ? business.displayName.trim() : "";
+  return fromDisplay || "Your Business";
+}
+
 
 function buildVideoRequest(opts: {
   business: any;
@@ -127,7 +134,7 @@ function buildVideoRequest(opts: {
     duration: meta.duration,
     style: meta.visualStyle || campaign.contentStyle,
     title: post.title,
-    businessName: (business.displayName as string) || business.name,
+    businessName: getAuthoritativeBusinessName(business),
     productName: business.productOrService || campaign.productOrService,
     offer: campaign.offerDetails,
     cta: campaign.preferredCta || post.cta,
@@ -870,7 +877,7 @@ export async function generatePremiumLeaflet({
 
         if (parsed) {
           const validationCtx = {
-            businessName: (business.displayName as string) || business.name,
+            businessName: getAuthoritativeBusinessName(business),
             campaignName: campaign.name,
             productOrService: campaign.productOrService || business.productOrService,
             targetCustomer: campaign.targetBuyer || business.targetCustomer,
@@ -1089,7 +1096,7 @@ export async function generatePremiumLeaflet({
     // before credits are spent.
     if (approvedMessagePack) {
       const validationCtx = {
-        businessName: (business.displayName as string) || business.name,
+        businessName: getAuthoritativeBusinessName(business),
         campaignName: campaign.name,
         productOrService: campaign.productOrService || business.productOrService,
         targetCustomer: campaign.targetBuyer || business.targetCustomer,
@@ -1172,7 +1179,7 @@ export async function generatePremiumLeaflet({
       format: "leaflet",
       outputFormat: "png",
       aspectRatio,
-      businessName: (business.displayName as string) || business.name,
+      businessName: getAuthoritativeBusinessName(business),
       logoUrl: business.logo,
       brandColors: [
         brandPalette.primary,
@@ -2523,7 +2530,7 @@ export async function renderBasicDraftVideo({
     duration: meta.duration,
     style: meta.visualStyle,
     title: post.title,
-    businessName: (business.displayName as string) || business.name,
+    businessName: getAuthoritativeBusinessName(business),
     productName: business.productOrService || campaign.productOrService,
     offer: campaign.offerDetails,
     cta: campaign.preferredCta || post.cta,

@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { buildApprovalGuidance } from "@/lib/approval-guidance";
 import {
   CheckCircle,
   XCircle,
@@ -54,6 +55,9 @@ export default function ApprovalCentre() {
   const [actionType, setActionType] = useState<"approve" | "reject" | "edit" | null>(null);
 
   const { data: approvals, isLoading } = trpc.approval.listApprovals.useQuery(undefined, {
+    refetchInterval: 5000,
+  });
+  const { data: campaigns } = trpc.campaign.list.useQuery(undefined, {
     refetchInterval: 5000,
   });
 
@@ -112,6 +116,10 @@ export default function ApprovalCentre() {
 
   const pendingApprovals = approvals?.filter((a) => a.status === "pending") || [];
   const resolvedApprovals = approvals?.filter((a) => a.status !== "pending") || [];
+  const guidance = buildApprovalGuidance({
+    pendingApprovals,
+    campaigns: campaigns || [],
+  });
 
   function StrategyDetails({ campaignId }: { campaignId?: number | null }) {
     const { data: campaign } = trpc.campaign.get.useQuery(
@@ -287,10 +295,10 @@ export default function ApprovalCentre() {
       <Card className="bg-[#1E293B] border-[#334155]">
         <CardContent className="p-4 space-y-1">
           <p className="text-xs uppercase tracking-wide text-[#00D4FF] font-semibold">Workflow Guidance</p>
-          <p className="text-sm text-gray-200">What is happening now: NatForgeAI is waiting for approval on strategy or launch decisions.</p>
-          <p className="text-sm text-gray-300">What has been completed: Agent generation steps attached to each request are already finished.</p>
-          <p className="text-sm text-gray-300">What you need to do next: Approve, reject, or edit each pending request.</p>
-          <p className="text-sm text-gray-300">What happens after the next action: Workflow resumes automatically into Agent Activity or campaign launch.</p>
+          <p className="text-sm text-gray-200">What is happening now: {guidance.happeningNow}</p>
+          <p className="text-sm text-gray-300">What has been completed: {guidance.completed}</p>
+          <p className="text-sm text-gray-300">What you need to do next: {guidance.nextAction}</p>
+          <p className="text-sm text-gray-300">What happens after the next action: {guidance.afterAction}</p>
         </CardContent>
       </Card>
 

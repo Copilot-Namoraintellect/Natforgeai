@@ -10,6 +10,7 @@ import { getEstimatedAgentCost } from "../billing/cost-tracker";
 import { enforceCostControl } from "../billing/cost-control";
 import {
   ensureApprovedMessagePack,
+  saveApprovedMessagePack,
   selectFunnelCta,
   validateCampaignCopy,
   type CampaignMessagePack,
@@ -1147,13 +1148,14 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
   }
 
   timing.creativeGenerationDurationMs = Date.now() - generationStartedAt;
+  let activePackRunId = packResult.runId;
 
   logInfo("[CreativeAgent] pack generated", {
     campaignId,
     userId,
     stage: "generation",
     provider: "openai",
-    runId: packResult.runId,
+    runId: activePackRunId,
   });
 
   // Normalise the AI output so missing/undefined fields become safe defaults
@@ -1185,17 +1187,39 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         qualityIssues: combinedIssues,
       });
 
-      if (!approvedMessagePack.validation.passed || approvedMessagePack.isGeneric) {
+      logInfo("[CreativeAgent] recovery pack evaluated", {
+        campaignId,
+        userId,
+        stage: "quality_gate",
+        recoveryPackSource: approvedMessagePack.messagePackSource || "unknown",
+        fallbackAccepted:
+          approvedMessagePack.validation.passed && approvedMessagePack.messagePackSource === "fallback_deterministic",
+        fallbackValidationScore: approvedMessagePack.validation.score,
+        fallbackValidationRejections: approvedMessagePack.validation.rejections,
+      });
+
+      if (!approvedMessagePack.validation.passed) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Regenerated campaign copy still failed quality standards.",
+          message: "Recovery message pack failed validation.",
         });
       }
+
+      await saveApprovedMessagePack(userId, campaignId, approvedMessagePack);
+
       if (approvedMessagePack.messagePackSource === "fallback_deterministic") {
         timing.fallbackDurationMs += Date.now() - retryStartedAt;
       }
 
       const retryPrompt = `${packPrompt}\n\nUPDATED APPROVED CAMPAIGN MESSAGE PACK (REPLACES PRIOR COPY SOURCE):\n- Headline: ${approvedMessagePack.headline}\n- Subheadline: ${approvedMessagePack.subheadline}\n- Benefit Bullets: ${approvedMessagePack.benefitBullets.join(" | ")}\n- CTA: ${approvedMessagePack.cta}\n- Footer/Contact: ${JSON.stringify(approvedMessagePack.footerContact)}\n- Proof Points: ${(approvedMessagePack.proofPoints || []).join(" | ") || "None"}\n- Platform Captions: ${approvedMessagePack.platformCaptions.map((c) => `${c.platform}: ${c.caption}`).join(" | ")}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE ISSUES AND REGENERATE:\n${combinedIssues.map((i) => `- ${i}`).join("\n")}\n\nDo not invent offers. Do not use generic motivational language. Ground every line in the campaign brief above. The Master Campaign Post must use the UPDATED Approved Message Pack headline and CTA.`;
+      logInfo("[CreativeAgent] recovery creative regeneration", {
+        campaignId,
+        userId,
+        stage: "quality_gate",
+        creativeRegenerationStarted: true,
+        recoveryPackSource: approvedMessagePack.messagePackSource || "unknown",
+      });
+
       const retryResult = await runAgent({
         userId,
         campaignId,
@@ -1206,9 +1230,26 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         system:
           "You are an elite creative director. Your previous output was rejected for being generic or inventing offers. Regenerate a tight, premium Hero Campaign Pack that is specific to the business and campaign brief. Do not invent discounts or offers. Use the approved headline and CTA. Every word must earn its place.",
       });
+      activePackRunId = retryResult.runId;
+      packResult = retryResult;
+      logInfo("[CreativeAgent] recovery creative regeneration run", {
+        campaignId,
+        userId,
+        stage: "quality_gate",
+        creativeRegenerationRunId: activePackRunId,
+      });
       pack = normalisePremiumPack(retryResult.output);
       const retryQuality = assessPackQuality(pack, hasExplicitOffer, brief);
       const retryArchitectQuality = validatePackAgainstArchitect(pack, buildValidationContextFromCampaign(campaign, business));
+      logInfo("[CreativeAgent] recovery creative regeneration validation", {
+        campaignId,
+        userId,
+        stage: "quality_gate",
+        creativeRegenerationValidation: {
+          passed: retryQuality.passed && retryArchitectQuality.passed,
+          issues: [...retryQuality.issues, ...retryArchitectQuality.issues],
+        },
+      });
       if (!retryQuality.passed || !retryArchitectQuality.passed) {
         const retryIssues = [...retryQuality.issues, ...retryArchitectQuality.issues];
         logError("[CreativeAgent] quality gate failed after retry", {
@@ -1249,7 +1290,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     userId,
     stage: "quality_gate",
     provider: "openai",
-    runId: packResult.runId,
+    runId: activePackRunId,
   });
 
   // Helper to mark the creative run as failed when post-save fails
@@ -1262,12 +1303,12 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           error,
           completedAt: new Date(),
         })
-        .where(eq(agentRuns.id, packResult!.runId));
+        .where(eq(agentRuns.id, activePackRunId));
       logInfo("[CreativeAgent] marked run as failed", {
         campaignId,
         userId,
         stage: "post_save",
-        runId: packResult!.runId,
+        runId: activePackRunId,
         error,
       });
     } catch (markErr: any) {
@@ -1275,7 +1316,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         campaignId,
         userId,
         stage: "post_save",
-        runId: packResult!.runId,
+        runId: activePackRunId,
         error: markErr.message,
       });
     }
@@ -1288,12 +1329,12 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       contentCalendar: {
         packSummary: pack.packSummary,
         generatedAt: new Date().toISOString(),
-        creativeRunId: packResult.runId,
+        creativeRunId: activePackRunId,
       } as any,
       workflowContext: {
         ...(strategyContext || {}),
         creativeGeneratedAt: new Date().toISOString(),
-        creativeRunId: packResult.runId,
+        creativeRunId: activePackRunId,
         premiumPack: true,
       } as any,
     })
@@ -1304,7 +1345,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     userId,
     stage: "post_save",
     provider: "openai",
-    runId: packResult.runId,
+    runId: activePackRunId,
   });
 
   // Determine the next campaign iteration number before any deletions occur.
@@ -1334,7 +1375,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     userId,
     stage: "post_save",
     provider: "openai",
-    runId: packResult.runId,
+    runId: activePackRunId,
   });
 
   // Helper to insert content post with metadata
@@ -1370,7 +1411,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         aiGenerated: true,
         metadata: {
           ...metadata,
-          generationRunId: `pack-${packResult!.runId}`,
+          generationRunId: `pack-${activePackRunId}`,
           iterationNumber: nextIterationNumber,
           assetType,
           assetTier: "standard",
@@ -1467,7 +1508,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         status: "ready",
         metadata: {
           ...metadata,
-          generationRunId: `pack-${packResult!.runId}`,
+          generationRunId: `pack-${activePackRunId}`,
           iterationNumber: nextIterationNumber,
           assetType,
           assetTier: "standard",
@@ -1720,6 +1761,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     failedInserts,
     savedAssets,
     insertErrorCount: insertErrors.length,
+    recoveryPostsSaved: savedPosts,
   });
 
   if (savedPosts === 0) {
@@ -1760,8 +1802,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     await deductCreativeCreditsOnce({
       userId,
       campaignId,
-      agentRunId: packResult.runId,
-      generationRunId: `pack-${packResult.runId}`,
+      agentRunId: activePackRunId,
+      generationRunId: `pack-${activePackRunId}`,
       estimatedCost: estimatedCreativeCost,
     });
   } catch (billingErr: any) {
@@ -1793,7 +1835,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       workflowContext: {
         ...(strategyContext || {}),
         creativeGeneratedAt: new Date().toISOString(),
-        creativeRunId: packResult.runId,
+        creativeRunId: activePackRunId,
         assetsRunId: null,
         assetsGenerationError: null,
         savedPosts,
@@ -1815,7 +1857,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     userId,
     stage: "complete",
     provider: "openai",
-    runId: packResult.runId,
+    runId: activePackRunId,
     savedPosts,
     savedAssets,
   });
@@ -1823,7 +1865,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
   timing.totalDurationMs = Date.now() - totalStartedAt;
 
   return {
-    packRunId: packResult.runId,
+    packRunId: activePackRunId,
     assetsRunId: null,
     pack,
     assets: null,
