@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CONTENT_GENERATION_CONNECTION_MESSAGE,
+  CONTENT_GENERATION_QUEUE_FAILURE_MESSAGE,
   formatContentGenerationError,
   isUpstreamConnectionError,
 } from "./content-generation-errors";
@@ -58,5 +59,14 @@ describe("content generation error formatting", () => {
 
     expect(isUpstreamConnectionError(err)).toBe(true);
     expect(formatContentGenerationError(err)).toBe(CONTENT_GENERATION_CONNECTION_MESSAGE);
+  });
+
+  it("sanitizes BullMQ custom ID infrastructure errors", () => {
+    const err = {
+      message: "Custom Id cannot contain :",
+    };
+
+    expect(formatContentGenerationError(err)).toBe(CONTENT_GENERATION_QUEUE_FAILURE_MESSAGE);
+    expect(formatContentGenerationError(err)).not.toContain("Custom Id cannot contain");
   });
 });

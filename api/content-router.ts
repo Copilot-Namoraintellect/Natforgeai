@@ -325,7 +325,8 @@ export const contentRouter = createRouter({
 
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to queue content generation. Please retry.",
+          message:
+            "Content generation could not be queued. No credits were charged. Please try again after the service issue is resolved.",
         });
       }
 

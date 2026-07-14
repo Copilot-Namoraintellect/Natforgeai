@@ -76,6 +76,22 @@ export interface ContentGenerationJobData {
   regenerate: boolean;
 }
 
+export function toSafeBullMqJobId(value: string | number): string {
+  const safe = String(value)
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return safe || "job";
+}
+
+export function toContentGenerationBullMqJobId(agentRunId: number): string {
+  return toSafeBullMqJobId(`content-generation-${agentRunId}`);
+}
+
+export function toPublishingBullMqJobId(queueItemId: number): string {
+  return toSafeBullMqJobId(`publish-${queueItemId}`);
+}
+
 export async function schedulePublishingJob(
   queueItemId: number,
   userId: number,
@@ -87,7 +103,7 @@ export async function schedulePublishingJob(
     "publish",
     { queueItemId, userId, platform },
     {
-      jobId: `publish:${queueItemId}`,
+      jobId: toPublishingBullMqJobId(queueItemId),
       delay: Math.max(0, scheduledAt.getTime() - Date.now()),
     }
   );
@@ -95,7 +111,7 @@ export async function schedulePublishingJob(
 
 export async function removePublishingJob(queueItemId: number): Promise<void> {
   const queue = getPublishingQueue();
-  await queue.remove(`publish:${queueItemId}`);
+  await queue.remove(toPublishingBullMqJobId(queueItemId));
 }
 
 export async function scheduleContentGenerationJob(
@@ -103,7 +119,7 @@ export async function scheduleContentGenerationJob(
 ): Promise<Job<ContentGenerationJobData>> {
   const queue = getContentGenerationQueue();
   return queue.add("content-generate", data, {
-    jobId: `content-generate:${data.campaignId}`,
+    jobId: toContentGenerationBullMqJobId(data.jobId),
   });
 }
 

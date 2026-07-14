@@ -1,6 +1,9 @@
 export const CONTENT_GENERATION_CONNECTION_MESSAGE =
   "Content generation is taking longer than expected or the server connection was interrupted. No credits were charged. Check Agent Activity for the current status before retrying.";
 
+export const CONTENT_GENERATION_QUEUE_FAILURE_MESSAGE =
+  "Content generation could not be queued. No credits were charged. Please try again after the service issue is resolved.";
+
 function collectErrorMessages(err: any): string[] {
   const visited = new Set<any>();
   const messages: string[] = [];
@@ -56,6 +59,10 @@ export function isUpstreamConnectionError(err: any): boolean {
 }
 
 export function formatContentGenerationError(err: any): string {
+  const combined = collectErrorMessages(err).join("\n");
+  if (/custom\s+id\s+cannot\s+contain\s*:/i.test(combined)) {
+    return CONTENT_GENERATION_QUEUE_FAILURE_MESSAGE;
+  }
   if (isUpstreamConnectionError(err)) {
     return CONTENT_GENERATION_CONNECTION_MESSAGE;
   }

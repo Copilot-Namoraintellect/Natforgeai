@@ -41,6 +41,10 @@ vi.mock("./lib/jobs/content-generation-job", () => ({
   processContentGenerationJob: vi.fn(async () => undefined),
 }));
 
+vi.mock("./lib/billing/credit-engine", () => ({
+  deductCredits: vi.fn(async () => ({ newBalance: 0 })),
+}));
+
 vi.mock("./lib/rate-limiter", () => ({
   rateLimitUser: vi.fn().mockResolvedValue(undefined),
   rateLimitPublic: vi.fn().mockResolvedValue(undefined),
@@ -360,7 +364,42 @@ describe("contentRouter.generateForCampaign", () => {
     expect(result.status).toBe("queued");
     expect(result.jobId).toBeGreaterThan(0);
     expect(result.campaignId).toBe(28);
+    expect(result).toMatchObject({ jobId: expect.any(Number), status: "queued" });
     expect(scheduleContentGenerationJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks agent run failed and does not deduct credits when enqueue fails", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { scheduleContentGenerationJob } = await import("./lib/queue/bullmq");
+    const { deductCredits } = await import("./lib/billing/credit-engine");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(scheduleContentGenerationJob).mockRejectedValueOnce(
+      new Error("Custom Id cannot contain :")
+    );
+
+    const mockDb = createMockDb({
+      campaign: {
+        id: 28,
+        userId: 18,
+        businessId: 24,
+        workflowState: "creatives_ready",
+        workflowContext: { coreMessage: "Empower your workforce" },
+        personas: [{ name: "Small Business Owner" }],
+        coreMessage: "Empower your workforce",
+      },
+      postCount: 0,
+    });
+
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.generateForCampaign({ campaignId: 28 })).rejects.toBeInstanceOf(TRPCError);
+
+    const updateSetSpy = mockDb.updateSetByTableName.get("agent_runs");
+    expect(updateSetSpy).toBeDefined();
+    expect(updateSetSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deductCredits)).not.toHaveBeenCalled();
   });
 
   it("returns queued when duplicate click finds a pending active job", async () => {
