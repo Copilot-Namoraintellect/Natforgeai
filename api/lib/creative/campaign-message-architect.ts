@@ -21,6 +21,15 @@ import {
   normalizeFunnelStage,
   selectStageCta,
 } from "./cta-utils";
+import { DEFAULT_V2_MESSAGE_QUALITY_POLICY } from "./message-approval/policy";
+import {
+  getCreativePipelineV2Mode,
+  runShadowMessageApproval,
+} from "./message-approval/shadow-runner";
+import {
+  buildLegacyShadowContextProjection,
+  type LegacyLoadedShadowContextInput,
+} from "./message-approval/integration/legacy-shadow-context";
 
 // ─── Public types ───
 
@@ -878,6 +887,7 @@ export interface BuildApprovedMessagePackOptions {
   maxAttempts?: number;
   forceRebuild?: boolean;
   qualityIssues?: string[];
+  onLegacyContextLoaded?: (context: LegacyLoadedShadowContextInput) => void;
 }
 
 function buildValidationContext(business: any, campaign: any): ValidationContext {
@@ -1023,6 +1033,21 @@ export async function buildApprovedMessagePack(
   if (!business) business = {};
 
   const ctx = buildValidationContext(business, campaign);
+  opts.onLegacyContextLoaded?.({
+    campaignId,
+    business,
+    campaign,
+    validationContext: {
+      businessName: ctx.businessName,
+      industry: ctx.industry,
+      productOrService: ctx.productOrService,
+      targetCustomer: ctx.targetCustomer,
+      mainPainPoint: ctx.mainPainPoint,
+      campaignObjective: ctx.campaignObjective,
+      funnelStage: ctx.funnelStage,
+      preferredCta: ctx.preferredCta,
+    },
+  });
   const platforms = (campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn")
     .split(/[,;]+/)
     .map((p: string) => p.trim())
@@ -1405,6 +1430,7 @@ export interface RefineMessagePackOptions {
   refinementInstruction: string;
   skipBilling?: boolean;
   maxAttempts?: number;
+  onLegacyContextLoaded?: (context: LegacyLoadedShadowContextInput) => void;
 }
 
 /**
@@ -1855,6 +1881,21 @@ export async function refineApprovedMessagePack(
   if (!business) business = {};
 
   const ctx = buildValidationContext(business, campaign);
+  opts.onLegacyContextLoaded?.({
+    campaignId,
+    business,
+    campaign,
+    validationContext: {
+      businessName: ctx.businessName,
+      industry: ctx.industry,
+      productOrService: ctx.productOrService,
+      targetCustomer: ctx.targetCustomer,
+      mainPainPoint: ctx.mainPainPoint,
+      campaignObjective: ctx.campaignObjective,
+      funnelStage: ctx.funnelStage,
+      preferredCta: ctx.preferredCta,
+    },
+  });
   const platforms = (campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn")
     .split(/[,;]+/)
     .map((p: string) => p.trim())
@@ -2015,6 +2056,7 @@ export async function refineApprovedMessagePack(
 export async function ensureApprovedMessagePack(
   opts: BuildApprovedMessagePackOptions
 ): Promise<CampaignMessagePack> {
+  let loadedShadowContext: LegacyLoadedShadowContextInput | undefined;
   const existing = await loadApprovedMessagePack(opts.campaignId);
 
   if (existing?.isGeneric) {
@@ -2041,7 +2083,7 @@ export async function ensureApprovedMessagePack(
       campaignId: opts.campaignId,
       userId: opts.userId,
     });
-    return existing;
+    return observeMessageApprovalV2Shadow(existing, opts, "reuse_existing_pack", loadedShadowContext);
   }
 
   if (opts.forceRebuild && existing) {
@@ -2067,19 +2109,84 @@ export async function ensureApprovedMessagePack(
       refinementInstruction,
       skipBilling: opts.skipBilling,
       maxAttempts: opts.maxAttempts,
+      onLegacyContextLoaded: (context) => {
+        loadedShadowContext = context;
+      },
     });
 
     const enrichedRefined = enrichMessagePackMetadata(refined);
     if (enrichedRefined.validation.passed && !enrichedRefined.isGeneric) {
       await saveApprovedMessagePack(opts.userId, opts.campaignId, enrichedRefined);
-      return enrichedRefined;
+      return observeMessageApprovalV2Shadow(
+        enrichedRefined,
+        opts,
+        "force_rebuild_refined_pack",
+        loadedShadowContext
+      );
     }
   }
 
-  const pack = await buildApprovedMessagePack(opts);
+  const pack = await buildApprovedMessagePack({
+    ...opts,
+    onLegacyContextLoaded: (context) => {
+      loadedShadowContext = context;
+    },
+  });
   const enrichedPack = enrichMessagePackMetadata(pack);
   if (enrichedPack.validation.passed && !enrichedPack.isGeneric) {
     await saveApprovedMessagePack(opts.userId, opts.campaignId, enrichedPack);
   }
-  return enrichedPack;
+  return observeMessageApprovalV2Shadow(
+    enrichedPack,
+    opts,
+    "fresh_or_fallback_pack",
+    loadedShadowContext
+  );
+}
+
+function observeMessageApprovalV2Shadow(
+  legacyPack: CampaignMessagePack,
+  opts: BuildApprovedMessagePackOptions,
+  workflowRunId: string | null,
+  loadedShadowContext?: LegacyLoadedShadowContextInput
+): CampaignMessagePack {
+  const mode = getCreativePipelineV2Mode(process.env.CREATIVE_PIPELINE_V2_MODE);
+  if (mode !== "shadow") return legacyPack;
+
+  const started = Date.now();
+  try {
+    const projection = buildLegacyShadowContextProjection(
+      loadedShadowContext || { campaignId: opts.campaignId }
+    );
+    runShadowMessageApproval({
+      mode,
+      campaignId: opts.campaignId,
+      workflowRunId,
+      candidateId: `shadow-candidate-${opts.campaignId}-${Date.now()}`,
+      assessmentId: `shadow-assessment-${opts.campaignId}-${Date.now()}`,
+      legacyPack,
+      businessDna: projection.businessDna,
+      campaignStrategy: projection.campaignStrategy,
+      policy: DEFAULT_V2_MESSAGE_QUALITY_POLICY,
+      contextDiagnostics: projection.diagnostics,
+      now: () => Date.now(),
+      nowIso: () => new Date().toISOString(),
+      log: (result) => {
+        logInfo(
+          "[CampaignMessageArchitect][V2Shadow] message approval comparison",
+          result as unknown as Record<string, unknown>
+        );
+      },
+    });
+  } catch {
+    logWarn("[CampaignMessageArchitect][V2Shadow] observation skipped", {
+      campaignId: opts.campaignId,
+      workflowRunId,
+      durationMs: Math.max(0, Date.now() - started),
+      stage: "context_build",
+      errorCode: "SHADOW_CONTEXT_BUILD_FAILED",
+    });
+  }
+
+  return legacyPack;
 }
