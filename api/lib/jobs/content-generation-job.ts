@@ -32,6 +32,15 @@ function defaultDurations(): ContentGenerationDurations {
   };
 }
 
+function toSafeContentJobFailureMessage(err: unknown): string {
+  if (err instanceof TRPCError) return err.message;
+  const msg = (err as any)?.message ? String((err as any).message) : "";
+  if (!msg) {
+    return "Content generation failed before creatives were saved. No credits were charged. Please retry.";
+  }
+  return msg;
+}
+
 export async function processContentGenerationJob(input: ContentGenerationJobInput): Promise<void> {
   const db = getDb();
   const totalStartedAt = Date.now();
@@ -254,21 +263,23 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
         } as any,
       })
       .where(eq(agentRuns.id, input.jobId));
+
+    logInfo("[content.job] completed", {
+      campaignId: input.campaignId,
+      userId: input.userId,
+      jobId: input.jobId,
+    });
   } catch (err: any) {
     durations.totalDurationMs = Date.now() - totalStartedAt;
-    const message = err instanceof TRPCError ? err.message : err?.message || String(err);
+    const message = toSafeContentJobFailureMessage(err);
     logError("[content.job] failed", {
       campaignId: input.campaignId,
       userId: input.userId,
       jobId: input.jobId,
-      error: message,
+      error: err?.message || String(err),
+      safeError: message,
     });
     await markFailed(message, durations);
+    throw err instanceof Error ? err : new Error(message);
   }
-
-  logInfo("[content.job] completed", {
-    campaignId: input.campaignId,
-    userId: input.userId,
-    jobId: input.jobId,
-  });
 }

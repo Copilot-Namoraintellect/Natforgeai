@@ -154,4 +154,82 @@ describe("Campaign Message Architect recovery", () => {
       ].some((term) => joinedCopy.includes(term))
     ).toBe(true);
   });
+
+  it("uses authoritative business record name and product/service, filtering generic website headings", async () => {
+    const { getDb } = await import("../../queries/connection");
+
+    vi.mocked(getDb).mockReturnValue({
+      select: vi.fn(() => ({
+        from: vi.fn((table: any) => {
+          const tableName = (table as Record<symbol, unknown>)[
+            Symbol.for("drizzle:Name") as symbol
+          ] as string;
+
+          if (tableName === "campaigns") {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn(async () => [{
+                  id: 30,
+                  businessId: 300,
+                  name: "zurohub",
+                  productOrService: "Comprehensive Financial Solutions, Streamlined Mass Disbursements",
+                  targetBuyer: "frontline teams",
+                  mainPainPoint: "manual payout reconciliation",
+                  preferredCta: "Awareness: Learn More",
+                  goal: "awareness",
+                  funnelStages: [{ stage: "awareness" }],
+                  platforms: "Instagram",
+                  offerDetails: "",
+                  excludedOffers: "",
+                }]),
+              })),
+            };
+          }
+
+          if (tableName === "businesses") {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn(async () => [{
+                  id: 300,
+                  name: "Zuto Hub",
+                  industry: "Fintech",
+                  productOrService: "Payout platform",
+                  websiteEvidence: {
+                    businessCategory: "fintech",
+                    productsServices: [
+                      "Comprehensive Financial Solutions",
+                      "Transform Your Business",
+                      "mass disbursements",
+                    ],
+                    targetCustomers: ["frontline teams"],
+                  },
+                }]),
+              })),
+            };
+          }
+
+          return {
+            where: vi.fn(() => ({ limit: vi.fn(async () => []) })),
+          };
+        }),
+      })),
+    } as any);
+
+    vi.mocked(runAgent)
+      .mockRejectedValueOnce(new Error("LLM down"))
+      .mockRejectedValueOnce(new Error("LLM down"));
+
+    const result = await buildApprovedMessagePack({
+      userId: 7,
+      campaignId: 30,
+      skipBilling: true,
+      maxAttempts: 2,
+    });
+
+    const joined = [result.headline, result.subheadline, ...result.benefitBullets].join(" ");
+    expect(joined).toContain("Zuto Hub");
+    expect(joined.toLowerCase()).toContain("payout platform");
+    expect(joined.toLowerCase()).not.toContain("comprehensive financial solutions");
+    expect(joined.toLowerCase()).not.toContain("transform your business");
+  });
 });

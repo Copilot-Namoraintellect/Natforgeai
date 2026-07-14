@@ -467,7 +467,7 @@ function buildGroundedFacts(ctx: ValidationContext): {
   return {
     businessName: String(ctx.businessName || "").trim() || "Not specified",
     industry: sanitize(ctx.industry || ctx.websiteEvidence?.businessCategory) || "Not specified",
-    productOrService: sanitize(ctx.productOrService) || "Not specified",
+    productOrService: sanitiseGroundedCapability(sanitize(ctx.productOrService)) || sanitize(ctx.productOrService) || "Not specified",
     targetCustomers,
     capabilities,
     selectedStageCta: selectFunnelCta(ctx.preferredCta, ctx.funnelStage || ctx.campaignObjective),
@@ -857,10 +857,15 @@ function buildValidationContext(business: any, campaign: any): ValidationContext
   const firstFunnelStage = Array.isArray(campaign?.funnelStages) && campaign.funnelStages.length > 0
     ? sanitize(campaign.funnelStages[0]?.stage)
     : "";
+  const authoritativeBusinessName = sanitize(business?.name);
+  const authoritativeProductOrService =
+    sanitiseGroundedCapability(sanitize(business?.productOrService)) || sanitize(business?.productOrService);
+  const campaignProductOrService =
+    sanitiseGroundedCapability(sanitize(campaign?.productOrService)) || sanitize(campaign?.productOrService);
   return {
-    businessName: sanitize(business?.name),
+    businessName: authoritativeBusinessName,
     campaignName: sanitize(campaign?.name),
-    productOrService: sanitize(campaign?.productOrService || business?.productOrService),
+    productOrService: authoritativeProductOrService || campaignProductOrService,
     targetCustomer: sanitize(campaign?.targetBuyer || business?.targetCustomer || business?.targetAudience),
     mainPainPoint: sanitize(campaign?.mainPainPoint),
     offerDetails: sanitize(campaign?.offerDetails),

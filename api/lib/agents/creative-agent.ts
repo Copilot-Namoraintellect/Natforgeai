@@ -17,6 +17,7 @@ import {
   type ValidationContext,
 } from "../creative/campaign-message-architect";
 import { ctaMatchesSelectedStage } from "../creative/cta-utils";
+import { normalizeCtaText } from "../creative/cta-utils";
 
 // Valid content_posts.type enum values from db/schema.ts
 const CONTENT_POST_TYPES = new Set([
@@ -597,7 +598,17 @@ function assessPackQuality(
     campaignObjective?: string | null;
     funnelStage?: string | null;
   }
-): { passed: boolean; issues: string[] } {
+): {
+  passed: boolean;
+  issues: string[];
+  ctaDiagnostics: {
+    generatedCta: string;
+    selectedStageCta: string;
+    normalizedGeneratedCta: string;
+    normalizedSelectedStageCta: string;
+    ctaMatches: boolean;
+  };
+} {
   const issues: string[] = [];
   const masterPost = pack.socialPosts?.[0];
   const video = pack.videoConcepts?.[0];
@@ -643,20 +654,24 @@ function assessPackQuality(
   }
 
   // Preferred CTA check (if provided and not an offer-based CTA)
+  const generatedCta = String(masterPost?.cta || video?.cta || "");
+  const selectedStageCta = selectFunnelCta(
+    brief.preferredCta,
+    brief.funnelStage || brief.campaignObjective
+  );
+  const normalizedGeneratedCta = normalizeCtaText(generatedCta);
+  const normalizedSelectedStageCta = normalizeCtaText(selectedStageCta);
+  const ctaMatches = ctaMatchesSelectedStage({
+    cta: generatedCta,
+    preferredCta: brief.preferredCta,
+    objectiveOrStage: brief.funnelStage || brief.campaignObjective,
+  });
+
   if (brief.preferredCta && !hasExplicitOffer) {
-    const selected = selectFunnelCta(
-      brief.preferredCta,
-      brief.funnelStage || brief.campaignObjective
-    );
-    const hasStageCta = ctaMatchesSelectedStage({
-      cta: masterPost?.cta || video?.cta || "",
-      preferredCta: brief.preferredCta,
-      objectiveOrStage: brief.funnelStage || brief.campaignObjective,
-    });
-    if (!hasStageCta) {
+    if (!ctaMatches) {
       issues.push(`Preferred CTA "${brief.preferredCta}" was not used`);
-      if (selected) {
-        issues.push(`Selected stage CTA "${selected}" was not used`);
+      if (selectedStageCta) {
+        issues.push(`Selected stage CTA "${selectedStageCta}" was not used`);
       }
     }
   }
@@ -685,7 +700,62 @@ function assessPackQuality(
     issues.push("Master Campaign Post hook is missing or too short");
   }
 
-  return { passed: issues.length === 0, issues };
+  return {
+    passed: issues.length === 0,
+    issues,
+    ctaDiagnostics: {
+      generatedCta,
+      selectedStageCta,
+      normalizedGeneratedCta,
+      normalizedSelectedStageCta,
+      ctaMatches,
+    },
+  };
+}
+
+function applyApprovedMessagePackToCreativePack(pack: any, approved: CampaignMessagePack): any {
+  const grounded = normalisePremiumPack(pack);
+  const fallbackCaption = [
+    approved.subheadline,
+    ...approved.benefitBullets.map((b) => `- ${b}`),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  if (grounded.socialPosts?.[0]) {
+    grounded.socialPosts[0].title = approved.headline;
+    grounded.socialPosts[0].hook = approved.headline;
+    grounded.socialPosts[0].caption = fallbackCaption || grounded.socialPosts[0].caption;
+    grounded.socialPosts[0].cta = approved.cta;
+  }
+
+  if (grounded.videoConcepts?.[0]) {
+    grounded.videoConcepts[0].hook = approved.headline;
+    grounded.videoConcepts[0].openingHook3Sec = approved.subheadline || grounded.videoConcepts[0].openingHook3Sec;
+    grounded.videoConcepts[0].cta = approved.cta;
+  }
+
+  if (Array.isArray(grounded.platformAdaptations)) {
+    for (const adaptation of grounded.platformAdaptations) {
+      const platformMatch = (approved.platformCaptions || []).find(
+        (c) => c.platform.toLowerCase() === String(adaptation.platform || "").toLowerCase()
+      );
+      adaptation.adaptedCaption = platformMatch?.caption || adaptation.adaptedCaption || fallbackCaption;
+      adaptation.adaptedCta = approved.cta;
+    }
+  }
+
+  if (Array.isArray(grounded.adCopyVariations)) {
+    for (const ad of grounded.adCopyVariations) {
+      ad.cta = approved.cta;
+    }
+  }
+
+  if (Array.isArray(grounded.ctaVariations) && grounded.ctaVariations.length > 0) {
+    grounded.ctaVariations[0].text = approved.cta;
+  }
+
+  return grounded;
 }
 
 async function assertCreativeCreditsAvailable(userId: number): Promise<number> {
@@ -1163,6 +1233,16 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
 
   // Quality gate: check for invented offers and generic copy
   const quality = assessPackQuality(pack, hasExplicitOffer, brief);
+  logInfo("[CreativeAgent] cta validation diagnostics", {
+    campaignId,
+    userId,
+    stage: "quality_gate",
+    generatedCta: quality.ctaDiagnostics.generatedCta,
+    selectedStageCta: quality.ctaDiagnostics.selectedStageCta,
+    normalizedGeneratedCta: quality.ctaDiagnostics.normalizedGeneratedCta,
+    normalizedSelectedStageCta: quality.ctaDiagnostics.normalizedSelectedStageCta,
+    ctaMatches: quality.ctaDiagnostics.ctaMatches,
+  });
   const architectQuality = validatePackAgainstArchitect(pack, buildValidationContextFromCampaign(campaign, business));
   const combinedIssues = quality.passed ? architectQuality.issues : [...quality.issues, ...architectQuality.issues];
   const combinedPassed = quality.passed && architectQuality.passed;
@@ -1238,8 +1318,18 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         stage: "quality_gate",
         creativeRegenerationRunId: activePackRunId,
       });
-      pack = normalisePremiumPack(retryResult.output);
+      pack = applyApprovedMessagePackToCreativePack(retryResult.output, approvedMessagePack);
       const retryQuality = assessPackQuality(pack, hasExplicitOffer, brief);
+      logInfo("[CreativeAgent] cta validation diagnostics", {
+        campaignId,
+        userId,
+        stage: "quality_gate",
+        generatedCta: retryQuality.ctaDiagnostics.generatedCta,
+        selectedStageCta: retryQuality.ctaDiagnostics.selectedStageCta,
+        normalizedGeneratedCta: retryQuality.ctaDiagnostics.normalizedGeneratedCta,
+        normalizedSelectedStageCta: retryQuality.ctaDiagnostics.normalizedSelectedStageCta,
+        ctaMatches: retryQuality.ctaDiagnostics.ctaMatches,
+      });
       const retryArchitectQuality = validatePackAgainstArchitect(pack, buildValidationContextFromCampaign(campaign, business));
       logInfo("[CreativeAgent] recovery creative regeneration validation", {
         campaignId,

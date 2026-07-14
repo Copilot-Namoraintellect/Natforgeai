@@ -625,6 +625,42 @@ describe("contentRouter.generateForCampaign", () => {
     const status = await caller.getGenerationJobStatus({ campaignId: 28, jobId: 903 });
     expect(status).toBeNull();
   });
+
+  it("polling returns failed when content-generation job run is failed", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+        campaign: {
+          id: 28,
+          userId: 18,
+          businessId: 24,
+          workflowState: "creatives_generating",
+          workflowContext: {},
+          personas: [{ name: "Small Business Owner" }],
+          coreMessage: "Empower your workforce",
+        },
+        postCount: 0,
+        agentRunsRows: [
+          {
+            id: 904,
+            userId: 18,
+            campaignId: 28,
+            agentType: "creative",
+            status: "failed",
+            error: "creative failed",
+            input: { jobType: "content_generation_job" },
+            createdAt: new Date(),
+          },
+        ],
+      }) as unknown as ReturnType<typeof getDb>
+    );
+
+    const caller = contentRouter.createCaller(buildCtx(18));
+    const status = await caller.getGenerationJobStatus({ campaignId: 28, jobId: 904 });
+    expect(status?.status).toBe("failed");
+  });
 });
 
 

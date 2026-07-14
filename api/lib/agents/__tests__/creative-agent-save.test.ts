@@ -376,9 +376,15 @@ describe("runCreativeAgent post-save failure handling", () => {
       ],
     };
 
+    const unusableRetryPack = {
+      ...buildPackOutput(),
+      socialPosts: [],
+      videoConcepts: [],
+    };
+
     vi.mocked(runAgent)
       .mockResolvedValueOnce({ runId: 300, output: lowQualityPack } as any)
-      .mockResolvedValueOnce({ runId: 301, output: lowQualityPack } as any);
+      .mockResolvedValueOnce({ runId: 301, output: unusableRetryPack } as any);
 
     await expect(runCreativeAgent({ userId: 18, campaignId: 28 })).rejects.toBeInstanceOf(TRPCError);
 
@@ -499,13 +505,72 @@ describe("runCreativeAgent post-save failure handling", () => {
       ],
     };
 
+    const unusableRetryPack = {
+      ...buildPackOutput(),
+      socialPosts: [],
+      videoConcepts: [],
+    };
+
     vi.mocked(runAgent)
       .mockResolvedValueOnce({ runId: 510, output: lowQualityPack } as any)
-      .mockResolvedValueOnce({ runId: 511, output: lowQualityPack } as any);
+      .mockResolvedValueOnce({ runId: 511, output: unusableRetryPack } as any);
 
     await expect(runCreativeAgent({ userId: 18, campaignId: 30 })).rejects.toBeInstanceOf(TRPCError);
 
     expect(saveApprovedMessagePack).toHaveBeenCalledTimes(1);
     expect(deductCredits).not.toHaveBeenCalled();
+  });
+
+  it("preserves approved recovery headline, subheadline, benefits and CTA when retry output is generic", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+
+    const groundedRecoveryPack = {
+      ...approvedPack(),
+      headline: "Zuto Hub payout platform for frontline teams",
+      subheadline: "Automate tips and commissions without manual reconciliation.",
+      benefitBullets: [
+        "Manage mass disbursements in one dashboard.",
+        "Reduce payout reconciliation admin work.",
+        "Speed up approved settlements for teams.",
+      ],
+      cta: "Learn More",
+      messagePackSource: "fallback_deterministic",
+      validation: { passed: true, score: 90, rejections: [], warnings: [] },
+    } as any;
+
+    vi.mocked(ensureApprovedMessagePack).mockReset();
+    vi.mocked(runAgent).mockReset();
+
+    vi.mocked(ensureApprovedMessagePack)
+      .mockResolvedValueOnce(approvedPack() as any)
+      .mockResolvedValueOnce(groundedRecoveryPack);
+
+    const lowQualityPack = {
+      ...buildPackOutput(),
+      socialPosts: [
+        {
+          ...(buildPackOutput().socialPosts as any[])[0],
+          hook: "Join the Trading Revolution",
+          caption: "Join thousands and unlock your potential.",
+          cta: "Act now",
+        },
+      ],
+    };
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce({ runId: 610, output: lowQualityPack } as any)
+      .mockResolvedValueOnce({ runId: 611, output: lowQualityPack } as any);
+
+    const result = await runCreativeAgent({ userId: 18, campaignId: 30 });
+
+    expect(result.pack.socialPosts[0].hook).toBe(groundedRecoveryPack.headline);
+    expect(result.pack.socialPosts[0].cta).toBe(groundedRecoveryPack.cta);
+    expect(result.pack.socialPosts[0].caption).toContain(groundedRecoveryPack.subheadline);
+    expect(result.pack.socialPosts[0].caption).toContain(groundedRecoveryPack.benefitBullets[0]);
   });
 });
