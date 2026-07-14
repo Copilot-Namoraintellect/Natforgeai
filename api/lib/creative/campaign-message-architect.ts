@@ -193,6 +193,8 @@ export const GENERIC_HEADLINE_PATTERNS = [
   /for\s+modern\s+businesses?/i,
 ];
 
+const DETERMINISTIC_FALLBACK_MIN_APPROVAL_SCORE = 85;
+
 export function isGenericHeadline(headline: string): boolean {
   if (!headline) return true;
   return GENERIC_HEADLINE_PATTERNS.some((p) => p.test(headline));
@@ -223,6 +225,32 @@ export function specificityScore(pack: CampaignMessagePack): number {
 
 export function isGenericPack(pack: CampaignMessagePack): boolean {
   return isGenericHeadline(pack.headline) || isGenericCta(pack.cta);
+}
+
+function normaliseValidationResult(validation?: CopyValidationResult): CopyValidationResult {
+  const v = validation || ({ passed: false, score: 0, rejections: [], warnings: [] } as CopyValidationResult);
+  return {
+    passed: Boolean(v.passed),
+    score: Number.isFinite(Number(v.score)) ? Number(v.score) : 0,
+    rejections: Array.isArray(v.rejections) ? v.rejections.map((r) => String(r)) : [],
+    warnings: Array.isArray(v.warnings) ? v.warnings.map((w) => String(w)) : [],
+  };
+}
+
+function isApprovedDeterministicFallback(pack: CampaignMessagePack): boolean {
+  const validation = normaliseValidationResult(pack.validation);
+  return (
+    pack.messagePackSource === "fallback_deterministic" &&
+    validation.passed &&
+    validation.score >= DETERMINISTIC_FALLBACK_MIN_APPROVAL_SCORE &&
+    validation.rejections.length === 0
+  );
+}
+
+function deriveGenericityFromFinalCopy(pack: CampaignMessagePack): boolean {
+  // A deterministic fallback that fully passes validation is treated as non-generic.
+  if (isApprovedDeterministicFallback(pack)) return false;
+  return isGenericPack(pack);
 }
 
 export const INVENTED_OFFER_PATTERNS = [
@@ -1112,9 +1140,11 @@ export async function buildApprovedMessagePack(
 // ─── Storage / retrieval helpers ───
 
 export function enrichMessagePackMetadata(pack: CampaignMessagePack): CampaignMessagePack {
+  const validation = normaliseValidationResult(pack.validation);
   return {
     ...pack,
-    isGeneric: isGenericPack(pack),
+    validation,
+    isGeneric: deriveGenericityFromFinalCopy({ ...pack, validation }),
     specificityScore: specificityScore(pack),
   };
 }
@@ -1213,7 +1243,15 @@ export async function saveApprovedMessagePack(
   const enriched = enrichMessagePackMetadata({
     ...pack,
     messagePackSource: pack.messagePackSource || "ai_refined_pack",
+    validation: normaliseValidationResult(pack.validation),
   });
+
+  if (!enriched.validation.passed) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Message pack failed validation and cannot be approved.",
+    });
+  }
 
   if (enriched.isGeneric) {
     throw new TRPCError({

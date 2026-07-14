@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TRPCError } from "@trpc/server";
 
 vi.mock("../agents/runner", () => ({
   runAgent: vi.fn(),
@@ -10,7 +11,7 @@ vi.mock("../../queries/connection", () => ({
 
 import { runAgent } from "../agents/runner";
 import { getDb } from "../../queries/connection";
-import { buildApprovedMessagePack } from "./campaign-message-architect";
+import { buildApprovedMessagePack, saveApprovedMessagePack } from "./campaign-message-architect";
 
 function createMockDb() {
   const campaign = {
@@ -83,9 +84,20 @@ function createMockDb() {
         return {
           where: vi.fn(() => ({
             limit: vi.fn(async () => []),
+            orderBy: vi.fn(() => ({
+              limit: vi.fn(async () => []),
+            })),
           })),
         };
       }),
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn(async () => [{ insertId: 1001 }]),
+    })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(async () => []),
+      })),
     })),
   };
 }
@@ -231,5 +243,64 @@ describe("Campaign Message Architect recovery", () => {
     expect(joined.toLowerCase()).toContain("payout platform");
     expect(joined.toLowerCase()).not.toContain("comprehensive financial solutions");
     expect(joined.toLowerCase()).not.toContain("transform your business");
+  });
+
+  it("persists accepted deterministic fallback with fresh fallback metadata after two failed AI attempts", async () => {
+    const db = createMockDb() as any;
+    vi.mocked(getDb).mockReturnValue(db);
+
+    vi.mocked(runAgent)
+      .mockRejectedValueOnce(new Error("LLM down"))
+      .mockRejectedValueOnce(new Error("LLM down"));
+
+    const fallback = await buildApprovedMessagePack({
+      userId: 7,
+      campaignId: 30,
+      skipBilling: true,
+      maxAttempts: 2,
+    });
+
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(fallback.messagePackSource).toBe("fallback_deterministic");
+    expect(fallback.validation.score).toBe(100);
+    expect(fallback.validation.rejections).toEqual([]);
+
+    await expect(saveApprovedMessagePack(7, 30, fallback)).resolves.toBe(1001);
+
+    const insertCallIndex = (db.insert as any).mock.calls.findIndex((call: any[]) => {
+      const tableName = (call[0] as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string;
+      return tableName === "campaign_assets";
+    });
+
+    expect(insertCallIndex).toBeGreaterThanOrEqual(0);
+    const insertValues = (db.insert as any).mock.results[insertCallIndex].value.values.mock.calls[0][0];
+    expect(insertValues.metadata.messagePackSource).toBe("fallback_deterministic");
+    expect(insertValues.metadata.isGeneric).toBe(false);
+    expect(insertValues.metadata.passed).toBe(true);
+    expect(insertValues.metadata.score).toBe(100);
+    expect(insertValues.metadata.approvedMessagePack.validation.rejections).toEqual([]);
+  });
+
+  it("does not approve deterministic fallback when validation has rejections", async () => {
+    const db = createMockDb() as any;
+    vi.mocked(getDb).mockReturnValue(db);
+
+    const invalidFallback = {
+      headline: "Seamless Financial Solutions for Modern Businesses",
+      subheadline: "Transform your business with modern solutions.",
+      benefitBullets: ["Quality service", "Professional team", "Great results"],
+      cta: "Learn More",
+      footerContact: { location: "South Africa" },
+      platformCaptions: [],
+      validation: {
+        passed: false,
+        score: 55,
+        rejections: ["Copy must mention at least one real service or use case from business evidence."],
+        warnings: [],
+      },
+      messagePackSource: "fallback_deterministic",
+    } as any;
+
+    await expect(saveApprovedMessagePack(7, 30, invalidFallback)).rejects.toBeInstanceOf(TRPCError);
   });
 });

@@ -446,13 +446,23 @@ describe("runCreativeAgent post-save failure handling", () => {
 
     vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
 
+    const approvedDeterministicFallback = {
+      ...approvedPack(),
+      headline: "Zuto Hub payout platform for frontline teams",
+      subheadline: "Automate tips and commissions without manual reconciliation.",
+      benefitBullets: [
+        "Manage mass disbursements in one dashboard.",
+        "Reduce payout reconciliation admin work.",
+        "Speed up approved settlements for teams.",
+      ],
+      cta: "Learn More",
+      messagePackSource: "fallback_deterministic",
+      validation: { passed: true, score: 100, rejections: [], warnings: [] },
+    } as any;
+
     vi.mocked(ensureApprovedMessagePack)
       .mockResolvedValueOnce(approvedPack() as any)
-      .mockResolvedValueOnce({
-        ...approvedPack(),
-        messagePackSource: "fallback_deterministic",
-        validation: { passed: true, score: 100, rejections: [], warnings: [] },
-      } as any);
+      .mockResolvedValueOnce(approvedDeterministicFallback);
 
     const lowQualityPack = {
       ...buildPackOutput(),
@@ -461,18 +471,26 @@ describe("runCreativeAgent post-save failure handling", () => {
           ...(buildPackOutput().socialPosts as any[])[0],
           hook: "Join the Trading Revolution",
           caption: "Join thousands and unlock your potential with this offer.",
+          cta: "Act now",
         },
       ],
     };
 
     vi.mocked(runAgent)
       .mockResolvedValueOnce({ runId: 410, output: lowQualityPack } as any)
-      .mockResolvedValueOnce({ runId: 411, output: buildPackOutput() } as any);
+      .mockResolvedValueOnce({ runId: 411, output: lowQualityPack } as any);
 
     const result = await runCreativeAgent({ userId: 18, campaignId: 30 });
 
+    const retryPrompt = vi.mocked(runAgent).mock.calls[1]?.[0]?.prompt || "";
+    expect(retryPrompt).toContain("UPDATED APPROVED CAMPAIGN MESSAGE PACK");
+
     expect(result.packRunId).toBe(411);
     expect(result.savedPosts).toBe(2);
+    expect(result.pack.socialPosts[0].hook).toBe(approvedDeterministicFallback.headline);
+    expect(result.pack.socialPosts[0].cta).toBe(approvedDeterministicFallback.cta);
+    expect(result.pack.socialPosts[0].caption).toContain(approvedDeterministicFallback.subheadline);
+    expect(result.pack.socialPosts[0].caption).toContain(approvedDeterministicFallback.benefitBullets[0]);
     expect(saveApprovedMessagePack).toHaveBeenCalledTimes(1);
     expect(deductCredits).toHaveBeenCalledTimes(1);
   });
