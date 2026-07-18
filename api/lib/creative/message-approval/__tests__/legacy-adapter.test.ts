@@ -80,4 +80,53 @@ describe("adaptLegacyMessagePack", () => {
     expect(candidate.source).toBe("deterministic_fallback");
     expect(legacy.headline).toBe(originalHeadline);
   });
+
+  it("orders known platform map entries by canonical platform order", () => {
+    const legacy = buildLegacy({
+      platformCaptions: {
+        LinkedIn: { caption: "B", cta: "Learn More", hashtags: ["#b"] },
+        Instagram: { caption: "A", cta: "Learn More", hashtags: ["#a"] },
+      } as any,
+    });
+
+    const candidate = adaptLegacyMessagePack({
+      campaignId: 30,
+      candidateId: "cand-legacy-map-1",
+      createdAtIso: "2026-07-01T08:00:00.000Z",
+      businessDnaSnapshotId: "biz-1",
+      campaignStrategySnapshotId: "strat-1",
+      qualityPolicyId: "policy-1",
+      qualityPolicyVersion: 1,
+      legacyPack: legacy,
+    });
+
+    expect(candidate.copy.platformCaptionsOrdered.map((item) => item.platform)).toEqual(["Instagram", "LinkedIn"]);
+  });
+
+  it("orders unknown platforms lexically after known platforms", () => {
+    const legacy = buildLegacy({
+      platformCaptions: {
+        ZebraNet: { caption: "Z", cta: "Learn More", hashtags: ["#z"] },
+        LinkedIn: { caption: "L", cta: "Learn More", hashtags: ["#l"] },
+        AlphaWire: { caption: "A", cta: "Learn More", hashtags: ["#a"] },
+      } as any,
+    });
+
+    const candidate = adaptLegacyMessagePack({
+      campaignId: 30,
+      candidateId: "cand-legacy-map-2",
+      createdAtIso: "2026-07-01T08:00:00.000Z",
+      businessDnaSnapshotId: "biz-1",
+      campaignStrategySnapshotId: "strat-1",
+      qualityPolicyId: "policy-1",
+      qualityPolicyVersion: 1,
+      legacyPack: legacy,
+    });
+
+    expect(candidate.copy.platformCaptionsOrdered.map((item) => item.platform)).toEqual([
+      "LinkedIn",
+      "AlphaWire",
+      "ZebraNet",
+    ]);
+  });
 });

@@ -12,7 +12,24 @@ const GENERIC_PHRASES = [
 ];
 
 export function checkGenericLanguage(copy: CanonicalMessagePackCopy): MessageQualityIssue[] {
-  const text = [copy.headline, copy.subheadline, ...copy.benefitBulletsOrdered, copy.cta]
+  const text = [
+    copy.headline,
+    copy.subheadline,
+    ...copy.benefitBulletsOrdered,
+    copy.cta,
+    ...copy.proofPointsOrdered,
+    ...copy.platformCaptionsOrdered.flatMap((caption) => [
+      caption.platform,
+      caption.caption,
+      caption.cta,
+      ...caption.hashtagsOrdered,
+    ]),
+    copy.footer?.phone || "",
+    copy.footer?.whatsapp || "",
+    copy.footer?.email || "",
+    copy.footer?.website || "",
+    copy.footer?.location || "",
+  ]
     .join("\n")
     .toLowerCase();
 

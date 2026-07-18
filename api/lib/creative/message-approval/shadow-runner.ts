@@ -53,9 +53,12 @@ export function runShadowMessageApproval(
         candidateId: input.candidateId,
         createdAtIso: input.nowIso(),
         businessDnaSnapshotId: input.businessDna.snapshotId,
+        evidenceHashSha256: input.businessDna.evidenceHashSha256,
         campaignStrategySnapshotId: input.campaignStrategy.snapshotId,
+        strategyHashSha256: input.campaignStrategy.strategyHashSha256,
         qualityPolicyId: input.policy.policyId,
         qualityPolicyVersion: input.policy.policyVersion,
+        policyHashSha256: input.policy.policyHashSha256,
         legacyPack: input.legacyPack,
       });
     } catch {

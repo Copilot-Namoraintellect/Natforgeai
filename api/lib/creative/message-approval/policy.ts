@@ -1,6 +1,7 @@
 import type { MessageQualityPolicy } from "./contracts";
+import { computePolicyHashSha256 } from "./hash";
 
-export const DEFAULT_V2_MESSAGE_QUALITY_POLICY: MessageQualityPolicy = Object.freeze({
+const BASE_POLICY: Omit<MessageQualityPolicy, "policyHashSha256"> = {
   policyId: "natforgeai-v2-message-quality",
   policyVersion: 1,
   copySchemaVersion: "v2.1",
@@ -31,4 +32,9 @@ export const DEFAULT_V2_MESSAGE_QUALITY_POLICY: MessageQualityPolicy = Object.fr
   }),
   scoreMin: 0,
   scoreMax: 100,
+};
+
+export const DEFAULT_V2_MESSAGE_QUALITY_POLICY: MessageQualityPolicy = Object.freeze({
+  ...BASE_POLICY,
+  policyHashSha256: computePolicyHashSha256(BASE_POLICY),
 });

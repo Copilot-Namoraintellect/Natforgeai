@@ -1,4 +1,9 @@
-import type { CanonicalFooter, CanonicalMessagePackCopy, ReadonlyDeep } from "./contracts";
+import type {
+  CanonicalFooter,
+  CanonicalMessagePackCopy,
+  CanonicalPlatformCaption,
+  ReadonlyDeep,
+} from "./contracts";
 
 export interface CanonicalCopyInput {
   readonly copySchemaVersion: string;
@@ -6,6 +11,15 @@ export interface CanonicalCopyInput {
   readonly subheadline: string;
   readonly benefitBulletsOrdered: readonly string[];
   readonly cta: string;
+  readonly proofPointsOrdered?: readonly string[];
+  readonly platformCaptionsOrdered?:
+    | readonly {
+        readonly platform: string;
+        readonly caption: string;
+        readonly cta: string;
+        readonly hashtagsOrdered?: readonly string[];
+      }[]
+    | null;
   readonly footer?: {
     readonly phone?: string | null;
     readonly whatsapp?: string | null;
@@ -34,6 +48,22 @@ function toCanonicalFooter(value: CanonicalCopyInput["footer"]): CanonicalFooter
   };
 }
 
+function toCanonicalPlatformCaptions(
+  value: CanonicalCopyInput["platformCaptionsOrdered"]
+): readonly CanonicalPlatformCaption[] {
+  if (!value) return Object.freeze([]);
+  return Object.freeze(
+    value.map((item) =>
+      Object.freeze({
+        platform: normalizeScalar(item.platform),
+        caption: normalizeScalar(item.caption),
+        cta: normalizeScalar(item.cta),
+        hashtagsOrdered: Object.freeze((item.hashtagsOrdered || []).map((tag) => normalizeScalar(tag))),
+      })
+    )
+  );
+}
+
 function deepFreeze<T>(value: T): ReadonlyDeep<T> {
   if (value && typeof value === "object") {
     Object.freeze(value);
@@ -54,6 +84,8 @@ export function canonicalizeMessagePackCopy(input: CanonicalCopyInput): Canonica
     ),
     cta: normalizeScalar(input.cta),
     footer: toCanonicalFooter(input.footer),
+    proofPointsOrdered: Object.freeze((input.proofPointsOrdered || []).map((item) => normalizeScalar(item))),
+    platformCaptionsOrdered: toCanonicalPlatformCaptions(input.platformCaptionsOrdered),
   };
 
   return deepFreeze(canonical) as CanonicalMessagePackCopy;

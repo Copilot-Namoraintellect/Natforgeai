@@ -11,7 +11,24 @@ const PLACEHOLDER_PATTERNS = [
 ];
 
 export function checkPlaceholderLanguage(copy: CanonicalMessagePackCopy): MessageQualityIssue[] {
-  const text = [copy.headline, copy.subheadline, ...copy.benefitBulletsOrdered, copy.cta].join("\n");
+  const text = [
+    copy.headline,
+    copy.subheadline,
+    ...copy.benefitBulletsOrdered,
+    copy.cta,
+    ...copy.proofPointsOrdered,
+    ...copy.platformCaptionsOrdered.flatMap((caption) => [
+      caption.platform,
+      caption.caption,
+      caption.cta,
+      ...caption.hashtagsOrdered,
+    ]),
+    copy.footer?.phone || "",
+    copy.footer?.whatsapp || "",
+    copy.footer?.email || "",
+    copy.footer?.website || "",
+    copy.footer?.location || "",
+  ].join("\n");
   const issues: MessageQualityIssue[] = [];
 
   for (const pattern of PLACEHOLDER_PATTERNS) {

@@ -48,6 +48,35 @@ describe("canonicalizeMessagePackCopy", () => {
     expect(canonical.footer).toBeNull();
   });
 
+  it("canonicalizes proof points and platform captions while preserving order", () => {
+    const canonical = canonicalizeMessagePackCopy({
+      copySchemaVersion: "v2.1",
+      headline: "H",
+      subheadline: "S",
+      benefitBulletsOrdered: ["A", "B", "C"],
+      cta: "Learn More",
+      proofPointsOrdered: ["  10 years  ", "\r\nLocal team\r\n"],
+      platformCaptionsOrdered: [
+        {
+          platform: " Instagram ",
+          caption: " Fast service\r\n",
+          cta: " Learn More ",
+          hashtagsOrdered: [" #fast ", "#local"],
+        },
+      ],
+    });
+
+    expect(canonical.proofPointsOrdered).toEqual(["10 years", "Local team"]);
+    expect(canonical.platformCaptionsOrdered).toEqual([
+      {
+        platform: "Instagram",
+        caption: "Fast service",
+        cta: "Learn More",
+        hashtagsOrdered: ["#fast", "#local"],
+      },
+    ]);
+  });
+
   it("isolates from caller object mutation", () => {
     const input = {
       copySchemaVersion: "v2.1",

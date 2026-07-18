@@ -14,9 +14,12 @@ export interface CreateMessagePackCandidateInput {
   readonly source: CandidateSource;
   readonly copy: CanonicalCopyInput;
   readonly businessDnaSnapshotId: string;
+  readonly evidenceHashSha256?: string;
   readonly campaignStrategySnapshotId: string;
+  readonly strategyHashSha256?: string;
   readonly qualityPolicyId: string;
   readonly qualityPolicyVersion: number;
+  readonly policyHashSha256?: string;
   readonly provenance: MessagePackCandidateProvenance;
 }
 
@@ -27,6 +30,13 @@ function deepCloneCopy(copy: CanonicalMessagePackCopy): CanonicalMessagePackCopy
     subheadline: copy.subheadline,
     benefitBulletsOrdered: [...copy.benefitBulletsOrdered],
     cta: copy.cta,
+    proofPointsOrdered: [...copy.proofPointsOrdered],
+    platformCaptionsOrdered: copy.platformCaptionsOrdered.map((item) => ({
+      platform: item.platform,
+      caption: item.caption,
+      cta: item.cta,
+      hashtagsOrdered: [...item.hashtagsOrdered],
+    })),
     footer: copy.footer
       ? {
           phone: copy.footer.phone,
@@ -41,7 +51,13 @@ function deepCloneCopy(copy: CanonicalMessagePackCopy): CanonicalMessagePackCopy
 
 function freezeCanonicalCopy(copy: CanonicalMessagePackCopy): CanonicalMessagePackCopy {
   const cloned = deepCloneCopy(copy);
+  for (const caption of cloned.platformCaptionsOrdered) {
+    Object.freeze(caption.hashtagsOrdered);
+    Object.freeze(caption);
+  }
   if (cloned.footer) Object.freeze(cloned.footer);
+  Object.freeze(cloned.platformCaptionsOrdered);
+  Object.freeze(cloned.proofPointsOrdered);
   Object.freeze(cloned.benefitBulletsOrdered);
   return Object.freeze(cloned);
 }
@@ -59,9 +75,12 @@ export function createMessagePackCandidate(input: CreateMessagePackCandidateInpu
     copy: isolatedCopy,
     copyHashSha256,
     businessDnaSnapshotId: input.businessDnaSnapshotId,
+    evidenceHashSha256: input.evidenceHashSha256 || "",
     campaignStrategySnapshotId: input.campaignStrategySnapshotId,
+    strategyHashSha256: input.strategyHashSha256 || "",
     qualityPolicyId: input.qualityPolicyId,
     qualityPolicyVersion: input.qualityPolicyVersion,
+    policyHashSha256: input.policyHashSha256 || "",
     provenance: Object.freeze({
       adaptedFromLegacy: input.provenance.adaptedFromLegacy,
       originSource: input.provenance.originSource,

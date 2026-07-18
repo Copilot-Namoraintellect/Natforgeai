@@ -237,4 +237,105 @@ describe("evaluateMessageCandidate", () => {
     expect(aiAssessment.decision).toBe(fallbackAssessment.decision);
     expect(aiAssessment.score).toBe(fallbackAssessment.score);
   });
+
+  it("rejects prohibited claim present only in platform caption", () => {
+    const assessment = evaluateMessageCandidate({
+      assessmentId: "assess-11",
+      evaluatedAtIso: "2026-07-01T08:01:00.000Z",
+      candidate: buildCandidate({
+        copy: {
+          copySchemaVersion: campaign30Policy.copySchemaVersion,
+          headline: "Reduce payout delays for operations managers",
+          subheadline: "Automate supplier disbursements and manual reconciliation workflows.",
+          benefitBulletsOrdered: [
+            "Payout automation cuts manual reconciliation by 2 hours per day.",
+            "Supplier settlement tracking keeps audit records clear.",
+            "Restaurant team payouts process faster with automated disbursements.",
+          ],
+          cta: "Learn More",
+          footer: null,
+          proofPointsOrdered: [],
+          platformCaptionsOrdered: [
+            {
+              platform: "Instagram",
+              caption: "Guaranteed instant wealth for your team.",
+              cta: "Learn More",
+              hashtagsOrdered: ["#ops"],
+            },
+          ],
+        },
+      }),
+      businessDna: campaign30BusinessDna,
+      campaignStrategy: campaign30Strategy,
+      policy: campaign30Policy,
+    });
+
+    expect(assessment.decision).toBe("rejected");
+    expect(assessment.hardIssues.map((i) => i.code)).toContain("PROHIBITED_CLAIM_PRESENT");
+  });
+
+  it("rejects placeholder language present only in proof points", () => {
+    const assessment = evaluateMessageCandidate({
+      assessmentId: "assess-12",
+      evaluatedAtIso: "2026-07-01T08:01:00.000Z",
+      candidate: buildCandidate({
+        copy: {
+          copySchemaVersion: campaign30Policy.copySchemaVersion,
+          headline: "Reduce payout delays for operations managers",
+          subheadline: "Automate supplier disbursements and manual reconciliation workflows.",
+          benefitBulletsOrdered: [
+            "Payout automation cuts manual reconciliation by 2 hours per day.",
+            "Supplier settlement tracking keeps audit records clear.",
+            "Restaurant team payouts process faster with automated disbursements.",
+          ],
+          cta: "Learn More",
+          footer: null,
+          proofPointsOrdered: ["Built for your business operations teams."],
+          platformCaptionsOrdered: [],
+        },
+      }),
+      businessDna: campaign30BusinessDna,
+      campaignStrategy: campaign30Strategy,
+      policy: campaign30Policy,
+    });
+
+    expect(assessment.decision).toBe("rejected");
+    expect(assessment.hardIssues.map((i) => i.code)).toContain("PLACEHOLDER_LANGUAGE_DETECTED");
+  });
+
+  it("rejects caption CTA mismatch even when primary CTA passes", () => {
+    const assessment = evaluateMessageCandidate({
+      assessmentId: "assess-13",
+      evaluatedAtIso: "2026-07-01T08:01:00.000Z",
+      candidate: buildCandidate({
+        copy: {
+          copySchemaVersion: campaign30Policy.copySchemaVersion,
+          headline: "Reduce payout delays for operations managers",
+          subheadline: "Automate supplier disbursements and manual reconciliation workflows.",
+          benefitBulletsOrdered: [
+            "Payout automation cuts manual reconciliation by 2 hours per day.",
+            "Supplier settlement tracking keeps audit records clear.",
+            "Restaurant team payouts process faster with automated disbursements.",
+          ],
+          cta: "Learn More",
+          footer: null,
+          proofPointsOrdered: [],
+          platformCaptionsOrdered: [
+            {
+              platform: "Instagram",
+              caption: "Operational payout clarity for managers.",
+              cta: "Schedule a Consultation",
+              hashtagsOrdered: ["#ops"],
+            },
+          ],
+        },
+      }),
+      businessDna: campaign30BusinessDna,
+      campaignStrategy: campaign30Strategy,
+      policy: campaign30Policy,
+    });
+
+    expect(assessment.decision).toBe("rejected");
+    expect(assessment.hardIssues.map((i) => i.code)).toContain("PLATFORM_CAPTION_CTA_POLICY_MISMATCH");
+  });
 });

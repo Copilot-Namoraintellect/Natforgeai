@@ -9,6 +9,15 @@ describe("computeCopyHashSha256", () => {
     subheadline: "For operations managers",
     benefitBulletsOrdered: ["A", "B", "C"],
     cta: "Learn More",
+    proofPointsOrdered: ["Verified local team"],
+    platformCaptionsOrdered: [
+      {
+        platform: "Instagram",
+        caption: "Trusted payouts for local teams",
+        cta: "Learn More",
+        hashtagsOrdered: ["#payouts", "#local"],
+      },
+    ],
     footer: null,
   });
 
@@ -44,5 +53,45 @@ describe("computeCopyHashSha256", () => {
   it("is source-neutral when canonical copy is unchanged", () => {
     const sameCopy = canonicalizeMessagePackCopy({ ...base });
     expect(computeCopyHashSha256(base)).toBe(computeCopyHashSha256(sameCopy));
+  });
+
+  it("is proof-point-sensitive", () => {
+    const variant = canonicalizeMessagePackCopy({ ...base, proofPointsOrdered: ["Different proof"] });
+    expect(computeCopyHashSha256(base)).not.toBe(computeCopyHashSha256(variant));
+  });
+
+  it("is platform-caption-cta-sensitive", () => {
+    const variant = canonicalizeMessagePackCopy({
+      ...base,
+      platformCaptionsOrdered: [
+        {
+          platform: "Instagram",
+          caption: "Trusted payouts for local teams",
+          cta: "Schedule a Consultation",
+          hashtagsOrdered: ["#payouts", "#local"],
+        },
+      ],
+    });
+    expect(computeCopyHashSha256(base)).not.toBe(computeCopyHashSha256(variant));
+  });
+
+  it("is hashtag-order-sensitive and internal-whitespace-sensitive", () => {
+    const reordered = canonicalizeMessagePackCopy({
+      ...base,
+      platformCaptionsOrdered: [
+        {
+          platform: "Instagram",
+          caption: "Trusted payouts for local teams",
+          cta: "Learn More",
+          hashtagsOrdered: ["#local", "#payouts"],
+        },
+      ],
+    });
+    const whitespace = canonicalizeMessagePackCopy({
+      ...base,
+      subheadline: "For  operations managers",
+    });
+    expect(computeCopyHashSha256(base)).not.toBe(computeCopyHashSha256(reordered));
+    expect(computeCopyHashSha256(base)).not.toBe(computeCopyHashSha256(whitespace));
   });
 });

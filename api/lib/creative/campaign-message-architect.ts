@@ -23,9 +23,28 @@ import {
 } from "./cta-utils";
 import { DEFAULT_V2_MESSAGE_QUALITY_POLICY } from "./message-approval/policy";
 import {
-  getCreativePipelineV2Mode,
   runShadowMessageApproval,
 } from "./message-approval/shadow-runner";
+import {
+  type CanonicalMessagePackCopy,
+  type CanaryApprovalProof,
+  type MessageApprovalContextLock,
+  type MessageAssessment,
+  type MessagePackCandidate,
+  type V2ApprovalEnvelope,
+} from "./message-approval/contracts";
+import { evaluateMessageCandidate } from "./message-approval/evaluator";
+import { adaptLegacyMessagePack } from "./message-approval/legacy-adapter";
+import { createMessagePackCandidate } from "./message-approval/candidate";
+import { createApprovedMessagePack } from "./message-approval/approve";
+import {
+  computeAssessmentHashSha256,
+  computeEvaluationKey,
+  computeSha256FromPayload,
+  serializeCanonicalCopy,
+} from "./message-approval/hash";
+import { resolveCanarySelection, type CanarySelectionResult } from "./message-approval/canary-selector";
+import { adaptApprovedToCampaignMessagePack } from "./message-approval/compatibility-adapter";
 import {
   buildLegacyShadowContextProjection,
   type LegacyLoadedShadowContextInput,
@@ -77,6 +96,8 @@ export interface CampaignMessagePack {
   /** Set when this pack was explicitly invalidated and should never be reused. */
   invalidatedAt?: string;
   invalidationReason?: string;
+  /** Additive Slice 2 canary approval identity metadata. */
+  v2ApprovalEnvelope?: V2ApprovalEnvelope;
 }
 
 export interface CopyValidationResult {
@@ -888,6 +909,12 @@ export interface BuildApprovedMessagePackOptions {
   forceRebuild?: boolean;
   qualityIssues?: string[];
   onLegacyContextLoaded?: (context: LegacyLoadedShadowContextInput) => void;
+  resolvedAuthority?: ResolvedArchitectAuthority;
+  privacyMode?: "standard" | "safe";
+}
+
+function isSafeLoggingMode(mode: BuildApprovedMessagePackOptions["privacyMode"]): boolean {
+  return mode === "safe";
 }
 
 function buildValidationContext(business: any, campaign: any): ValidationContext {
@@ -1016,20 +1043,28 @@ function normaliseArchitectOutput(raw: any, ctx: ValidationContext): CampaignMes
   return pack;
 }
 
-export async function buildApprovedMessagePack(
+async function buildApprovedMessagePackLegacy(
   opts: BuildApprovedMessagePackOptions
 ): Promise<CampaignMessagePack> {
   const db = getDb();
   const { userId, campaignId, skipBilling, maxAttempts = 2 } = opts;
+  const safeLogging = isSafeLoggingMode(opts.privacyMode);
 
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
-  if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+  const preloadedContext = opts.resolvedAuthority?.loadedContext;
+  let campaign = preloadedContext?.campaign as any;
+  let business = (preloadedContext?.business || null) as any;
 
-  let business: any = null;
-  if (campaign.businessId) {
-    const [b] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
-    business = b;
+  if (!campaign || !campaign.id) {
+    const [loadedCampaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
+    if (!loadedCampaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+    campaign = loadedCampaign;
+
+    if (loadedCampaign.businessId) {
+      const [b] = await db.select().from(businesses).where(eq(businesses.id, loadedCampaign.businessId)).limit(1);
+      business = b;
+    }
   }
+
   if (!business) business = {};
 
   const ctx = buildValidationContext(business, campaign);
@@ -1063,14 +1098,22 @@ export async function buildApprovedMessagePack(
 
   while (attempt < maxAttempts) {
     attempt++;
-    logInfo("[CampaignMessageArchitect] building message pack", {
-      campaignId,
-      userId,
-      attempt,
-      skipBilling: !!skipBilling,
-      selectedStageCta: groundedFactsUsed.selectedStageCta,
-      groundedFactsUsed,
-    });
+    logInfo("[CampaignMessageArchitect] building message pack", safeLogging
+      ? {
+          campaignId,
+          attempt,
+          skipBilling: !!skipBilling,
+          stageCode: "legacy_build_attempt",
+          status: "started",
+        }
+      : {
+          campaignId,
+          userId,
+          attempt,
+          skipBilling: !!skipBilling,
+          selectedStageCta: groundedFactsUsed.selectedStageCta,
+          groundedFactsUsed,
+        });
 
     let raw: any;
     try {
@@ -1085,13 +1128,22 @@ export async function buildApprovedMessagePack(
         skipBilling,
       });
       raw = result.output;
-    } catch (err: any) {
-      logError("[CampaignMessageArchitect] LLM generation failed", {
-        campaignId,
-        userId,
-        attempt,
-        error: err.message,
-      });
+    } catch {
+      logError("[CampaignMessageArchitect] LLM generation failed", safeLogging
+        ? {
+            campaignId,
+            attempt,
+            errorCode: "CREATIVE_GENERATION_FAILED",
+            stageCode: "legacy_build_run_agent",
+            status: "failed",
+          }
+        : {
+            campaignId,
+            userId,
+            attempt,
+            errorCode: "CREATIVE_GENERATION_FAILED",
+            stageCode: "legacy_build_run_agent",
+          });
       if (attempt === maxAttempts) {
         // Fallback to deterministic pack
         usedDeterministicFallback = true;
@@ -1105,33 +1157,58 @@ export async function buildApprovedMessagePack(
     lastPack = pack;
 
     if (pack.validation.passed) {
-      logInfo("[CampaignMessageArchitect] message pack approved", {
-        campaignId,
-        userId,
-        score: pack.validation.score,
-      });
+      logInfo("[CampaignMessageArchitect] message pack approved", safeLogging
+        ? {
+            campaignId,
+            attempt,
+            score: pack.validation.score,
+            passed: true,
+            stageCode: "legacy_build_validation",
+          }
+        : {
+            campaignId,
+            userId,
+            score: pack.validation.score,
+          });
       break;
     }
 
-    logWarn("[CampaignMessageArchitect] message pack rejected", {
-      campaignId,
-      userId,
-      attempt,
-      rejections: pack.validation.rejections,
-      warnings: pack.validation.warnings,
-    });
+    logWarn("[CampaignMessageArchitect] message pack rejected", safeLogging
+      ? {
+          campaignId,
+          attempt,
+          passed: false,
+          stageCode: "legacy_build_validation",
+          rejectionCount: pack.validation.rejections.length,
+          warningCount: pack.validation.warnings.length,
+        }
+      : {
+          campaignId,
+          userId,
+          attempt,
+          rejections: pack.validation.rejections,
+          warnings: pack.validation.warnings,
+        });
 
     retryQualityIssues = [...pack.validation.rejections, ...pack.validation.warnings];
 
     if (attempt < maxAttempts) {
       const rejectedPhrases = extractQuotedPhrases(retryQualityIssues);
-      logInfo("[CampaignMessageArchitect] retrying message pack generation", {
-        campaignId,
-        userId,
-        attempt,
-        retryQualityIssues,
-        rejectedPhrases,
-      });
+      logInfo("[CampaignMessageArchitect] retrying message pack generation", safeLogging
+        ? {
+            campaignId,
+            attempt,
+            stageCode: "legacy_build_retry",
+            retryIssueCount: retryQualityIssues.length,
+            rejectedPhraseCount: rejectedPhrases.length,
+          }
+        : {
+            campaignId,
+            userId,
+            attempt,
+            retryQualityIssues,
+            rejectedPhrases,
+          });
       prompt = `${basePrompt}\n\nPREVIOUS ATTEMPT FAILED QUALITY CHECK. FIX THESE EXACT ISSUES AND REGENERATE:\n${pack.validation.rejections
         .map((r) => `- ${r}`)
         .join("\n")}\n\nVALIDATION WARNINGS TO ADDRESS:\n${pack.validation.warnings
@@ -1145,16 +1222,26 @@ export async function buildApprovedMessagePack(
     lastPack = buildDeterministicMessagePack(ctx);
     const fallbackValidation = validateCampaignCopy(lastPack, ctx);
     lastPack.validation = fallbackValidation;
-    logInfo("[CampaignMessageArchitect] deterministic fallback generated", {
-      campaignId,
-      userId,
-      fallbackUsed: true,
-      fallbackValidationScore: fallbackValidation.score,
-      fallbackValidationRejections: fallbackValidation.rejections,
-      retryQualityIssues,
-      groundedFactsUsed,
-      selectedStageCta: groundedFactsUsed.selectedStageCta,
-    });
+    logInfo("[CampaignMessageArchitect] deterministic fallback generated", safeLogging
+      ? {
+          campaignId,
+          fallbackUsed: true,
+          stageCode: "legacy_build_deterministic_fallback",
+          fallbackValidationScore: fallbackValidation.score,
+          fallbackValidationRejectionCount: fallbackValidation.rejections.length,
+          retryIssueCount: retryQualityIssues.length,
+          passed: fallbackValidation.passed,
+        }
+      : {
+          campaignId,
+          userId,
+          fallbackUsed: true,
+          fallbackValidationScore: fallbackValidation.score,
+          fallbackValidationRejections: fallbackValidation.rejections,
+          retryQualityIssues,
+          groundedFactsUsed,
+          selectedStageCta: groundedFactsUsed.selectedStageCta,
+        });
   }
 
   lastPack.messagePackSource = usedDeterministicFallback ? "fallback_deterministic" : "ai_refined_pack";
@@ -1259,30 +1346,141 @@ export async function loadApprovedMessagePack(campaignId: number): Promise<Campa
   return best;
 }
 
+function verifyCanaryApprovalProof(pack: CampaignMessagePack, proof: CanaryApprovalProof): void {
+  if (!proof || !proof.candidate || !proof.assessment || !proof.contextLock || !proof.approvedMessagePack || !proof.envelope) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Canary approval proof is incomplete." });
+  }
+
+  const approved = proof.approvedMessagePack;
+  const candidate = proof.candidate;
+  const assessment = proof.assessment;
+  const envelope = proof.envelope;
+
+  const compatibilityCopy: CanonicalMessagePackCopy = {
+    copySchemaVersion: approved.copy.copySchemaVersion,
+    headline: pack.headline,
+    subheadline: pack.subheadline,
+    benefitBulletsOrdered: [...pack.benefitBullets],
+    cta: pack.cta,
+    footer: {
+      phone: pack.footerContact?.phone ?? null,
+      whatsapp: pack.footerContact?.whatsapp ?? null,
+      email: pack.footerContact?.email ?? null,
+      website: pack.footerContact?.website ?? null,
+      location: pack.footerContact?.location ?? null,
+    },
+    proofPointsOrdered: Array.isArray(pack.proofPoints) ? [...pack.proofPoints] : [],
+    platformCaptionsOrdered: Array.isArray(pack.platformCaptions)
+      ? pack.platformCaptions.map((caption) => ({
+          platform: caption.platform,
+          caption: caption.caption,
+          cta: caption.cta,
+          hashtagsOrdered: Array.isArray(caption.hashtags) ? [...caption.hashtags] : [],
+        }))
+      : [],
+  };
+
+  const semanticMismatch =
+    compatibilityCopy.copySchemaVersion !== approved.copy.copySchemaVersion ||
+    compatibilityCopy.headline !== approved.copy.headline ||
+    compatibilityCopy.subheadline !== approved.copy.subheadline ||
+    compatibilityCopy.cta !== approved.copy.cta ||
+    JSON.stringify(compatibilityCopy.benefitBulletsOrdered) !== JSON.stringify(approved.copy.benefitBulletsOrdered) ||
+    JSON.stringify(compatibilityCopy.proofPointsOrdered) !== JSON.stringify(approved.copy.proofPointsOrdered) ||
+    JSON.stringify(compatibilityCopy.platformCaptionsOrdered) !== JSON.stringify(approved.copy.platformCaptionsOrdered) ||
+    JSON.stringify(compatibilityCopy.footer) !== JSON.stringify(approved.copy.footer);
+
+  if (semanticMismatch) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Canary approval proof semantic mismatch." });
+  }
+
+  const compatibilityPayload = serializeCanonicalCopy(compatibilityCopy);
+  const recomputedHash = computeSha256FromPayload(compatibilityPayload);
+  if (
+    recomputedHash !== candidate.copyHashSha256 ||
+    recomputedHash !== approved.copyHashSha256 ||
+    recomputedHash !== envelope.copyHashSha256
+  ) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Canary approval proof copy hash mismatch." });
+  }
+
+  const recomputedAssessmentHash = computeAssessmentHashSha256({
+    assessmentId: assessment.assessmentId,
+    candidateId: assessment.candidateId,
+    copyHashSha256: assessment.copyHashSha256,
+    businessDnaSnapshotId: assessment.businessDnaSnapshotId,
+    evidenceHashSha256: assessment.evidenceHashSha256,
+    campaignStrategySnapshotId: assessment.campaignStrategySnapshotId,
+    strategyHashSha256: assessment.strategyHashSha256,
+    policyId: assessment.policyId,
+    policyVersion: assessment.policyVersion,
+    policyHashSha256: assessment.policyHashSha256,
+    decision: assessment.decision,
+    hardIssues: assessment.hardIssues,
+    warnings: assessment.warnings,
+    score: assessment.score,
+    evaluatedAtIso: assessment.evaluatedAtIso,
+  });
+
+  if (
+    recomputedAssessmentHash !== assessment.assessmentHashSha256 ||
+    recomputedAssessmentHash !== envelope.assessmentHashSha256
+  ) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Canary approval proof assessment hash mismatch." });
+  }
+
+  if (
+    envelope.candidateId !== candidate.candidateId ||
+    envelope.assessmentId !== assessment.assessmentId ||
+    envelope.approvedRevisionId !== approved.approvedRevisionId ||
+    envelope.businessDnaSnapshotId !== proof.contextLock.businessDnaSnapshotId ||
+    envelope.evidenceHashSha256 !== proof.contextLock.evidenceHashSha256 ||
+    envelope.campaignStrategySnapshotId !== proof.contextLock.campaignStrategySnapshotId ||
+    envelope.strategyHashSha256 !== proof.contextLock.strategyHashSha256 ||
+    envelope.policyId !== proof.contextLock.policyId ||
+    envelope.policyVersion !== proof.contextLock.policyVersion ||
+    envelope.policyHashSha256 !== proof.contextLock.policyHashSha256 ||
+    assessment.decision !== "approved" ||
+    assessment.hardIssues.length > 0 ||
+    assessment.score < proof.contextLock.policy.minScoreForApproval
+  ) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Canary approval proof identity mismatch." });
+  }
+}
+
 export async function saveApprovedMessagePack(
   userId: number,
   campaignId: number,
-  pack: CampaignMessagePack
+  pack: CampaignMessagePack,
+  options?: { mode?: "legacy" | "canary"; proof?: CanaryApprovalProof }
 ): Promise<number> {
   const db = getDb();
+  const saveMode = options?.mode || "legacy";
   const enriched = enrichMessagePackMetadata({
     ...pack,
     messagePackSource: pack.messagePackSource || "ai_refined_pack",
     validation: normaliseValidationResult(pack.validation),
   });
 
-  if (!enriched.validation.passed) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Message pack failed validation and cannot be approved.",
-    });
-  }
+  if (saveMode === "canary") {
+    if (!options?.proof || !enriched.v2ApprovalEnvelope) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Canary save requires approval proof and envelope." });
+    }
+    verifyCanaryApprovalProof(enriched, options.proof);
+  } else {
+    if (!enriched.validation.passed) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Message pack failed validation and cannot be approved.",
+      });
+    }
 
-  if (enriched.isGeneric) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Generic message packs cannot be approved. Please regenerate with business-specific copy.",
-    });
+    if (enriched.isGeneric) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Generic message packs cannot be approved. Please regenerate with business-specific copy.",
+      });
+    }
   }
 
   const [{ insertId }] = await db.insert(campaignAssets).values({
@@ -1299,6 +1497,7 @@ export async function saveApprovedMessagePack(
       messagePackSource: enriched.messagePackSource,
       isGeneric: enriched.isGeneric,
       specificityScore: enriched.specificityScore,
+      v2ApprovalEnvelope: enriched.v2ApprovalEnvelope,
     } as any,
   });
 
@@ -1341,6 +1540,7 @@ export async function saveApprovedMessagePack(
           ...workflowContext,
           approvedMessagePack: enriched,
           approvedMessagePackAt: new Date().toISOString(),
+          v2ApprovalEnvelope: enriched.v2ApprovalEnvelope || workflowContext.v2ApprovalEnvelope,
         } as any,
       })
       .where(eq(campaigns.id, campaignId));
@@ -1431,6 +1631,8 @@ export interface RefineMessagePackOptions {
   skipBilling?: boolean;
   maxAttempts?: number;
   onLegacyContextLoaded?: (context: LegacyLoadedShadowContextInput) => void;
+  resolvedAuthority?: ResolvedArchitectAuthority;
+  privacyMode?: "standard" | "safe";
 }
 
 /**
@@ -1864,20 +2066,28 @@ COPY RULES:
 Return strict JSON matching the provided schema. Every field must be present. Use null for missing optional values.`;
 }
 
-export async function refineApprovedMessagePack(
+async function refineApprovedMessagePackLegacy(
   opts: RefineMessagePackOptions
 ): Promise<CampaignMessagePack> {
   const db = getDb();
   const { userId, campaignId, existingPack, refinementInstruction, skipBilling, maxAttempts = 2 } = opts;
+  const safeLogging = isSafeLoggingMode(opts.privacyMode);
 
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
-  if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+  const preloadedContext = opts.resolvedAuthority?.loadedContext;
+  let campaign = preloadedContext?.campaign as any;
+  let business = (preloadedContext?.business || null) as any;
 
-  let business: any = null;
-  if (campaign.businessId) {
-    const [b] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
-    business = b;
+  if (!campaign || !campaign.id) {
+    const [loadedCampaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
+    if (!loadedCampaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+    campaign = loadedCampaign;
+
+    if (loadedCampaign.businessId) {
+      const [b] = await db.select().from(businesses).where(eq(businesses.id, loadedCampaign.businessId)).limit(1);
+      business = b;
+    }
   }
+
   if (!business) business = {};
 
   const ctx = buildValidationContext(business, campaign);
@@ -1928,13 +2138,22 @@ export async function refineApprovedMessagePack(
 
   while (attempt < maxAttempts) {
     attempt++;
-    logInfo("[CampaignMessageArchitect] refining message pack", {
-      campaignId,
-      userId,
-      attempt,
-      skipBilling: !!skipBilling,
-      hasUserProvidedPack: !!userPack,
-    });
+    logInfo("[CampaignMessageArchitect] refining message pack", safeLogging
+      ? {
+          campaignId,
+          attempt,
+          skipBilling: !!skipBilling,
+          hasUserProvidedPack: !!userPack,
+          stageCode: "legacy_refine_attempt",
+          status: "started",
+        }
+      : {
+          campaignId,
+          userId,
+          attempt,
+          skipBilling: !!skipBilling,
+          hasUserProvidedPack: !!userPack,
+        });
 
     let raw: any;
     try {
@@ -1949,13 +2168,22 @@ export async function refineApprovedMessagePack(
         skipBilling,
       });
       raw = result.output;
-    } catch (err: any) {
-      logError("[CampaignMessageArchitect] refinement generation failed", {
-        campaignId,
-        userId,
-        attempt,
-        error: err.message,
-      });
+    } catch {
+      logError("[CampaignMessageArchitect] refinement generation failed", safeLogging
+        ? {
+            campaignId,
+            attempt,
+            errorCode: "CREATIVE_REFINEMENT_GENERATION_FAILED",
+            stageCode: "legacy_refine_run_agent",
+            status: "failed",
+          }
+        : {
+            campaignId,
+            userId,
+            attempt,
+            errorCode: "CREATIVE_REFINEMENT_GENERATION_FAILED",
+            stageCode: "legacy_refine_run_agent",
+          });
       if (attempt === maxAttempts) {
         break;
       }
@@ -1966,21 +2194,38 @@ export async function refineApprovedMessagePack(
     lastPack = pack;
 
     if (pack.validation.passed) {
-      logInfo("[CampaignMessageArchitect] refined message pack approved", {
-        campaignId,
-        userId,
-        score: pack.validation.score,
-      });
+      logInfo("[CampaignMessageArchitect] refined message pack approved", safeLogging
+        ? {
+            campaignId,
+            attempt,
+            score: pack.validation.score,
+            passed: true,
+            stageCode: "legacy_refine_validation",
+          }
+        : {
+            campaignId,
+            userId,
+            score: pack.validation.score,
+          });
       break;
     }
 
-    logWarn("[CampaignMessageArchitect] refined message pack rejected", {
-      campaignId,
-      userId,
-      attempt,
-      rejections: pack.validation.rejections,
-      warnings: pack.validation.warnings,
-    });
+    logWarn("[CampaignMessageArchitect] refined message pack rejected", safeLogging
+      ? {
+          campaignId,
+          attempt,
+          passed: false,
+          stageCode: "legacy_refine_validation",
+          rejectionCount: pack.validation.rejections.length,
+          warningCount: pack.validation.warnings.length,
+        }
+      : {
+          campaignId,
+          userId,
+          attempt,
+          rejections: pack.validation.rejections,
+          warnings: pack.validation.warnings,
+        });
 
     // Auto-retry once specifically for placeholder/generic language without
     // consuming a user-visible retry click.
@@ -2042,21 +2287,28 @@ export async function refineApprovedMessagePack(
       ? "latest_message_pack"
       : "ai_refined_pack";
   lastPack.messagePackSource = finalSource;
-  logInfo("[CampaignMessageArchitect] refinement resolved", {
-    campaignId,
-    userId,
-    source: finalSource,
-    passed: lastPack.validation.passed,
-    score: lastPack.validation.score,
-  });
+  logInfo("[CampaignMessageArchitect] refinement resolved", safeLogging
+    ? {
+        campaignId,
+        source: finalSource,
+        passed: lastPack.validation.passed,
+        score: lastPack.validation.score,
+        stageCode: "legacy_refine_resolved",
+      }
+    : {
+        campaignId,
+        userId,
+        source: finalSource,
+        passed: lastPack.validation.passed,
+        score: lastPack.validation.score,
+      });
 
   return lastPack;
 }
 
-export async function ensureApprovedMessagePack(
+async function ensureApprovedMessagePackLegacy(
   opts: BuildApprovedMessagePackOptions
 ): Promise<CampaignMessagePack> {
-  let loadedShadowContext: LegacyLoadedShadowContextInput | undefined;
   const existing = await loadApprovedMessagePack(opts.campaignId);
 
   if (existing?.isGeneric) {
@@ -2083,7 +2335,7 @@ export async function ensureApprovedMessagePack(
       campaignId: opts.campaignId,
       userId: opts.userId,
     });
-    return observeMessageApprovalV2Shadow(existing, opts, "reuse_existing_pack", loadedShadowContext);
+    return observeMessageApprovalV2Shadow(existing, opts, "reuse_existing_pack", opts.resolvedAuthority);
   }
 
   if (opts.forceRebuild && existing) {
@@ -2102,16 +2354,15 @@ export async function ensureApprovedMessagePack(
       "Ensure the copy explicitly references the business product or service.",
     ].join("\n");
 
-    const refined = await refineApprovedMessagePack({
+    const refined = await refineApprovedMessagePackLegacy({
       userId: opts.userId,
       campaignId: opts.campaignId,
       existingPack: existing,
       refinementInstruction,
       skipBilling: opts.skipBilling,
       maxAttempts: opts.maxAttempts,
-      onLegacyContextLoaded: (context) => {
-        loadedShadowContext = context;
-      },
+      onLegacyContextLoaded: opts.onLegacyContextLoaded,
+      resolvedAuthority: opts.resolvedAuthority,
     });
 
     const enrichedRefined = enrichMessagePackMetadata(refined);
@@ -2121,16 +2372,15 @@ export async function ensureApprovedMessagePack(
         enrichedRefined,
         opts,
         "force_rebuild_refined_pack",
-        loadedShadowContext
+        opts.resolvedAuthority
       );
     }
   }
 
-  const pack = await buildApprovedMessagePack({
+  const pack = await buildApprovedMessagePackLegacy({
     ...opts,
-    onLegacyContextLoaded: (context) => {
-      loadedShadowContext = context;
-    },
+    onLegacyContextLoaded: opts.onLegacyContextLoaded,
+    resolvedAuthority: opts.resolvedAuthority,
   });
   const enrichedPack = enrichMessagePackMetadata(pack);
   if (enrichedPack.validation.passed && !enrichedPack.isGeneric) {
@@ -2140,7 +2390,7 @@ export async function ensureApprovedMessagePack(
     enrichedPack,
     opts,
     "fresh_or_fallback_pack",
-    loadedShadowContext
+    opts.resolvedAuthority
   );
 }
 
@@ -2148,27 +2398,25 @@ function observeMessageApprovalV2Shadow(
   legacyPack: CampaignMessagePack,
   opts: BuildApprovedMessagePackOptions,
   workflowRunId: string | null,
-  loadedShadowContext?: LegacyLoadedShadowContextInput
+  resolvedAuthority?: ResolvedArchitectAuthority
 ): CampaignMessagePack {
-  const mode = getCreativePipelineV2Mode(process.env.CREATIVE_PIPELINE_V2_MODE);
-  if (mode !== "shadow") return legacyPack;
+  const authority = resolvedAuthority || opts.resolvedAuthority;
+  if (!authority || authority.mode !== "shadow" || !authority.contextLock) return legacyPack;
 
   const started = Date.now();
+  const lock = authority.contextLock;
   try {
-    const projection = buildLegacyShadowContextProjection(
-      loadedShadowContext || { campaignId: opts.campaignId }
-    );
     runShadowMessageApproval({
-      mode,
+      mode: "shadow",
       campaignId: opts.campaignId,
       workflowRunId,
       candidateId: `shadow-candidate-${opts.campaignId}-${Date.now()}`,
       assessmentId: `shadow-assessment-${opts.campaignId}-${Date.now()}`,
       legacyPack,
-      businessDna: projection.businessDna,
-      campaignStrategy: projection.campaignStrategy,
-      policy: DEFAULT_V2_MESSAGE_QUALITY_POLICY,
-      contextDiagnostics: projection.diagnostics,
+      businessDna: lock.businessDna,
+      campaignStrategy: lock.campaignStrategy,
+      policy: lock.policy,
+      contextDiagnostics: lock.diagnostics,
       now: () => Date.now(),
       nowIso: () => new Date().toISOString(),
       log: (result) => {
@@ -2183,10 +2431,576 @@ function observeMessageApprovalV2Shadow(
       campaignId: opts.campaignId,
       workflowRunId,
       durationMs: Math.max(0, Date.now() - started),
-      stage: "context_build",
-      errorCode: "SHADOW_CONTEXT_BUILD_FAILED",
+      stage: "shadow_observation",
+      errorCode: "SHADOW_OBSERVATION_FAILED",
     });
   }
 
   return legacyPack;
+}
+
+interface ResolvedArchitectAuthority {
+  readonly mode: "off" | "shadow" | "canary";
+  readonly canarySelected: boolean;
+  readonly businessId: number | null;
+  readonly selection: CanarySelectionResult;
+  readonly loadedContext: LegacyLoadedShadowContextInput | null;
+  readonly contextLock: MessageApprovalContextLock | null;
+  readonly diagnostics: {
+    readonly stageCode: string;
+    readonly reason: string;
+  };
+}
+
+async function resolveArchitectAuthority(campaignId: number, userId: number): Promise<ResolvedArchitectAuthority> {
+  const db = getDb();
+  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
+  const businessId = campaign?.businessId ? Number(campaign.businessId) : null;
+  const selection = resolveCanarySelection({ campaignId, businessId, userId });
+
+  logInfo("[CampaignMessageArchitect][V2Mode] resolved mode", {
+    campaignId,
+    mode: selection.mode,
+    selected: selection.selected,
+    reason: selection.reason,
+    bucket: selection.bucket,
+    percent: selection.percent,
+  });
+
+  const mode: "off" | "shadow" | "canary" =
+    selection.mode === "shadow"
+      ? "shadow"
+      : selection.mode === "canary" && selection.selected
+      ? "canary"
+      : "off";
+
+  if (mode === "off") {
+    return Object.freeze({
+      mode,
+      canarySelected: false,
+      businessId,
+      selection,
+      loadedContext: null,
+      contextLock: null,
+      diagnostics: {
+        stageCode: "legacy_authority",
+        reason: selection.reason,
+      },
+    });
+  }
+
+  const loadedContext = await loadContextInput(campaignId);
+  const contextLock = buildContextLock({
+    mode,
+    campaignId,
+    loadedContext,
+  });
+
+  return Object.freeze({
+    mode,
+    canarySelected: mode === "canary",
+    businessId,
+    selection,
+    loadedContext,
+    contextLock,
+    diagnostics: {
+      stageCode: mode === "shadow" ? "shadow_context_lock_ready" : "canary_context_lock_ready",
+      reason: selection.reason,
+    },
+  });
+}
+
+function buildContextLock(input: {
+  mode: "shadow" | "canary";
+  campaignId: number;
+  loadedContext: LegacyLoadedShadowContextInput;
+}): MessageApprovalContextLock {
+  const projection = buildLegacyShadowContextProjection(input.loadedContext);
+  return Object.freeze({
+    contextLockId: `ctx-${input.campaignId}-${Date.now()}`,
+    mode: input.mode,
+    campaignId: input.campaignId,
+    businessDna: projection.businessDna,
+    businessDnaSnapshotId: projection.businessDna.snapshotId,
+    evidenceHashSha256: projection.businessDna.evidenceHashSha256,
+    campaignStrategy: projection.campaignStrategy,
+    campaignStrategySnapshotId: projection.campaignStrategy.snapshotId,
+    strategyHashSha256: projection.campaignStrategy.strategyHashSha256,
+    policy: DEFAULT_V2_MESSAGE_QUALITY_POLICY,
+    policyId: DEFAULT_V2_MESSAGE_QUALITY_POLICY.policyId,
+    policyVersion: DEFAULT_V2_MESSAGE_QUALITY_POLICY.policyVersion,
+    policyHashSha256: DEFAULT_V2_MESSAGE_QUALITY_POLICY.policyHashSha256,
+    diagnostics: projection.diagnostics,
+  });
+}
+
+async function loadContextInput(campaignId: number): Promise<LegacyLoadedShadowContextInput> {
+  const db = getDb();
+  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
+  let business: any = null;
+  if (campaign?.businessId) {
+    const [b] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
+    business = b;
+  }
+  const ctx = buildValidationContext(business || {}, campaign || {});
+  return {
+    campaignId,
+    business: business || {},
+    campaign: campaign || {},
+    validationContext: {
+      businessName: ctx.businessName,
+      industry: ctx.industry,
+      productOrService: ctx.productOrService,
+      targetCustomer: ctx.targetCustomer,
+      mainPainPoint: ctx.mainPainPoint,
+      campaignObjective: ctx.campaignObjective,
+      funnelStage: ctx.funnelStage,
+      preferredCta: ctx.preferredCta,
+    },
+  };
+}
+
+async function loadEligibleStoredCanaryRows(campaignId: number): Promise<Array<{ pack: CampaignMessagePack; assetId: number; createdAt: Date }>> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: campaignAssets.id, metadata: campaignAssets.metadata, createdAt: campaignAssets.createdAt, status: campaignAssets.status })
+    .from(campaignAssets)
+    .where(and(eq(campaignAssets.campaignId, campaignId), eq(campaignAssets.assetType, "message_pack" as any)))
+    .orderBy(desc(campaignAssets.createdAt))
+    .limit(1000);
+
+  return rows
+    .map((row) => {
+      const meta = (row.metadata || {}) as any;
+      const pack = meta.approvedMessagePack as CampaignMessagePack | undefined;
+      if (!pack) return null;
+      if (pack.invalidatedAt || meta.invalidatedAt) return null;
+      if (pack.supersededBy || meta.supersededBy) return null;
+      if (String(row.status || "").toLowerCase() === "archived" || meta.archivedAt) return null;
+      if (typeof pack.headline !== "string" || typeof pack.cta !== "string" || !Array.isArray(pack.benefitBullets)) return null;
+      return {
+        pack,
+        assetId: Number(row.id),
+        createdAt: new Date(row.createdAt || Date.now()),
+      };
+    })
+    .filter(Boolean) as Array<{ pack: CampaignMessagePack; assetId: number; createdAt: Date }>;
+}
+
+async function supersedeMessagePackAsset(assetId: number, newAssetId: number): Promise<void> {
+  const db = getDb();
+  const rows = await db
+    .select({ metadata: campaignAssets.metadata })
+    .from(campaignAssets)
+    .where(eq(campaignAssets.id, assetId))
+    .limit(1);
+  const meta = (rows[0]?.metadata || {}) as any;
+  const existingPack = (meta.approvedMessagePack || {}) as CampaignMessagePack;
+
+  await db
+    .update(campaignAssets)
+    .set({
+      metadata: {
+        ...meta,
+        supersededBy: newAssetId,
+        approvedMessagePack: {
+          ...existingPack,
+          supersededBy: newAssetId,
+        },
+      } as any,
+    })
+    .where(eq(campaignAssets.id, assetId));
+}
+
+type CandidateRecord = {
+  candidate: MessagePackCandidate;
+  assessment: MessageAssessment;
+  approved: ReturnType<typeof createApprovedMessagePack> | null;
+  candidateSource: MessagePackCandidate["source"];
+  originTimestamp: number;
+};
+
+function createCandidateFromPack(input: {
+  lock: MessageApprovalContextLock;
+  campaignId: number;
+  source: MessagePackCandidate["source"];
+  legacyPack: CampaignMessagePack;
+  candidateId: string;
+  createdAtIso: string;
+}): MessagePackCandidate {
+  return createMessagePackCandidate({
+    candidateId: input.candidateId,
+    campaignId: input.campaignId,
+    createdAtIso: input.createdAtIso,
+    source: input.source,
+    copy: {
+      copySchemaVersion: "v2.1",
+      headline: input.legacyPack.headline,
+      subheadline: input.legacyPack.subheadline,
+      benefitBulletsOrdered: input.legacyPack.benefitBullets,
+      cta: input.legacyPack.cta,
+      proofPointsOrdered: Array.isArray(input.legacyPack.proofPoints) ? input.legacyPack.proofPoints : [],
+      platformCaptionsOrdered: Array.isArray(input.legacyPack.platformCaptions)
+        ? input.legacyPack.platformCaptions.map((caption) => ({
+            platform: caption.platform,
+            caption: caption.caption,
+            cta: caption.cta,
+            hashtagsOrdered: Array.isArray(caption.hashtags) ? caption.hashtags : [],
+          }))
+        : [],
+      footer: {
+        phone: input.legacyPack.footerContact?.phone ?? null,
+        whatsapp: input.legacyPack.footerContact?.whatsapp ?? null,
+        email: input.legacyPack.footerContact?.email ?? null,
+        website: input.legacyPack.footerContact?.website ?? null,
+        location: input.legacyPack.footerContact?.location ?? null,
+      },
+    },
+    businessDnaSnapshotId: input.lock.businessDnaSnapshotId,
+    evidenceHashSha256: input.lock.evidenceHashSha256,
+    campaignStrategySnapshotId: input.lock.campaignStrategySnapshotId,
+    strategyHashSha256: input.lock.strategyHashSha256,
+    qualityPolicyId: input.lock.policyId,
+    qualityPolicyVersion: input.lock.policyVersion,
+    policyHashSha256: input.lock.policyHashSha256,
+    provenance: {
+      adaptedFromLegacy: false,
+      originSource: input.legacyPack.messagePackSource ?? "unknown",
+      modelName: null,
+      diagnostics: {
+        legacyIsGeneric: typeof input.legacyPack.isGeneric === "boolean" ? input.legacyPack.isGeneric : null,
+        legacyValidationPassed: input.legacyPack.validation?.passed ?? null,
+        legacyValidationScore: input.legacyPack.validation?.score ?? null,
+        legacyValidationRejections: input.legacyPack.validation?.rejections || [],
+      },
+    },
+  });
+}
+
+function evaluateCandidateOnce(
+  lock: MessageApprovalContextLock,
+  candidate: MessagePackCandidate,
+  cache: Map<string, CandidateRecord>
+): CandidateRecord {
+  const evaluationKey = computeEvaluationKey({
+    copyHashSha256: candidate.copyHashSha256,
+    evidenceHashSha256: lock.evidenceHashSha256,
+    strategyHashSha256: lock.strategyHashSha256,
+    policyHashSha256: lock.policyHashSha256,
+  });
+  const existing = cache.get(evaluationKey);
+  if (existing) {
+    logInfo("[CampaignMessageArchitect][V2Canary] duplicate candidate key reused", {
+      campaignId: lock.campaignId,
+      contextLockId: lock.contextLockId,
+      evaluationKey,
+      reusedCandidateId: existing.candidate.candidateId,
+      reusedAssessmentId: existing.assessment.assessmentId,
+    });
+    return existing;
+  }
+
+  const assessment = evaluateMessageCandidate({
+    assessmentId: `canary-assessment-${lock.campaignId}-${Date.now()}`,
+    evaluatedAtIso: new Date().toISOString(),
+    candidate,
+    businessDna: lock.businessDna,
+    campaignStrategy: lock.campaignStrategy,
+    policy: lock.policy,
+  });
+
+  const approved = assessment.decision === "approved"
+    ? createApprovedMessagePack({
+        approvedRevisionId: `canary-rev-${lock.campaignId}-${Date.now()}`,
+        approvedAtIso: new Date().toISOString(),
+        candidate,
+        assessment,
+        policy: lock.policy,
+      })
+    : null;
+
+  const record: CandidateRecord = {
+    candidate,
+    assessment,
+    approved,
+    candidateSource: candidate.source,
+    originTimestamp: Date.now(),
+  };
+  cache.set(evaluationKey, record);
+  return record;
+}
+
+function buildV2RefinementInstruction(baseInstruction: string | null, assessment: MessageAssessment): string {
+  const hardIssues = assessment.hardIssues.map((issue) => `- [${issue.code}] ${issue.message}`);
+  const warnings = assessment.warnings.map((issue) => `- [${issue.code}] ${issue.message}`);
+  const ctaIssues = assessment.hardIssues.filter((issue) => issue.code.includes("CTA")).map((issue) => `- ${issue.message}`);
+  const groundingIssues = assessment.hardIssues
+    .filter((issue) => issue.code.includes("GROUNDING") || issue.code.includes("ALIGNMENT"))
+    .map((issue) => `- ${issue.message}`);
+
+  return [
+    baseInstruction ? `ORIGINAL REFINEMENT INSTRUCTION:\n${baseInstruction}` : "",
+    "V2 MESSAGE AUTHORITY REJECTION. APPLY THESE EXACT CORRECTIONS:",
+    "HARD ISSUES:",
+    hardIssues.join("\n") || "- None",
+    "WARNINGS TO ADDRESS:",
+    warnings.join("\n") || "- None",
+    "CTA DETAILS:",
+    ctaIssues.join("\n") || "- None",
+    "GROUNDING DETAILS:",
+    groundingIssues.join("\n") || "- None",
+    "Do not rely on previous legacy validator rejection strings; fix the V2 findings above.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+async function runCanaryMessageApprovalFlow(input: {
+  kind: "ensure" | "build" | "refine";
+  ensureOptions: BuildApprovedMessagePackOptions;
+  refineOptions?: RefineMessagePackOptions;
+  authority: ResolvedArchitectAuthority;
+}): Promise<CampaignMessagePack> {
+  const lock = input.authority.contextLock;
+  const loadedContext = input.authority.loadedContext;
+  if (!lock || !loadedContext || input.authority.mode !== "canary") {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Missing canary authority context lock." });
+  }
+
+  const cache = new Map<string, CandidateRecord>();
+  let sequence = 0;
+
+  const evaluateGeneratedPack = (pack: CampaignMessagePack, source: MessagePackCandidate["source"]): CandidateRecord => {
+    sequence += 1;
+    const candidate = createCandidateFromPack({
+      lock,
+      campaignId: input.ensureOptions.campaignId,
+      source,
+      legacyPack: pack,
+      candidateId: `canary-candidate-${lock.campaignId}-${sequence}-${Date.now()}`,
+      createdAtIso: new Date().toISOString(),
+    });
+    return evaluateCandidateOnce(lock, candidate, cache);
+  };
+
+  const stored = await loadEligibleStoredCanaryRows(input.ensureOptions.campaignId);
+  const storedApproved: Array<CandidateRecord & { assetId: number; createdAt: Date }> = [];
+  for (const item of stored) {
+    const candidate = adaptLegacyMessagePack({
+      campaignId: input.ensureOptions.campaignId,
+      candidateId: `stored-${item.assetId}-${Date.now()}`,
+      createdAtIso: new Date().toISOString(),
+      businessDnaSnapshotId: lock.businessDnaSnapshotId,
+      evidenceHashSha256: lock.evidenceHashSha256,
+      campaignStrategySnapshotId: lock.campaignStrategySnapshotId,
+      strategyHashSha256: lock.strategyHashSha256,
+      qualityPolicyId: lock.policyId,
+      qualityPolicyVersion: lock.policyVersion,
+      policyHashSha256: lock.policyHashSha256,
+      legacyPack: item.pack,
+      preferredSource: "existing_approved",
+    });
+    const result = evaluateCandidateOnce(lock, candidate, cache);
+    if (result.approved) {
+      storedApproved.push({ ...result, assetId: item.assetId, createdAt: item.createdAt });
+    }
+  }
+
+  if (input.kind === "ensure" && !input.ensureOptions.forceRebuild && storedApproved.length > 0) {
+    storedApproved.sort((a, b) => {
+      if (a.assessment.score !== b.assessment.score) return b.assessment.score - a.assessment.score;
+      const dateDiff = b.createdAt.getTime() - a.createdAt.getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return b.assetId - a.assetId;
+    });
+    const selected = storedApproved[0];
+    const adapted = adaptApprovedToCampaignMessagePack({
+      approved: selected.approved!,
+      assessment: selected.assessment,
+      contextLock: lock,
+      candidateSource: selected.candidateSource,
+      specificityScore,
+    });
+    return adapted.pack;
+  }
+
+  let priorBestAssetId: number | null = null;
+  if (input.ensureOptions.forceRebuild && storedApproved.length > 0) {
+    const sortedStored = [...storedApproved].sort((a, b) => {
+      if (a.assessment.score !== b.assessment.score) return b.assessment.score - a.assessment.score;
+      const dateDiff = b.createdAt.getTime() - a.createdAt.getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return b.assetId - a.assetId;
+    });
+    priorBestAssetId = sortedStored[0].assetId;
+  }
+
+  let approvedGenerated: CandidateRecord | null = null;
+
+  if (input.kind === "refine" && input.refineOptions) {
+    let refined = await refineApprovedMessagePackLegacy({
+      ...input.refineOptions,
+      maxAttempts: 1,
+      privacyMode: "safe",
+      resolvedAuthority: input.authority,
+    });
+
+    for (let retry = 0; retry < 2; retry++) {
+      const evaluated = evaluateGeneratedPack(refined, "ai_refined");
+      if (evaluated.approved) {
+        approvedGenerated = evaluated;
+        break;
+      }
+
+      if (retry === 1) break;
+
+      const refinementInstruction = buildV2RefinementInstruction(
+        input.refineOptions.refinementInstruction,
+        evaluated.assessment
+      );
+
+      refined = await refineApprovedMessagePackLegacy({
+        ...input.refineOptions,
+        existingPack: refined,
+        refinementInstruction,
+        maxAttempts: 1,
+        privacyMode: "safe",
+        resolvedAuthority: input.authority,
+      });
+    }
+  } else {
+    const initial = await buildApprovedMessagePackLegacy({
+      ...input.ensureOptions,
+      maxAttempts: 1,
+      privacyMode: "safe",
+      resolvedAuthority: input.authority,
+    });
+    const initialEvaluated = evaluateGeneratedPack(initial, "ai_initial");
+    if (initialEvaluated.approved) {
+      approvedGenerated = initialEvaluated;
+    } else {
+      let currentPack = initial;
+      let currentFeedback = buildV2RefinementInstruction(null, initialEvaluated.assessment);
+
+      for (let retry = 0; retry < 2; retry++) {
+        const refined = await refineApprovedMessagePackLegacy({
+        userId: input.ensureOptions.userId,
+        campaignId: input.ensureOptions.campaignId,
+          existingPack: currentPack,
+          refinementInstruction: currentFeedback,
+        skipBilling: input.ensureOptions.skipBilling,
+        maxAttempts: 1,
+          privacyMode: "safe",
+          resolvedAuthority: input.authority,
+      });
+
+        const evaluated = evaluateGeneratedPack(refined, "ai_refined");
+        if (evaluated.approved) {
+          approvedGenerated = evaluated;
+          break;
+        }
+
+        currentPack = refined;
+        currentFeedback = buildV2RefinementInstruction(null, evaluated.assessment);
+      }
+    }
+  }
+
+  if (!approvedGenerated) {
+    const deterministicPack = buildDeterministicMessagePack(
+      buildValidationContext(loadedContext.business || {}, loadedContext.campaign || {})
+    );
+    deterministicPack.messagePackSource = "fallback_deterministic";
+    const evaluated = evaluateGeneratedPack(deterministicPack, "deterministic_fallback");
+    if (evaluated.approved) {
+      approvedGenerated = evaluated;
+    }
+  }
+
+  if (approvedGenerated) {
+    const adapted = adaptApprovedToCampaignMessagePack({
+      approved: approvedGenerated.approved!,
+      assessment: approvedGenerated.assessment,
+      contextLock: lock,
+      candidateSource: approvedGenerated.candidateSource,
+      specificityScore,
+    });
+
+    const newAssetId = await saveApprovedMessagePack(
+      input.ensureOptions.userId,
+      input.ensureOptions.campaignId,
+      adapted.pack,
+      {
+        mode: "canary",
+        proof: adapted.proof,
+      }
+    );
+
+    if (input.ensureOptions.forceRebuild && priorBestAssetId && priorBestAssetId !== newAssetId) {
+      await supersedeMessagePackAsset(priorBestAssetId, newAssetId);
+    }
+
+    return adapted.pack;
+  }
+
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message: "V2 message approval rejected all candidates.",
+  });
+}
+
+export async function buildApprovedMessagePack(
+  opts: BuildApprovedMessagePackOptions
+): Promise<CampaignMessagePack> {
+  const authority = await resolveArchitectAuthority(opts.campaignId, opts.userId);
+  if (authority.mode === "canary" && authority.canarySelected) {
+    return runCanaryMessageApprovalFlow({ kind: "build", ensureOptions: { ...opts, resolvedAuthority: authority }, authority });
+  }
+
+  const pack = await buildApprovedMessagePackLegacy({ ...opts, resolvedAuthority: authority });
+  return observeMessageApprovalV2Shadow(pack, { ...opts, resolvedAuthority: authority }, "build_pack", authority);
+}
+
+export async function refineApprovedMessagePack(
+  opts: RefineMessagePackOptions
+): Promise<CampaignMessagePack> {
+  const authority = await resolveArchitectAuthority(opts.campaignId, opts.userId);
+  if (authority.mode === "canary" && authority.canarySelected) {
+    return runCanaryMessageApprovalFlow({
+      kind: "refine",
+      ensureOptions: {
+        userId: opts.userId,
+        campaignId: opts.campaignId,
+        skipBilling: opts.skipBilling,
+        maxAttempts: opts.maxAttempts,
+        resolvedAuthority: authority,
+      },
+      refineOptions: { ...opts, resolvedAuthority: authority },
+      authority,
+    });
+  }
+
+  const refined = await refineApprovedMessagePackLegacy({ ...opts, resolvedAuthority: authority });
+  return observeMessageApprovalV2Shadow(
+    refined,
+    {
+      userId: opts.userId,
+      campaignId: opts.campaignId,
+      skipBilling: opts.skipBilling,
+      maxAttempts: opts.maxAttempts,
+      resolvedAuthority: authority,
+    },
+    "refine_pack",
+    authority
+  );
+}
+
+export async function ensureApprovedMessagePack(
+  opts: BuildApprovedMessagePackOptions
+): Promise<CampaignMessagePack> {
+  const authority = await resolveArchitectAuthority(opts.campaignId, opts.userId);
+  if (authority.mode === "canary" && authority.canarySelected) {
+    return runCanaryMessageApprovalFlow({ kind: "ensure", ensureOptions: { ...opts, resolvedAuthority: authority }, authority });
+  }
+  return ensureApprovedMessagePackLegacy({ ...opts, resolvedAuthority: authority });
 }

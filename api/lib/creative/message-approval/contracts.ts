@@ -1,12 +1,11 @@
 export type CreativePipelineV2Mode = "off" | "shadow" | "canary" | "active";
 
 export type CandidateSource =
+  | "ai_initial"
   | "ai_refined"
   | "deterministic_fallback"
   | "user_structured"
-  | "existing_approved"
-  | "manual_restore"
-  | "unknown";
+  | "existing_approved";
 
 export interface BusinessDNASnapshot {
   readonly snapshotId: string;
@@ -77,6 +76,15 @@ export interface CanonicalMessagePackCopy {
   readonly benefitBulletsOrdered: readonly string[];
   readonly cta: string;
   readonly footer: CanonicalFooter | null;
+  readonly proofPointsOrdered: readonly string[];
+  readonly platformCaptionsOrdered: readonly CanonicalPlatformCaption[];
+}
+
+export interface CanonicalPlatformCaption {
+  readonly platform: string;
+  readonly caption: string;
+  readonly cta: string;
+  readonly hashtagsOrdered: readonly string[];
 }
 
 export interface MessageQualityIssue {
@@ -89,6 +97,7 @@ export type RuleClassification = "hard" | "warning";
 export interface MessageQualityPolicy {
   readonly policyId: string;
   readonly policyVersion: number;
+  readonly policyHashSha256: string;
   readonly copySchemaVersion: string;
   readonly minScoreForApproval: number;
   readonly ruleClassifications: Readonly<Record<string, RuleClassification>>;
@@ -117,9 +126,12 @@ export interface MessagePackCandidate {
   readonly copy: CanonicalMessagePackCopy;
   readonly copyHashSha256: string;
   readonly businessDnaSnapshotId: string;
+  readonly evidenceHashSha256: string;
   readonly campaignStrategySnapshotId: string;
+  readonly strategyHashSha256: string;
   readonly qualityPolicyId: string;
   readonly qualityPolicyVersion: number;
+  readonly policyHashSha256: string;
   readonly provenance: MessagePackCandidateProvenance;
 }
 
@@ -127,12 +139,16 @@ export type AssessmentDecision = "approved" | "rejected";
 
 export interface MessageAssessment {
   readonly assessmentId: string;
+  readonly assessmentHashSha256: string;
   readonly candidateId: string;
   readonly copyHashSha256: string;
   readonly businessDnaSnapshotId: string;
+  readonly evidenceHashSha256: string;
   readonly campaignStrategySnapshotId: string;
+  readonly strategyHashSha256: string;
   readonly policyId: string;
   readonly policyVersion: number;
+  readonly policyHashSha256: string;
   readonly decision: AssessmentDecision;
   readonly hardIssues: readonly MessageQualityIssue[];
   readonly warnings: readonly MessageQualityIssue[];
@@ -144,14 +160,72 @@ export interface ApprovedMessagePack {
   readonly approvedRevisionId: string;
   readonly candidateId: string;
   readonly assessmentId: string;
+  readonly assessmentHashSha256: string;
   readonly copyHashSha256: string;
   readonly businessDnaSnapshotId: string;
+  readonly evidenceHashSha256: string;
   readonly campaignStrategySnapshotId: string;
+  readonly strategyHashSha256: string;
   readonly policyId: string;
   readonly policyVersion: number;
+  readonly policyHashSha256: string;
   readonly approvedAtIso: string;
   readonly copy: CanonicalMessagePackCopy;
   readonly sourceProvenance: MessagePackCandidateProvenance;
+}
+
+export interface MessageApprovalContextLock {
+  readonly contextLockId: string;
+  readonly mode: CreativePipelineV2Mode;
+  readonly campaignId: number;
+  readonly businessDna: BusinessDNASnapshot;
+  readonly businessDnaSnapshotId: string;
+  readonly evidenceHashSha256: string;
+  readonly campaignStrategy: CampaignStrategySnapshot;
+  readonly campaignStrategySnapshotId: string;
+  readonly strategyHashSha256: string;
+  readonly policy: MessageQualityPolicy;
+  readonly policyId: string;
+  readonly policyVersion: number;
+  readonly policyHashSha256: string;
+  readonly diagnostics: Pick<
+    ShadowEvaluationResult,
+    "contextSource" | "contextReadyForComparison" | "missingContextFields"
+  >;
+}
+
+export interface V2ApprovalEnvelope {
+  readonly schemaVersion: string;
+  readonly approvalMode: CreativePipelineV2Mode;
+  readonly contextLockId: string;
+  readonly approvedRevisionId: string;
+  readonly candidateId: string;
+  readonly assessmentId: string;
+  readonly assessmentHashSha256: string;
+  readonly copyHashSha256: string;
+  readonly copySchemaVersion: string;
+  readonly businessDnaSnapshotId: string;
+  readonly evidenceHashSha256: string;
+  readonly campaignStrategySnapshotId: string;
+  readonly strategyHashSha256: string;
+  readonly policyId: string;
+  readonly policyVersion: number;
+  readonly policyHashSha256: string;
+  readonly approvedAtIso: string;
+  readonly candidateSource: CandidateSource;
+  readonly sourceProvenance: MessagePackCandidateProvenance;
+  readonly decision: AssessmentDecision;
+  readonly score: number;
+  readonly hardIssueCodes: readonly string[];
+  readonly warningCodes: readonly string[];
+}
+
+export interface CanaryApprovalProof {
+  readonly contextLock: MessageApprovalContextLock;
+  readonly candidate: MessagePackCandidate;
+  readonly assessment: MessageAssessment;
+  readonly approvedMessagePack: ApprovedMessagePack;
+  readonly envelope: V2ApprovalEnvelope;
 }
 
 export interface ShadowEvaluationResult {
@@ -162,7 +236,7 @@ export interface ShadowEvaluationResult {
   readonly contextReadyForComparison: boolean;
   readonly missingContextFields: readonly string[];
   readonly candidateId: string;
-  readonly candidateSource: CandidateSource;
+  readonly candidateSource: CandidateSource | "unknown";
   readonly copyHashSha256: string;
   readonly legacyDecision: "approved" | "rejected";
   readonly legacyIsGeneric: boolean | null;

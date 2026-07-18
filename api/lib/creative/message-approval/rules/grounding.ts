@@ -25,7 +25,19 @@ export function checkGrounding(
   business: BusinessDNASnapshot,
   strategy: CampaignStrategySnapshot
 ): GroundingCheckResult {
-  const text = [copy.headline, copy.subheadline, ...copy.benefitBulletsOrdered, copy.cta]
+  const text = [
+    copy.headline,
+    copy.subheadline,
+    ...copy.benefitBulletsOrdered,
+    copy.cta,
+    ...copy.proofPointsOrdered,
+    ...copy.platformCaptionsOrdered.flatMap((caption) => [
+      caption.platform,
+      caption.caption,
+      caption.cta,
+      ...caption.hashtagsOrdered,
+    ]),
+  ]
     .join("\n")
     .toLowerCase();
 
