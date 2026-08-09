@@ -18,6 +18,10 @@ function toLegacySource(candidateSource: V2ApprovalEnvelope["candidateSource"]):
       return "user_structured_copy";
     case "existing_approved":
       return "latest_message_pack";
+    case "diagnostic_fixture":
+      // Diagnostic fixtures are in-memory only. Map to the nearest truthful
+      // legacy source for type completeness; they must never be persisted.
+      return "user_structured_copy";
     default:
       return "latest_message_pack";
   }

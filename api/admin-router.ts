@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { createRouter, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
+import { env } from "./lib/env";
+import { logInfo, logError } from "./lib/logger";
 import { aggregateIntegrationStatuses } from "./lib/admin/integration-status";
+import {
+  runDiagnosticAuthority,
+  type DiagnosticProductionMode,
+} from "./lib/creative/message-approval/diagnostic-harness";
 import {
   users,
   subscriptions,
@@ -22,6 +28,14 @@ import {
 } from "@db/schema";
 import { eq, desc, sql, count, and, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+
+function normalizeProductionMode(raw: string | undefined): DiagnosticProductionMode {
+  const value = String(raw ?? "off").toLowerCase().trim();
+  if (value === "off" || value === "shadow" || value === "canary" || value === "active") {
+    return value as DiagnosticProductionMode;
+  }
+  return "unknown";
+}
 
 export const adminRouter = createRouter({
   // ─── Dashboard Stats ───
@@ -454,4 +468,72 @@ export const adminRouter = createRouter({
       latestPublishErrors,
     };
   }),
+
+  // ─── V2 Diagnostic Authority Harness ───
+  canaryDiagnosticAuthority: adminQuery
+    .input(
+      z.object({
+        executionId: z.string().uuid(),
+        fixtureCase: z.enum(["approved", "rejected_cta_mismatch"]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!env.creativeV2DiagnosticHarnessEnabled) {
+        throw new TRPCError({
+          code: "SERVICE_UNAVAILABLE",
+          message: "V2 diagnostic authority harness is disabled.",
+        });
+      }
+
+      const productionMode = normalizeProductionMode(process.env.CREATIVE_PIPELINE_V2_MODE);
+      const adminUserId = ctx.user.id;
+
+      try {
+        const result = runDiagnosticAuthority({
+          executionId: input.executionId,
+          fixtureCase: input.fixtureCase,
+          productionMode,
+        });
+
+        const safeEvent = {
+          event: "v2_diagnostic_authority_executed",
+          executionId: input.executionId,
+          adminUserId,
+          timestamp: result.timestamp,
+          productionMode: result.productionMode,
+          executionMode: result.executionMode,
+          fixtureCase: input.fixtureCase,
+          decision: result.decision,
+          score: result.score,
+          hardIssueCodes: result.hardIssueCodes,
+          warningCodes: result.warningCodes,
+          errorStage: result.errorStage,
+          errorCode: result.errorCode,
+          durationMs: result.durationMs,
+          billingMutationCount: result.billingMutationCount,
+          artifactMutationCount: result.artifactMutationCount,
+          publishingMutationCount: result.publishingMutationCount,
+        };
+
+        if (result.errorStage || result.errorCode) {
+          logError("[Admin] V2 diagnostic authority failed", safeEvent);
+        } else {
+          logInfo("[Admin] V2 diagnostic authority executed", safeEvent);
+        }
+
+        return result;
+      } catch (err: any) {
+        const errorCode = typeof err?.code === "string" ? err.code : "DIAGNOSTIC_AUTHORITY_ERROR";
+        logError("[Admin] V2 diagnostic authority unexpected error", {
+          event: "v2_diagnostic_authority_error",
+          executionId: input.executionId,
+          adminUserId,
+          errorCode,
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Diagnostic authority execution failed.",
+        });
+      }
+    }),
 });

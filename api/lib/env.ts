@@ -63,6 +63,10 @@ export const env = {
   enablePremiumTemplateProvider: process.env.ENABLE_PREMIUM_TEMPLATE_PROVIDER === "true",
   premiumTemplateProvider: process.env.PREMIUM_TEMPLATE_PROVIDER ?? "",
 
+  // V2 diagnostic authority harness (admin-only, fixture-only, in-memory, fail-closed)
+  creativeV2DiagnosticHarnessEnabled:
+    process.env.CREATIVE_V2_DIAGNOSTIC_HARNESS_ENABLED === "true",
+
   // Default provider for premium leaflet generation. Can be overridden per-request.
   premiumLeafletProvider: process.env.PREMIUM_LEAFLET_PROVIDER ?? "v2",
 

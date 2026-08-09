@@ -5,7 +5,8 @@ export type CandidateSource =
   | "ai_refined"
   | "deterministic_fallback"
   | "user_structured"
-  | "existing_approved";
+  | "existing_approved"
+  | "diagnostic_fixture";
 
 export interface BusinessDNASnapshot {
   readonly snapshotId: string;
