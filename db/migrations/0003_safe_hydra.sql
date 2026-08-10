@@ -58,16 +58,9 @@ CREATE TABLE `system_alerts` (
 ALTER TABLE `approval_requests` MODIFY COLUMN `approvalType` enum('campaign_launch','budget_increase','sensitive_reply','high_value_proposal','ad_spend','shutdown','brand_risk','strategy_review') NOT NULL;--> statement-breakpoint
 ALTER TABLE `campaign_assets` MODIFY COLUMN `assetType` enum('image','video_script','carousel','ad_copy','caption','hashtag_set','cta_variant','email_copy','whatsapp_copy','video_concept','reel_script','carousel_ad','whatsapp_promo','lead_gen_ad','launch_pack') NOT NULL;--> statement-breakpoint
 ALTER TABLE `content_posts` MODIFY COLUMN `type` enum('social_post','ad_copy','email','script','blog','story','video_concept','reel_script','carousel_ad','whatsapp_promo','lead_gen_ad','launch_pack') NOT NULL;--> statement-breakpoint
-ALTER TABLE `publishing_queue` MODIFY COLUMN `status` enum('draft','pending_approval','approved','published','failed','safety_blocked','retrying') NOT NULL DEFAULT 'draft';--> statement-breakpoint
 ALTER TABLE `businesses` ADD `premiumContentPreferences` text;--> statement-breakpoint
 ALTER TABLE `businesses` ADD `hasProductVideos` boolean DEFAULT false;--> statement-breakpoint
 ALTER TABLE `content_posts` ADD `metadata` json;--> statement-breakpoint
-ALTER TABLE `publishing_queue` ADD `retryCount` int DEFAULT 0 NOT NULL;--> statement-breakpoint
-ALTER TABLE `publishing_queue` ADD `maxRetries` int DEFAULT 3 NOT NULL;--> statement-breakpoint
-ALTER TABLE `publishing_queue` ADD `nextRetryAt` timestamp;--> statement-breakpoint
-ALTER TABLE `publishing_queue` ADD `lastError` text;--> statement-breakpoint
-ALTER TABLE `publishing_queue` ADD `safetyStatus` enum('pending','low','medium','high');--> statement-breakpoint
-ALTER TABLE `publishing_queue` ADD `safetyReasons` json;--> statement-breakpoint
 ALTER TABLE `subscription_tiers` ADD `monthlyCredits` int DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE `subscriptions` ADD `lastCreditAllocationAt` timestamp;--> statement-breakpoint
 ALTER TABLE `subscriptions` ADD `nextCreditAllocationAt` timestamp;--> statement-breakpoint

@@ -5,6 +5,7 @@ INNER JOIN `social_profiles` t2
   AND t1.`platform` = t2.`platform`
   AND t1.`externalId` = t2.`externalId`
   AND t1.`id` > t2.`id`;
-
-DROP INDEX `user_platform_external_idx` ON `social_profiles`;--> statement-breakpoint
+--> statement-breakpoint
+DROP INDEX `user_platform_external_idx` ON `social_profiles`;
+--> statement-breakpoint
 ALTER TABLE `social_profiles` ADD CONSTRAINT `user_platform_external_idx` UNIQUE(`userId`,`platform`,`externalId`);
