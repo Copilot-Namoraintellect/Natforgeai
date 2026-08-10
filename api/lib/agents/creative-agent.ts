@@ -2,8 +2,8 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { runAgent } from "./runner";
 import { getDb } from "../../queries/connection";
-import { campaigns, contentPosts, campaignAssets, businesses, agentRuns, creditTransactions } from "@db/schema";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { campaigns, contentPosts, campaignAssets, businesses, agentRuns } from "@db/schema";
+import { eq, and } from "drizzle-orm";
 import { logInfo, logError, logWarn } from "../logger";
 import { checkCredits, deductCredits } from "../billing/credit-engine";
 import { getEstimatedAgentCost } from "../billing/cost-tracker";
@@ -793,33 +793,9 @@ async function deductCreativeCreditsOnce({
   generationRunId: string;
   estimatedCost: number;
 }): Promise<void> {
-  const db = getDb();
   const idempotencyKey = `creative-success:${campaignId}:${agentRunId}`;
 
-  const existingTx = await db
-    .select({ id: creditTransactions.id })
-    .from(creditTransactions)
-    .where(
-      and(
-        eq(creditTransactions.userId, userId),
-        eq(creditTransactions.type, "agent_deduction" as any),
-        sql`JSON_UNQUOTE(JSON_EXTRACT(${creditTransactions.metadata}, '$.idempotencyKey')) = ${idempotencyKey}`
-      )
-    )
-    .orderBy(desc(creditTransactions.id))
-    .limit(1);
-
-  if (existingTx.length > 0) {
-    logInfo("[CreativeAgent] billing already deducted for run", {
-      userId,
-      campaignId,
-      agentRunId,
-      idempotencyKey,
-    });
-    return;
-  }
-
-  await deductCredits({
+  const { alreadyDeducted } = await deductCredits({
     userId,
     amount: estimatedCost,
     type: "agent_deduction",
@@ -834,7 +810,17 @@ async function deductCreativeCreditsOnce({
       agentType: "creative",
       idempotencyKey,
     },
+    idempotencyKey,
   });
+
+  if (alreadyDeducted) {
+    logInfo("[CreativeAgent] billing already deducted for run", {
+      userId,
+      campaignId,
+      agentRunId,
+      idempotencyKey,
+    });
+  }
 }
 
 export async function runCreativeAgent({

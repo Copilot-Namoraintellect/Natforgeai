@@ -3,6 +3,40 @@ import { creditWallets, creditTransactions, aiUsage, subscriptionTiers, subscrip
 import { eq, and, gte, sql, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
+// Test-only seam. Tests install a callback here to force a failure after the
+// wallet UPDATE but before the final credit_transactions materialisation.
+// It is not part of the deductCredits input contract and cannot be supplied by
+// production callers.
+let testHookAfterWalletUpdate: (() => void | Promise<void>) | undefined;
+
+export function __setTestHookAfterWalletUpdate(
+  hook: (() => void | Promise<void>) | undefined
+): void {
+  testHookAfterWalletUpdate = hook;
+}
+
+export function isMySqlDuplicateKeyError(err: unknown): boolean {
+  const seen = new WeakSet<object>();
+  let current: unknown = err;
+  let depth = 0;
+  while (current && typeof current === "object" && depth < 5) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    const e = current as Record<string, unknown>;
+    if (e.code === "ER_DUP_ENTRY" || e.errno === 1062) return true;
+    current = e.cause;
+    depth++;
+  }
+  return false;
+}
+
+function throwIdempotencyCollision(): never {
+  throw new TRPCError({
+    code: "CONFLICT",
+    message: "IDEMPOTENCY_KEY_COLLISION",
+  });
+}
+
 
 /**
  * Ensures a credit wallet exists for a user. Creates one if missing.
@@ -114,13 +148,15 @@ export async function deductCredits({
   type,
   description,
   metadata,
+  idempotencyKey,
 }: {
   userId: number;
   amount: number;
   type: typeof creditTransactions.$inferInsert["type"];
   description: string;
   metadata?: Record<string, any>;
-}): Promise<{ newBalance: number }> {
+  idempotencyKey?: string;
+}): Promise<{ newBalance: number; alreadyDeducted?: boolean }> {
   const db = getDb();
 
   const wallet = await ensureWallet(userId);
@@ -136,6 +172,105 @@ export async function deductCredits({
     }
   }
 
+  if (idempotencyKey) {
+    // Run the deduction inside a transaction. If another caller has already
+    // claimed this idempotency key, MySQL rejects the claim INSERT with
+    // ER_DUP_ENTRY. The transaction then rolls back and we look up the
+    // already-committed transaction from outside the failed transaction. This
+    // avoids deadlocks that can occur if we try to lock-read the duplicate row
+    // inside the same transaction that just failed to insert it.
+    try {
+      return await db.transaction(async (tx) => {
+        // Claim the idempotency key first. The unique constraint guarantees
+        // that only one transaction can record a claim for this key.
+        await tx.insert(creditTransactions).values({
+          userId,
+          walletId: wallet.id,
+          type,
+          amount: -amount,
+          balanceAfter: 0,
+          description,
+          metadata: metadata as any,
+          idempotencyKey,
+        });
+
+        // Atomic balance deduction with race-condition protection
+        const updateResult = await tx.execute(
+          sql`UPDATE credit_wallets
+              SET balance = balance - ${amount}, lifetimeSpent = lifetimeSpent + ${amount}, updatedAt = NOW()
+              WHERE id = ${wallet.id} AND balance >= ${amount}`
+        );
+
+        // MySQL2 returns [ResultSetHeader, ...] where affectedRows is on the first element
+        const walletAffectedRows = (updateResult as any)?.[0]?.affectedRows ?? 0;
+
+        if (walletAffectedRows === 0) {
+          throw new TRPCError({
+            code: "PAYMENT_REQUIRED",
+            message: `Insufficient credits. Balance: ${wallet.balance}. Required: ${amount}. Upgrade your plan or purchase more credits.`,
+          });
+        }
+
+        // Re-read wallet to avoid stale balance under concurrency
+        const [updatedWallet] = await tx
+          .select()
+          .from(creditWallets)
+          .where(eq(creditWallets.id, wallet.id))
+          .limit(1);
+        const newBalance = updatedWallet?.balance ?? wallet.balance - amount;
+
+        // Test-only seam: allow tests to force a failure after the wallet UPDATE
+        // but before the claim row is materialised, proving the transaction rolls
+        // back and leaves no idempotency claim.
+        if (testHookAfterWalletUpdate) {
+          await testHookAfterWalletUpdate();
+        }
+
+        // Materialise the actual post-deduction balance on the idempotency claim.
+        // If this or any earlier step fails, the transaction rolls back and the
+        // claim row is never visible.
+        await tx
+          .update(creditTransactions)
+          .set({ balanceAfter: newBalance })
+          .where(eq(creditTransactions.idempotencyKey, idempotencyKey));
+
+        return { newBalance };
+      });
+    } catch (err) {
+      if (isMySqlDuplicateKeyError(err)) {
+        // The failed transaction has already rolled back. Read the committed
+        // transaction that won the race and verify it represents the same
+        // deduction before reporting alreadyDeducted.
+        const [existing] = await db
+          .select()
+          .from(creditTransactions)
+          .where(eq(creditTransactions.idempotencyKey, idempotencyKey))
+          .limit(1);
+
+        if (!existing) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Idempotency key collision detected but existing transaction could not be retrieved",
+          });
+        }
+
+        if (
+          existing.userId !== userId ||
+          existing.walletId !== wallet.id ||
+          existing.type !== type ||
+          existing.amount !== -amount
+        ) {
+          throwIdempotencyCollision();
+        }
+
+        return { newBalance: existing.balanceAfter, alreadyDeducted: true };
+      }
+      throw err;
+    }
+  }
+
+  // Non-idempotent path: preserve existing behaviour exactly.
   // Atomic balance deduction with race-condition protection
   const updateResult = await db.execute(
     sql`UPDATE credit_wallets 

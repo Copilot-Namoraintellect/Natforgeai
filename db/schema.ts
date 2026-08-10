@@ -1010,6 +1010,7 @@ export const creditTransactions = mysqlTable("credit_transactions", {
   balanceAfter: int("balanceAfter").notNull(),
   description: text("description"),
   metadata: json("metadata"),
+  idempotencyKey: varchar("idempotencyKey", { length: 255 }).unique(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
