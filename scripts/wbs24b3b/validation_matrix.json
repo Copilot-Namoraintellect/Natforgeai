@@ -1,0 +1,657 @@
+{
+  "ephemeralMysqlPort": 41042,
+  "matrix": [
+    {
+      "scenario": "initial_production_state",
+      "expectedExitCode": 0,
+      "actualExitCode": 0,
+      "pass": true,
+      "detectedState": "A",
+      "finalClassification": "PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED",
+      "statementsExecuted": [
+        "[WBS24B3B] 2026-08-11T08:34:33.665Z DDL_ADD_0015_COLUMN_AND_INDEX",
+        "[WBS24B3B] 2026-08-11T08:34:33.665Z APPLY_0015_COLUMN credit_transactions.idempotencyKey",
+        "[WBS24B3B] 2026-08-11T08:34:33.694Z APPLY_0015_INDEX credit_transactions_idempotencyKey_unique",
+        "[WBS24B3B] 2026-08-11T08:34:33.774Z TRACKING_INSERT_START",
+        "[WBS24B3B] 2026-08-11T08:34:33.793Z TRACKING_INSERT_COMMITTED affected=8"
+      ],
+      "finalState": {
+        "trackingRows": 17,
+        "duplicates": 0,
+        "hasTargetColumn": true,
+        "hasTargetIndex": true
+      },
+      "divergentVerificationValues": {
+        "checked": true,
+        "preserved": false,
+        "users": [
+          {
+            "unionId": "u1",
+            "twoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "emailVerifiedAt": "2025-01-01 10:00:00",
+            "lastTwoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "preserved": false
+          },
+          {
+            "unionId": "u2",
+            "twoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "emailVerifiedAt": "2025-02-01 11:00:00",
+            "lastTwoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "preserved": false
+          }
+        ]
+      },
+      "noopProof": {
+        "runs": [
+          {
+            "run": 1,
+            "migrateExitCode": 0,
+            "suspicious": []
+          },
+          {
+            "run": 2,
+            "migrateExitCode": 0,
+            "suspicious": []
+          }
+        ],
+        "trackingUnchanged": true,
+        "schemaUnchanged": true,
+        "valuesUnchanged": true,
+        "aggregatesUnchanged": true,
+        "beforeTrackingFingerprint": "1:72b3c061c1ad128ac438ccf529de78f0e0002725d10fe71502e71ffd2e9902a1:1779900649982|2:a75ec6176d74c3154b716e32c8483cbe42606dd60e500f841507034e6588a19b:1780324454630|3:4fc651b25fba9161117051d6efc12ee0f716d12c72fd1599678aa0213673d423:1780324500000|4:cc1f0ad292b61ee46ac88df8e61154eff9297a55ade1d9f540621c5523f74933:1780831759898|5:688aed12f2e961e1bb024c148eb55600c60e3001ae5ec5bc463780fe8643a7ff:1781510827473|6:1cb50c16061be27e898d1394c658777b9bacd5c8c713e8c1a7a97cfdaf9a6492:1781542151944|7:2e43ba6c7dcac164d49fd80bf77fd95c37f124faba72525a14141a1908767d89:1781548376131|8:1cbf0cbce58141fea0af9a197decbe6483e5926b75b8a3f1ddfe08849b71929b:1781691852016|9:e2a4f7230720940a41a03d9942ba8f0324992284b1048daf55384e560acc5e32:1782301770674|10:ce33730998dde10569ff2c8e038d321d8a4963f50a11b01ecfe36b0099bc147f:1782459275896|11:7aaefb5ea121c78df1a910afc313915b5edf26ae44ca14e828280c795f2bc0b6:1782495282088|12:22f040486d9441dded492f5e137d403b183cb44400d229cee36a229031ca0655:1782571686288|13:7d9452351c176705178034ab852b8fcc6a47b3e904c97790621c2660998638f9:1782834565471|14:026fc1717dfa1371f629f2e16dec11a1486040b1e4987b404bb8d53dcccbd7a8:1783021494761|15:ad3ba6c3f2e692a15cc42822eaba537e4fb59c5df094211cffa7efdde6a978fa:1783341181484|16:36e961ca7d822c6065cc19ce0d9cdd3ecb9d0edf0b3ab71212a46a1dd5bee0d0:1786376773661|17:86412d4815a155b39ed074885176ba6a8e3179b4b830fb6808ccd3854bb7f0bf:1786381570150"
+      },
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:34:35.521Z NOOP_PROOF_OK\n[WBS24B3B] 2026-08-11T08:34:35.521Z MIGRATION_CONN_CLOSED id=11\n[WBS24B3B] 2026-08-11T08:34:35.521Z SMOKE command: node --version\n[WBS24B3B] 2026-08-11T08:34:35.567Z SMOKE result: exit=0\n[WBS24B3B] 2026-08-11T08:34:35.568Z RELEASE_APPROVAL operator=validation-agent timestamp=2026-08-11T00:00:00Z reference=WBS-2.4B3B-RELEASE\n[WBS24B3B] 2026-08-11T08:34:35.568Z FINAL_CLASSIFICATION=PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED\n[WBS24B3B] 2026-08-11T08:34:35.568Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":true,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":true,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "0015_column_only_partial",
+      "expectedExitCode": 0,
+      "actualExitCode": 0,
+      "pass": true,
+      "detectedState": "B",
+      "finalClassification": "PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED",
+      "statementsExecuted": [
+        "[WBS24B3B] 2026-08-11T08:34:41.956Z DDL_ADD_0015_INDEX",
+        "[WBS24B3B] 2026-08-11T08:34:41.956Z APPLY_0015_INDEX credit_transactions_idempotencyKey_unique",
+        "[WBS24B3B] 2026-08-11T08:34:42.031Z TRACKING_INSERT_START",
+        "[WBS24B3B] 2026-08-11T08:34:42.043Z TRACKING_INSERT_COMMITTED affected=8"
+      ],
+      "finalState": {
+        "trackingRows": 17,
+        "duplicates": 0,
+        "hasTargetColumn": true,
+        "hasTargetIndex": true
+      },
+      "divergentVerificationValues": {
+        "checked": true,
+        "preserved": true,
+        "users": [
+          {
+            "unionId": "u1",
+            "twoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "emailVerifiedAt": "2025-01-02 12:30:00",
+            "lastTwoFactorVerifiedAt": "2025-01-03 13:45:00",
+            "preserved": true
+          },
+          {
+            "unionId": "u2",
+            "twoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "emailVerifiedAt": "2025-02-03 14:15:00",
+            "lastTwoFactorVerifiedAt": "2025-02-04 15:20:00",
+            "preserved": true
+          }
+        ]
+      },
+      "noopProof": {
+        "runs": [
+          {
+            "run": 1,
+            "migrateExitCode": 0,
+            "suspicious": []
+          },
+          {
+            "run": 2,
+            "migrateExitCode": 0,
+            "suspicious": []
+          }
+        ],
+        "trackingUnchanged": true,
+        "schemaUnchanged": true,
+        "valuesUnchanged": true,
+        "aggregatesUnchanged": true,
+        "beforeTrackingFingerprint": "1:72b3c061c1ad128ac438ccf529de78f0e0002725d10fe71502e71ffd2e9902a1:1779900649982|2:a75ec6176d74c3154b716e32c8483cbe42606dd60e500f841507034e6588a19b:1780324454630|3:4fc651b25fba9161117051d6efc12ee0f716d12c72fd1599678aa0213673d423:1780324500000|4:cc1f0ad292b61ee46ac88df8e61154eff9297a55ade1d9f540621c5523f74933:1780831759898|5:688aed12f2e961e1bb024c148eb55600c60e3001ae5ec5bc463780fe8643a7ff:1781510827473|6:1cb50c16061be27e898d1394c658777b9bacd5c8c713e8c1a7a97cfdaf9a6492:1781542151944|7:2e43ba6c7dcac164d49fd80bf77fd95c37f124faba72525a14141a1908767d89:1781548376131|8:1cbf0cbce58141fea0af9a197decbe6483e5926b75b8a3f1ddfe08849b71929b:1781691852016|9:e2a4f7230720940a41a03d9942ba8f0324992284b1048daf55384e560acc5e32:1782301770674|10:ce33730998dde10569ff2c8e038d321d8a4963f50a11b01ecfe36b0099bc147f:1782459275896|11:7aaefb5ea121c78df1a910afc313915b5edf26ae44ca14e828280c795f2bc0b6:1782495282088|12:22f040486d9441dded492f5e137d403b183cb44400d229cee36a229031ca0655:1782571686288|13:7d9452351c176705178034ab852b8fcc6a47b3e904c97790621c2660998638f9:1782834565471|14:026fc1717dfa1371f629f2e16dec11a1486040b1e4987b404bb8d53dcccbd7a8:1783021494761|15:ad3ba6c3f2e692a15cc42822eaba537e4fb59c5df094211cffa7efdde6a978fa:1783341181484|16:36e961ca7d822c6065cc19ce0d9cdd3ecb9d0edf0b3ab71212a46a1dd5bee0d0:1786376773661|17:86412d4815a155b39ed074885176ba6a8e3179b4b830fb6808ccd3854bb7f0bf:1786381570150"
+      },
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:34:43.642Z NOOP_PROOF_OK\n[WBS24B3B] 2026-08-11T08:34:43.642Z MIGRATION_CONN_CLOSED id=18\n[WBS24B3B] 2026-08-11T08:34:43.642Z SMOKE command: node --version\n[WBS24B3B] 2026-08-11T08:34:43.698Z SMOKE result: exit=0\n[WBS24B3B] 2026-08-11T08:34:43.699Z RELEASE_APPROVAL operator=validation-agent timestamp=2026-08-11T00:00:00Z reference=WBS-2.4B3B-RELEASE\n[WBS24B3B] 2026-08-11T08:34:43.699Z FINAL_CLASSIFICATION=PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED\n[WBS24B3B] 2026-08-11T08:34:43.699Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":true,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":true,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "0015_column_and_index_partial",
+      "expectedExitCode": 0,
+      "actualExitCode": 0,
+      "pass": true,
+      "detectedState": "C",
+      "finalClassification": "PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED",
+      "statementsExecuted": [
+        "[WBS24B3B] 2026-08-11T08:34:49.676Z DDL_0015_ALREADY_PRESENT",
+        "[WBS24B3B] 2026-08-11T08:34:49.709Z TRACKING_INSERT_START",
+        "[WBS24B3B] 2026-08-11T08:34:49.722Z TRACKING_INSERT_COMMITTED affected=8"
+      ],
+      "finalState": {
+        "trackingRows": 17,
+        "duplicates": 0,
+        "hasTargetColumn": true,
+        "hasTargetIndex": true
+      },
+      "divergentVerificationValues": {
+        "checked": true,
+        "preserved": true,
+        "users": [
+          {
+            "unionId": "u1",
+            "twoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "emailVerifiedAt": "2025-01-02 12:30:00",
+            "lastTwoFactorVerifiedAt": "2025-01-03 13:45:00",
+            "preserved": true
+          },
+          {
+            "unionId": "u2",
+            "twoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "emailVerifiedAt": "2025-02-03 14:15:00",
+            "lastTwoFactorVerifiedAt": "2025-02-04 15:20:00",
+            "preserved": true
+          }
+        ]
+      },
+      "noopProof": {
+        "runs": [
+          {
+            "run": 1,
+            "migrateExitCode": 0,
+            "suspicious": []
+          },
+          {
+            "run": 2,
+            "migrateExitCode": 0,
+            "suspicious": []
+          }
+        ],
+        "trackingUnchanged": true,
+        "schemaUnchanged": true,
+        "valuesUnchanged": true,
+        "aggregatesUnchanged": true,
+        "beforeTrackingFingerprint": "1:72b3c061c1ad128ac438ccf529de78f0e0002725d10fe71502e71ffd2e9902a1:1779900649982|2:a75ec6176d74c3154b716e32c8483cbe42606dd60e500f841507034e6588a19b:1780324454630|3:4fc651b25fba9161117051d6efc12ee0f716d12c72fd1599678aa0213673d423:1780324500000|4:cc1f0ad292b61ee46ac88df8e61154eff9297a55ade1d9f540621c5523f74933:1780831759898|5:688aed12f2e961e1bb024c148eb55600c60e3001ae5ec5bc463780fe8643a7ff:1781510827473|6:1cb50c16061be27e898d1394c658777b9bacd5c8c713e8c1a7a97cfdaf9a6492:1781542151944|7:2e43ba6c7dcac164d49fd80bf77fd95c37f124faba72525a14141a1908767d89:1781548376131|8:1cbf0cbce58141fea0af9a197decbe6483e5926b75b8a3f1ddfe08849b71929b:1781691852016|9:e2a4f7230720940a41a03d9942ba8f0324992284b1048daf55384e560acc5e32:1782301770674|10:ce33730998dde10569ff2c8e038d321d8a4963f50a11b01ecfe36b0099bc147f:1782459275896|11:7aaefb5ea121c78df1a910afc313915b5edf26ae44ca14e828280c795f2bc0b6:1782495282088|12:22f040486d9441dded492f5e137d403b183cb44400d229cee36a229031ca0655:1782571686288|13:7d9452351c176705178034ab852b8fcc6a47b3e904c97790621c2660998638f9:1782834565471|14:026fc1717dfa1371f629f2e16dec11a1486040b1e4987b404bb8d53dcccbd7a8:1783021494761|15:ad3ba6c3f2e692a15cc42822eaba537e4fb59c5df094211cffa7efdde6a978fa:1783341181484|16:36e961ca7d822c6065cc19ce0d9cdd3ecb9d0edf0b3ab71212a46a1dd5bee0d0:1786376773661|17:86412d4815a155b39ed074885176ba6a8e3179b4b830fb6808ccd3854bb7f0bf:1786381570150"
+      },
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:34:51.285Z NOOP_PROOF_OK\n[WBS24B3B] 2026-08-11T08:34:51.285Z MIGRATION_CONN_CLOSED id=25\n[WBS24B3B] 2026-08-11T08:34:51.285Z SMOKE command: node --version\n[WBS24B3B] 2026-08-11T08:34:51.346Z SMOKE result: exit=0\n[WBS24B3B] 2026-08-11T08:34:51.346Z RELEASE_APPROVAL operator=validation-agent timestamp=2026-08-11T00:00:00Z reference=WBS-2.4B3B-RELEASE\n[WBS24B3B] 2026-08-11T08:34:51.346Z FINAL_CLASSIFICATION=PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED\n[WBS24B3B] 2026-08-11T08:34:51.346Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":true,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":true,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "rolled_back_tracking_transaction",
+      "expectedExitCode": 0,
+      "actualExitCode": 0,
+      "pass": true,
+      "detectedState": "C",
+      "finalClassification": "PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED",
+      "statementsExecuted": [
+        "[WBS24B3B] 2026-08-11T08:34:57.480Z DDL_0015_ALREADY_PRESENT",
+        "[WBS24B3B] 2026-08-11T08:34:57.515Z TRACKING_INSERT_START",
+        "[WBS24B3B] 2026-08-11T08:34:57.529Z TRACKING_INSERT_COMMITTED affected=8"
+      ],
+      "finalState": {
+        "trackingRows": 17,
+        "duplicates": 0,
+        "hasTargetColumn": true,
+        "hasTargetIndex": true
+      },
+      "divergentVerificationValues": {
+        "checked": true,
+        "preserved": true,
+        "users": [
+          {
+            "unionId": "u1",
+            "twoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "emailVerifiedAt": "2025-01-02 12:30:00",
+            "lastTwoFactorVerifiedAt": "2025-01-03 13:45:00",
+            "preserved": true
+          },
+          {
+            "unionId": "u2",
+            "twoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "emailVerifiedAt": "2025-02-03 14:15:00",
+            "lastTwoFactorVerifiedAt": "2025-02-04 15:20:00",
+            "preserved": true
+          }
+        ]
+      },
+      "noopProof": {
+        "runs": [
+          {
+            "run": 1,
+            "migrateExitCode": 0,
+            "suspicious": []
+          },
+          {
+            "run": 2,
+            "migrateExitCode": 0,
+            "suspicious": []
+          }
+        ],
+        "trackingUnchanged": true,
+        "schemaUnchanged": true,
+        "valuesUnchanged": true,
+        "aggregatesUnchanged": true,
+        "beforeTrackingFingerprint": "1:72b3c061c1ad128ac438ccf529de78f0e0002725d10fe71502e71ffd2e9902a1:1779900649982|2:a75ec6176d74c3154b716e32c8483cbe42606dd60e500f841507034e6588a19b:1780324454630|3:4fc651b25fba9161117051d6efc12ee0f716d12c72fd1599678aa0213673d423:1780324500000|4:cc1f0ad292b61ee46ac88df8e61154eff9297a55ade1d9f540621c5523f74933:1780831759898|5:688aed12f2e961e1bb024c148eb55600c60e3001ae5ec5bc463780fe8643a7ff:1781510827473|6:1cb50c16061be27e898d1394c658777b9bacd5c8c713e8c1a7a97cfdaf9a6492:1781542151944|7:2e43ba6c7dcac164d49fd80bf77fd95c37f124faba72525a14141a1908767d89:1781548376131|8:1cbf0cbce58141fea0af9a197decbe6483e5926b75b8a3f1ddfe08849b71929b:1781691852016|9:e2a4f7230720940a41a03d9942ba8f0324992284b1048daf55384e560acc5e32:1782301770674|10:ce33730998dde10569ff2c8e038d321d8a4963f50a11b01ecfe36b0099bc147f:1782459275896|11:7aaefb5ea121c78df1a910afc313915b5edf26ae44ca14e828280c795f2bc0b6:1782495282088|12:22f040486d9441dded492f5e137d403b183cb44400d229cee36a229031ca0655:1782571686288|13:7d9452351c176705178034ab852b8fcc6a47b3e904c97790621c2660998638f9:1782834565471|14:026fc1717dfa1371f629f2e16dec11a1486040b1e4987b404bb8d53dcccbd7a8:1783021494761|15:ad3ba6c3f2e692a15cc42822eaba537e4fb59c5df094211cffa7efdde6a978fa:1783341181484|16:36e961ca7d822c6065cc19ce0d9cdd3ecb9d0edf0b3ab71212a46a1dd5bee0d0:1786376773661|17:86412d4815a155b39ed074885176ba6a8e3179b4b830fb6808ccd3854bb7f0bf:1786381570150"
+      },
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:34:59.069Z NOOP_PROOF_OK\n[WBS24B3B] 2026-08-11T08:34:59.070Z MIGRATION_CONN_CLOSED id=32\n[WBS24B3B] 2026-08-11T08:34:59.070Z SMOKE command: node --version\n[WBS24B3B] 2026-08-11T08:34:59.120Z SMOKE result: exit=0\n[WBS24B3B] 2026-08-11T08:34:59.121Z RELEASE_APPROVAL operator=validation-agent timestamp=2026-08-11T00:00:00Z reference=WBS-2.4B3B-RELEASE\n[WBS24B3B] 2026-08-11T08:34:59.121Z FINAL_CLASSIFICATION=PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED\n[WBS24B3B] 2026-08-11T08:34:59.121Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":true,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":true,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "fully_reconciled",
+      "expectedExitCode": 0,
+      "actualExitCode": 0,
+      "pass": true,
+      "detectedState": "D",
+      "finalClassification": "PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED",
+      "statementsExecuted": [],
+      "finalState": {
+        "trackingRows": 17,
+        "duplicates": 0,
+        "hasTargetColumn": true,
+        "hasTargetIndex": true
+      },
+      "divergentVerificationValues": {
+        "checked": true,
+        "preserved": true,
+        "users": [
+          {
+            "unionId": "u1",
+            "twoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "emailVerifiedAt": "2025-01-02 12:30:00",
+            "lastTwoFactorVerifiedAt": "2025-01-03 13:45:00",
+            "preserved": true
+          },
+          {
+            "unionId": "u2",
+            "twoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "emailVerifiedAt": "2025-02-03 14:15:00",
+            "lastTwoFactorVerifiedAt": "2025-02-04 15:20:00",
+            "preserved": true
+          }
+        ]
+      },
+      "noopProof": {
+        "runs": [
+          {
+            "run": 1,
+            "migrateExitCode": 0,
+            "suspicious": []
+          },
+          {
+            "run": 2,
+            "migrateExitCode": 0,
+            "suspicious": []
+          }
+        ],
+        "trackingUnchanged": true,
+        "schemaUnchanged": true,
+        "valuesUnchanged": true,
+        "aggregatesUnchanged": true,
+        "beforeTrackingFingerprint": "1:72b3c061c1ad128ac438ccf529de78f0e0002725d10fe71502e71ffd2e9902a1:1779900649982|2:a75ec6176d74c3154b716e32c8483cbe42606dd60e500f841507034e6588a19b:1780324454630|3:4fc651b25fba9161117051d6efc12ee0f716d12c72fd1599678aa0213673d423:1780324500000|4:cc1f0ad292b61ee46ac88df8e61154eff9297a55ade1d9f540621c5523f74933:1780831759898|5:688aed12f2e961e1bb024c148eb55600c60e3001ae5ec5bc463780fe8643a7ff:1781510827473|6:1cb50c16061be27e898d1394c658777b9bacd5c8c713e8c1a7a97cfdaf9a6492:1781542151944|7:2e43ba6c7dcac164d49fd80bf77fd95c37f124faba72525a14141a1908767d89:1781548376131|8:1cbf0cbce58141fea0af9a197decbe6483e5926b75b8a3f1ddfe08849b71929b:1781691852016|9:e2a4f7230720940a41a03d9942ba8f0324992284b1048daf55384e560acc5e32:1782301770674|10:ce33730998dde10569ff2c8e038d321d8a4963f50a11b01ecfe36b0099bc147f:1782459275896|11:7aaefb5ea121c78df1a910afc313915b5edf26ae44ca14e828280c795f2bc0b6:1782495282088|12:22f040486d9441dded492f5e137d403b183cb44400d229cee36a229031ca0655:1782571686288|13:7d9452351c176705178034ab852b8fcc6a47b3e904c97790621c2660998638f9:1782834565471|14:026fc1717dfa1371f629f2e16dec11a1486040b1e4987b404bb8d53dcccbd7a8:1783021494761|15:ad3ba6c3f2e692a15cc42822eaba537e4fb59c5df094211cffa7efdde6a978fa:1783341181484|16:36e961ca7d822c6065cc19ce0d9cdd3ecb9d0edf0b3ab71212a46a1dd5bee0d0:1786376773661|17:86412d4815a155b39ed074885176ba6a8e3179b4b830fb6808ccd3854bb7f0bf:1786381570150"
+      },
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:35:06.759Z NOOP_PROOF_OK\n[WBS24B3B] 2026-08-11T08:35:06.759Z MIGRATION_CONN_CLOSED id=39\n[WBS24B3B] 2026-08-11T08:35:06.759Z SMOKE command: node --version\n[WBS24B3B] 2026-08-11T08:35:06.813Z SMOKE result: exit=0\n[WBS24B3B] 2026-08-11T08:35:06.814Z RELEASE_APPROVAL operator=validation-agent timestamp=2026-08-11T00:00:00Z reference=WBS-2.4B3B-RELEASE\n[WBS24B3B] 2026-08-11T08:35:06.814Z FINAL_CLASSIFICATION=PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED\n[WBS24B3B] 2026-08-11T08:35:06.814Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":true,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":true,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "unexpected_pre_existing_tracking_row",
+      "expectedExitCode": 1,
+      "actualExitCode": 1,
+      "pass": true,
+      "detectedState": "n/a",
+      "finalClassification": "BLOCKED_ACTUAL_PRODUCTION_BASELINE",
+      "statementsExecuted": [],
+      "finalState": {
+        "trackingRows": 10,
+        "duplicates": 0,
+        "hasTargetColumn": false,
+        "hasTargetIndex": false
+      },
+      "divergentVerificationValues": {
+        "checked": false,
+        "reason": "columns_absent"
+      },
+      "noopProof": null,
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:35:12.082Z TARGET_MANIFEST host=127.0.0.1 port=41042 db=unexpected_pre_existing_tracking_row version=8.0.x account=natforge_migrator@%\n[WBS24B3B] 2026-08-11T08:35:12.154Z PREFLIGHT_CONN_OPENED id=45 url=127.0.0.1:41042/unexpected_pre_existing_tracking_row\n[WBS24B3B] 2026-08-11T08:35:12.158Z READ_ONLY_SESSION_VERIFIED transaction_read_only=1\n[WBS24B3B] 2026-08-11T08:35:12.160Z VERSION_OK actual=8.0.40 expected=8.0.x\n[WBS24B3B] 2026-08-11T08:35:12.173Z FAIL-CLOSED: BLOCKED_ACTUAL_PRODUCTION_BASELINE — unrecognised preflight state: 10 rows; ids=[1,2,3,4,5,6,7,8,9,10] hashes=[72b3c061c1ad128ac438ccf529de78f0e0002725d10fe71502e71ffd2e9902a1,a75ec6176d74c3154b716e32c8483cbe42606dd60e500f841507034e6588a19b,4fc651b25fba9161117051d6efc12ee0f716d12c72fd1599678aa0213673d423,cc1f0ad292b61ee46ac88df8e61154eff9297a55ade1d9f540621c5523f74933,688aed12f2e961e1bb024c148eb55600c60e3001ae5ec5bc463780fe8643a7ff,1cb50c16061be27e898d1394c658777b9bacd5c8c713e8c1a7a97cfdaf9a6492,2e43ba6c7dcac164d49fd80bf77fd95c37f124faba72525a14141a1908767d89,1cbf0cbce58141fea0af9a197decbe6483e5926b75b8a3f1ddfe08849b71929b,e2a4f7230720940a41a03d9942ba8f0324992284b1048daf55384e560acc5e32,ce33730998dde10569ff2c8e038d321d8a4963f50a11b01ecfe36b0099bc147f]\n[WBS24B3B] 2026-08-11T08:35:12.173Z FINAL_CLASSIFICATION=BLOCKED_ACTUAL_PRODUCTION_BASELINE\n[WBS24B3B] 2026-08-11T08:35:12.173Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":false,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":false,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "conflicting_tracking_hash",
+      "expectedExitCode": 1,
+      "actualExitCode": 1,
+      "pass": true,
+      "detectedState": "n/a",
+      "finalClassification": "BLOCKED_ACTUAL_PRODUCTION_BASELINE",
+      "statementsExecuted": [],
+      "finalState": {
+        "trackingRows": 9,
+        "duplicates": 0,
+        "hasTargetColumn": false,
+        "hasTargetIndex": false
+      },
+      "divergentVerificationValues": {
+        "checked": false,
+        "reason": "columns_absent"
+      },
+      "noopProof": null,
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:35:18.219Z TARGET_MANIFEST host=127.0.0.1 port=41042 db=conflicting_tracking_hash version=8.0.x account=natforge_migrator@%\n[WBS24B3B] 2026-08-11T08:35:18.287Z PREFLIGHT_CONN_OPENED id=49 url=127.0.0.1:41042/conflicting_tracking_hash\n[WBS24B3B] 2026-08-11T08:35:18.290Z READ_ONLY_SESSION_VERIFIED transaction_read_only=1\n[WBS24B3B] 2026-08-11T08:35:18.291Z VERSION_OK actual=8.0.40 expected=8.0.x\n[WBS24B3B] 2026-08-11T08:35:18.303Z FAIL-CLOSED: BLOCKED_ACTUAL_PRODUCTION_BASELINE — unrecognised preflight state: 9 rows; ids=[1,2,3,4,5,6,7,8,9] hashes=[72b3c061c1ad128ac438ccf529de78f0e0002725d10fe71502e71ffd2e9902a1,a75ec6176d74c3154b716e32c8483cbe42606dd60e500f841507034e6588a19b,4fc651b25fba9161117051d6efc12ee0f716d12c72fd1599678aa0213673d423,cc1f0ad292b61ee46ac88df8e61154eff9297a55ade1d9f540621c5523f74933,0000000000000000000000000000000000000000000000000000000000000000,1cb50c16061be27e898d1394c658777b9bacd5c8c713e8c1a7a97cfdaf9a6492,2e43ba6c7dcac164d49fd80bf77fd95c37f124faba72525a14141a1908767d89,1cbf0cbce58141fea0af9a197decbe6483e5926b75b8a3f1ddfe08849b71929b,e2a4f7230720940a41a03d9942ba8f0324992284b1048daf55384e560acc5e32]\n[WBS24B3B] 2026-08-11T08:35:18.303Z FINAL_CLASSIFICATION=BLOCKED_ACTUAL_PRODUCTION_BASELINE\n[WBS24B3B] 2026-08-11T08:35:18.303Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":false,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":false,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "conflicting_created_at",
+      "expectedExitCode": 1,
+      "actualExitCode": 1,
+      "pass": true,
+      "detectedState": "n/a",
+      "finalClassification": "BLOCKED_ACTUAL_PRODUCTION_BASELINE",
+      "statementsExecuted": [],
+      "finalState": {
+        "trackingRows": 9,
+        "duplicates": 0,
+        "hasTargetColumn": false,
+        "hasTargetIndex": false
+      },
+      "divergentVerificationValues": {
+        "checked": false,
+        "reason": "columns_absent"
+      },
+      "noopProof": null,
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:35:23.976Z TARGET_MANIFEST host=127.0.0.1 port=41042 db=conflicting_created_at version=8.0.x account=natforge_migrator@%\n[WBS24B3B] 2026-08-11T08:35:24.035Z PREFLIGHT_CONN_OPENED id=53 url=127.0.0.1:41042/conflicting_created_at\n[WBS24B3B] 2026-08-11T08:35:24.037Z READ_ONLY_SESSION_VERIFIED transaction_read_only=1\n[WBS24B3B] 2026-08-11T08:35:24.038Z VERSION_OK actual=8.0.40 expected=8.0.x\n[WBS24B3B] 2026-08-11T08:35:24.050Z FAIL-CLOSED: BLOCKED_ACTUAL_PRODUCTION_BASELINE — unrecognised preflight state: 9 rows; ids=[1,2,3,4,5,6,7,8,9] hashes=[72b3c061c1ad128ac438ccf529de78f0e0002725d10fe71502e71ffd2e9902a1,a75ec6176d74c3154b716e32c8483cbe42606dd60e500f841507034e6588a19b,4fc651b25fba9161117051d6efc12ee0f716d12c72fd1599678aa0213673d423,cc1f0ad292b61ee46ac88df8e61154eff9297a55ade1d9f540621c5523f74933,688aed12f2e961e1bb024c148eb55600c60e3001ae5ec5bc463780fe8643a7ff,1cb50c16061be27e898d1394c658777b9bacd5c8c713e8c1a7a97cfdaf9a6492,2e43ba6c7dcac164d49fd80bf77fd95c37f124faba72525a14141a1908767d89,1cbf0cbce58141fea0af9a197decbe6483e5926b75b8a3f1ddfe08849b71929b,e2a4f7230720940a41a03d9942ba8f0324992284b1048daf55384e560acc5e32]\n[WBS24B3B] 2026-08-11T08:35:24.050Z FINAL_CLASSIFICATION=BLOCKED_ACTUAL_PRODUCTION_BASELINE\n[WBS24B3B] 2026-08-11T08:35:24.050Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":false,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":false,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "historical_schema_mismatch",
+      "expectedExitCode": 1,
+      "actualExitCode": 1,
+      "pass": true,
+      "detectedState": "A",
+      "finalClassification": "BLOCKED_SCHEMA_EQUIVALENCE",
+      "statementsExecuted": [],
+      "finalState": {
+        "trackingRows": 9,
+        "duplicates": 0,
+        "hasTargetColumn": false,
+        "hasTargetIndex": false
+      },
+      "divergentVerificationValues": {
+        "checked": true,
+        "preserved": false,
+        "users": [
+          {
+            "unionId": "u1",
+            "twoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "emailVerifiedAt": "2025-01-01 10:00:00",
+            "lastTwoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "preserved": false
+          },
+          {
+            "unionId": "u2",
+            "twoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "emailVerifiedAt": "2025-02-01 11:00:00",
+            "lastTwoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "preserved": false
+          }
+        ]
+      },
+      "noopProof": null,
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:35:30.505Z PREFLIGHT_CONN_OPENED id=57 url=127.0.0.1:41042/historical_schema_mismatch\n[WBS24B3B] 2026-08-11T08:35:30.507Z READ_ONLY_SESSION_VERIFIED transaction_read_only=1\n[WBS24B3B] 2026-08-11T08:35:30.508Z VERSION_OK actual=8.0.40 expected=8.0.x\n[WBS24B3B] 2026-08-11T08:35:30.520Z PREFLIGHT_STATE state=A hasTargetColumn=false hasTargetIndex=false\n[WBS24B3B] 2026-08-11T08:35:30.558Z FAIL-CLOSED: BLOCKED_SCHEMA_EQUIVALENCE — preflight historical schema mismatch: 0009 social_integrations.pageId: COLUMN_TYPE expected to include 255, got varchar(100)\n[WBS24B3B] 2026-08-11T08:35:30.558Z FINAL_CLASSIFICATION=BLOCKED_SCHEMA_EQUIVALENCE\n[WBS24B3B] 2026-08-11T08:35:30.558Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":false,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":false,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "incorrectly_defined_0015_column",
+      "expectedExitCode": 1,
+      "actualExitCode": 1,
+      "pass": true,
+      "detectedState": "B",
+      "finalClassification": "BLOCKED_SCHEMA_EQUIVALENCE",
+      "statementsExecuted": [
+        "[WBS24B3B] 2026-08-11T08:35:36.790Z DDL_ADD_0015_INDEX",
+        "[WBS24B3B] 2026-08-11T08:35:36.790Z APPLY_0015_INDEX credit_transactions_idempotencyKey_unique"
+      ],
+      "finalState": {
+        "trackingRows": 9,
+        "duplicates": 0,
+        "hasTargetColumn": true,
+        "hasTargetIndex": true
+      },
+      "divergentVerificationValues": {
+        "checked": true,
+        "preserved": false,
+        "users": [
+          {
+            "unionId": "u1",
+            "twoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "emailVerifiedAt": "2025-01-01 10:00:00",
+            "lastTwoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "preserved": false
+          },
+          {
+            "unionId": "u2",
+            "twoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "emailVerifiedAt": "2025-02-01 11:00:00",
+            "lastTwoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "preserved": false
+          }
+        ]
+      },
+      "noopProof": null,
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:35:36.786Z HISTORICAL_SCHEMA_EQUIVALENCE_OK\n[WBS24B3B] 2026-08-11T08:35:36.789Z VERIFICATION_VALUES_BEFORE fingerprint_captured\n[WBS24B3B] 2026-08-11T08:35:36.790Z DDL_ADD_0015_INDEX\n[WBS24B3B] 2026-08-11T08:35:36.790Z APPLY_0015_INDEX credit_transactions_idempotencyKey_unique\n[WBS24B3B] 2026-08-11T08:35:36.850Z FAIL-CLOSED: BLOCKED_SCHEMA_EQUIVALENCE — post-0015 checks failed: 0015 credit_transactions.idempotencyKey: COLUMN_TYPE expected to include 255, got varchar(128)\n[WBS24B3B] 2026-08-11T08:35:36.850Z FINAL_CLASSIFICATION=BLOCKED_SCHEMA_EQUIVALENCE\n[WBS24B3B] 2026-08-11T08:35:36.850Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":false,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":false,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "incorrectly_defined_0015_index",
+      "expectedExitCode": 1,
+      "actualExitCode": 1,
+      "pass": true,
+      "detectedState": "C",
+      "finalClassification": "BLOCKED_SCHEMA_EQUIVALENCE",
+      "statementsExecuted": [
+        "[WBS24B3B] 2026-08-11T08:35:43.125Z DDL_0015_ALREADY_PRESENT"
+      ],
+      "finalState": {
+        "trackingRows": 9,
+        "duplicates": 0,
+        "hasTargetColumn": true,
+        "hasTargetIndex": true
+      },
+      "divergentVerificationValues": {
+        "checked": true,
+        "preserved": false,
+        "users": [
+          {
+            "unionId": "u1",
+            "twoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "emailVerifiedAt": "2025-01-01 10:00:00",
+            "lastTwoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "preserved": false
+          },
+          {
+            "unionId": "u2",
+            "twoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "emailVerifiedAt": "2025-02-01 11:00:00",
+            "lastTwoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "preserved": false
+          }
+        ]
+      },
+      "noopProof": null,
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:35:43.089Z DETECTED_STATE state=C hasTargetColumn=true hasTargetIndex=true\n[WBS24B3B] 2026-08-11T08:35:43.122Z HISTORICAL_SCHEMA_EQUIVALENCE_OK\n[WBS24B3B] 2026-08-11T08:35:43.125Z VERIFICATION_VALUES_BEFORE fingerprint_captured\n[WBS24B3B] 2026-08-11T08:35:43.125Z DDL_0015_ALREADY_PRESENT\n[WBS24B3B] 2026-08-11T08:35:43.154Z FAIL-CLOSED: BLOCKED_SCHEMA_EQUIVALENCE — post-0015 checks failed: 0015 credit_transactions_idempotencyKey_unique: NON_UNIQUE expected 0, got 1\n[WBS24B3B] 2026-08-11T08:35:43.154Z FINAL_CLASSIFICATION=BLOCKED_SCHEMA_EQUIVALENCE\n[WBS24B3B] 2026-08-11T08:35:43.154Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":false,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":false,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "duplicate_social_profile_group",
+      "expectedExitCode": 1,
+      "actualExitCode": 1,
+      "pass": true,
+      "detectedState": "C",
+      "finalClassification": "BLOCKED_SCHEMA_EQUIVALENCE",
+      "statementsExecuted": [],
+      "finalState": {
+        "trackingRows": 9,
+        "duplicates": 3,
+        "hasTargetColumn": true,
+        "hasTargetIndex": true
+      },
+      "divergentVerificationValues": {
+        "checked": true,
+        "preserved": false,
+        "users": [
+          {
+            "unionId": "u1",
+            "twoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "emailVerifiedAt": "2025-01-01 10:00:00",
+            "lastTwoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "preserved": false
+          },
+          {
+            "unionId": "u2",
+            "twoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "emailVerifiedAt": "2025-02-01 11:00:00",
+            "lastTwoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "preserved": false
+          }
+        ]
+      },
+      "noopProof": null,
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:35:49.289Z PREFLIGHT_CONN_OPENED id=71 url=127.0.0.1:41042/duplicate_social_profile_group\n[WBS24B3B] 2026-08-11T08:35:49.291Z READ_ONLY_SESSION_VERIFIED transaction_read_only=1\n[WBS24B3B] 2026-08-11T08:35:49.292Z VERSION_OK actual=8.0.40 expected=8.0.x\n[WBS24B3B] 2026-08-11T08:35:49.303Z PREFLIGHT_STATE state=C hasTargetColumn=true hasTargetIndex=true\n[WBS24B3B] 2026-08-11T08:35:49.338Z FAIL-CLOSED: BLOCKED_SCHEMA_EQUIVALENCE — preflight historical schema mismatch: 0014 social_profiles.user_platform_external_idx: NON_UNIQUE expected 0, got 1; 0014 duplicate social_profiles groups: 3\n[WBS24B3B] 2026-08-11T08:35:49.338Z FINAL_CLASSIFICATION=BLOCKED_SCHEMA_EQUIVALENCE\n[WBS24B3B] 2026-08-11T08:35:49.338Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":false,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":false,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    },
+    {
+      "scenario": "changed_divergent_verification_values",
+      "expectedExitCode": 1,
+      "actualExitCode": 1,
+      "pass": true,
+      "detectedState": "C",
+      "finalClassification": "BLOCKED_DIRECT_NO_OP_CONTROL",
+      "statementsExecuted": [
+        "[WBS24B3B] 2026-08-11T08:35:55.719Z DDL_0015_ALREADY_PRESENT",
+        "[WBS24B3B] 2026-08-11T08:35:55.752Z TRACKING_INSERT_START",
+        "[WBS24B3B] 2026-08-11T08:35:55.765Z TRACKING_INSERT_COMMITTED affected=8"
+      ],
+      "finalState": {
+        "trackingRows": 17,
+        "duplicates": 0,
+        "hasTargetColumn": true,
+        "hasTargetIndex": true
+      },
+      "divergentVerificationValues": {
+        "checked": true,
+        "preserved": true,
+        "users": [
+          {
+            "unionId": "u1",
+            "twoFactorVerifiedAt": "2025-01-01 10:00:00",
+            "emailVerifiedAt": "2026-01-01 00:00:00",
+            "lastTwoFactorVerifiedAt": "2026-01-02 00:00:00",
+            "preserved": true
+          },
+          {
+            "unionId": "u2",
+            "twoFactorVerifiedAt": "2025-02-01 11:00:00",
+            "emailVerifiedAt": "2026-01-01 00:00:00",
+            "lastTwoFactorVerifiedAt": "2026-01-02 00:00:00",
+            "preserved": true
+          }
+        ]
+      },
+      "noopProof": null,
+      "stderrExcerpt": "[WBS24B3B] 2026-08-11T08:35:55.749Z VERIFICATION_VALUES_UNCHANGED\n[WBS24B3B] 2026-08-11T08:35:55.752Z TRACKING_INSERT_START\n[WBS24B3B] 2026-08-11T08:35:55.765Z TRACKING_INSERT_COMMITTED affected=8\n[WBS24B3B] 2026-08-11T08:35:55.766Z TRACKING_MANIFEST_OK 17_rows\n[WBS24B3B] 2026-08-11T08:35:55.769Z FAIL-CLOSED: BLOCKED_DIRECT_NO_OP_CONTROL — verification column values changed during tracking insertion\n[WBS24B3B] 2026-08-11T08:35:55.769Z FINAL_CLASSIFICATION=BLOCKED_DIRECT_NO_OP_CONTROL\n[WBS24B3B] 2026-08-11T08:35:55.769Z RETAINED_FLAGS={\"PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED\":true,\"PRODUCTION_MIGRATION_SIMULATION_COMPLETED\":true,\"RECONCILIATION_ARCHITECTURE_VALIDATED\":true,\"PRODUCTION_RUNBOOK_VALIDATED\":false,\"PRODUCTION_RECONCILIATION_PATH_VALIDATED\":false,\"PRODUCTION_DEPLOYMENT_READY\":false,\"DEPLOYMENT_AUTHORISED\":false}\n"
+    }
+  ],
+  "finalClassification": "PASS_WBS_2_4B3B_FROZEN_PRODUCTION_ARTIFACT_VALIDATED",
+  "retainedFlags": {
+    "PRODUCTION_SCHEMA_PREFLIGHT_COMPLETED": true,
+    "PRODUCTION_MIGRATION_SIMULATION_COMPLETED": true,
+    "RECONCILIATION_ARCHITECTURE_VALIDATED": true,
+    "PRODUCTION_RUNBOOK_VALIDATED": true,
+    "PRODUCTION_RECONCILIATION_PATH_VALIDATED": true,
+    "PRODUCTION_DEPLOYMENT_READY": false,
+    "DEPLOYMENT_AUTHORISED": false
+  },
+  "baselineHashes": {
+    "production_pre_repair": [
+      {
+        "id": 1,
+        "hash": "72b3c061c1ad128ac438ccf529de78f0e0002725d10fe71502e71ffd2e9902a1",
+        "created_at": 1779900649982
+      },
+      {
+        "id": 2,
+        "hash": "a75ec6176d74c3154b716e32c8483cbe42606dd60e500f841507034e6588a19b",
+        "created_at": 1780324454630
+      },
+      {
+        "id": 3,
+        "hash": "4fc651b25fba9161117051d6efc12ee0f716d12c72fd1599678aa0213673d423",
+        "created_at": 1780324500000
+      },
+      {
+        "id": 4,
+        "hash": "cc1f0ad292b61ee46ac88df8e61154eff9297a55ade1d9f540621c5523f74933",
+        "created_at": 1780831759898
+      },
+      {
+        "id": 5,
+        "hash": "688aed12f2e961e1bb024c148eb55600c60e3001ae5ec5bc463780fe8643a7ff",
+        "created_at": 1781510827473
+      },
+      {
+        "id": 6,
+        "hash": "1cb50c16061be27e898d1394c658777b9bacd5c8c713e8c1a7a97cfdaf9a6492",
+        "created_at": 1781542151944
+      },
+      {
+        "id": 7,
+        "hash": "2e43ba6c7dcac164d49fd80bf77fd95c37f124faba72525a14141a1908767d89",
+        "created_at": 1781548376131
+      },
+      {
+        "id": 8,
+        "hash": "1cbf0cbce58141fea0af9a197decbe6483e5926b75b8a3f1ddfe08849b71929b",
+        "created_at": 1781691852016
+      },
+      {
+        "id": 9,
+        "hash": "e2a4f7230720940a41a03d9942ba8f0324992284b1048daf55384e560acc5e32",
+        "created_at": 1782301770674
+      }
+    ],
+    "current_head_rows_10_17": [
+      {
+        "id": 10,
+        "hash": "ce33730998dde10569ff2c8e038d321d8a4963f50a11b01ecfe36b0099bc147f",
+        "created_at": 1782459275896
+      },
+      {
+        "id": 11,
+        "hash": "7aaefb5ea121c78df1a910afc313915b5edf26ae44ca14e828280c795f2bc0b6",
+        "created_at": 1782495282088
+      },
+      {
+        "id": 12,
+        "hash": "22f040486d9441dded492f5e137d403b183cb44400d229cee36a229031ca0655",
+        "created_at": 1782571686288
+      },
+      {
+        "id": 13,
+        "hash": "7d9452351c176705178034ab852b8fcc6a47b3e904c97790621c2660998638f9",
+        "created_at": 1782834565471
+      },
+      {
+        "id": 14,
+        "hash": "026fc1717dfa1371f629f2e16dec11a1486040b1e4987b404bb8d53dcccbd7a8",
+        "created_at": 1783021494761
+      },
+      {
+        "id": 15,
+        "hash": "ad3ba6c3f2e692a15cc42822eaba537e4fb59c5df094211cffa7efdde6a978fa",
+        "created_at": 1783341181484
+      },
+      {
+        "id": 16,
+        "hash": "36e961ca7d822c6065cc19ce0d9cdd3ecb9d0edf0b3ab71212a46a1dd5bee0d0",
+        "created_at": 1786376773661
+      },
+      {
+        "id": 17,
+        "hash": "86412d4815a155b39ed074885176ba6a8e3179b4b830fb6808ccd3854bb7f0bf",
+        "created_at": 1786381570150
+      }
+    ]
+  }
+}
