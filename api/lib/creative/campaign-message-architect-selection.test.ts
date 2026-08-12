@@ -12,6 +12,7 @@ import {
   saveApprovedMessagePack,
   isGenericHeadline,
   isGenericCta,
+  isGenericPack,
   specificityScore,
   enrichMessagePackMetadata,
 } from "./campaign-message-architect";
@@ -85,6 +86,152 @@ describe("message pack selection and generic detection", () => {
     expect(isGenericHeadline("Instant payouts for restaurants")).toBe(false);
     expect(isGenericCta("Learn more")).toBe(true);
     expect(isGenericCta("Book a Zuto Hub Demo")).toBe(false);
+  });
+
+  it("flags generic placeholder language anywhere in the pack, not just headline or CTA", () => {
+    const pack: CampaignMessagePack = {
+      ...specificPack,
+      headline: "Instant payouts for restaurants",
+      cta: "Book a Demo",
+      subheadline: "Solutions built for your business.",
+      benefitBullets: [
+        "Reduce payout delays for your business.",
+        "Automated disbursements for restaurant teams",
+        "Clear reconciliation for finance leads",
+      ],
+    };
+    expect(isGenericPack(pack)).toBe(true);
+    const enriched = enrichMessagePackMetadata(pack);
+    expect(enriched.isGeneric).toBe(true);
+  });
+
+  it("detects placeholder phrases in every customer-facing field", () => {
+    const base: CampaignMessagePack = {
+      ...specificPack,
+      headline: "Instant payouts for restaurants",
+      cta: "Book a Demo",
+    };
+
+    expect(isGenericPack({ ...base, subheadline: "Built for your business." })).toBe(true);
+    expect(isGenericPack({ ...base, benefitBullets: ["Great outcomes for your business", "Fast setup", "Local support"] })).toBe(true);
+    expect(isGenericPack({ ...base, proofPoints: ["Trusted by your business community"] })).toBe(true);
+    expect(isGenericPack({
+      ...base,
+      platformCaptions: [{ platform: "LinkedIn", caption: "For your business needs", cta: "Book a Demo", hashtags: [] }],
+    })).toBe(true);
+  });
+
+  it("detects placeholder phrases regardless of case and surrounding punctuation", () => {
+    const pack: CampaignMessagePack = {
+      ...specificPack,
+      headline: "Instant payouts for restaurants",
+      cta: "Book a Demo",
+      subheadline: "Built for YOUR BUSINESS!",
+      benefitBullets: ["Great outcomes for [Your Business].", "Fast setup", "Local support"],
+    };
+    expect(isGenericPack(pack)).toBe(true);
+  });
+
+  it("detects placeholder phrases with irregular whitespace", () => {
+    const base: CampaignMessagePack = {
+      ...specificPack,
+      headline: "Instant payouts for restaurants",
+      cta: "Book a Demo",
+    };
+
+    expect(isGenericPack({ ...base, subheadline: "Built for your   business." })).toBe(true);
+    expect(isGenericPack({ ...base, subheadline: "Built for your\tbusiness." })).toBe(true);
+    expect(isGenericPack({ ...base, subheadline: "Built for your\nbusiness." })).toBe(true);
+    expect(isGenericPack({ ...base, subheadline: "Built for YOUR\t  BUSINESS!" })).toBe(true);
+  });
+
+  it("does not treat legitimate business names as generic placeholders", () => {
+    const pack: CampaignMessagePack = {
+      ...specificPack,
+      headline: "Instant payouts for restaurants",
+      cta: "Book a Demo",
+      subheadline: "Business Services Limited handles your payouts.",
+      benefitBullets: ["Company disbursements settle faster", "Fast setup", "Local support"],
+    };
+    expect(isGenericPack(pack)).toBe(false);
+  });
+
+  it("does not throw when optional fields are missing or malformed", () => {
+    const pack: CampaignMessagePack = {
+      ...specificPack,
+      headline: "Instant payouts for restaurants",
+      cta: "Book a Demo",
+      benefitBullets: undefined as any,
+      platformCaptions: [{ platform: "LinkedIn", caption: "caption", cta: "cta", hashtags: undefined as any }],
+      proofPoints: undefined as any,
+    };
+    expect(() => isGenericPack(pack)).not.toThrow();
+    expect(isGenericPack(pack)).toBe(false);
+  });
+
+  it("does not throw when platformCaptions contains null or undefined entries", () => {
+    const packs: CampaignMessagePack[] = [
+      {
+        ...specificPack,
+        headline: "Instant payouts for restaurants",
+        cta: "Book a Demo",
+        platformCaptions: [null as any],
+      },
+      {
+        ...specificPack,
+        headline: "Instant payouts for restaurants",
+        cta: "Book a Demo",
+        platformCaptions: [undefined as any],
+      },
+    ];
+    for (const pack of packs) {
+      expect(() => isGenericPack(pack)).not.toThrow();
+      expect(isGenericPack(pack)).toBe(false);
+    }
+  });
+
+  it("detects a generic platform caption mixed with malformed entries", () => {
+    const pack: CampaignMessagePack = {
+      ...specificPack,
+      headline: "Instant payouts for restaurants",
+      cta: "Book a Demo",
+      platformCaptions: [
+        null as any,
+        { platform: "LinkedIn", caption: "For your business needs", cta: "Book a Demo", hashtags: [] },
+        undefined as any,
+      ],
+    };
+    expect(() => isGenericPack(pack)).not.toThrow();
+    expect(isGenericPack(pack)).toBe(true);
+  });
+
+  it("does not treat clean platform captions as generic when mixed with malformed entries", () => {
+    const pack: CampaignMessagePack = {
+      ...specificPack,
+      headline: "Instant payouts for restaurants",
+      cta: "Book a Demo",
+      platformCaptions: [
+        null as any,
+        { platform: "LinkedIn", caption: "Instant payouts for restaurants", cta: "Book a Demo", hashtags: [] },
+        undefined as any,
+      ],
+    };
+    expect(() => isGenericPack(pack)).not.toThrow();
+    expect(isGenericPack(pack)).toBe(false);
+  });
+
+  it("ignores stale legacy metadata and derives genericity from the actual copy", () => {
+    const pack: CampaignMessagePack = {
+      ...specificPack,
+      headline: "Instant payouts for restaurants",
+      cta: "Book a Demo",
+      subheadline: "Solutions built for your business.",
+      validation: { passed: true, score: 100, rejections: [], warnings: [] },
+      isGeneric: false,
+    };
+    const enriched = enrichMessagePackMetadata(pack);
+    expect(enriched.isGeneric).toBe(true);
+    expect(enriched.validation.passed).toBe(true); // metadata preserved; genericity is separate
   });
 
   it("scores specific copy higher than generic copy", () => {

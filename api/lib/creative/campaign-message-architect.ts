@@ -247,8 +247,32 @@ export function specificityScore(pack: CampaignMessagePack): number {
   return Math.max(0, Math.round(score));
 }
 
+function normalizeGenericText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function hasGenericPlaceholderLanguage(pack: CampaignMessagePack): boolean {
+  const allCopy = normalizeGenericText(
+    [
+      pack.headline,
+      pack.subheadline,
+      ...(Array.isArray(pack.benefitBullets) ? pack.benefitBullets : []),
+      pack.cta,
+      ...(Array.isArray(pack.platformCaptions)
+        ? pack.platformCaptions.map((c) =>
+            c
+              ? `${c.platform || ""} ${c.caption || ""} ${c.cta || ""} ${Array.isArray(c.hashtags) ? c.hashtags.join(" ") : ""}`
+              : ""
+          )
+        : []),
+      ...(Array.isArray(pack.proofPoints) ? pack.proofPoints : []),
+    ].join(" ")
+  );
+  return GENERIC_PLACEHOLDERS.some((placeholder) => allCopy.includes(normalizeGenericText(placeholder)));
+}
+
 export function isGenericPack(pack: CampaignMessagePack): boolean {
-  return isGenericHeadline(pack.headline) || isGenericCta(pack.cta);
+  return isGenericHeadline(pack.headline) || isGenericCta(pack.cta) || hasGenericPlaceholderLanguage(pack);
 }
 
 function normaliseValidationResult(validation?: CopyValidationResult): CopyValidationResult {
