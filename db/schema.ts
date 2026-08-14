@@ -552,6 +552,45 @@ export const agentRuns = mysqlTable("agent_runs", {
 
 export type AgentRun = typeof agentRuns.$inferSelect;
 
+// ─── Creative Generation Claims ───
+// Atomic acquisition layer for creative-generation operations.
+// Active claims are identified by a nullable unique key; terminal claims clear it.
+export const creativeGenerationClaims = mysqlTable(
+  "creative_generation_claims",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
+    operationSource: varchar("operationSource", { length: 32 }).notNull(),
+    operationReferenceId: bigint("operationReferenceId", {
+      mode: "number",
+      unsigned: true,
+    }),
+    activeClaimKey: varchar("activeClaimKey", { length: 255 }),
+    ownerToken: varchar("ownerToken", { length: 64 }).notNull(),
+    status: mysqlEnum("status", ["running", "completed", "failed"])
+      .default("running")
+      .notNull(),
+    heartbeatAt: timestamp("heartbeatAt"),
+    leaseExpiresAt: timestamp("leaseExpiresAt"),
+    releasedAt: timestamp("releasedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    activeClaimKeyUnique: uniqueIndex("cgc_active_claim_key_idx").on(table.activeClaimKey),
+    operationSourceReferenceUnique: uniqueIndex("cgc_op_source_reference_idx").on(
+      table.operationSource,
+      table.operationReferenceId
+    ),
+    userCampaignIdx: index("cgc_user_campaign_idx").on(table.userId, table.campaignId),
+    statusLeaseIdx: index("cgc_status_lease_idx").on(table.status, table.leaseExpiresAt),
+  })
+);
+
+export type CreativeGenerationClaim = typeof creativeGenerationClaims.$inferSelect;
+export type InsertCreativeGenerationClaim = typeof creativeGenerationClaims.$inferInsert;
+
 // ─── Approval Requests ───
 export const approvalRequests = mysqlTable("approval_requests", {
   id: serial("id").primaryKey(),
