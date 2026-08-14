@@ -39,7 +39,7 @@ import { createApprovedMessagePack } from "./message-approval/approve";
 import { buildV2ApprovalEnvelope } from "./message-approval/compatibility-adapter";
 import { buildLegacyShadowContextProjection } from "./message-approval/integration/legacy-shadow-context";
 import { DEFAULT_V2_MESSAGE_QUALITY_POLICY } from "./message-approval/policy";
-import type { CanaryApprovalProof, MessageApprovalContextLock } from "./message-approval/contracts";
+import type { CanaryApprovalProof, MessageApprovalContextLock, ShadowEvaluationResult } from "./message-approval/contracts";
 
 function createMockDb(overrides?: {
   storedPacks?: CampaignMessagePack[];
@@ -206,6 +206,7 @@ describe("campaign-message-architect canary wrappers", () => {
         ],
       },
     } as any);
+    vi.mocked(runShadowMessageApproval).mockReturnValue(null);
   });
 
   it("shared canary fixture is V2-approved with zero hard issues and threshold score", () => {
@@ -1207,5 +1208,281 @@ describe("campaign-message-architect canary wrappers", () => {
     ).rejects.toThrow(/supersede update failed/);
 
     expect(db.insert).toHaveBeenCalledTimes(1);
+  });
+
+  describe("shadow-mode public entry point hardening", () => {
+    const expectedLegacyHeadline = "Cut delayed staff payouts with Zuto Hub payout platform";
+    const expectedLegacySubheadline = "Restaurants and delivery platforms reduce manual payout reconciliation with mass disbursements.";
+    const expectedBenefit = "Mass disbursements improve payout speed for frontline teams.";
+    const expectedCta = "Learn More";
+    const expectedCaption = "Frontline teams can avoid delayed staff payouts using Zuto Hub payout platform automation.";
+    const expectedProofPoint = "Payout platform supports mass disbursements and supplier payouts.";
+
+    function countShadowObservations(): number {
+      return getAllLogPayloads().filter((p) => (p as Record<string, unknown>)?.event === "v2_shadow_observation").length;
+    }
+
+    function findShadowObservation(): Record<string, unknown> | undefined {
+      return getAllLogPayloads().find((p) => (p as Record<string, unknown>)?.event === "v2_shadow_observation");
+    }
+
+    function findShadowSkipped(): Record<string, unknown> | undefined {
+      return getAllLogPayloads().find((p) => (p as Record<string, unknown>)?.event === "v2_shadow_observation_skipped");
+    }
+
+    function makeShadowResult(input: any): ShadowEvaluationResult {
+      return {
+        mode: "shadow",
+        campaignId: input.campaignId,
+        workflowRunId: input.workflowRunId,
+        contextSource: "legacy_loaded_context",
+        contextReadyForComparison: true,
+        missingContextFields: [],
+        candidateId: input.candidateId,
+        candidateSource: "ai_refined",
+        copyHashSha256: "a".repeat(64),
+        legacyDecision: "approved",
+        legacyIsGeneric: false,
+        legacyScore: 95,
+        v2Decision: "approved",
+        v2HardIssueCodes: [],
+        v2WarningCodes: [],
+        v2Score: 92,
+        decisionMatched: true,
+        durationMs: 10,
+        errorStage: null,
+        errorCode: null,
+      };
+    }
+
+    function runAgentOutput(cta = expectedCta) {
+      return {
+        runId: 124,
+        output: {
+          headline: expectedLegacyHeadline,
+          subheadline: expectedLegacySubheadline,
+          benefitBullets: [
+            expectedBenefit,
+            "Tips and commissions payouts reduce reconciliation bottlenecks.",
+            "Supplier payouts remain consistent across restaurant locations.",
+          ],
+          cta,
+          footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "South Africa" },
+          proofPoints: [expectedProofPoint],
+          platformCaptions: [
+            {
+              platform: "Instagram",
+              caption: expectedCaption,
+              cta,
+              hashtags: ["#payoutplatform", "#frontlineteams"],
+            },
+          ],
+        },
+      } as any;
+    }
+
+    beforeEach(() => {
+      process.env.CREATIVE_PIPELINE_V2_MODE = "shadow";
+      vi.mocked(runShadowMessageApproval).mockImplementation((input: any) => {
+        const result = makeShadowResult(input);
+        input.log(result);
+        return result;
+      });
+    });
+
+    it("buildApprovedMessagePack returns the legacy pack, emits exactly one v2_shadow_observation and contains no raw copy", async () => {
+      delete process.env.CREATIVE_PIPELINE_V2_MODE;
+      const legacySnapshot = await buildApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      let passedLegacy: CampaignMessagePack | undefined;
+      vi.clearAllMocks();
+      process.env.CREATIVE_PIPELINE_V2_MODE = "shadow";
+      vi.mocked(runShadowMessageApproval).mockImplementation((input: any) => {
+        passedLegacy = input.legacyPack;
+        const result = makeShadowResult(input);
+        input.log(result);
+        return result;
+      });
+
+      const pack = await buildApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      expect(pack).toEqual(legacySnapshot);
+      expect(pack).toBe(passedLegacy);
+      expect(pack.headline).toBe(expectedLegacyHeadline);
+      expect(pack.v2ApprovalEnvelope).toBeUndefined();
+      expect(runShadowMessageApproval).toHaveBeenCalledTimes(1);
+      expect(countShadowObservations()).toBe(1);
+
+      const observation = findShadowObservation();
+      expect(observation).toBeDefined();
+      expect(observation?.event).toBe("v2_shadow_observation");
+      expect(observation?.decisionMatched).toBe(true);
+      expect(observation?.copyHashSha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(observation).not.toHaveProperty("headline");
+      expect(observation).not.toHaveProperty("subheadline");
+      expect(observation).not.toHaveProperty("benefitBullets");
+      expect(observation).not.toHaveProperty("cta");
+      expect(observation).not.toHaveProperty("caption");
+
+      const serialized = JSON.stringify(observation);
+      expect(serialized).not.toContain(expectedLegacyHeadline);
+      expect(serialized).not.toContain(expectedLegacySubheadline);
+      expect(serialized).not.toContain(expectedBenefit);
+      expect(serialized).not.toContain(expectedCta);
+      expect(serialized).not.toContain(expectedCaption);
+      expect(serialized).not.toContain(expectedProofPoint);
+
+      const db = vi.mocked(getDb).mock.results[0]?.value;
+      expect(db?.insert).not.toHaveBeenCalled();
+    });
+
+    it("ensureApprovedMessagePack returns the legacy pack, emits exactly one v2_shadow_observation and does not leak raw copy", async () => {
+      vi.mocked(runAgent).mockResolvedValueOnce(runAgentOutput("Book a Demo"));
+      delete process.env.CREATIVE_PIPELINE_V2_MODE;
+      const legacySnapshot = await ensureApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      let passedLegacy: CampaignMessagePack | undefined;
+      vi.clearAllMocks();
+      process.env.CREATIVE_PIPELINE_V2_MODE = "shadow";
+      vi.mocked(runAgent).mockResolvedValueOnce(runAgentOutput("Book a Demo"));
+      vi.mocked(runShadowMessageApproval).mockImplementation((input: any) => {
+        passedLegacy = input.legacyPack;
+        const result = makeShadowResult(input);
+        input.log(result);
+        return result;
+      });
+
+      const pack = await ensureApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      expect(pack).toEqual(legacySnapshot);
+      expect(pack).toBe(passedLegacy);
+      expect(pack.headline).toBe(expectedLegacyHeadline);
+      expect(pack.v2ApprovalEnvelope).toBeUndefined();
+      expect(runShadowMessageApproval).toHaveBeenCalledTimes(1);
+      expect(countShadowObservations()).toBe(1);
+      expect(findShadowObservation()?.event).toBe("v2_shadow_observation");
+
+      const serialized = JSON.stringify(findShadowObservation());
+      expect(serialized).not.toContain(expectedLegacyHeadline);
+      expect(serialized).not.toContain(expectedBenefit);
+      expect(serialized).not.toContain("Book a Demo");
+
+      const db = vi.mocked(getDb).mock.results[0]?.value;
+      expect(db?.insert).toHaveBeenCalledTimes(1);
+    });
+
+    it("refineApprovedMessagePack returns the legacy pack, emits exactly one v2_shadow_observation and does not leak raw copy", async () => {
+      delete process.env.CREATIVE_PIPELINE_V2_MODE;
+      const legacySnapshot = await refineApprovedMessagePack({
+        userId: 10,
+        campaignId: 1,
+        existingPack: basePack,
+        refinementInstruction: "Make it more urgent",
+        skipBilling: true,
+        maxAttempts: 1,
+      });
+
+      let passedLegacy: CampaignMessagePack | undefined;
+      vi.clearAllMocks();
+      process.env.CREATIVE_PIPELINE_V2_MODE = "shadow";
+      vi.mocked(runShadowMessageApproval).mockImplementation((input: any) => {
+        passedLegacy = input.legacyPack;
+        const result = makeShadowResult(input);
+        input.log(result);
+        return result;
+      });
+
+      const pack = await refineApprovedMessagePack({
+        userId: 10,
+        campaignId: 1,
+        existingPack: basePack,
+        refinementInstruction: "Make it more urgent",
+        skipBilling: true,
+        maxAttempts: 1,
+      });
+
+      expect(pack).toEqual(legacySnapshot);
+      expect(pack).toBe(passedLegacy);
+      expect(pack.headline).toBe(expectedLegacyHeadline);
+      expect(pack.v2ApprovalEnvelope).toBeUndefined();
+      expect(runShadowMessageApproval).toHaveBeenCalledTimes(1);
+      expect(countShadowObservations()).toBe(1);
+      expect(findShadowObservation()?.event).toBe("v2_shadow_observation");
+
+      const serialized = JSON.stringify(findShadowObservation());
+      expect(serialized).not.toContain(expectedLegacyHeadline);
+      expect(serialized).not.toContain(expectedBenefit);
+      expect(serialized).not.toContain(expectedCaption);
+
+      const db = vi.mocked(getDb).mock.results[0]?.value;
+      expect(db?.insert).not.toHaveBeenCalled();
+    });
+
+    it("shadow output cannot replace the legacy result even when V2 disagrees", async () => {
+      delete process.env.CREATIVE_PIPELINE_V2_MODE;
+      const legacySnapshot = await buildApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      vi.clearAllMocks();
+      process.env.CREATIVE_PIPELINE_V2_MODE = "shadow";
+      vi.mocked(runShadowMessageApproval).mockImplementation((input: any) => {
+        const result: ShadowEvaluationResult = { ...makeShadowResult(input), v2Decision: "rejected", decisionMatched: false };
+        input.log(result);
+        return result;
+      });
+
+      const pack = await buildApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      expect(pack).toEqual(legacySnapshot);
+      expect(pack.headline).toBe(expectedLegacyHeadline);
+      expect(pack.v2ApprovalEnvelope).toBeUndefined();
+      expect(findShadowObservation()?.event).toBe("v2_shadow_observation");
+      expect(findShadowObservation()?.decisionMatched).toBe(false);
+    });
+
+    it("shadow evaluation failure is isolated and the legacy response is still returned", async () => {
+      vi.mocked(runShadowMessageApproval).mockImplementation(() => {
+        throw new Error("shadow runner exploded");
+      });
+
+      const pack = await buildApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      expect(pack.headline).toBe(expectedLegacyHeadline);
+      expect(pack.v2ApprovalEnvelope).toBeUndefined();
+      expect(runShadowMessageApproval).toHaveBeenCalledTimes(1);
+
+      const skipped = findShadowSkipped();
+      expect(skipped).toBeDefined();
+      expect(skipped?.event).toBe("v2_shadow_observation_skipped");
+      expect(skipped?.errorCode).toBe("SHADOW_OBSERVATION_FAILED");
+      expect(findShadowObservation()).toBeUndefined();
+      expect(countShadowObservations()).toBe(0);
+    });
+
+    it("off, active, unknown and non-selected canary modes do not emit a shadow observation", async () => {
+      vi.mocked(runShadowMessageApproval).mockReturnValue(null);
+
+      const modes: Array<{ mode: string; campaignIds?: string }> = [
+        { mode: "off" },
+        { mode: "active" },
+        { mode: "unknown_mode" },
+        { mode: "canary", campaignIds: "999" },
+      ];
+
+      for (const m of modes) {
+        vi.clearAllMocks();
+        delete process.env.CREATIVE_PIPELINE_V2_CANARY_ENABLED;
+        delete process.env.CREATIVE_PIPELINE_V2_CANARY_CAMPAIGN_IDS;
+        process.env.CREATIVE_PIPELINE_V2_MODE = m.mode;
+        if (m.mode === "canary") {
+          process.env.CREATIVE_PIPELINE_V2_CANARY_ENABLED = "true";
+          process.env.CREATIVE_PIPELINE_V2_CANARY_CAMPAIGN_IDS = m.campaignIds;
+        }
+
+        await buildApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+        expect(runShadowMessageApproval).not.toHaveBeenCalled();
+        expect(findShadowObservation()).toBeUndefined();
+        expect(findShadowSkipped()).toBeUndefined();
+      }
+    });
   });
 });

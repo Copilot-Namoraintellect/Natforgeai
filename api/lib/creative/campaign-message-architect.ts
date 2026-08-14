@@ -2338,12 +2338,16 @@ function observeMessageApprovalV2Shadow(
       log: (result) => {
         logInfo(
           "[CampaignMessageArchitect][V2Shadow] message approval comparison",
-          result as unknown as Record<string, unknown>
+          {
+            ...result,
+            event: "v2_shadow_observation",
+          } as unknown as Record<string, unknown>
         );
       },
     });
   } catch {
     logWarn("[CampaignMessageArchitect][V2Shadow] observation skipped", {
+      event: "v2_shadow_observation_skipped",
       campaignId: opts.campaignId,
       workflowRunId,
       durationMs: Math.max(0, Date.now() - started),
