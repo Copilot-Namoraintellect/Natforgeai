@@ -3,11 +3,13 @@ import type { CanonicalMessagePackCopy, MessageQualityIssue } from "../contracts
 const PLACEHOLDER_PATTERNS = [
   /\[your business\]/i,
   /\[your brand\]/i,
+  /\[your company\]/i,
   /\[company\]/i,
   /\[product\]/i,
   /\[service\]/i,
-  /your business/gi,
-  /your brand/gi,
+  /your business/i,
+  /your brand/i,
+  /your company/i,
 ];
 
 export function checkPlaceholderLanguage(copy: CanonicalMessagePackCopy): MessageQualityIssue[] {

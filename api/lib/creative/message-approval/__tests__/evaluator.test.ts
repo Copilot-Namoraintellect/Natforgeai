@@ -303,6 +303,138 @@ describe("evaluateMessageCandidate", () => {
     expect(assessment.hardIssues.map((i) => i.code)).toContain("PLACEHOLDER_LANGUAGE_DETECTED");
   });
 
+  it.each([
+    {
+      label: "headline",
+      copy: {
+        headline: "Built for your company",
+      },
+    },
+    {
+      label: "subheadline",
+      copy: {
+        subheadline: "Works for your company.",
+      },
+    },
+    {
+      label: "benefit bullet",
+      copy: {
+        benefitBulletsOrdered: ["Great for your company."],
+      },
+    },
+    {
+      label: "platform caption",
+      copy: {
+        platformCaptionsOrdered: [
+          {
+            platform: "Instagram",
+            caption: "Your company deserves this.",
+            cta: "Learn More",
+            hashtagsOrdered: ["#ops"],
+          },
+        ],
+      },
+    },
+    {
+      label: "bracketed headline",
+      copy: {
+        headline: "Built for [your company]",
+      },
+    },
+    {
+      label: "mixed case",
+      copy: {
+        headline: "Built for YoUr CoMpAnY",
+      },
+    },
+  ])("rejects 'your company' placeholder language in $label", ({ label, copy }) => {
+    const assessment = evaluateMessageCandidate({
+      assessmentId: `assess-your-company-${label}`,
+      evaluatedAtIso: "2026-07-01T08:01:00.000Z",
+      candidate: buildCandidate({
+        copy: {
+          copySchemaVersion: campaign30Policy.copySchemaVersion,
+          headline: "Reduce payout delays for operations managers",
+          subheadline: "Automate supplier disbursements and manual reconciliation workflows.",
+          benefitBulletsOrdered: [
+            "Payout automation cuts manual reconciliation by 2 hours per day.",
+            "Supplier settlement tracking keeps audit records clear.",
+            "Restaurant team payouts process faster with automated disbursements.",
+          ],
+          cta: "Learn More",
+          footer: null,
+          proofPointsOrdered: [],
+          platformCaptionsOrdered: [],
+          ...copy,
+        },
+      }),
+      businessDna: campaign30BusinessDna,
+      campaignStrategy: campaign30Strategy,
+      policy: campaign30Policy,
+    });
+
+    expect(assessment.decision).toBe("rejected");
+    expect(assessment.hardIssues.map((i) => i.code)).toContain("PLACEHOLDER_LANGUAGE_DETECTED");
+  });
+
+  it("does not reject legitimate wording that contains 'company' without 'your company'", () => {
+    const assessment = evaluateMessageCandidate({
+      assessmentId: "assess-company-only",
+      evaluatedAtIso: "2026-07-01T08:01:00.000Z",
+      candidate: buildCandidate({
+        copy: {
+          copySchemaVersion: campaign30Policy.copySchemaVersion,
+          headline: "Company disbursements settle faster",
+          subheadline: "Automate supplier disbursements and manual reconciliation workflows.",
+          benefitBulletsOrdered: [
+            "Payout automation cuts manual reconciliation by 2 hours per day.",
+            "Supplier settlement tracking keeps audit records clear.",
+            "Restaurant team payouts process faster with automated disbursements.",
+          ],
+          cta: "Learn More",
+          footer: null,
+        },
+      }),
+      businessDna: campaign30BusinessDna,
+      campaignStrategy: campaign30Strategy,
+      policy: campaign30Policy,
+    });
+
+    expect(assessment.hardIssues.map((i) => i.code)).not.toContain("PLACEHOLDER_LANGUAGE_DETECTED");
+  });
+
+  it("repeatedly evaluates placeholder candidates without RegExp.lastIndex alternation", () => {
+    const candidate = buildCandidate({
+      copy: {
+        copySchemaVersion: campaign30Policy.copySchemaVersion,
+        headline: "Transform your business",
+        subheadline: "Built for your brand and your company.",
+        benefitBulletsOrdered: [
+          "Payout automation cuts manual reconciliation by 2 hours per day.",
+          "Supplier settlement tracking keeps audit records clear.",
+          "Restaurant team payouts process faster with automated disbursements.",
+        ],
+        cta: "Learn More",
+        footer: null,
+      },
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      const assessment = evaluateMessageCandidate({
+        assessmentId: `assess-stateful-${i}`,
+        evaluatedAtIso: "2026-07-01T08:01:00.000Z",
+        candidate,
+        businessDna: campaign30BusinessDna,
+        campaignStrategy: campaign30Strategy,
+        policy: campaign30Policy,
+      });
+
+      expect(assessment.hardIssues.map((issue) => issue.code)).toContain(
+        "PLACEHOLDER_LANGUAGE_DETECTED"
+      );
+    }
+  });
+
   it("rejects caption CTA mismatch even when primary CTA passes", () => {
     const assessment = evaluateMessageCandidate({
       assessmentId: "assess-13",
