@@ -248,6 +248,22 @@ export const agentRouter = createRouter({
         };
       }
 
+      // Persist an outer creative-operation row so billing and dedup have a stable
+      // identity for this direct-agent call that is distinct from the nested
+      // model-execution run rows created by runAgent inside runCreativeAgent.
+      const [operationInsert] = await db.insert(agentRuns).values({
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+        agentType: "creative",
+        status: "running",
+        input: {
+          jobType: "content_generation_job",
+          source: "agent_router",
+        } as any,
+        startedAt: new Date(),
+      });
+      const operationRowId = Number((operationInsert as any).insertId);
+
       // Transition campaign to creatives_generating before starting
       try {
         await transitionCampaignState(input.campaignId, ctx.user.id, "generate_creatives");
@@ -255,10 +271,38 @@ export const agentRouter = createRouter({
         // If transition fails (wrong current state), continue anyway and let the agent run
       }
 
-      const result = await runCreativeAgent({
-        userId: ctx.user.id,
-        campaignId: input.campaignId,
-      });
+      let result: Awaited<ReturnType<typeof runCreativeAgent>> | undefined;
+      try {
+        result = await runCreativeAgent({
+          userId: ctx.user.id,
+          campaignId: input.campaignId,
+          generationOperation: { source: "agent", id: operationRowId },
+        });
+      } catch (err: any) {
+        await db
+          .update(agentRuns)
+          .set({
+            status: "failed",
+            error: err?.message || String(err),
+            completedAt: new Date(),
+          })
+          .where(eq(agentRuns.id, operationRowId));
+        throw err;
+      }
+
+      await db
+        .update(agentRuns)
+        .set({
+          status: "completed",
+          completedAt: new Date(),
+          output: {
+            success: true,
+            packRunId: result!.packRunId,
+            savedPosts: result!.savedPosts,
+            savedAssets: result!.savedAssets,
+          } as any,
+        })
+        .where(eq(agentRuns.id, operationRowId));
 
       // Trigger workflow advancement asynchronously so the HTTP response is fast
       Promise.resolve().then(() =>

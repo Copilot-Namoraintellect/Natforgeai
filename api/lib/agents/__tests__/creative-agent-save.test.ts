@@ -279,34 +279,36 @@ function mockRunAgentResponse(opts: { prompt: string }, runId: number): { runId:
   return { runId, output: buildPackOutput() };
 }
 
+const testGenerationOperation = { source: "job" as const, id: 9999 };
+
+function approvedPack() {
+  return {
+    headline: "Payout platform for small businesses in Randburg",
+    subheadline: "Move staff earnings faster and cut manual payout admin.",
+    benefitBullets: [
+      "Automated tip and commission payouts.",
+      "Less admin time for owners.",
+      "Staff get paid faster and more reliably.",
+    ],
+    cta: "Learn More",
+    footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Randburg" },
+    proofPoints: [],
+    platformCaptions: [
+      {
+        platform: "Instagram",
+        caption: "Stop losing staff to slow manual payouts. Zutohub moves earnings faster.",
+        cta: "Learn More",
+        hashtags: ["#fintech", "#smallbiz"],
+      },
+    ],
+    validation: { passed: true, score: 100, rejections: [], warnings: [] },
+  };
+}
+
 describe("runCreativeAgent post-save failure handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
-
-  function approvedPack() {
-    return {
-      headline: "Payout platform for small businesses in Randburg",
-      subheadline: "Move staff earnings faster and cut manual payout admin.",
-      benefitBullets: [
-        "Automated tip and commission payouts.",
-        "Less admin time for owners.",
-        "Staff get paid faster and more reliably.",
-      ],
-      cta: "Learn More",
-      footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "Randburg" },
-      proofPoints: [],
-      platformCaptions: [
-        {
-          platform: "Instagram",
-          caption: "Stop losing staff to slow manual payouts. Zutohub moves earnings faster.",
-          cta: "Learn More",
-          hashtags: ["#fintech", "#smallbiz"],
-        },
-      ],
-      validation: { passed: true, score: 100, rejections: [], warnings: [] },
-    };
-  }
 
   it("throws a clear TRPCError when content_posts inserts fail", async () => {
     const { getDb } = await import("../../../queries/connection");
@@ -322,7 +324,7 @@ describe("runCreativeAgent post-save failure handling", () => {
 
     let thrownError: unknown;
     try {
-      await runCreativeAgent({ userId: 18, campaignId: 28 });
+      await runCreativeAgent({ userId: 18, campaignId: 28, generationOperation: testGenerationOperation });
     } catch (err) {
       thrownError = err;
     }
@@ -347,7 +349,7 @@ describe("runCreativeAgent post-save failure handling", () => {
     vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
     vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 92));
 
-    const result = await runCreativeAgent({ userId: 18, campaignId: 28 });
+    const result = await runCreativeAgent({ userId: 18, campaignId: 28, generationOperation: testGenerationOperation });
 
     expect(result.savedPosts).toBe(2);
     expect(deductCredits).toHaveBeenCalledTimes(1);
@@ -386,7 +388,7 @@ describe("runCreativeAgent post-save failure handling", () => {
       .mockResolvedValueOnce({ runId: 300, output: lowQualityPack } as any)
       .mockResolvedValueOnce({ runId: 301, output: unusableRetryPack } as any);
 
-    await expect(runCreativeAgent({ userId: 18, campaignId: 28 })).rejects.toBeInstanceOf(TRPCError);
+    await expect(runCreativeAgent({ userId: 18, campaignId: 28, generationOperation: testGenerationOperation })).rejects.toBeInstanceOf(TRPCError);
 
     expect(ensureApprovedMessagePack).toHaveBeenCalledTimes(2);
     expect(vi.mocked(ensureApprovedMessagePack).mock.calls[1]?.[0]).toMatchObject({
@@ -428,7 +430,7 @@ describe("runCreativeAgent post-save failure handling", () => {
     } as any);
     vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 302));
 
-    const result = await runCreativeAgent({ userId: 18, campaignId: 30 });
+    const result = await runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation });
 
     expect(result.savedPosts).toBe(2);
     expect(deductCredits).toHaveBeenCalledTimes(1);
@@ -480,7 +482,7 @@ describe("runCreativeAgent post-save failure handling", () => {
       .mockResolvedValueOnce({ runId: 410, output: lowQualityPack } as any)
       .mockResolvedValueOnce({ runId: 411, output: lowQualityPack } as any);
 
-    const result = await runCreativeAgent({ userId: 18, campaignId: 30 });
+    const result = await runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation });
 
     const retryPrompt = vi.mocked(runAgent).mock.calls[1]?.[0]?.prompt || "";
     expect(retryPrompt).toContain("UPDATED APPROVED CAMPAIGN MESSAGE PACK");
@@ -533,7 +535,7 @@ describe("runCreativeAgent post-save failure handling", () => {
       .mockResolvedValueOnce({ runId: 510, output: lowQualityPack } as any)
       .mockResolvedValueOnce({ runId: 511, output: unusableRetryPack } as any);
 
-    await expect(runCreativeAgent({ userId: 18, campaignId: 30 })).rejects.toBeInstanceOf(TRPCError);
+    await expect(runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation })).rejects.toBeInstanceOf(TRPCError);
 
     expect(saveApprovedMessagePack).toHaveBeenCalledTimes(1);
     expect(deductCredits).not.toHaveBeenCalled();
@@ -584,11 +586,141 @@ describe("runCreativeAgent post-save failure handling", () => {
       .mockResolvedValueOnce({ runId: 610, output: lowQualityPack } as any)
       .mockResolvedValueOnce({ runId: 611, output: lowQualityPack } as any);
 
-    const result = await runCreativeAgent({ userId: 18, campaignId: 30 });
+    const result = await runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation });
 
     expect(result.pack.socialPosts[0].hook).toBe(groundedRecoveryPack.headline);
     expect(result.pack.socialPosts[0].cta).toBe(groundedRecoveryPack.cta);
     expect(result.pack.socialPosts[0].caption).toContain(groundedRecoveryPack.subheadline);
     expect(result.pack.socialPosts[0].caption).toContain(groundedRecoveryPack.benefitBullets[0]);
+  });
+});
+
+describe("runCreativeAgent generation-operation identity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("uses the generationOperation source and id in the idempotency key", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
+    vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 700));
+
+    await runCreativeAgent({
+      userId: 18,
+      campaignId: 30,
+      generationOperation: { source: "job", id: 12345 },
+    });
+
+    expect(deductCredits).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deductCredits).mock.calls[0]?.[0]).toMatchObject({
+      idempotencyKey: "creative-success:30:job:12345",
+    });
+  });
+
+  it("produces different keys for different operations", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
+    vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 800));
+
+    await runCreativeAgent({
+      userId: 18,
+      campaignId: 30,
+      generationOperation: { source: "job", id: 111 },
+    });
+    await runCreativeAgent({
+      userId: 18,
+      campaignId: 30,
+      generationOperation: { source: "job", id: 222 },
+    });
+
+    const keys = vi.mocked(deductCredits).mock.calls.map((c) => c[0].idempotencyKey);
+    expect(keys).toContain("creative-success:30:job:111");
+    expect(keys).toContain("creative-success:30:job:222");
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("uses the same key regardless of the nested runAgent runId", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
+    vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 900));
+
+    await runCreativeAgent({
+      userId: 18,
+      campaignId: 30,
+      generationOperation: { source: "job", id: 555 },
+    });
+
+    vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 901));
+    await runCreativeAgent({
+      userId: 18,
+      campaignId: 30,
+      generationOperation: { source: "job", id: 555 },
+    });
+
+    const keys = vi.mocked(deductCredits).mock.calls.map((c) => c[0].idempotencyKey);
+    expect(keys).toEqual(["creative-success:30:job:555", "creative-success:30:job:555"]);
+  });
+
+  it("rejects an invalid source before billing", async () => {
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    await expect(
+      runCreativeAgent({
+        userId: 18,
+        campaignId: 30,
+        generationOperation: { source: "invalid" as any, id: 1 },
+      })
+    ).rejects.toBeInstanceOf(TRPCError);
+
+    expect(deductCredits).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-positive id before billing", async () => {
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    await expect(
+      runCreativeAgent({
+        userId: 18,
+        campaignId: 30,
+        generationOperation: { source: "job", id: 0 },
+      })
+    ).rejects.toBeInstanceOf(TRPCError);
+
+    expect(deductCredits).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized id before billing", async () => {
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    await expect(
+      runCreativeAgent({
+        userId: 18,
+        campaignId: 30,
+        generationOperation: { source: "job", id: Number.MAX_SAFE_INTEGER + 1 },
+      })
+    ).rejects.toBeInstanceOf(TRPCError);
+
+    expect(deductCredits).not.toHaveBeenCalled();
   });
 });

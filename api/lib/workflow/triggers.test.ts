@@ -49,7 +49,7 @@ function createWorkflowDbMock({
   campaign,
   existingAudienceRun,
 }: {
-  initialRun: Record<string, unknown>;
+  initialRun?: Record<string, unknown>;
   campaign: Record<string, unknown>;
   existingAudienceRun?: Record<string, unknown>;
 }) {
@@ -228,5 +228,78 @@ describe("onAgentRunComplete integration path", () => {
 
     const providerMessage = buildFailedCreativeMessage("OpenAI timeout");
     expect(providerMessage.creditsImpact.toLowerCase()).toContain("automatically refunded");
+  });
+});
+
+describe("onStrategyApproved", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("passes the approval request id as the generation operation identity", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const { onStrategyApproved } = await import("./triggers");
+
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 701,
+      savedPosts: 2,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
+
+    const { db } = createWorkflowDbMock({
+      initialRun: undefined,
+      campaign: {
+        id: 29,
+        userId: 42,
+        businessId: 7,
+        workflowState: "strategy_approved",
+        workflowContext: {},
+        platforms: "Instagram, Facebook",
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onStrategyApproved(29, 42, 555);
+
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+    expect(runCreativeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 42,
+        campaignId: 29,
+        generationOperation: { source: "approval", id: 555 },
+      })
+    );
+  });
+
+  it("skips creative generation when an existing creative run is already active", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const { onStrategyApproved } = await import("./triggers");
+
+    const { db } = createWorkflowDbMock({
+      initialRun: {
+        id: 500,
+        userId: 42,
+        campaignId: 29,
+        agentType: "creative",
+        status: "running",
+      },
+      campaign: {
+        id: 29,
+        userId: 42,
+        businessId: 7,
+        workflowState: "strategy_approved",
+        workflowContext: {},
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onStrategyApproved(29, 42, 556);
+
+    expect(runCreativeAgent).not.toHaveBeenCalled();
   });
 });

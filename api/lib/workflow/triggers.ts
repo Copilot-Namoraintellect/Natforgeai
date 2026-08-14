@@ -221,14 +221,18 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
     // If rejected, leave them as pending_approval / safety_blocked
   } else if (request.approvalType === "strategy_review") {
     if (decision === "approved") {
-      await onStrategyApproved(campaignId, userId);
+      await onStrategyApproved(campaignId, userId, approvalId);
     } else {
       await transitionCampaignState(campaignId, userId, "request_strategy_changes");
     }
   }
 }
 
-export async function onStrategyApproved(campaignId: number, userId: number) {
+export async function onStrategyApproved(
+  campaignId: number,
+  userId: number,
+  approvalId: number
+) {
   const db = getDb();
   const [campaign] = await db
     .select()
@@ -307,6 +311,7 @@ export async function onStrategyApproved(campaignId: number, userId: number) {
     const result = await runCreativeAgent({
       userId,
       campaignId,
+      generationOperation: { source: "approval", id: approvalId },
     });
     await onAgentRunComplete(result.packRunId);
   } catch (err: any) {

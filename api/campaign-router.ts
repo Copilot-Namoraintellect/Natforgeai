@@ -637,6 +637,7 @@ export const campaignRouter = createRouter({
           userId,
           campaignId,
           deleteExistingDrafts: false,
+          generationOperation: { source: "profile", id: strategyRunId! },
         });
         creativeRunId = creativeResult.packRunId;
         console.log(`[regenerateFromProfile] creative pack generated | campaignId=${campaignId} | creativeRunId=${creativeRunId} | savedPosts=${creativeResult.savedPosts} | savedAssets=${creativeResult.savedAssets}`);

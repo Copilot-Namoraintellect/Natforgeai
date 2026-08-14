@@ -302,15 +302,15 @@ describeIfSafe("deductCredits idempotency", () => {
 
   it("G. creative idempotency key charges once for repeated calls", async () => {
     const campaignId = 999999;
-    const agentRunId = 888888;
-    const key = `creative-success:${campaignId}:${agentRunId}`;
+    const operationId = 888888;
+    const key = `creative-success:${campaignId}:job:${operationId}`;
 
     const first = await deductCredits({
       userId: testUserId,
       amount: 150,
       type: "agent_deduction",
       description: "creative agent execution (post-success)",
-      metadata: { campaignId, agentRunId, agentType: "creative" },
+      metadata: { campaignId, generationSource: "job", generationOperationId: operationId, agentType: "creative" },
       idempotencyKey: key,
     });
 
@@ -319,7 +319,7 @@ describeIfSafe("deductCredits idempotency", () => {
       amount: 150,
       type: "agent_deduction",
       description: "creative agent execution (post-success)",
-      metadata: { campaignId, agentRunId, agentType: "creative" },
+      metadata: { campaignId, generationSource: "job", generationOperationId: operationId, agentType: "creative" },
       idempotencyKey: key,
     });
 

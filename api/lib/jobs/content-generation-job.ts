@@ -203,6 +203,7 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
     const creativeResult = await runCreativeAgent({
       userId: input.userId,
       campaignId: input.campaignId,
+      generationOperation: { source: "job", id: input.jobId },
     });
 
     if (creativeResult.savedPosts > 0 && campaign.workflowState !== "creatives_ready") {

@@ -39,7 +39,7 @@ function makeChainable(rows: unknown[]) {
   };
 }
 
-function createMockDb() {
+function createMockDb({ postCount = 0 }: { postCount?: number } = {}) {
   const agentRunUpdates: any[] = [];
   return {
     agentRunUpdates,
@@ -61,7 +61,7 @@ function createMockDb() {
             ]);
           }
           if (name === "content_posts" && selection?.value) {
-            return makeChainable([{ value: 0 }]);
+            return makeChainable([{ value: postCount }]);
           }
           if (name === "campaign_assets") {
             return makeChainable([]);
@@ -113,6 +113,11 @@ describe("processContentGenerationJob", () => {
     expect(completed).toHaveLength(1);
     expect(failed).toHaveLength(0);
     expect(vi.mocked(logInfo).mock.calls.some((c) => c[0] === "[content.job] completed")).toBe(true);
+    expect(runCreativeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generationOperation: { source: "job", id: 189 },
+      })
+    );
   });
 
   it("failed Creative Agent processing marks failed, rejects, and does not log completed or charge credits", async () => {
@@ -134,5 +139,26 @@ describe("processContentGenerationJob", () => {
     expect(failed).toHaveLength(1);
     expect(vi.mocked(logInfo).mock.calls.some((c) => c[0] === "[content.job] completed")).toBe(false);
     expect(vi.mocked(deductCredits)).not.toHaveBeenCalled();
+  });
+
+  it("short-circuits when existing posts are found and does not call runCreativeAgent", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const { processContentGenerationJob } = await import("./content-generation-job");
+
+    const db = createMockDb({ postCount: 3 });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 901,
+      savedPosts: 2,
+      savedAssets: 1,
+      metrics: {},
+    } as any);
+
+    await processContentGenerationJob({ jobId: 189, userId: 18, campaignId: 30 });
+
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    const completed = db.agentRunUpdates.filter((u: any) => u.status === "completed");
+    expect(completed).toHaveLength(1);
   });
 });

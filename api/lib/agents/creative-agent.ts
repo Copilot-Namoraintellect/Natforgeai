@@ -780,20 +780,69 @@ async function assertCreativeCreditsAvailable(userId: number): Promise<number> {
   return estimatedCost;
 }
 
+export type CreativeGenerationSource = "job" | "agent" | "profile" | "approval";
+
+export interface CreativeGenerationOperation {
+  source: CreativeGenerationSource;
+  id: number;
+}
+
+function validateCreativeGenerationOperation(
+  generationOperation: CreativeGenerationOperation
+): void {
+  const validSources: CreativeGenerationSource[] = ["job", "agent", "profile", "approval"];
+  if (!generationOperation || !validSources.includes(generationOperation.source)) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `Invalid creative generation operation source: ${String(generationOperation?.source)}`,
+    });
+  }
+  const { id } = generationOperation;
+  if (
+    typeof id !== "number" ||
+    !Number.isFinite(id) ||
+    !Number.isInteger(id) ||
+    id <= 0 ||
+    id > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `Invalid creative generation operation id: ${String(id)}`,
+    });
+  }
+}
+
+function buildCreativeIdempotencyKey(
+  campaignId: number,
+  generationOperation: CreativeGenerationOperation
+): string {
+  const key = `creative-success:${campaignId}:${generationOperation.source}:${generationOperation.id}`;
+  if (key.length > 255) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Creative idempotency key exceeds database column limit",
+    });
+  }
+  return key;
+}
+
 async function deductCreativeCreditsOnce({
   userId,
   campaignId,
   agentRunId,
   generationRunId,
+  generationOperation,
   estimatedCost,
 }: {
   userId: number;
   campaignId: number;
   agentRunId: number;
   generationRunId: string;
+  generationOperation: CreativeGenerationOperation;
   estimatedCost: number;
 }): Promise<void> {
-  const idempotencyKey = `creative-success:${campaignId}:${agentRunId}`;
+  validateCreativeGenerationOperation(generationOperation);
+  const idempotencyKey = buildCreativeIdempotencyKey(campaignId, generationOperation);
 
   const { alreadyDeducted } = await deductCredits({
     userId,
@@ -804,6 +853,8 @@ async function deductCreativeCreditsOnce({
       campaignId,
       agentRunId,
       generationRunId,
+      generationSource: generationOperation.source,
+      generationOperationId: generationOperation.id,
       provider: "openai",
       billingStage: "post_success",
       estimatedCost,
@@ -814,10 +865,10 @@ async function deductCreativeCreditsOnce({
   });
 
   if (alreadyDeducted) {
-    logInfo("[CreativeAgent] billing already deducted for run", {
+    logInfo("[CreativeAgent] billing already deducted for operation", {
       userId,
       campaignId,
-      agentRunId,
+      generationOperation,
       idempotencyKey,
     });
   }
@@ -827,11 +878,14 @@ export async function runCreativeAgent({
   userId,
   campaignId,
   deleteExistingDrafts = true,
+  generationOperation,
 }: {
   userId: number;
   campaignId: number;
   deleteExistingDrafts?: boolean;
+  generationOperation: CreativeGenerationOperation;
 }) {
+  validateCreativeGenerationOperation(generationOperation);
   const db = getDb();
   const totalStartedAt = Date.now();
   const timing = {
@@ -1880,6 +1934,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       campaignId,
       agentRunId: activePackRunId,
       generationRunId: `pack-${activePackRunId}`,
+      generationOperation,
       estimatedCost: estimatedCreativeCost,
     });
   } catch (billingErr: any) {
