@@ -1485,4 +1485,132 @@ describe("campaign-message-architect canary wrappers", () => {
       }
     });
   });
+
+  describe("canary authority routing", () => {
+    function countShadowObservations(): number {
+      return getAllLogPayloads().filter((p) => (p as Record<string, unknown>)?.event === "v2_shadow_observation").length;
+    }
+
+    function findShadowObservation(): Record<string, unknown> | undefined {
+      return getAllLogPayloads().find((p) => (p as Record<string, unknown>)?.event === "v2_shadow_observation");
+    }
+
+    function findShadowSkipped(): Record<string, unknown> | undefined {
+      return getAllLogPayloads().find((p) => (p as Record<string, unknown>)?.event === "v2_shadow_observation_skipped");
+    }
+
+    function setSelectedCanary() {
+      process.env.CREATIVE_PIPELINE_V2_MODE = "canary";
+      process.env.CREATIVE_PIPELINE_V2_CANARY_ENABLED = "true";
+      process.env.CREATIVE_PIPELINE_V2_CANARY_CAMPAIGN_IDS = "1";
+    }
+
+    function setNonSelectedCanary() {
+      process.env.CREATIVE_PIPELINE_V2_MODE = "canary";
+      process.env.CREATIVE_PIPELINE_V2_CANARY_ENABLED = "true";
+      process.env.CREATIVE_PIPELINE_V2_CANARY_CAMPAIGN_IDS = "999";
+    }
+
+    beforeEach(() => {
+      vi.mocked(runShadowMessageApproval).mockReturnValue(null);
+    });
+
+    it("selected canary buildApprovedMessagePack follows canary authority once and does not run shadow", async () => {
+      setSelectedCanary();
+
+      const pack = await buildApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      expect(pack.v2ApprovalEnvelope).toBeDefined();
+      expect(runAgent).toHaveBeenCalledTimes(1);
+      expect(runShadowMessageApproval).not.toHaveBeenCalled();
+      expect(countShadowObservations()).toBe(0);
+      expect(findShadowObservation()).toBeUndefined();
+      expect(findShadowSkipped()).toBeUndefined();
+    });
+
+    it("selected canary ensureApprovedMessagePack follows canary authority once and does not run shadow", async () => {
+      setSelectedCanary();
+
+      const pack = await ensureApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      expect(pack.v2ApprovalEnvelope).toBeDefined();
+      expect(runShadowMessageApproval).not.toHaveBeenCalled();
+      expect(countShadowObservations()).toBe(0);
+      expect(findShadowObservation()).toBeUndefined();
+      expect(findShadowSkipped()).toBeUndefined();
+    });
+
+    it("selected canary refineApprovedMessagePack follows canary authority once and does not run shadow", async () => {
+      setSelectedCanary();
+
+      const pack = await refineApprovedMessagePack({
+        userId: 10,
+        campaignId: 1,
+        existingPack: basePack,
+        refinementInstruction: "Make it more urgent",
+        skipBilling: true,
+        maxAttempts: 1,
+      });
+
+      expect(pack.v2ApprovalEnvelope).toBeDefined();
+      expect(runAgent).toHaveBeenCalledTimes(1);
+      expect(runShadowMessageApproval).not.toHaveBeenCalled();
+      expect(countShadowObservations()).toBe(0);
+      expect(findShadowObservation()).toBeUndefined();
+      expect(findShadowSkipped()).toBeUndefined();
+    });
+
+    it("non-selected canary buildApprovedMessagePack stays on legacy path and does not run shadow", async () => {
+      setNonSelectedCanary();
+
+      const pack = await buildApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      expect(pack.v2ApprovalEnvelope).toBeUndefined();
+      expect(runShadowMessageApproval).not.toHaveBeenCalled();
+      expect(countShadowObservations()).toBe(0);
+      expect(findShadowObservation()).toBeUndefined();
+      expect(findShadowSkipped()).toBeUndefined();
+    });
+
+    it("non-selected canary ensureApprovedMessagePack stays on legacy path and does not run shadow", async () => {
+      setNonSelectedCanary();
+
+      const pack = await ensureApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      expect(pack.v2ApprovalEnvelope).toBeUndefined();
+      expect(runShadowMessageApproval).not.toHaveBeenCalled();
+      expect(countShadowObservations()).toBe(0);
+      expect(findShadowObservation()).toBeUndefined();
+      expect(findShadowSkipped()).toBeUndefined();
+    });
+
+    it("non-selected canary refineApprovedMessagePack stays on legacy path and does not run shadow", async () => {
+      setNonSelectedCanary();
+
+      const pack = await refineApprovedMessagePack({
+        userId: 10,
+        campaignId: 1,
+        existingPack: basePack,
+        refinementInstruction: "Make it more urgent",
+        skipBilling: true,
+        maxAttempts: 1,
+      });
+
+      expect(pack.v2ApprovalEnvelope).toBeUndefined();
+      expect(runShadowMessageApproval).not.toHaveBeenCalled();
+      expect(countShadowObservations()).toBe(0);
+      expect(findShadowObservation()).toBeUndefined();
+      expect(findShadowSkipped()).toBeUndefined();
+    });
+
+    it("ensures canary and shadow authority never execute during the same top-level call", async () => {
+      setSelectedCanary();
+
+      await buildApprovedMessagePack({ userId: 10, campaignId: 1, skipBilling: true, maxAttempts: 1 });
+
+      expect(runAgent).toHaveBeenCalledTimes(1);
+      expect(runShadowMessageApproval).not.toHaveBeenCalled();
+      expect(countShadowObservations()).toBe(0);
+    });
+  });
 });
