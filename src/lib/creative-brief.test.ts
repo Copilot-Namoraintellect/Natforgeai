@@ -7,6 +7,7 @@ import {
   applyBusinessProfileToBrief,
   buildCampaignUpdatePayload,
   EMPTY_CREATIVE_BRIEF,
+  CONTENT_STYLE_NONE_SENTINEL,
 } from "./creative-brief";
 
 describe("creative brief readiness", () => {
@@ -178,5 +179,31 @@ describe("buildCampaignUpdatePayload", () => {
     expect(payload.name).toBe("Campaign 30");
     expect(payload.productOrService).toBe("B2B payments");
     expect(payload.preferredCta).toBe("Book a Demo");
+  });
+
+  it("maps the content style sentinel to an empty string", () => {
+    const payload = buildCampaignUpdatePayload({
+      contentStyle: CONTENT_STYLE_NONE_SENTINEL,
+    });
+    expect(payload.contentStyle).toBe("");
+  });
+});
+
+describe("contentStyle sentinel handling", () => {
+  it("initialises an empty persisted contentStyle without throwing", () => {
+    const form = prefillBriefFromCampaign({ contentStyle: null });
+    expect(form.contentStyle).toBe("");
+  });
+
+  it("does not treat the sentinel as a required field", () => {
+    expect(
+      isCreativeBriefComplete({
+        productOrService: "B2B payments",
+        targetBuyer: "delivery platforms",
+        mainPainPoint: "Manual reconciliation",
+        preferredCta: "Book a Demo",
+        contentStyle: CONTENT_STYLE_NONE_SENTINEL,
+      })
+    ).toBe(true);
   });
 });

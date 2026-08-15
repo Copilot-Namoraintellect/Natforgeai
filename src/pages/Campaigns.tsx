@@ -21,6 +21,7 @@ import {
   buildCampaignUpdatePayload,
   prefillBriefFromCampaign,
   validateCreativeBrief,
+  CONTENT_STYLE_NONE_SENTINEL,
   type CreativeBriefForm,
 } from "@/lib/creative-brief";
 import {
@@ -401,7 +402,9 @@ export default function Campaigns() {
   }
 
   function handleEditBriefChange(field: keyof CreativeBriefForm, value: string) {
-    setEditBriefForm((prev) => ({ ...prev, [field]: value }));
+    const nextValue =
+      field === "contentStyle" && value === CONTENT_STYLE_NONE_SENTINEL ? "" : value;
+    setEditBriefForm((prev) => ({ ...prev, [field]: nextValue }));
     if (editBriefErrors[field]) {
       setEditBriefErrors((prev) => {
         const next = { ...prev };
@@ -1541,7 +1544,8 @@ export default function Campaigns() {
                     <SelectValue placeholder="Select style" />
                   </SelectTrigger>
                   <SelectContent>
-                    {CONTENT_STYLE_OPTIONS.map((option) => (
+                    <SelectItem value={CONTENT_STYLE_NONE_SENTINEL}>Not specified</SelectItem>
+                    {CONTENT_STYLE_OPTIONS.filter((option) => option.value !== "").map((option) => (
                       <SelectItem key={option.value} value={option.value}>
                         {option.label}
                       </SelectItem>

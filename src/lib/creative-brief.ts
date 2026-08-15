@@ -28,6 +28,8 @@ export const PLACEHOLDER_VALUES = [
   "",
 ];
 
+export const CONTENT_STYLE_NONE_SENTINEL = "__none__";
+
 export const BRIEF_FIELD_LABELS: Record<string, string> = {
   productOrService: "Product or Service",
   targetBuyer: "Target Buyer",
@@ -203,5 +205,9 @@ export function applyBusinessProfileToBrief(
 export function buildCampaignUpdatePayload(
   form: Partial<CreativeBriefForm>
 ): Partial<CreativeBriefForm> {
-  return trimCreativeBrief(form);
+  const trimmed = trimCreativeBrief(form);
+  if (trimmed.contentStyle === CONTENT_STYLE_NONE_SENTINEL) {
+    trimmed.contentStyle = "";
+  }
+  return trimmed;
 }
