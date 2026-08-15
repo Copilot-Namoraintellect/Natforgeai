@@ -1,3 +1,5 @@
+import { isCreativeBriefComplete } from "./creative-brief";
+
 export type ActivityStatus = "pending" | "running" | "waiting" | "completed" | "failed";
 
 export interface AgentRunLike {
@@ -184,4 +186,29 @@ export function buildFailedCreativeMessage(error: string | null | undefined): {
   return {
     message: "Creative generation failed before content became available. Please retry from this campaign.",
   };
+}
+
+export interface RetryPendingState {
+  strategy: boolean;
+  creative: boolean;
+  audience: boolean;
+  distribution: boolean;
+}
+
+/**
+ * Determine whether the Retry Creative action is enabled for a failed campaign.
+ * Keeps the disabled-reason decision in one place so AgentActivity and its tests
+ * share the same logic.
+ */
+export function getCreativeRetryState(
+  campaign: unknown,
+  pending: RetryPendingState
+): { enabled: boolean; reason: "incomplete" | "pending" | null } {
+  if (pending.strategy || pending.creative || pending.audience || pending.distribution) {
+    return { enabled: false, reason: "pending" };
+  }
+  if (!isCreativeBriefComplete(campaign)) {
+    return { enabled: false, reason: "incomplete" };
+  }
+  return { enabled: true, reason: null };
 }

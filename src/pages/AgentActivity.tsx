@@ -22,8 +22,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { Link } from "react-router";
-import { buildFailedCreativeMessage, groupCampaignActivity } from "@/lib/agent-activity";
-import { isCreativeBriefComplete } from "@/lib/creative-brief";
+import { buildFailedCreativeMessage, getCreativeRetryState, groupCampaignActivity } from "@/lib/agent-activity";
 import { getWorkflowNextActionMessage } from "@/lib/workflow";
 
 const agentTypeConfig: Record<string, { label: string }> = {
@@ -65,11 +64,18 @@ export default function AgentActivity() {
     },
   });
 
-  // Fetch campaigns to determine correct CTA state per run
+  // Fetch campaigns to determine correct CTA state per run. String keys make the
+  // lookup robust whether campaign.id and run.campaignId arrive as numbers or strings.
   const { data: allCampaigns } = trpc.campaign.list.useQuery(undefined, {
     refetchInterval: 10000,
   });
-  const campaignMap = new Map(allCampaigns?.map((c) => [c.id, c]));
+  const campaignMap = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const c of allCampaigns ?? []) {
+      map.set(String(c.id), c);
+    }
+    return map;
+  }, [allCampaigns]);
 
   const runStrategyAgent = trpc.agent.runStrategyAgent.useMutation({
     onSuccess: () => {
@@ -173,11 +179,17 @@ export default function AgentActivity() {
           <div className="p-8 text-center text-gray-400">Loading activity...</div>
         ) : campaignTimelines.length > 0 ? (
           campaignTimelines.map((timeline) => {
-            const campaign = campaignMap.get(timeline.campaignId);
+            const campaign = campaignMap.get(String(timeline.campaignId));
             const latestCreative = timeline.creativeRun;
             const statusItem = statusConfig[timeline.currentStatus] || statusConfig.waiting;
             const StatusIcon = statusItem.icon;
             const errorDetails = buildFailedCreativeMessage(timeline.errorMessage);
+            const retryState = getCreativeRetryState(campaign, {
+              strategy: runStrategyAgent.isPending,
+              creative: runCreativeAgent.isPending,
+              audience: runAudienceAgent.isPending,
+              distribution: runDistributionAgent.isPending,
+            });
 
             const nextActionHref =
               timeline.currentStatus === "completed"
@@ -248,18 +260,12 @@ export default function AgentActivity() {
                           size="sm"
                           className="border-[#334155] text-gray-300 hover:text-white h-7 text-xs"
                           onClick={() => handleRetry(latestCreative)}
-                          disabled={
-                            !isCreativeBriefComplete(campaign) ||
-                            runStrategyAgent.isPending ||
-                            runCreativeAgent.isPending ||
-                            runAudienceAgent.isPending ||
-                            runDistributionAgent.isPending
-                          }
+                          disabled={!retryState.enabled}
                         >
                           <RotateCcw className="w-3.5 h-3.5 mr-1" />
                           Retry Creative
                         </Button>
-                        {!isCreativeBriefComplete(campaign) && (
+                        {retryState.reason === "incomplete" && (
                           <p className="text-xs text-red-200/80">
                             {campaign
                               ? "Complete the campaign's product, target buyer, pain point and CTA before retrying."

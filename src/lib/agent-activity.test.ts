@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFailedCreativeMessage, groupCampaignActivity } from "./agent-activity";
+import { buildFailedCreativeMessage, getCreativeRetryState, groupCampaignActivity } from "./agent-activity";
 
 describe("agent activity grouping and deduplication", () => {
   it("groups runs by campaign and keeps one active creative run with history", () => {
@@ -182,5 +182,65 @@ describe("agent activity grouping and deduplication", () => {
     const campaign30 = timelines.find((t) => t.campaignId === 30);
     expect(campaign30?.creativeRun?.id).toBe(231);
     expect(campaign30?.creativeRunHistory.some((r) => r.id === 233)).toBe(true);
+  });
+});
+
+describe("getCreativeRetryState", () => {
+  const noPending = { strategy: false, creative: false, audience: false, distribution: false };
+
+  const completeCampaign = {
+    id: 30,
+    userId: 22,
+    businessId: 26,
+    name: "Campaign 30",
+    workflowState: "creatives_generating",
+    productOrService: "B2B payment orchestration, prefunded merchant-account administration and controlled payment-instruction services.",
+    targetBuyer: "delivery platforms, restaurants, marketplaces and fintech businesses managing partner payouts",
+    mainPainPoint: "Manual reconciliation and delayed settlement of partner payouts",
+    preferredCta: "Book a Zuto Hub Demo",
+    primaryOutcome: "Book qualified demos",
+    targetAudience: "delivery platforms, restaurants, marketplaces, fintech businesses",
+    coreMessage: "Pay partners in minutes without manual reconciliation",
+    offerDetails: "Free reconciliation health check",
+    excludedOffers: "No upfront commitment",
+    referenceStyle: "Stripe-style clarity",
+    contentStyle: "premium_brand_ad",
+  };
+
+  it("enables retry for a complete failed campaign with no pending mutations", () => {
+    expect(getCreativeRetryState(completeCampaign, noPending)).toEqual({ enabled: true, reason: null });
+  });
+
+  it("disables retry when the brief is incomplete", () => {
+    const incomplete = { ...completeCampaign, preferredCta: "" };
+    expect(getCreativeRetryState(incomplete, noPending)).toEqual({ enabled: false, reason: "incomplete" });
+  });
+
+  it("disables retry when campaign details have not loaded", () => {
+    expect(getCreativeRetryState(undefined, noPending)).toEqual({ enabled: false, reason: "incomplete" });
+  });
+
+  it("disables retry while any retry mutation is pending", () => {
+    expect(getCreativeRetryState(completeCampaign, { ...noPending, strategy: true })).toEqual({
+      enabled: false,
+      reason: "pending",
+    });
+    expect(getCreativeRetryState(completeCampaign, { ...noPending, creative: true })).toEqual({
+      enabled: false,
+      reason: "pending",
+    });
+    expect(getCreativeRetryState(completeCampaign, { ...noPending, audience: true })).toEqual({
+      enabled: false,
+      reason: "pending",
+    });
+    expect(getCreativeRetryState(completeCampaign, { ...noPending, distribution: true })).toEqual({
+      enabled: false,
+      reason: "pending",
+    });
+  });
+
+  it("does not weaken validation by accepting placeholder values", () => {
+    const placeholderCampaign = { ...completeCampaign, preferredCta: "TBD" };
+    expect(getCreativeRetryState(placeholderCampaign, noPending)).toEqual({ enabled: false, reason: "incomplete" });
   });
 });
