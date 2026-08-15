@@ -22,7 +22,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { Link } from "react-router";
-import { buildFailedCreativeMessage, getCreativeRetryState, groupCampaignActivity } from "@/lib/agent-activity";
+import { buildFailedCreativeMessage, executeCreativeRetry, getCreativeRetryState, getCreativeRetryTarget, groupCampaignActivity } from "@/lib/agent-activity";
 import { getWorkflowNextActionMessage } from "@/lib/workflow";
 
 const agentTypeConfig: Record<string, { label: string }> = {
@@ -106,23 +106,23 @@ export default function AgentActivity() {
     onError: (err) => toast.error(err.message || "Retry failed"),
   });
 
-  function handleRetry(run: any) {
-    if (!run.campaignId) return;
-    switch (run.agentType) {
-      case "strategy":
-        runStrategyAgent.mutate({ campaignId: run.campaignId, generate: true });
-        break;
-      case "creative":
-        runCreativeAgent.mutate({ campaignId: run.campaignId });
-        break;
-      case "audience":
-        runAudienceAgent.mutate({ campaignId: run.campaignId });
-        break;
-      case "distribution":
-        runDistributionAgent.mutate({ campaignId: run.campaignId });
-        break;
-      default:
-        toast.info("Retry is not available for this agent type yet.");
+  function handleCreativeRetry(target: ReturnType<typeof getCreativeRetryTarget>) {
+    if (!target) {
+      toast.error("Retry is only available for the main creative generation operation.");
+      return;
+    }
+    const result = executeCreativeRetry(target, {
+      mutate: runCreativeAgent.mutate,
+      isPending: runCreativeAgent.isPending,
+    });
+    if (result.kind === "blocked") {
+      const messages: Record<string, string> = {
+        pending: "A retry is already in progress. Please wait.",
+        not_authoritative: "Retry is only available for the main creative generation operation.",
+        missing_campaign_id: "Campaign details are missing. Please refresh and try again.",
+        unsupported_agent_type: "Retry is not available for this agent type.",
+      };
+      toast.error(messages[result.reason]);
     }
   }
 
@@ -180,7 +180,7 @@ export default function AgentActivity() {
         ) : campaignTimelines.length > 0 ? (
           campaignTimelines.map((timeline) => {
             const campaign = campaignMap.get(String(timeline.campaignId));
-            const latestCreative = timeline.creativeRun;
+            const retryTarget = getCreativeRetryTarget(timeline);
             const statusItem = statusConfig[timeline.currentStatus] || statusConfig.waiting;
             const StatusIcon = statusItem.icon;
             const errorDetails = buildFailedCreativeMessage(timeline.errorMessage);
@@ -253,13 +253,13 @@ export default function AgentActivity() {
                       </Button>
                     </Link>
 
-                    {latestCreative && timeline.currentStatus === "failed" && (
+                    {retryTarget && (
                       <div className="flex items-center gap-2 flex-wrap">
                         <Button
                           variant="outline"
                           size="sm"
                           className="border-[#334155] text-gray-300 hover:text-white h-7 text-xs"
-                          onClick={() => handleRetry(latestCreative)}
+                          onClick={() => handleCreativeRetry(retryTarget)}
                           disabled={!retryState.enabled}
                         >
                           <RotateCcw className="w-3.5 h-3.5 mr-1" />

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFailedCreativeMessage, getCreativeRetryState, groupCampaignActivity } from "./agent-activity";
+import { buildFailedCreativeMessage, executeCreativeRetry, getCreativeRetryState, getCreativeRetryTarget, groupCampaignActivity, isAuthoritativeCreativeRun } from "./agent-activity";
 
 describe("agent activity grouping and deduplication", () => {
   it("groups runs by campaign and keeps one active creative run with history", () => {
@@ -242,5 +242,203 @@ describe("getCreativeRetryState", () => {
   it("does not weaken validation by accepting placeholder values", () => {
     const placeholderCampaign = { ...completeCampaign, preferredCta: "TBD" };
     expect(getCreativeRetryState(placeholderCampaign, noPending)).toEqual({ enabled: false, reason: "incomplete" });
+  });
+});
+
+describe("isAuthoritativeCreativeRun", () => {
+  it("returns true for a creative run with content_generation_job input", () => {
+    expect(
+      isAuthoritativeCreativeRun({
+        id: 231,
+        campaignId: 30,
+        agentType: "creative",
+        status: "failed",
+        input: { jobType: "content_generation_job" },
+      })
+    ).toBe(true);
+  });
+
+  it("returns false for a nested model-execution inner run", () => {
+    expect(
+      isAuthoritativeCreativeRun({
+        id: 233,
+        campaignId: 30,
+        agentType: "creative",
+        status: "completed",
+        input: { prompt: "inner" },
+      })
+    ).toBe(false);
+  });
+
+  it("returns false for a non-creative run", () => {
+    expect(
+      isAuthoritativeCreativeRun({
+        id: 1,
+        campaignId: 30,
+        agentType: "strategy",
+        status: "completed",
+      })
+    ).toBe(false);
+  });
+
+  it("returns false when input is missing", () => {
+    expect(
+      isAuthoritativeCreativeRun({
+        id: 231,
+        campaignId: 30,
+        agentType: "creative",
+        status: "failed",
+      })
+    ).toBe(false);
+  });
+});
+
+describe("getCreativeRetryTarget", () => {
+  const failedControllingRun = {
+    id: 231,
+    campaignId: 30,
+    agentType: "creative" as const,
+    status: "failed" as const,
+    error: "quality validation failed",
+    input: { jobType: "content_generation_job" },
+  };
+
+  const failedTimeline = {
+    campaignId: 30,
+    currentStatus: "failed" as const,
+    creativeRun: failedControllingRun,
+    strategyRun: null,
+    audienceRun: null,
+    distributionRun: null,
+    creativeRunHistory: [],
+    currentCampaignStage: "Creative generation",
+    completedSteps: [],
+    pendingWork: "Creative output failed validation and needs a retry.",
+    nextAction: "Retry creative generation",
+    errorMessage: "quality validation failed",
+  };
+
+  it("returns the failed controlling run and timeline campaignId when the timeline is failed", () => {
+    expect(getCreativeRetryTarget(failedTimeline)).toEqual({
+      campaignId: 30,
+      run: failedControllingRun,
+    });
+  });
+
+  it("selects the failed outer operation over newer completed inner runs", () => {
+    const timeline = {
+      ...failedTimeline,
+      creativeRunHistory: [
+        { id: 234, campaignId: 30, agentType: "creative" as const, status: "completed" as const, input: { prompt: "inner" } },
+        { id: 233, campaignId: 30, agentType: "creative" as const, status: "completed" as const, input: { prompt: "inner" } },
+      ],
+    };
+    expect(getCreativeRetryTarget(timeline)?.run.id).toBe(231);
+    expect(getCreativeRetryTarget(timeline)?.campaignId).toBe(30);
+  });
+
+  it("returns null when the timeline is not failed", () => {
+    expect(getCreativeRetryTarget({ ...failedTimeline, currentStatus: "completed" as const })).toBeNull();
+  });
+
+  it("returns null when there is no creative run", () => {
+    expect(getCreativeRetryTarget({ ...failedTimeline, creativeRun: null })).toBeNull();
+  });
+
+  it("returns null when the creative run is not authoritative", () => {
+    expect(
+      getCreativeRetryTarget({
+        ...failedTimeline,
+        creativeRun: { ...failedControllingRun, input: { prompt: "inner" } },
+      })
+    ).toBeNull();
+  });
+});
+
+describe("executeCreativeRetry", () => {
+  const controllingRun = {
+    id: 231,
+    campaignId: 30,
+    agentType: "creative" as const,
+    status: "failed" as const,
+    error: "quality validation failed",
+    input: { jobType: "content_generation_job" },
+  };
+
+  const target = { campaignId: 30, run: controllingRun };
+
+  it("calls the creative mutation exactly once when ready", () => {
+    const calls: { campaignId: number }[] = [];
+    const mutation = {
+      mutate: (input: { campaignId: number }) => calls.push(input),
+      isPending: false,
+    };
+    expect(executeCreativeRetry(target, mutation)).toEqual({ kind: "started", campaignId: 30 });
+    expect(calls).toEqual([{ campaignId: 30 }]);
+  });
+
+  it("blocks a duplicate click while a mutation is pending", () => {
+    const calls: { campaignId: number }[] = [];
+    const mutation = {
+      mutate: (input: { campaignId: number }) => calls.push(input),
+      isPending: true,
+    };
+    expect(executeCreativeRetry(target, mutation)).toEqual({ kind: "blocked", reason: "pending" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("blocks when the campaignId is missing", () => {
+    const calls: { campaignId: number }[] = [];
+    const mutation = {
+      mutate: (input: { campaignId: number }) => calls.push(input),
+      isPending: false,
+    };
+    expect(executeCreativeRetry({ campaignId: 0, run: controllingRun }, mutation)).toEqual({
+      kind: "blocked",
+      reason: "missing_campaign_id",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("blocks when the run is not an authoritative creative operation", () => {
+    const calls: { campaignId: number }[] = [];
+    const mutation = {
+      mutate: (input: { campaignId: number }) => calls.push(input),
+      isPending: false,
+    };
+    const innerRun = { ...controllingRun, input: { prompt: "inner" } };
+    expect(executeCreativeRetry({ campaignId: 30, run: innerRun }, mutation)).toEqual({
+      kind: "blocked",
+      reason: "not_authoritative",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("blocks when the agent type is unsupported", () => {
+    const calls: { campaignId: number }[] = [];
+    const mutation = {
+      mutate: (input: { campaignId: number }) => calls.push(input),
+      isPending: false,
+    };
+    const strategyRun = { ...controllingRun, agentType: "strategy" as const };
+    expect(executeCreativeRetry({ campaignId: 30, run: strategyRun }, mutation)).toEqual({
+      kind: "blocked",
+      reason: "unsupported_agent_type",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("always uses the provided campaignId, not the run's campaignId", () => {
+    const calls: { campaignId: number }[] = [];
+    const mutation = {
+      mutate: (input: { campaignId: number }) => calls.push(input),
+      isPending: false,
+    };
+    const runWithDifferentCampaignId = { ...controllingRun, campaignId: 99 };
+    expect(executeCreativeRetry({ campaignId: 30, run: runWithDifferentCampaignId }, mutation)).toEqual({
+      kind: "started",
+      campaignId: 30,
+    });
+    expect(calls).toEqual([{ campaignId: 30 }]);
   });
 });

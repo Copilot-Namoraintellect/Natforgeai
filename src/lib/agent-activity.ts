@@ -34,9 +34,56 @@ export function getLatestRun(runs: AgentRunLike[], agentType: string): AgentRunL
   return [...matching].sort((a, b) => Number(b.id) - Number(a.id))[0] ?? null;
 }
 
-function isControllingCreativeRun(run: AgentRunLike): boolean {
+export function isAuthoritativeCreativeRun(run: AgentRunLike): boolean {
   const input = (run as any).input as Record<string, unknown> | undefined;
   return run.agentType === "creative" && input?.jobType === "content_generation_job";
+}
+
+/**
+ * Return the authoritative creative run that should be retried for a failed
+ * campaign timeline, using the timeline's campaignId as the authoritative
+ * campaign identifier. Returns null when the timeline is not failed, when there
+ * is no creative run, or when the run is not an authoritative controlling
+ * creative operation (e.g., a nested model-execution inner run).
+ */
+export function getCreativeRetryTarget(
+  timeline: CampaignActivityTimeline
+): { campaignId: number; run: AgentRunLike } | null {
+  if (timeline.currentStatus !== "failed") return null;
+  const run = timeline.creativeRun;
+  if (!run) return null;
+  if (!isAuthoritativeCreativeRun(run)) return null;
+  return { campaignId: timeline.campaignId, run };
+}
+
+export interface CreativeRetryMutation {
+  mutate: (input: { campaignId: number }) => void;
+  isPending: boolean;
+}
+
+export type CreativeRetryResult =
+  | { kind: "started"; campaignId: number }
+  | { kind: "blocked"; reason: "pending" | "not_authoritative" | "missing_campaign_id" | "unsupported_agent_type" };
+
+/**
+ * Execute a creative retry against the authoritative controlling run. This is a
+ * pure decision helper: the caller provides the mutation and decides how to
+ * surface the result to the user.
+ */
+export function executeCreativeRetry(
+  target: { campaignId: number; run: AgentRunLike },
+  mutation: CreativeRetryMutation
+): CreativeRetryResult {
+  if (mutation.isPending) return { kind: "blocked", reason: "pending" };
+  if (!target.campaignId) return { kind: "blocked", reason: "missing_campaign_id" };
+  if (target.run.agentType !== "creative") return { kind: "blocked", reason: "unsupported_agent_type" };
+  if (!isAuthoritativeCreativeRun(target.run)) return { kind: "blocked", reason: "not_authoritative" };
+  mutation.mutate({ campaignId: target.campaignId });
+  return { kind: "started", campaignId: target.campaignId };
+}
+
+function isControllingCreativeRun(run: AgentRunLike): boolean {
+  return isAuthoritativeCreativeRun(run);
 }
 
 function getSavedPostCountFromRun(run: AgentRunLike): number | null {
