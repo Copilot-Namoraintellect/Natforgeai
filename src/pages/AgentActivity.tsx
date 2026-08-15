@@ -85,8 +85,12 @@ export default function AgentActivity() {
     onError: (err) => toast.error(err.message || "Retry failed"),
   });
   const runCreativeAgent = trpc.agent.runCreativeAgent.useMutation({
-    onSuccess: () => {
-      toast.success("Creative generation restarted");
+    onSuccess: (data) => {
+      if (data.skipped) {
+        toast.success(data.reason || "Creative generation already completed or in progress.");
+      } else {
+        toast.success("Creative generation started");
+      }
       utils.agent.getAgentRuns.invalidate();
     },
     onError: (err) => toast.error(err.message || "Retry failed"),

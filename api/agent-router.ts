@@ -11,6 +11,7 @@ import {
   outreachRecommendations,
   leads,
   leadActivities,
+  contentPosts,
 } from "@db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { runStrategyAgent } from "./lib/agents/strategy-agent";
@@ -267,9 +268,64 @@ export const agentRouter = createRouter({
         });
       };
 
+      const attachAndReleaseShortcutClaim = async (
+        operationReferenceId: number,
+        terminalStatus: "completed" | "failed"
+      ) => {
+        if (released) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Operation claim was already released; cannot complete shortcut.",
+          });
+        }
+
+        let attachSucceeded = false;
+        try {
+          const attachResult = await attachCreativeGenerationOperationReference({
+            claimId: claim.id,
+            ownerToken,
+            operationReferenceId,
+          });
+          attachSucceeded = attachResult.attached;
+        } catch (attachErr) {
+          logError(
+            "[agentRouter.runCreativeAgent] failed to attach operation reference before shortcut release",
+            {
+              campaignId: input.campaignId,
+              userId: ctx.user.id,
+              claimId: claim.id,
+              operationReferenceId,
+              error: attachErr instanceof Error ? attachErr.message : String(attachErr),
+            }
+          );
+        }
+
+        if (!attachSucceeded) {
+          // Attachment failed or reported a collision. Fail closed: release the
+          // newly acquired claim as failed and do not return a successful/skipped
+          // shortcut or continue to the normal terminal release.
+          await releaseClaimOnce("failed");
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Could not record the operation reference for this generation request. Please retry.",
+          });
+        }
+
+        const releaseResult = await releaseClaimOnce(terminalStatus);
+        if (!releaseResult.released) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "The operation could not be closed cleanly. Please retry.",
+          });
+        }
+      };
+
       try {
-        // Advisory dedup: a pre-existing creative run from before the claim table
-        // existed may already be active or completed with content.
+        // Advisory dedup: an existing controlling creative operation may already be
+        // active, or may have completed and produced durable content. Nested inner
+        // runAgent rows also have agentType="creative" but are not authoritative
+        // controlling operations, so they must not satisfy this guard.
         const existingCreative = await db
           .select()
           .from(agentRuns)
@@ -280,38 +336,71 @@ export const agentRouter = createRouter({
               eq(agentRuns.userId, ctx.user.id)
             )
           )
-          .orderBy(desc(agentRuns.createdAt))
-          .limit(1);
+          .orderBy(desc(agentRuns.createdAt));
 
-        const workflowContext = (campaign.workflowContext || {}) as { savedPosts?: number } | undefined;
-        const savedPosts = typeof workflowContext?.savedPosts === "number" ? workflowContext.savedPosts : null;
-        const existingRun = existingCreative[0];
-        const hasNoContent = savedPosts === 0;
+        const existingRun = existingCreative.find((run) => {
+          const runInput = (run as any).input as Record<string, unknown> | undefined;
+          // Only outer controlling operations are authoritative. Rows with no input,
+          // malformed input, or inner runAgent input shapes must not suppress
+          // generation; they fail open for retry.
+          return runInput?.jobType === "content_generation_job";
+        });
 
-        if (
-          existingRun &&
-          ((existingRun.status === "running") ||
-            (existingRun.status === "completed" && !hasNoContent))
-        ) {
-          const releaseResult = await releaseClaimOnce("completed");
-          if (!releaseResult.released) {
-            throw new TRPCError({
-              code: "INTERNAL_SERVER_ERROR",
-              message:
-                "A creative agent run already exists, but the operation could not be closed cleanly. Please retry.",
-            });
+        const contentPostRows = await db
+          .select({ id: contentPosts.id })
+          .from(contentPosts)
+          .where(
+            and(
+              eq(contentPosts.userId, ctx.user.id),
+              eq(contentPosts.campaignId, input.campaignId),
+              eq(contentPosts.aiGenerated, true)
+            )
+          );
+        const contentPostCount = contentPostRows.length;
+        const runOutput = (existingRun?.output as Record<string, unknown> | undefined) ?? {};
+        const outputSavedPosts =
+          typeof runOutput.savedPosts === "number" ? runOutput.savedPosts : null;
+
+        if (existingRun) {
+          if (existingRun.status === "running") {
+            // No durable output exists yet; release the no-work claim as failed and
+            // record the running operation reference.
+            await attachAndReleaseShortcutClaim(existingRun.id, "failed");
+            return {
+              success: true,
+              skipped: true,
+              reason: "A creative generation operation is already in progress.",
+              packRunId: existingRun.id,
+              assetsRunId: null,
+              pack: null,
+              assets: null,
+              savedPosts: 0,
+              savedAssets: 0,
+            };
           }
-          return {
-            success: true,
-            skipped: true,
-            reason: `A creative agent run already exists with status "${existingRun.status}".`,
-            packRunId: existingRun.id,
-            assetsRunId: null,
-            pack: null,
-            assets: null,
-            savedPosts: 0,
-            savedAssets: 0,
-          };
+
+          if (
+            existingRun.status === "completed" &&
+            outputSavedPosts !== null &&
+            outputSavedPosts > 0 &&
+            contentPostCount >= outputSavedPosts
+          ) {
+            // Durable output and matching persisted posts exist; safe reuse.
+            await attachAndReleaseShortcutClaim(existingRun.id, "completed");
+            return {
+              success: true,
+              skipped: true,
+              reason: "Creative content already exists for this campaign.",
+              packRunId: existingRun.id,
+              assetsRunId: null,
+              pack: null,
+              assets: null,
+              savedPosts: 0,
+              savedAssets: 0,
+            };
+          }
+
+          // completed with zero/missing saved posts, or failed → allow retry
         }
 
         // Keep the claim alive during the long-running creative generation. Started
@@ -428,7 +517,7 @@ export const agentRouter = createRouter({
           })
         );
 
-        return { success: true, ...result };
+        return { success: true, skipped: false, ...result };
       } catch (err) {
         // Ensure the claim is released on any unexpected error path not handled above.
         // Preserve the original error; release failure is logged without ownerToken.

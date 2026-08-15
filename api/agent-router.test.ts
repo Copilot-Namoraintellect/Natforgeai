@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TRPCError } from "@trpc/server";
+import { attachCreativeGenerationOperationReference, acquireCreativeGenerationClaim, releaseClaimWithResult } from "./lib/creative/creative-generation-claim";
 
 vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
@@ -47,59 +48,68 @@ interface MockDbState {
   agentRunsRows: any[];
   insertedRows: any[];
   updatedRows: any[];
+  contentPostsCount: number;
+  campaign: any;
 }
 
-function createMockDb({ existingCreativeRun }: { existingCreativeRun?: any } = {}) {
+function createMockDb({
+  existingCreativeRun,
+  agentRunsRows = [],
+  contentPostsCount = 0,
+  campaign = {
+    id: 28,
+    userId: 18,
+    businessId: 24,
+    workflowState: "strategy_approved",
+    workflowContext: {},
+  },
+}: {
+  existingCreativeRun?: any;
+  agentRunsRows?: any[];
+  contentPostsCount?: number;
+  campaign?: any;
+} = {}) {
+  const allAgentRunsRows = existingCreativeRun
+    ? [existingCreativeRun, ...agentRunsRows]
+    : [...agentRunsRows];
+
   const state: MockDbState = {
-    agentRunsRows: existingCreativeRun ? [existingCreativeRun] : [],
+    agentRunsRows: allAgentRunsRows,
     insertedRows: [],
     updatedRows: [],
+    contentPostsCount,
+    campaign,
   };
+
+  function buildRowsForTable(table: unknown): any[] {
+    const name = getTableName(table);
+    if (name === "campaigns") return [state.campaign];
+    if (name === "agent_runs") {
+      return [...state.agentRunsRows].sort((a, b) => Number(b.id) - Number(a.id));
+    }
+    if (name === "content_posts") {
+      return Array.from({ length: state.contentPostsCount }, (_, i) => ({
+        id: 2000 + i,
+        aiGenerated: true,
+      }));
+    }
+    return [];
+  }
+
+  function createQueryBuilder(rows: any[]) {
+    const builder: any = {
+      orderBy: vi.fn(() => builder),
+      limit: vi.fn(() => Promise.resolve(rows)),
+      then: (resolve: any, reject: any) => Promise.resolve(rows).then(resolve, reject),
+    };
+    return builder;
+  }
 
   const db = {
     state,
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => ({
-        where: vi.fn(() => ({
-          orderBy: vi.fn(() => ({
-            limit: vi.fn(async () => {
-              const name = getTableName(table);
-              if (name === "campaigns") {
-                return [
-                  {
-                    id: 28,
-                    userId: 18,
-                    businessId: 24,
-                    workflowState: "strategy_approved",
-                    workflowContext: {},
-                  },
-                ];
-              }
-              if (name === "agent_runs") {
-                return existingCreativeRun ? [existingCreativeRun] : [];
-              }
-              return [];
-            }),
-          })),
-          limit: vi.fn(async () => {
-            const name = getTableName(table);
-            if (name === "campaigns") {
-              return [
-                {
-                  id: 28,
-                  userId: 18,
-                  businessId: 24,
-                  workflowState: "strategy_approved",
-                  workflowContext: {},
-                },
-              ];
-            }
-            if (name === "agent_runs") {
-              return existingCreativeRun ? [existingCreativeRun] : [];
-            }
-            return [];
-          }),
-        })),
+        where: vi.fn(() => createQueryBuilder(buildRowsForTable(table))),
       })),
     })),
     insert: vi.fn((table: unknown) => ({
@@ -163,6 +173,7 @@ describe("agentRouter.runCreativeAgent", () => {
     const result = await caller.runCreativeAgent({ campaignId: 28 });
 
     expect(result.success).toBe(true);
+    expect(result.skipped).toBe(false);
     expect(result.packRunId).toBe(501);
 
     expect(runCreativeAgent).toHaveBeenCalledWith(
@@ -192,6 +203,10 @@ describe("agentRouter.runCreativeAgent", () => {
       savedPosts: 2,
       savedAssets: 1,
     });
+
+    expect(attachCreativeGenerationOperationReference).toHaveBeenCalledWith(
+      expect.objectContaining({ operationReferenceId: 1000 })
+    );
   });
 
   it("marks the operation row failed when runCreativeAgent throws", async () => {
@@ -216,7 +231,251 @@ describe("agentRouter.runCreativeAgent", () => {
     expect(failedUpdate.payload.error).toContain("generation failed");
   });
 
-  it("does not create an operation row when the dedup guard skips", async () => {
+  it("ignores completed inner creative rows and retries a failed controlling operation", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 231,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "failed",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          createdAt: new Date("2024-01-01T00:00:00Z"),
+        },
+        {
+          id: 236,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "completed",
+          input: { prompt: "inner prompt", system: "inner system" },
+          createdAt: new Date("2024-01-02T00:00:00Z"),
+        },
+      ],
+      contentPostsCount: 0,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 601,
+      savedPosts: 2,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(result.skipped).toBe(false);
+    expect(result.success).toBe(true);
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+    expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(1);
+    expect(attachCreativeGenerationOperationReference).toHaveBeenCalledWith(
+      expect.objectContaining({ operationReferenceId: 1000 })
+    );
+  });
+
+  it("does not deduplicate when only inner creative runs exist", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 236,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "completed",
+          input: { prompt: "inner prompt", system: "inner system" },
+          createdAt: new Date(),
+        },
+      ],
+      contentPostsCount: 0,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 602,
+      savedPosts: 2,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(result.skipped).toBe(false);
+    expect(result.success).toBe(true);
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("short-circuits when an authoritative controlling run is already running", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 231,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "running",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          createdAt: new Date(),
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toContain("already in progress");
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(db.state.insertedRows.length).toBe(0);
+    expect(attachCreativeGenerationOperationReference).toHaveBeenCalledWith(
+      expect.objectContaining({ operationReferenceId: 231, claimId: 1001 })
+    );
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", context: "agentRouter.runCreativeAgent" })
+    );
+  });
+
+  it("safely reuses when a completed authoritative run has saved output evidence and matching posts", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 231,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "completed",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          output: { success: true, packRunId: 555, savedPosts: 3, savedAssets: 1 },
+          createdAt: new Date(),
+        },
+      ],
+      contentPostsCount: 3,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toContain("Creative content already exists");
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(db.state.insertedRows.length).toBe(0);
+    expect(attachCreativeGenerationOperationReference).toHaveBeenCalledWith(
+      expect.objectContaining({ operationReferenceId: 231, claimId: 1001 })
+    );
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed", context: "agentRouter.runCreativeAgent" })
+    );
+  });
+
+  it("retries when a completed authoritative run has no persisted posts", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 231,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "completed",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          createdAt: new Date(),
+        },
+      ],
+      contentPostsCount: 0,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 603,
+      savedPosts: 2,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(result.skipped).toBe(false);
+    expect(result.success).toBe(true);
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+    expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(1);
+  });
+
+  it("does not short-circuit through a newer completed inner row when controlling run failed", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { acquireCreativeGenerationClaim } = await import("./lib/creative/creative-generation-claim");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 231,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "failed",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          createdAt: new Date("2024-01-01T00:00:00Z"),
+        },
+        {
+          id: 236,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "completed",
+          input: { prompt: "inner prompt", system: "inner system" },
+          createdAt: new Date("2024-01-02T00:00:00Z"),
+        },
+      ],
+      contentPostsCount: 0,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 604,
+      savedPosts: 2,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(acquireCreativeGenerationClaim).toHaveBeenCalledTimes(1);
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+    expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(1);
+  });
+
+  it("does not treat a legacy running creative run with no input as authoritative", async () => {
     const { getDb } = await import("./queries/connection");
     const { runCreativeAgent } = await import("./lib/agents/creative-agent");
     const { agentRouter } = await import("./agent-router");
@@ -232,12 +491,317 @@ describe("agentRouter.runCreativeAgent", () => {
       },
     });
     vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 700,
+      savedPosts: 2,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
 
     const caller = agentRouter.createCaller(buildCtx());
     const result = await caller.runCreativeAgent({ campaignId: 28 });
 
-    expect(result.skipped).toBe(true);
+    expect(result.skipped).toBe(false);
+    expect(result.success).toBe(true);
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+    expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(1);
+  });
+
+  it("does not deduplicate a legacy completed creative run with null input", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      existingCreativeRun: {
+        id: 778,
+        userId: 18,
+        campaignId: 28,
+        agentType: "creative",
+        status: "completed",
+        input: null,
+        createdAt: new Date(),
+      },
+      contentPostsCount: 5,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 701,
+      savedPosts: 2,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(result.skipped).toBe(false);
+    expect(result.success).toBe(true);
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not deduplicate a creative run with malformed string input", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 779,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "completed",
+          input: "not-an-object",
+          createdAt: new Date(),
+        },
+      ],
+      contentPostsCount: 5,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 702,
+      savedPosts: 2,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(result.skipped).toBe(false);
+    expect(result.success).toBe(true);
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not deduplicate when posts exist but the completed authoritative run output lacks saved-post evidence", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 780,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "completed",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          output: { success: true, packRunId: 780 },
+          createdAt: new Date(),
+        },
+      ],
+      contentPostsCount: 3,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 703,
+      savedPosts: 2,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(result.skipped).toBe(false);
+    expect(result.success).toBe(true);
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+    expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(1);
+  });
+
+  it("attaches the authoritative operation reference before releasing every shortcut claim", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { agentRouter } = await import("./agent-router");
+
+    const callLog: { type: string; operationReferenceId?: number; status?: string }[] = [];
+    vi.mocked(attachCreativeGenerationOperationReference).mockImplementation(async (args) => {
+      callLog.push({ type: "attach", operationReferenceId: args.operationReferenceId });
+      return { attached: true };
+    });
+    vi.mocked(releaseClaimWithResult).mockImplementation(async (args) => {
+      callLog.push({ type: "release", status: args.status });
+      return { released: true };
+    });
+
+    const caller = agentRouter.createCaller(buildCtx());
+
+    // Running authoritative operation shortcut
+    vi.mocked(getDb).mockReturnValue(createMockDb({
+      agentRunsRows: [
+        {
+          id: 231,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "running",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          createdAt: new Date(),
+        },
+      ],
+    }) as any);
+    await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(callLog).toContainEqual({ type: "attach", operationReferenceId: 231 });
+    expect(callLog).toContainEqual({ type: "release", status: "failed" });
+    const runningAttachIndex = callLog.findIndex((c) => c.type === "attach" && c.operationReferenceId === 231);
+    const runningReleaseIndex = callLog.findIndex((c) => c.type === "release" && c.status === "failed");
+    expect(runningAttachIndex).toBeLessThan(runningReleaseIndex);
+
+    // Completed authoritative operation shortcut with durable output
+    callLog.length = 0;
+    vi.clearAllMocks();
+    vi.mocked(attachCreativeGenerationOperationReference).mockImplementation(async (args) => {
+      callLog.push({ type: "attach", operationReferenceId: args.operationReferenceId });
+      return { attached: true };
+    });
+    vi.mocked(releaseClaimWithResult).mockImplementation(async (args) => {
+      callLog.push({ type: "release", status: args.status });
+      return { released: true };
+    });
+    vi.mocked(getDb).mockReturnValue(createMockDb({
+      agentRunsRows: [
+        {
+          id: 232,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "completed",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          output: { success: true, packRunId: 232, savedPosts: 3, savedAssets: 1 },
+          createdAt: new Date(),
+        },
+      ],
+      contentPostsCount: 3,
+    }) as any);
+    await caller.runCreativeAgent({ campaignId: 28 });
+
+    expect(callLog).toContainEqual({ type: "attach", operationReferenceId: 232 });
+    expect(callLog).toContainEqual({ type: "release", status: "completed" });
+    const completedAttachIndex = callLog.findIndex((c) => c.type === "attach" && c.operationReferenceId === 232);
+    const completedReleaseIndex = callLog.findIndex((c) => c.type === "release" && c.status === "completed");
+    expect(completedAttachIndex).toBeLessThan(completedReleaseIndex);
+  });
+
+  it("fails closed when attachment is rejected for a running shortcut", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    vi.mocked(attachCreativeGenerationOperationReference).mockImplementationOnce(async () => ({
+      attached: false,
+      existingClaim: { id: 9999 } as any,
+    }) as any);
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 231,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "running",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          createdAt: new Date(),
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    await expect(caller.runCreativeAgent({ campaignId: 28 })).rejects.toBeInstanceOf(TRPCError);
+
     expect(runCreativeAgent).not.toHaveBeenCalled();
-    expect(db.state.insertedRows.length).toBe(0);
+    expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(0);
+    expect(releaseClaimWithResult).toHaveBeenCalledTimes(1);
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", context: "agentRouter.runCreativeAgent" })
+    );
+  });
+
+  it("fails closed when attachment throws for a completed reuse shortcut", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    vi.mocked(attachCreativeGenerationOperationReference).mockImplementationOnce(async () => {
+      throw new Error("duplicate operation reference");
+    });
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 231,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "completed",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          output: { success: true, packRunId: 555, savedPosts: 3, savedAssets: 1 },
+          createdAt: new Date(),
+        },
+      ],
+      contentPostsCount: 3,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    await expect(caller.runCreativeAgent({ campaignId: 28 })).rejects.toBeInstanceOf(TRPCError);
+
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(0);
+    expect(releaseClaimWithResult).toHaveBeenCalledTimes(1);
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", context: "agentRouter.runCreativeAgent" })
+    );
+  });
+
+  it("does not release a terminal shortcut as completed when attachment fails", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    vi.mocked(attachCreativeGenerationOperationReference).mockImplementationOnce(async () => ({
+      attached: false,
+      existingClaim: { id: 9999 } as any,
+    }) as any);
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 231,
+          userId: 18,
+          campaignId: 28,
+          agentType: "creative",
+          status: "completed",
+          input: { jobType: "content_generation_job", source: "agent_router" },
+          output: { success: true, packRunId: 555, savedPosts: 3, savedAssets: 1 },
+          createdAt: new Date(),
+        },
+      ],
+      contentPostsCount: 3,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = caller.runCreativeAgent({ campaignId: 28 });
+    await expect(result).rejects.toBeInstanceOf(TRPCError);
+
+    const completedRelease = vi.mocked(releaseClaimWithResult).mock.calls.find(
+      (c) => (c[0] as any).status === "completed"
+    );
+    expect(completedRelease).toBeUndefined();
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(0);
   });
 });
