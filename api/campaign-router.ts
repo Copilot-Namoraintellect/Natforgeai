@@ -697,12 +697,7 @@ export const campaignRouter = createRouter({
           // this claim without deleting any AI-generated content; old agent runs
           // have already been cleared as part of the regeneration flow, which
           // is the destructive step that precedes strategy generation.
-          const releaseResult = await releaseClaimWithResult({
-            claimId: claim!.id,
-            ownerToken: ownerToken!,
-            status: "failed",
-            context: "campaignRouter.regenerateFromProfile reference collision",
-          });
+          const releaseResult = await releaseClaimOnce("failed");
           if (!releaseResult.released) {
             console.error(`[regenerateFromProfile] failed-release failed after reference collision | campaignId=${campaignId} | claimId=${claim!.id} | releaseError=${releaseResult.error.message}`);
           }

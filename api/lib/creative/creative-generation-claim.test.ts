@@ -8,6 +8,7 @@ import {
   acquireCreativeGenerationClaim,
   attachCreativeGenerationOperationReference,
   releaseCreativeGenerationClaim,
+  releaseClaimWithResult,
   getActiveCreativeGenerationClaim,
   classifyStaleCreativeGenerationClaims,
   heartbeatCreativeGenerationClaim,
@@ -21,6 +22,7 @@ import {
 } from "./creative-generation-claim";
 
 const mockGetDb = vi.hoisted(() => vi.fn());
+const mockLogError = vi.hoisted(() => vi.fn());
 
 vi.mock("../../queries/connection", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../queries/connection")>();
@@ -31,6 +33,14 @@ vi.mock("../../queries/connection", async (importOriginal) => {
     getDb: () => mockGetDb(),
   };
 });
+
+vi.mock("../logger", () => ({
+  logError: mockLogError,
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logDebug: vi.fn(),
+  log: vi.fn(),
+}));
 
 function getDatabaseName(): string {
   try {
@@ -615,6 +625,80 @@ describe("creative generation claim primitive (DB)", () => {
 
     // If an unhandled rejection occurred, the test runner would have flagged it.
     expect(controller.lostOwnership).toBe(true);
+  });
+
+  itSafe("releasedAt is populated by the database clock", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+
+    await releaseCreativeGenerationClaim({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+      status: "completed",
+    });
+
+    const [released] = await db
+      .select()
+      .from(creativeGenerationClaims)
+      .where(eq(creativeGenerationClaims.id, claim.id))
+      .limit(1);
+
+    expect(released?.releasedAt).toBeInstanceOf(Date);
+    expect(released?.releasedAt?.getTime()).toBeGreaterThanOrEqual(
+      claim.createdAt.getTime()
+    );
+  });
+
+  itSafe("heartbeat controller stop prevents further scheduled heartbeats", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+
+    const controller = createClaimHeartbeatController({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+      leaseSeconds: 300,
+      heartbeatIntervalSeconds: 1,
+    });
+
+    // Allow the immediate heartbeat to complete.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await controller.stop();
+
+    const afterStop = await db
+      .select()
+      .from(creativeGenerationClaims)
+      .where(eq(creativeGenerationClaims.id, claim.id))
+      .limit(1);
+    const heartbeatAtAfterStop = afterStop[0]?.heartbeatAt;
+    expect(heartbeatAtAfterStop).not.toBeNull();
+
+    // Wait longer than the heartbeat interval and confirm no further heartbeat
+    // is scheduled after stop().
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const later = await db
+      .select()
+      .from(creativeGenerationClaims)
+      .where(eq(creativeGenerationClaims.id, claim.id))
+      .limit(1);
+
+    expect(later[0]?.heartbeatAt?.getTime()).toBe(heartbeatAtAfterStop?.getTime());
+  });
+
+  itSafe("release failure logs do not include ownerToken", async () => {
+    const ownerToken = makeOwnerToken();
+    mockLogError.mockClear();
+
+    await releaseClaimWithResult({
+      claimId: 999999,
+      ownerToken,
+      status: "failed",
+      context: "test",
+    });
+
+    expect(mockLogError).toHaveBeenCalled();
+    for (const call of mockLogError.mock.calls) {
+      const serialized = JSON.stringify(call);
+      expect(serialized).not.toContain(ownerToken);
+      expect(serialized).not.toMatch(/"ownerToken"\s*:/);
+    }
   });
 
   itConcurrent(

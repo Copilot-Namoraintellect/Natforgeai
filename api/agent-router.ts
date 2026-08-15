@@ -352,12 +352,7 @@ export const agentRouter = createRouter({
             .update(agentRuns)
             .set({ status: "failed", error: "operation reference collision", completedAt: new Date() })
             .where(eq(agentRuns.id, operationRowId));
-          const releaseResult = await releaseClaimWithResult({
-            claimId: claim.id,
-            ownerToken,
-            status: "failed",
-            context: "agentRouter.runCreativeAgent reference collision",
-          });
+          const releaseResult = await releaseClaimOnce("failed");
           if (!releaseResult.released) {
             logError("[agentRouter.runCreativeAgent] failed-release failed after reference collision", {
               campaignId: input.campaignId,

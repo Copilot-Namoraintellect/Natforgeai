@@ -7,6 +7,8 @@ export interface AgentRunLike {
   status: ActivityStatus;
   createdAt?: string | Date | null;
   error?: string | null;
+  input?: unknown;
+  output?: unknown;
 }
 
 export interface CampaignActivityTimeline {
@@ -30,6 +32,19 @@ export function getLatestRun(runs: AgentRunLike[], agentType: string): AgentRunL
   return [...matching].sort((a, b) => Number(b.id) - Number(a.id))[0] ?? null;
 }
 
+function isControllingCreativeRun(run: AgentRunLike): boolean {
+  const input = (run as any).input as Record<string, unknown> | undefined;
+  return run.agentType === "creative" && input?.jobType === "content_generation_job";
+}
+
+function getSavedPostCountFromRun(run: AgentRunLike): number | null {
+  const output = (run as any).output as Record<string, unknown> | undefined;
+  if (!output) return null;
+  if (typeof output.savedPosts === "number") return output.savedPosts;
+  if (typeof output.postCount === "number") return output.postCount;
+  return null;
+}
+
 export function groupCampaignActivity(runs: AgentRunLike[]): CampaignActivityTimeline[] {
   const grouped = new Map<number, AgentRunLike[]>();
   for (const run of runs) {
@@ -42,17 +57,23 @@ export function groupCampaignActivity(runs: AgentRunLike[]): CampaignActivityTim
   return [...grouped.entries()]
     .map(([campaignId, campaignRuns]) => {
       const strategyRun = getLatestRun(campaignRuns, "strategy");
-      const creativeRuns = campaignRuns
+      const allCreativeRuns = campaignRuns
         .filter((run) => run.agentType === "creative")
         .sort((a, b) => Number(b.id) - Number(a.id));
-      const creativeRun = creativeRuns[0] ?? null;
+      const controllingCreativeRuns = allCreativeRuns.filter(isControllingCreativeRun);
+      const creativeRun = controllingCreativeRuns[0] ?? allCreativeRuns[0] ?? null;
       const audienceRun = getLatestRun(campaignRuns, "audience");
       const distributionRun = getLatestRun(campaignRuns, "distribution");
-      const creativeRunHistory = creativeRuns.slice(1);
+      const creativeRunHistory = allCreativeRuns.filter((run) => run.id !== creativeRun?.id);
 
       const completedSteps: string[] = [];
       if (strategyRun?.status === "completed") completedSteps.push("Strategy Agent completed");
-      if (creativeRun?.status === "completed") completedSteps.push("Creative Agent completed");
+      if (
+        creativeRun?.status === "completed" &&
+        getSavedPostCountFromRun(creativeRun) !== 0
+      ) {
+        completedSteps.push("Creative Agent completed");
+      }
       if (audienceRun?.status === "completed") completedSteps.push("Audience Agent completed");
       if (distributionRun?.status === "completed") completedSteps.push("Distribution Agent completed");
 
@@ -94,10 +115,19 @@ export function groupCampaignActivity(runs: AgentRunLike[]): CampaignActivityTim
         pendingWork = "AI is generating posts and campaign assets.";
         nextAction = "Wait for creative generation to finish";
       } else if (creativeRun?.status === "completed") {
-        currentCampaignStage = "Creative review";
-        currentStatus = "completed";
-        pendingWork = "Creative content is ready for approval and channel preparation.";
-        nextAction = "Open Content Studio";
+        const savedPosts = getSavedPostCountFromRun(creativeRun);
+        if (savedPosts === 0) {
+          currentCampaignStage = "Creative generation";
+          currentStatus = "failed";
+          pendingWork = "Creative generation completed but no posts were persisted. Please retry.";
+          nextAction = "Retry creative generation";
+          errorMessage = "Creative generation completed but no posts were persisted.";
+        } else {
+          currentCampaignStage = "Creative review";
+          currentStatus = "completed";
+          pendingWork = "Creative content is ready for approval and channel preparation.";
+          nextAction = "Open Content Studio";
+        }
       } else if (strategyRun?.status === "completed") {
         currentCampaignStage = "Strategy approved";
         currentStatus = "waiting";

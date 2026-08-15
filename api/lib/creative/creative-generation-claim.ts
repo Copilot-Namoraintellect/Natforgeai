@@ -323,7 +323,7 @@ export async function releaseCreativeGenerationClaim({
     .set({
       status,
       activeClaimKey: null,
-      releasedAt: new Date(),
+      releasedAt: sql`NOW()`,
     })
     .where(
       and(
@@ -596,6 +596,7 @@ export function createClaimHeartbeatController({
 }): CreativeGenerationClaimHeartbeatController {
   let lostOwnership = false;
   let running = false;
+  let stopped = false;
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let inFlightHeartbeat: Promise<void> | null = null;
 
@@ -603,12 +604,12 @@ export function createClaimHeartbeatController({
   const { signal } = controller;
 
   function scheduleNext(): void {
-    if (lostOwnership || !running) return;
+    if (stopped || lostOwnership || !running) return;
     timeoutId = setTimeout(runHeartbeat, heartbeatIntervalSeconds * 1000);
   }
 
   async function runHeartbeat(): Promise<void> {
-    if (lostOwnership || !running) return;
+    if (stopped || lostOwnership || !running) return;
 
     const thisHeartbeat = (async () => {
       const result = await heartbeatCreativeGenerationClaim({
@@ -689,6 +690,7 @@ export function createClaimHeartbeatController({
       }
     },
     async stop(): Promise<void> {
+      stopped = true;
       running = false;
       if (timeoutId) {
         clearTimeout(timeoutId);
