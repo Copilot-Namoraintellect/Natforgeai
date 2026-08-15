@@ -5,6 +5,7 @@ import { getDb } from "../../queries/connection";
 import { campaigns, contentPosts, campaignAssets, businesses, agentRuns } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { logInfo, logError, logWarn } from "../logger";
+import { type CreativeGenerationClaimHeartbeatController } from "../creative/creative-generation-claim";
 import { checkCredits, deductCredits } from "../billing/credit-engine";
 import { getEstimatedAgentCost } from "../billing/cost-tracker";
 import { enforceCostControl } from "../billing/cost-control";
@@ -879,11 +880,13 @@ export async function runCreativeAgent({
   campaignId,
   deleteExistingDrafts = true,
   generationOperation,
+  claimContext,
 }: {
   userId: number;
   campaignId: number;
   deleteExistingDrafts?: boolean;
   generationOperation: CreativeGenerationOperation;
+  claimContext?: CreativeGenerationClaimHeartbeatController;
 }) {
   validateCreativeGenerationOperation(generationOperation);
   const db = getDb();
@@ -895,6 +898,24 @@ export async function runCreativeAgent({
     fallbackDurationMs: 0,
     totalDurationMs: 0,
   };
+
+  // Defensive ownership checkpoint. These checks reduce the risk of a zombie
+  // worker continuing after its claim has expired, but they are not a complete
+  // transactional fence. Phase 3A deliberately does not perform automatic
+  // stale-claim takeover.
+  async function assertOwnershipCheckpoint(stage: string): Promise<void> {
+    if (!claimContext) return;
+    try {
+      await claimContext.assertStillOwned();
+    } catch (err) {
+      logError("[CreativeAgent] ownership checkpoint failed", {
+        campaignId,
+        userId,
+        stage,
+      });
+      throw err;
+    }
+  }
 
   logInfo("[CreativeAgent] started", {
     campaignId,
@@ -1027,6 +1048,8 @@ export async function runCreativeAgent({
     if (approvedMessagePack.messagePackSource === "fallback_deterministic") {
       timing.fallbackDurationMs += timing.messageArchitectDurationMs;
     }
+
+    await assertOwnershipCheckpoint("message_architect");
 
     logInfo("[CreativeAgent] approved message pack loaded", {
       campaignId,
@@ -1223,6 +1246,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
   let packError: string | undefined;
   const generationStartedAt = Date.now();
 
+  await assertOwnershipCheckpoint("pre_generation");
+
   try {
     packResult = await runAgent({
       userId,
@@ -1231,6 +1256,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       prompt: packPrompt,
       schema: PremiumCampaignPackSchema,
       skipBilling: true,
+      abortSignal: claimContext?.abortSignal,
       system:
         "You are an elite creative director for a premium marketing agency. You create Hero Campaign Packs: one strong campaign idea expressed as one Master Campaign Post and one Master Video Ad, plus platform adaptations and collapsed supporting assets. You specialise in Instagram Reels, TikTok, Facebook ads, carousel ads, direct-response copywriting, and launch sequences. Every asset must be emotionally engaging, visually specific, platform-native, and conversion-focused. You do not create separate cards for each persona; personas guide tone only. You do not invent offers, discounts, free trials, limited spots or free e-books. If no offer is provided, use neutral CTAs like 'Book a demo' or 'See how it works'. CRITICAL: You must include EVERY key in every object. Use null for fields that do not apply. Never omit a key.",
     });
@@ -1340,6 +1366,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         recoveryPackSource: approvedMessagePack.messagePackSource || "unknown",
       });
 
+      await assertOwnershipCheckpoint("pre_recovery_generation");
+
       const retryResult = await runAgent({
         userId,
         campaignId,
@@ -1347,6 +1375,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         prompt: retryPrompt,
         schema: PremiumCampaignPackSchema,
         skipBilling: true,
+        abortSignal: claimContext?.abortSignal,
         system:
           "You are an elite creative director. Your previous output was rejected for being generic or inventing offers. Regenerate a tight, premium Hero Campaign Pack that is specific to the business and campaign brief. Do not invent discounts or offers. Use the approved headline and CTA. Every word must earn its place.",
       });
@@ -1451,6 +1480,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       });
     }
   }
+
+  await assertOwnershipCheckpoint("pre_campaign_update");
 
   // Save pack summary to campaign
   await db
@@ -1570,6 +1601,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     }
   }
 
+  await assertOwnershipCheckpoint("pre_post_persistence");
+
   // Save ONLY the master video ad as a content post
   if (pack.videoConcepts.length > 0) {
     const video = pack.videoConcepts[0];
@@ -1625,6 +1658,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       "leaflet"
     );
   }
+
+  await assertOwnershipCheckpoint("pre_asset_persistence");
 
   // Save supporting assets as campaign assets (collapsed in the UI), not as primary content posts
   async function insertAsset(title: string, assetType: string, metadata: any) {
@@ -1915,6 +1950,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     });
   }
 
+  await assertOwnershipCheckpoint("pre_draft_cleanup");
+
   if (existingDraftIdsToDelete.length > 0) {
     for (const draftId of existingDraftIdsToDelete) {
       await db.delete(contentPosts).where(eq(contentPosts.id, draftId));
@@ -1927,6 +1964,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       deletedCount: existingDraftIdsToDelete.length,
     });
   }
+
+  await assertOwnershipCheckpoint("pre_billing");
 
   try {
     await deductCreativeCreditsOnce({
@@ -1958,6 +1997,8 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
   // Step 2 intentionally disabled to avoid creating duplicate "creative" agent runs
   // that confuse campaign timelines. The primary Hero Campaign Pack already contains
   // the assets required for Content Studio.
+
+  await assertOwnershipCheckpoint("pre_final_campaign_update");
 
   // Update campaign with final context
   await db

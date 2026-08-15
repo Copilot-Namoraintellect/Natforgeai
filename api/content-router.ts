@@ -17,6 +17,7 @@ import {
   attachCreativeGenerationOperationReference,
   generateOwnerToken,
   releaseClaimWithResult,
+  calculateLeaseExpiresAt,
 } from "./lib/creative/creative-generation-claim";
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
@@ -266,6 +267,7 @@ export const contentRouter = createRouter({
         campaignId,
         operationSource: "job",
         ownerToken,
+        leaseExpiresAt: calculateLeaseExpiresAt(env.creativeGenerationQueuedLeaseSeconds),
       });
 
       if (!claimResult.acquired) {

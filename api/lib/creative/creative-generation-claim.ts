@@ -1,6 +1,6 @@
 import { randomBytes } from "crypto";
 import { TRPCError } from "@trpc/server";
-import { eq, and, or, lt, isNull, isNotNull } from "drizzle-orm";
+import { eq, and, or, lt, gte, isNull, isNotNull, sql, SQL } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
 import { creativeGenerationClaims } from "@db/schema";
 import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
@@ -134,7 +134,7 @@ export async function acquireCreativeGenerationClaim({
   operationSource: CreativeGenerationOperationSource;
   operationReferenceId?: number | null;
   ownerToken: string;
-  leaseExpiresAt?: Date | null;
+  leaseExpiresAt?: Date | SQL | null;
 }): Promise<AcquireCreativeGenerationClaimResult> {
   assertValidId(userId, "userId");
   assertValidId(campaignId, "campaignId");
@@ -145,13 +145,16 @@ export async function acquireCreativeGenerationClaim({
     assertValidId(operationReferenceId, "operationReferenceId");
   }
 
-  if (leaseExpiresAt !== undefined && leaseExpiresAt !== null) {
-    if (!(leaseExpiresAt instanceof Date) || Number.isNaN(leaseExpiresAt.getTime())) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "Invalid leaseExpiresAt: expected Date",
-      });
-    }
+  if (
+    leaseExpiresAt !== undefined &&
+    leaseExpiresAt !== null &&
+    !(leaseExpiresAt instanceof SQL) &&
+    (!(leaseExpiresAt instanceof Date) || Number.isNaN(leaseExpiresAt.getTime()))
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid leaseExpiresAt: expected Date or SQL",
+    });
   }
 
   const activeClaimKey = buildActiveCreativeClaimKey(userId, campaignId);
@@ -436,13 +439,282 @@ export async function releaseClaimSafely({
   }
 }
 
+export function calculateLeaseExpiresAt(leaseSeconds: number): SQL {
+  // Use MySQL NOW() so lease times are consistent with the database clock and
+  // session timezone. Callers should pass the returned SQL directly to
+  // acquireCreativeGenerationClaim.
+  return sql`DATE_ADD(NOW(), INTERVAL ${leaseSeconds} SECOND)`;
+}
+
+export interface HeartbeatCreativeGenerationClaimResult {
+  renewed: boolean;
+  reason?: "expired" | "not_found_or_unauthorized" | "missing_lease";
+}
+
+export async function heartbeatCreativeGenerationClaim({
+  claimId,
+  ownerToken,
+  leaseSeconds,
+}: {
+  claimId: number;
+  ownerToken: string;
+  leaseSeconds: number;
+}): Promise<HeartbeatCreativeGenerationClaimResult> {
+  assertValidId(claimId, "claimId");
+  assertValidOwnerToken(ownerToken);
+  if (
+    typeof leaseSeconds !== "number" ||
+    !Number.isFinite(leaseSeconds) ||
+    !Number.isInteger(leaseSeconds) ||
+    leaseSeconds <= 0 ||
+    leaseSeconds > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid leaseSeconds: expected positive safe integer",
+    });
+  }
+
+  const db = getDb();
+  const result = await db
+    .update(creativeGenerationClaims)
+    .set({
+      heartbeatAt: sql`NOW()`,
+      leaseExpiresAt: sql`DATE_ADD(NOW(), INTERVAL ${leaseSeconds} SECOND)`,
+    })
+    .where(
+      and(
+        eq(creativeGenerationClaims.id, claimId),
+        eq(creativeGenerationClaims.ownerToken, ownerToken),
+        eq(creativeGenerationClaims.status, "running"),
+        isNotNull(creativeGenerationClaims.activeClaimKey),
+        isNotNull(creativeGenerationClaims.leaseExpiresAt),
+        gte(creativeGenerationClaims.leaseExpiresAt, sql`NOW()`)
+      )
+    );
+
+  const affectedRows = getAffectedRows(result);
+  if (affectedRows === 1) {
+    return { renewed: true };
+  }
+
+  // Determine why the heartbeat failed without exposing the reason to callers.
+  // Use MySQL time for all comparisons to avoid JS/DB clock skew.
+  const [claim] = await db
+    .select()
+    .from(creativeGenerationClaims)
+    .where(eq(creativeGenerationClaims.id, claimId))
+    .limit(1);
+
+  if (!claim) {
+    return { renewed: false, reason: "not_found_or_unauthorized" };
+  }
+
+  if (claim.leaseExpiresAt === null) {
+    return { renewed: false, reason: "missing_lease" };
+  }
+
+  const [expiredCheck] = await db
+    .select({ id: creativeGenerationClaims.id })
+    .from(creativeGenerationClaims)
+    .where(
+      and(
+        eq(creativeGenerationClaims.id, claimId),
+        eq(creativeGenerationClaims.ownerToken, ownerToken),
+        isNotNull(creativeGenerationClaims.leaseExpiresAt),
+        lt(creativeGenerationClaims.leaseExpiresAt, sql`NOW()`)
+      )
+    )
+    .limit(1);
+
+  if (expiredCheck) {
+    return { renewed: false, reason: "expired" };
+  }
+
+  if (claim.status !== "running" || claim.activeClaimKey === null) {
+    return { renewed: false, reason: "not_found_or_unauthorized" };
+  }
+
+  return { renewed: false, reason: "not_found_or_unauthorized" };
+}
+
+export interface AssertCreativeGenerationClaimOwnershipResult {
+  owned: boolean;
+  reason?: "not_found_or_unauthorized" | "missing_lease" | "expired";
+}
+
+export async function assertCreativeGenerationClaimOwnership({
+  claimId,
+  ownerToken,
+}: {
+  claimId: number;
+  ownerToken: string;
+}): Promise<AssertCreativeGenerationClaimOwnershipResult> {
+  assertValidId(claimId, "claimId");
+  assertValidOwnerToken(ownerToken);
+
+  const db = getDb();
+  const [claim] = await db
+    .select()
+    .from(creativeGenerationClaims)
+    .where(
+      and(
+        eq(creativeGenerationClaims.id, claimId),
+        eq(creativeGenerationClaims.ownerToken, ownerToken),
+        eq(creativeGenerationClaims.status, "running"),
+        isNotNull(creativeGenerationClaims.activeClaimKey),
+        isNotNull(creativeGenerationClaims.leaseExpiresAt),
+        gte(creativeGenerationClaims.leaseExpiresAt, sql`NOW()`)
+      )
+    )
+    .limit(1);
+
+  if (!claim) {
+    return { owned: false, reason: "not_found_or_unauthorized" };
+  }
+
+  return { owned: true };
+}
+
+export interface CreativeGenerationClaimHeartbeatController {
+  readonly lostOwnership: boolean;
+  readonly abortSignal: AbortSignal;
+  assertStillOwned(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+export function createClaimHeartbeatController({
+  claimId,
+  ownerToken,
+  leaseSeconds,
+  heartbeatIntervalSeconds,
+}: {
+  claimId: number;
+  ownerToken: string;
+  leaseSeconds: number;
+  heartbeatIntervalSeconds: number;
+}): CreativeGenerationClaimHeartbeatController {
+  let lostOwnership = false;
+  let running = false;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let inFlightHeartbeat: Promise<void> | null = null;
+
+  const controller = new AbortController();
+  const { signal } = controller;
+
+  function scheduleNext(): void {
+    if (lostOwnership || !running) return;
+    timeoutId = setTimeout(runHeartbeat, heartbeatIntervalSeconds * 1000);
+  }
+
+  async function runHeartbeat(): Promise<void> {
+    if (lostOwnership || !running) return;
+
+    const thisHeartbeat = (async () => {
+      const result = await heartbeatCreativeGenerationClaim({
+        claimId,
+        ownerToken,
+        leaseSeconds,
+      });
+
+      if (!result.renewed) {
+        lostOwnership = true;
+        running = false;
+        try {
+          controller.abort();
+        } catch {
+          // AbortController may already be aborted; ignore.
+        }
+      }
+    })().catch((err) => {
+      // Any unexpected heartbeat failure is treated as ownership loss to keep
+      // the system fail-closed. ownerToken is never logged here.
+      lostOwnership = true;
+      running = false;
+      logError("[creative-claim] heartbeat controller encountered an error", {
+        claimId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      try {
+        controller.abort();
+      } catch {
+        // ignore
+      }
+    });
+
+    inFlightHeartbeat = thisHeartbeat;
+    await thisHeartbeat;
+    inFlightHeartbeat = null;
+    scheduleNext();
+  }
+
+  running = true;
+  // Run an immediate heartbeat so the lease is current before long work begins.
+  inFlightHeartbeat = runHeartbeat().then(() => {
+    inFlightHeartbeat = null;
+  });
+
+  return {
+    get lostOwnership() {
+      return lostOwnership;
+    },
+    get abortSignal() {
+      return signal;
+    },
+    async assertStillOwned(): Promise<void> {
+      if (lostOwnership) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Creative generation operation ownership was lost. Stopping work.",
+        });
+      }
+      const result = await assertCreativeGenerationClaimOwnership({
+        claimId,
+        ownerToken,
+      });
+      if (!result.owned) {
+        lostOwnership = true;
+        running = false;
+        try {
+          controller.abort();
+        } catch {
+          // ignore
+        }
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Creative generation operation ownership was lost. Stopping work.",
+        });
+      }
+    },
+    async stop(): Promise<void> {
+      running = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      if (inFlightHeartbeat) {
+        await inFlightHeartbeat.catch(() => {
+          // Swallow errors during shutdown; caller decides how to surface.
+        });
+      }
+    },
+  };
+}
+
+export interface StaleClaimClassification {
+  expiredLeasedClaims: CreativeGenerationClaim[];
+  legacyOrUnleasedClaims: CreativeGenerationClaim[];
+}
+
 export async function classifyStaleCreativeGenerationClaims({
   staleBefore,
   status = "running",
 }: {
   staleBefore: Date;
   status?: "running";
-}): Promise<CreativeGenerationClaim[]> {
+}): Promise<StaleClaimClassification> {
   if (!(staleBefore instanceof Date) || Number.isNaN(staleBefore.getTime())) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -451,7 +723,7 @@ export async function classifyStaleCreativeGenerationClaims({
   }
 
   const db = getDb();
-  return db
+  const rows = await db
     .select()
     .from(creativeGenerationClaims)
     .where(
@@ -460,7 +732,7 @@ export async function classifyStaleCreativeGenerationClaims({
         or(
           and(
             isNotNull(creativeGenerationClaims.leaseExpiresAt),
-            lt(creativeGenerationClaims.leaseExpiresAt, staleBefore)
+            lt(creativeGenerationClaims.leaseExpiresAt, sql`NOW()`)
           ),
           and(
             isNull(creativeGenerationClaims.leaseExpiresAt),
@@ -469,4 +741,17 @@ export async function classifyStaleCreativeGenerationClaims({
         )
       )
     );
+
+  const expiredLeasedClaims: CreativeGenerationClaim[] = [];
+  const legacyOrUnleasedClaims: CreativeGenerationClaim[] = [];
+
+  for (const claim of rows) {
+    if (claim.leaseExpiresAt === null) {
+      legacyOrUnleasedClaims.push(claim);
+    } else {
+      expiredLeasedClaims.push(claim);
+    }
+  }
+
+  return { expiredLeasedClaims, legacyOrUnleasedClaims };
 }

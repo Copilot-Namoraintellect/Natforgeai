@@ -10,6 +10,10 @@ import {
   releaseCreativeGenerationClaim,
   getActiveCreativeGenerationClaim,
   classifyStaleCreativeGenerationClaims,
+  heartbeatCreativeGenerationClaim,
+  assertCreativeGenerationClaimOwnership,
+  createClaimHeartbeatController,
+  calculateLeaseExpiresAt,
   type AcquireCreativeGenerationClaimResult,
   type CreativeGenerationClaimAcquisition,
   type CreativeGenerationClaimCollision,
@@ -397,14 +401,23 @@ describe("creative generation claim primitive (DB)", () => {
     expect(active).toBeNull();
   });
 
+  itSafe("every acquired claim can carry a non-null database-time lease", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+    expect(claim.leaseExpiresAt).not.toBeNull();
+    const remainingSeconds =
+      (new Date(claim.leaseExpiresAt!).getTime() - Date.now()) / 1000;
+    expect(remainingSeconds).toBeGreaterThan(250);
+  });
+
   itSafe("classifyStaleCreativeGenerationClaims never mutates", async () => {
-    const claim = await acquire({ leaseExpiresAt: new Date(Date.now() - 1000) });
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(-1) });
 
     const stale = await classifyStaleCreativeGenerationClaims({
       staleBefore: new Date(),
     });
 
-    expect(stale.some((c) => c.id === claim.id)).toBe(true);
+    expect(stale.expiredLeasedClaims.some((c) => c.id === claim.id)).toBe(true);
+    expect(stale.legacyOrUnleasedClaims).toHaveLength(0);
 
     const after = await db
       .select()
@@ -416,25 +429,192 @@ describe("creative generation claim primitive (DB)", () => {
     expect(after[0]?.activeClaimKey).not.toBeNull();
   });
 
-  itSafe("classifies stale claims by updatedAt when leaseExpiresAt is null", async () => {
-    const claim = await acquire();
-
-    // A brand-new claim must not be classified as stale.
-    const fresh = await classifyStaleCreativeGenerationClaims({
-      staleBefore: new Date(Date.now() + 60_000),
-    });
-    expect(fresh.some((c) => c.id === claim.id)).toBe(false);
-
-    // Manually age the row so the updatedAt-based fallback classifies it as stale.
+  itSafe("classifies expired leased claims separately from legacy unleased claims", async () => {
+    const expiredLease = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(-1) });
+    const nullLease = await acquire({ userId: testUserId + 1, campaignId: testCampaignId + 1 });
     await db
       .update(creativeGenerationClaims)
-      .set({ updatedAt: new Date(Date.now() - 60_000) })
+      .set({ leaseExpiresAt: null, updatedAt: new Date(Date.now() - 60_000) })
+      .where(eq(creativeGenerationClaims.id, nullLease.id));
+
+    const stale = await classifyStaleCreativeGenerationClaims({
+      staleBefore: new Date(),
+    });
+
+    expect(stale.expiredLeasedClaims.some((c) => c.id === expiredLease.id)).toBe(true);
+    expect(stale.legacyOrUnleasedClaims.some((c) => c.id === nullLease.id)).toBe(true);
+  });
+
+  itSafe("heartbeat renews the lease for the correct owner", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+
+    const result = await heartbeatCreativeGenerationClaim({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+      leaseSeconds: 300,
+    });
+
+    expect(result.renewed).toBe(true);
+
+    const updated = await db
+      .select()
+      .from(creativeGenerationClaims)
+      .where(eq(creativeGenerationClaims.id, claim.id))
+      .limit(1);
+
+    expect(updated[0]?.heartbeatAt).not.toBeNull();
+    const remainingSeconds =
+      (new Date(updated[0]?.leaseExpiresAt!).getTime() - Date.now()) / 1000;
+    expect(remainingSeconds).toBeGreaterThan(250);
+  });
+
+  itSafe("heartbeat fails for the wrong owner", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+
+    const result = await heartbeatCreativeGenerationClaim({
+      claimId: claim.id,
+      ownerToken: "wrong-owner",
+      leaseSeconds: 300,
+    });
+
+    expect(result.renewed).toBe(false);
+  });
+
+  itSafe("heartbeat fails when the lease has already expired and does not revive the claim", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(-1) });
+    const leaseBefore = claim.leaseExpiresAt;
+
+    const result = await heartbeatCreativeGenerationClaim({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+      leaseSeconds: 300,
+    });
+
+    expect(result.renewed).toBe(false);
+    expect(result.reason).toBe("expired");
+
+    const [updated] = await db
+      .select()
+      .from(creativeGenerationClaims)
+      .where(eq(creativeGenerationClaims.id, claim.id))
+      .limit(1);
+
+    // The expired lease must not have been renewed by the heartbeat attempt.
+    expect(updated?.leaseExpiresAt?.getTime()).toBe(leaseBefore?.getTime());
+  });
+
+  itSafe("heartbeat fails for a completed claim", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+    await releaseCreativeGenerationClaim({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+      status: "completed",
+    });
+
+    const result = await heartbeatCreativeGenerationClaim({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+      leaseSeconds: 300,
+    });
+
+    expect(result.renewed).toBe(false);
+  });
+
+  itSafe("heartbeat fails for a null-lease claim", async () => {
+    const claim = await acquire();
+    await db
+      .update(creativeGenerationClaims)
+      .set({ leaseExpiresAt: null })
       .where(eq(creativeGenerationClaims.id, claim.id));
 
-    const staleForced = await classifyStaleCreativeGenerationClaims({
-      staleBefore: new Date(Date.now() - 1),
+    const result = await heartbeatCreativeGenerationClaim({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+      leaseSeconds: 300,
     });
-    expect(staleForced.some((c) => c.id === claim.id)).toBe(true);
+
+    expect(result.renewed).toBe(false);
+    expect(result.reason).toBe("missing_lease");
+  });
+
+  itSafe("assertCreativeGenerationClaimOwnership confirms ownership for a valid lease", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+
+    const result = await assertCreativeGenerationClaimOwnership({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+    });
+
+    expect(result.owned).toBe(true);
+  });
+
+  itSafe("assertCreativeGenerationClaimOwnership rejects an expired lease", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(-1) });
+
+    const result = await assertCreativeGenerationClaimOwnership({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+    });
+
+    expect(result.owned).toBe(false);
+  });
+
+  itSafe("heartbeat controller records ownership loss", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+
+    const controller = createClaimHeartbeatController({
+      claimId: claim.id,
+      ownerToken: "wrong-owner",
+      leaseSeconds: 300,
+      heartbeatIntervalSeconds: 1,
+    });
+
+    // Wait for the immediate heartbeat to fail and set lostOwnership.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(controller.lostOwnership).toBe(true);
+
+    await expect(controller.assertStillOwned()).rejects.toThrow(/ownership was lost/);
+
+    await controller.stop();
+  });
+
+  itSafe("heartbeat controller stop awaits in-flight heartbeat", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+
+    const controller = createClaimHeartbeatController({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+      leaseSeconds: 300,
+      heartbeatIntervalSeconds: 1,
+    });
+
+    const stopPromise = controller.stop();
+    await expect(stopPromise).resolves.toBeUndefined();
+
+    const updated = await db
+      .select()
+      .from(creativeGenerationClaims)
+      .where(eq(creativeGenerationClaims.id, claim.id))
+      .limit(1);
+    expect(updated[0]?.heartbeatAt).not.toBeNull();
+  });
+
+  itSafe("heartbeat controller does not produce unhandled rejections", async () => {
+    const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+
+    const controller = createClaimHeartbeatController({
+      claimId: claim.id,
+      ownerToken: "wrong-owner",
+      leaseSeconds: 300,
+      heartbeatIntervalSeconds: 1,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await controller.stop();
+
+    // If an unhandled rejection occurred, the test runner would have flagged it.
+    expect(controller.lostOwnership).toBe(true);
   });
 
   itConcurrent(

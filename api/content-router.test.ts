@@ -54,6 +54,7 @@ vi.mock("./lib/creative/creative-generation-claim", () => ({
   attachCreativeGenerationOperationReference: vi.fn(async () => ({ attached: true })),
   releaseClaimSafely: vi.fn(),
   releaseClaimWithResult: vi.fn(async () => ({ released: true })),
+  calculateLeaseExpiresAt: vi.fn(() => new Date(Date.now() + 1800_000)),
 }));
 
 vi.mock("./lib/rate-limiter", () => ({

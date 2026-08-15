@@ -14,7 +14,11 @@ import {
   acquireCreativeGenerationClaim,
   generateOwnerToken,
   releaseClaimWithResult,
+  calculateLeaseExpiresAt,
+  createClaimHeartbeatController,
+  type CreativeGenerationClaimHeartbeatController,
 } from "../creative/creative-generation-claim";
+import { env } from "../env";
 
 export async function onAgentRunComplete(runId: number) {
   const db = getDb();
@@ -255,6 +259,7 @@ export async function onStrategyApproved(
     operationSource: "approval",
     operationReferenceId: approvalId,
     ownerToken,
+    leaseExpiresAt: calculateLeaseExpiresAt(env.creativeGenerationRunningLeaseSeconds),
   });
 
   if (!claimResult.acquired) {
@@ -264,10 +269,14 @@ export async function onStrategyApproved(
 
   const claim = claimResult.claim;
   let released = false;
+  let heartbeatController: CreativeGenerationClaimHeartbeatController | undefined;
 
   const releaseClaimOnce = async (status: "completed" | "failed") => {
     if (released) return { released: true } as const;
     released = true;
+    if (heartbeatController) {
+      await heartbeatController.stop();
+    }
     return releaseClaimWithResult({
       claimId: claim.id,
       ownerToken,
@@ -349,12 +358,21 @@ export async function onStrategyApproved(
     // Transition to creatives_generating before running the creative agent
     await transitionCampaignState(campaignId, userId, "generate_creatives");
 
+    // Keep the claim alive during the long-running creative generation.
+    heartbeatController = createClaimHeartbeatController({
+      claimId: claim.id,
+      ownerToken,
+      leaseSeconds: env.creativeGenerationRunningLeaseSeconds,
+      heartbeatIntervalSeconds: env.creativeGenerationHeartbeatIntervalSeconds,
+    });
+
     // Auto-trigger creative agent
     try {
       const result = await runCreativeAgent({
         userId,
         campaignId,
         generationOperation: { source: "approval", id: approvalId },
+        claimContext: heartbeatController,
       });
       await onAgentRunComplete(result.packRunId);
       const releaseResult = await releaseClaimOnce("completed");

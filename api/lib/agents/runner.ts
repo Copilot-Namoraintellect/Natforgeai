@@ -49,6 +49,7 @@ export interface AgentRunOptions<TOutput> {
   schema: z.ZodSchema<TOutput>;
   system?: string;
   skipBilling?: boolean;
+  abortSignal?: AbortSignal;
 }
 
 export interface AgentRunResult<TOutput> {
@@ -64,6 +65,7 @@ export async function runAgent<TOutput>({
   schema,
   system,
   skipBilling,
+  abortSignal,
 }: AgentRunOptions<TOutput>): Promise<AgentRunResult<TOutput>> {
   const db = getDb();
 
@@ -121,6 +123,7 @@ export async function runAgent<TOutput>({
         "You are an expert marketing AI agent. Respond with structured, actionable output.",
       prompt,
       schema,
+      abortSignal,
     });
 
     const object = result.object;

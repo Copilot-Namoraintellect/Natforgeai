@@ -6,7 +6,12 @@ import { runCreativeAgent } from "../agents/creative-agent";
 import { ensureApprovedMessagePack, saveApprovedMessagePack } from "../creative/campaign-message-architect";
 import { logError, logInfo } from "../logger";
 import { onAgentRunComplete } from "../workflow/triggers";
-import { releaseClaimWithResult } from "../creative/creative-generation-claim";
+import {
+  releaseClaimWithResult,
+  createClaimHeartbeatController,
+  type CreativeGenerationClaimHeartbeatController,
+} from "../creative/creative-generation-claim";
+import { env } from "../env";
 
 export interface ContentGenerationJobInput {
   jobId: number;
@@ -44,7 +49,9 @@ function toSafeContentJobFailureMessage(err: unknown): string {
   return msg;
 }
 
-function validateClaimInput(input: ContentGenerationJobInput): void {
+function validateClaimInput(
+  input: ContentGenerationJobInput
+): asserts input is ContentGenerationJobInput & { claimId: number; ownerToken: string } {
   if (
     typeof input.claimId !== "number" ||
     !Number.isFinite(input.claimId) ||
@@ -70,10 +77,14 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
   const db = getDb();
   const totalStartedAt = Date.now();
   let released = false;
+  let heartbeatController: CreativeGenerationClaimHeartbeatController | undefined;
 
   const releaseClaimOnce = async (status: "completed" | "failed") => {
     if (released) return { released: true } as const;
     released = true;
+    if (heartbeatController) {
+      await heartbeatController.stop();
+    }
     return releaseClaimWithResult({
       claimId: input.claimId!,
       ownerToken: input.ownerToken!,
@@ -106,6 +117,13 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
       startedAt: new Date(),
     })
     .where(eq(agentRuns.id, input.jobId));
+
+  heartbeatController = createClaimHeartbeatController({
+    claimId: input.claimId,
+    ownerToken: input.ownerToken,
+    leaseSeconds: env.creativeGenerationRunningLeaseSeconds,
+    heartbeatIntervalSeconds: env.creativeGenerationHeartbeatIntervalSeconds,
+  });
 
   const durations = defaultDurations();
 
@@ -249,6 +267,7 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
       userId: input.userId,
       campaignId: input.campaignId,
       generationOperation: { source: "job", id: input.jobId },
+      claimContext: heartbeatController,
     });
 
     if (creativeResult.savedPosts > 0 && campaign.workflowState !== "creatives_ready") {

@@ -16,8 +16,12 @@ import {
   attachCreativeGenerationOperationReference,
   generateOwnerToken,
   releaseClaimWithResult,
+  calculateLeaseExpiresAt,
+  createClaimHeartbeatController,
   type CreativeGenerationClaim,
+  type CreativeGenerationClaimHeartbeatController,
 } from "./lib/creative/creative-generation-claim";
+import { env } from "./lib/env";
 
 function campaignSuggestionSchema() {
   return z.object({
@@ -514,10 +518,14 @@ export const campaignRouter = createRouter({
       let claim: CreativeGenerationClaim | null = null;
       let ownerToken: string | null = null;
       let released = false;
+      let heartbeatController: CreativeGenerationClaimHeartbeatController | undefined;
 
       const releaseClaimOnce = async (status: "completed" | "failed") => {
         if (released || !claim || !ownerToken) return { released: true } as const;
         released = true;
+        if (heartbeatController) {
+          await heartbeatController.stop();
+        }
         return releaseClaimWithResult({
           claimId: claim.id,
           ownerToken,
@@ -562,6 +570,7 @@ export const campaignRouter = createRouter({
           campaignId,
           operationSource: "profile",
           ownerToken,
+          leaseExpiresAt: calculateLeaseExpiresAt(env.creativeGenerationRunningLeaseSeconds),
         });
 
         if (!claimResult.acquired) {
@@ -581,6 +590,14 @@ export const campaignRouter = createRouter({
         }
 
         claim = claimResult.claim;
+
+        // Keep the claim alive during the long-running regeneration.
+        heartbeatController = createClaimHeartbeatController({
+          claimId: claim.id,
+          ownerToken,
+          leaseSeconds: env.creativeGenerationRunningLeaseSeconds,
+          heartbeatIntervalSeconds: env.creativeGenerationHeartbeatIntervalSeconds,
+        });
 
         // 3. Parse website evidence
         const evidence = (business.websiteEvidence || {}) as {
@@ -712,6 +729,7 @@ export const campaignRouter = createRouter({
           campaignId,
           deleteExistingDrafts: false,
           generationOperation: { source: "profile", id: strategyRunId! },
+          claimContext: heartbeatController,
         });
         creativeRunId = creativeResult.packRunId;
         console.log(`[regenerateFromProfile] creative pack generated | campaignId=${campaignId} | creativeRunId=${creativeRunId} | savedPosts=${creativeResult.savedPosts} | savedAssets=${creativeResult.savedAssets}`);

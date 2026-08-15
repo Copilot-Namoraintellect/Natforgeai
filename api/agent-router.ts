@@ -31,7 +31,11 @@ import {
   attachCreativeGenerationOperationReference,
   generateOwnerToken,
   releaseClaimWithResult,
+  calculateLeaseExpiresAt,
+  createClaimHeartbeatController,
+  type CreativeGenerationClaimHeartbeatController,
 } from "./lib/creative/creative-generation-claim";
+import { env } from "./lib/env";
 
 export const agentRouter = createRouter({
   runStrategyAgent: aiActionQuery
@@ -225,6 +229,7 @@ export const agentRouter = createRouter({
         campaignId: input.campaignId,
         operationSource: "agent",
         ownerToken,
+        leaseExpiresAt: calculateLeaseExpiresAt(env.creativeGenerationRunningLeaseSeconds),
       });
 
       if (!claimResult.acquired) {
@@ -246,10 +251,14 @@ export const agentRouter = createRouter({
 
       const claim = claimResult.claim;
       let released = false;
+      let heartbeatController: CreativeGenerationClaimHeartbeatController | undefined;
 
       const releaseClaimOnce = async (status: "completed" | "failed") => {
         if (released) return { released: true } as const;
         released = true;
+        if (heartbeatController) {
+          await heartbeatController.stop();
+        }
         return releaseClaimWithResult({
           claimId: claim.id,
           ownerToken,
@@ -304,6 +313,15 @@ export const agentRouter = createRouter({
             savedAssets: 0,
           };
         }
+
+        // Keep the claim alive during the long-running creative generation. Started
+        // after advisory dedup so short-circuit paths do not schedule heartbeats.
+        heartbeatController = createClaimHeartbeatController({
+          claimId: claim.id,
+          ownerToken,
+          leaseSeconds: env.creativeGenerationRunningLeaseSeconds,
+          heartbeatIntervalSeconds: env.creativeGenerationHeartbeatIntervalSeconds,
+        });
 
         // Persist an outer creative-operation row so billing and dedup have a stable
         // identity for this direct-agent call that is distinct from the nested
@@ -368,6 +386,7 @@ export const agentRouter = createRouter({
             userId: ctx.user.id,
             campaignId: input.campaignId,
             generationOperation: { source: "agent", id: operationRowId },
+            claimContext: heartbeatController,
           });
         } catch (err: any) {
           await db

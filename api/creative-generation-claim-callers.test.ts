@@ -225,6 +225,21 @@ describe("creative generation claim caller integration (DB)", () => {
       expect(serialized).not.toContain("ownerToken");
       expect(serialized).not.toContain("owner_token");
     });
+
+    itSafe("acquired claim has a non-null queued lease", async () => {
+      const caller = contentRouter.createCaller(buildCtx(testUserId));
+      await caller.generateForCampaign({ campaignId: testCampaignId });
+
+      const claims = await db
+        .select()
+        .from(creativeGenerationClaims)
+        .where(eq(creativeGenerationClaims.campaignId, testCampaignId));
+      expect(claims).toHaveLength(1);
+      expect(claims[0]?.leaseExpiresAt).not.toBeNull();
+      const remainingSeconds =
+        (new Date(claims[0]?.leaseExpiresAt!).getTime() - Date.now()) / 1000;
+      expect(remainingSeconds).toBeGreaterThan(1700);
+    });
   });
 
   describe("agentRouter.runCreativeAgent", () => {
@@ -303,6 +318,33 @@ describe("creative generation claim caller integration (DB)", () => {
       expect(claims[0]?.status).toBe("failed");
       expect(claims[0]?.activeClaimKey).toBeNull();
     });
+
+    itSafe("acquired claim has a non-null running lease", async () => {
+      const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+      vi.mocked(runCreativeAgent).mockResolvedValue({
+        packRunId: 501,
+        savedPosts: 2,
+        savedAssets: 1,
+        pack: null,
+        assets: null,
+        metrics: {},
+      } as any);
+
+      const caller = agentRouter.createCaller(buildCtx(testUserId));
+      await caller.runCreativeAgent({ campaignId: testCampaignId });
+
+      const claims = await db
+        .select()
+        .from(creativeGenerationClaims)
+        .where(eq(creativeGenerationClaims.campaignId, testCampaignId));
+      expect(claims).toHaveLength(1);
+      expect(claims[0]?.leaseExpiresAt).not.toBeNull();
+      const remainingSeconds =
+        (new Date(claims[0]?.leaseExpiresAt!).getTime() - Date.now()) / 1000;
+      // The database clock may be in a different timezone than the test runner,
+      // so only assert that a future lease was established.
+      expect(remainingSeconds).toBeGreaterThan(0);
+    });
   });
 
   describe("campaignRouter.regenerateFromProfile", () => {
@@ -333,6 +375,7 @@ describe("creative generation claim caller integration (DB)", () => {
       expect(claims[0]?.operationSource).toBe("profile");
       expect(claims[0]?.operationReferenceId).toBe(456);
       expect(claims[0]?.status).toBe("completed");
+      expect(claims[0]?.leaseExpiresAt).not.toBeNull();
     });
 
     itSafe("concurrent regeneration rejects the loser before deleting anything", async () => {
@@ -410,6 +453,7 @@ describe("creative generation claim caller integration (DB)", () => {
       expect(claims[0]?.operationSource).toBe("approval");
       expect(claims[0]?.operationReferenceId).toBe(555);
       expect(claims[0]?.status).toBe("completed");
+      expect(claims[0]?.leaseExpiresAt).not.toBeNull();
 
       expect(runCreativeAgent).toHaveBeenCalledTimes(1);
     });

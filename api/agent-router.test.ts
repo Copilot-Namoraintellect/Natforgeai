@@ -27,6 +27,14 @@ vi.mock("./lib/creative/creative-generation-claim", () => ({
   attachCreativeGenerationOperationReference: vi.fn(async () => ({ attached: true })),
   releaseClaimSafely: vi.fn(),
   releaseClaimWithResult: vi.fn(async () => ({ released: true })),
+  calculateLeaseExpiresAt: vi.fn(() => new Date(Date.now() + 300_000)),
+  createClaimHeartbeatController: vi.fn(() => ({
+    start: vi.fn(),
+    stop: vi.fn(async () => undefined),
+    assertStillOwned: vi.fn(async () => undefined),
+    abortSignal: undefined,
+    lostOwnership: false,
+  })),
 }));
 
 function getTableName(table: unknown): string | undefined {

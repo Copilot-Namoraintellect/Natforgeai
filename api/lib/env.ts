@@ -9,6 +9,19 @@ function required(name: string): string {
   return value ?? "";
 }
 
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = parseInt(value ?? String(fallback), 10);
+  if (
+    Number.isNaN(parsed) ||
+    !Number.isFinite(parsed) ||
+    parsed <= 0 ||
+    parsed > Number.MAX_SAFE_INTEGER
+  ) {
+    return fallback;
+  }
+  return parsed;
+}
+
 export const env = {
   stripeSecretKey: process.env.STRIPE_SECRET_KEY || "",
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
@@ -76,6 +89,20 @@ export const env = {
   hybridLeafletVisionModel: process.env.HYBRID_LEAFLET_VISION_MODEL ?? "gpt-4o-mini",
   hybridLeafletMaxRevisions: parseInt(process.env.HYBRID_LEAFLET_MAX_REVISIONS || "1", 10),
 
+  // Creative generation operation claim leases (provisional defaults; validate in staging).
+  creativeGenerationRunningLeaseSeconds: parsePositiveInteger(
+    process.env.CREATIVE_GENERATION_RUNNING_LEASE_SECONDS,
+    300
+  ),
+  creativeGenerationHeartbeatIntervalSeconds: parsePositiveInteger(
+    process.env.CREATIVE_GENERATION_HEARTBEAT_INTERVAL_SECONDS,
+    60
+  ),
+  creativeGenerationQueuedLeaseSeconds: parsePositiveInteger(
+    process.env.CREATIVE_GENERATION_QUEUED_LEASE_SECONDS,
+    1800
+  ),
+
   bannerbearApiKey: process.env.BANNERBEAR_API_KEY ?? "",
   bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
   bannerbearTemplateServiceBusinessPromo: process.env.BANNERBEAR_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",
@@ -128,4 +155,34 @@ export const env = {
 // Validate Redis in production
 if (env.isProduction && !env.redisUrl) {
   throw new Error("Missing required environment variable: REDIS_URL");
+}
+
+// Validate creative-generation claim lease configuration. Defaults are provisional
+// and must be measured against observed generation durations in staging.
+const runningLease = env.creativeGenerationRunningLeaseSeconds;
+const heartbeatInterval = env.creativeGenerationHeartbeatIntervalSeconds;
+const queuedLease = env.creativeGenerationQueuedLeaseSeconds;
+
+function isInvalidLeaseConfig(): boolean {
+  return (
+    heartbeatInterval >= runningLease ||
+    heartbeatInterval <= 0 ||
+    runningLease <= 0 ||
+    queuedLease <= 0 ||
+    heartbeatInterval > Number.MAX_SAFE_INTEGER ||
+    runningLease > Number.MAX_SAFE_INTEGER ||
+    queuedLease > Number.MAX_SAFE_INTEGER
+  );
+}
+
+if (isInvalidLeaseConfig()) {
+  const message = `Invalid creative-generation claim lease configuration: heartbeat (${heartbeatInterval}s) must be less than running lease (${runningLease}s) and all values must be positive safe integers.`;
+  if (env.isProduction) {
+    throw new Error(message);
+  }
+  // Revert to documented safe defaults in development/test.
+  env.creativeGenerationRunningLeaseSeconds = 300;
+  env.creativeGenerationHeartbeatIntervalSeconds = 60;
+  env.creativeGenerationQueuedLeaseSeconds = 1800;
+  console.warn(message + " Reverting to safe defaults.");
 }

@@ -29,6 +29,12 @@ vi.mock("../billing/credit-engine", () => ({
 vi.mock("../creative/creative-generation-claim", () => ({
   releaseClaimSafely: vi.fn(),
   releaseClaimWithResult: vi.fn(async () => ({ released: true })),
+  createClaimHeartbeatController: vi.fn(() => ({
+    lostOwnership: false,
+    abortSignal: new AbortController().signal,
+    assertStillOwned: vi.fn(async () => undefined),
+    stop: vi.fn(async () => undefined),
+  })),
 }));
 
 function getTableName(table: unknown): string | undefined {
