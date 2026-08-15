@@ -242,10 +242,10 @@ describe("onAgentRunComplete integration path", () => {
     expect(timeline?.nextAction.toLowerCase()).toContain("retry");
 
     const paymentMessage = buildFailedCreativeMessage("PAYMENT_REQUIRED: insufficient credits");
-    expect(paymentMessage.creditsImpact.toLowerCase()).toContain("no credits were deducted");
+    expect(paymentMessage.creditsImpact?.toLowerCase()).toContain("no credits were deducted");
 
     const providerMessage = buildFailedCreativeMessage("OpenAI timeout");
-    expect(providerMessage.creditsImpact.toLowerCase()).toContain("automatically refunded");
+    expect(providerMessage.creditsImpact?.toLowerCase()).toContain("automatically refunded");
   });
 });
 

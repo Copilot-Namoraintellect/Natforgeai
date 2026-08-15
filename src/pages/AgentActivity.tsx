@@ -182,8 +182,10 @@ export default function AgentActivity() {
               timeline.currentStatus === "completed"
                 ? `/content?campaignId=${timeline.campaignId}`
                 : timeline.currentStatus === "failed"
-                  ? `/agent-activity?campaignId=${timeline.campaignId}`
+                  ? `/campaigns?campaignId=${timeline.campaignId}`
                   : "/approvals";
+            const nextActionLabel =
+              timeline.currentStatus === "failed" ? "Review Campaign" : "Next Action";
 
             return (
               <Card
@@ -210,21 +212,30 @@ export default function AgentActivity() {
                     <p className="text-sm text-gray-200">What is happening now: {timeline.currentStatus === "running" ? "Agents are processing this campaign." : timeline.currentStatus === "completed" ? "Content is ready for review." : timeline.currentStatus === "failed" ? "Creative generation failed and needs attention." : "Waiting for workflow progression."}</p>
                     <p className="text-sm text-gray-300">What has been completed: {timeline.completedSteps.length > 0 ? timeline.completedSteps.join(" -> ") : "No completed agent steps yet."}</p>
                     <p className="text-sm text-gray-300">Pending work: {timeline.pendingWork}</p>
-                    <p className="text-sm text-gray-300">What you need to do next: {campaign ? getWorkflowNextActionMessage(campaign.workflowState) : timeline.nextAction}</p>
+                    <p className="text-sm text-gray-300">
+                      What you need to do next:{" "}
+                      {timeline.currentStatus === "failed"
+                        ? "Review your business and campaign details, then retry creative generation."
+                        : campaign
+                          ? getWorkflowNextActionMessage(campaign.workflowState)
+                          : timeline.nextAction}
+                    </p>
                     <p className="text-sm text-gray-300">What happens after the next action: {timeline.currentStatus === "completed" ? "Content Studio opens with generated drafts and assets." : "Workflow advances to the next campaign stage."}</p>
                   </div>
 
                   {timeline.currentStatus === "failed" && (
                     <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-3">
                       <p className="text-sm text-red-300">{errorDetails.message}</p>
-                      <p className="text-xs text-red-200/80 mt-1">{errorDetails.creditsImpact}</p>
+                      {errorDetails.creditsImpact && (
+                        <p className="text-xs text-red-200/80 mt-1">{errorDetails.creditsImpact}</p>
+                      )}
                     </div>
                   )}
 
                   <div className="flex items-center gap-2 flex-wrap">
                     <Link to={nextActionHref}>
                       <Button size="sm" className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white h-7 text-xs">
-                        Next Action
+                        {nextActionLabel}
                         <ArrowRight className="w-3 h-3 ml-1" />
                       </Button>
                     </Link>

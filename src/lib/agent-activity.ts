@@ -160,7 +160,7 @@ export function groupCampaignActivity(runs: AgentRunLike[]): CampaignActivityTim
 
 export function buildFailedCreativeMessage(error: string | null | undefined): {
   message: string;
-  creditsImpact: string;
+  creditsImpact?: string;
 } {
   const text = (error || "").toLowerCase();
 
@@ -178,8 +178,10 @@ export function buildFailedCreativeMessage(error: string | null | undefined): {
     };
   }
 
+  // Default/unknown failures (including quality validation failures) do not
+  // make a billing claim because credits are only deducted after a successful
+  // save. The UI must not state that credits were deducted without evidence.
   return {
     message: "Creative generation failed before content became available. Please retry from this campaign.",
-    creditsImpact: "This attempt deducted credits when generation started.",
   };
 }

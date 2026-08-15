@@ -34,10 +34,32 @@ describe("agent activity grouping and deduplication", () => {
 
   it("returns clear credit messaging for failed creative errors", () => {
     const insufficient = buildFailedCreativeMessage("PAYMENT_REQUIRED: insufficient credits");
-    expect(insufficient.creditsImpact.toLowerCase()).toContain("no credits were deducted");
+    expect(insufficient.creditsImpact?.toLowerCase()).toContain("no credits were deducted");
 
     const provider = buildFailedCreativeMessage("OpenAI timeout");
-    expect(provider.creditsImpact.toLowerCase()).toContain("automatically refunded");
+    expect(provider.creditsImpact?.toLowerCase()).toContain("automatically refunded");
+  });
+
+  it("does not assert a credit deduction for default quality validation failures", () => {
+    const quality = buildFailedCreativeMessage("quality validation failed");
+    expect(quality.creditsImpact).toBeUndefined();
+    expect(quality.message.toLowerCase()).toContain("retry from this campaign");
+  });
+
+  it("never claims credits were deducted at generation start", () => {
+    const errors = [
+      "quality validation failed",
+      "unknown error",
+      "",
+      null,
+      "content generation failed",
+    ];
+    for (const error of errors) {
+      const result = buildFailedCreativeMessage(error);
+      if (result.creditsImpact) {
+        expect(result.creditsImpact.toLowerCase()).not.toContain("deducted credits when generation started");
+      }
+    }
   });
 
   it("selects failed controlling creative run over later completed inner runs", () => {
