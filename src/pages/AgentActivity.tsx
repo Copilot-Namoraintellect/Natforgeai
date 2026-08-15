@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router";
 import { buildFailedCreativeMessage, groupCampaignActivity } from "@/lib/agent-activity";
+import { isCreativeBriefComplete } from "@/lib/creative-brief";
 import { getWorkflowNextActionMessage } from "@/lib/workflow";
 
 const agentTypeConfig: Record<string, { label: string }> = {
@@ -241,16 +242,31 @@ export default function AgentActivity() {
                     </Link>
 
                     {latestCreative && timeline.currentStatus === "failed" && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-[#334155] text-gray-300 hover:text-white h-7 text-xs"
-                        onClick={() => handleRetry(latestCreative)}
-                        disabled={runStrategyAgent.isPending || runCreativeAgent.isPending || runAudienceAgent.isPending || runDistributionAgent.isPending}
-                      >
-                        <RotateCcw className="w-3.5 h-3.5 mr-1" />
-                        Retry Creative
-                      </Button>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-[#334155] text-gray-300 hover:text-white h-7 text-xs"
+                          onClick={() => handleRetry(latestCreative)}
+                          disabled={
+                            !isCreativeBriefComplete(campaign) ||
+                            runStrategyAgent.isPending ||
+                            runCreativeAgent.isPending ||
+                            runAudienceAgent.isPending ||
+                            runDistributionAgent.isPending
+                          }
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                          Retry Creative
+                        </Button>
+                        {!isCreativeBriefComplete(campaign) && (
+                          <p className="text-xs text-red-200/80">
+                            {campaign
+                              ? "Complete the campaign's product, target buyer, pain point and CTA before retrying."
+                              : "Campaign details loading..."}
+                          </p>
+                        )}
+                      </div>
                     )}
 
                     {timeline.creativeRunHistory.length > 0 && (

@@ -17,12 +17,26 @@ import {
   getContinueAction,
 } from "@/lib/workflow";
 import {
+  applyBusinessProfileToBrief,
+  buildCampaignUpdatePayload,
+  prefillBriefFromCampaign,
+  validateCreativeBrief,
+  type CreativeBriefForm,
+} from "@/lib/creative-brief";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Megaphone,
   Plus,
@@ -37,6 +51,7 @@ import {
   Loader2,
   Rocket,
   Wand2,
+  Edit,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -51,6 +66,11 @@ export default function Campaigns() {
   const [viewCampaign, setViewCampaign] = useState<any>(null);
   const [highlightedId, setHighlightedId] = useState<number | null>(null);
   const [filter, setFilter] = useState<string>("all");
+  const [editBriefOpen, setEditBriefOpen] = useState(false);
+  const [editBriefForm, setEditBriefForm] = useState<CreativeBriefForm>(
+    prefillBriefFromCampaign(null)
+  );
+  const [editBriefErrors, setEditBriefErrors] = useState<Record<string, string>>({});
 
   // Campaign intent quick-start state
   const [intentText, setIntentText] = useState("");
@@ -142,6 +162,14 @@ export default function Campaigns() {
   const strategyApproval = campaignPendingApprovals?.find(
     (a) => a.approvalType === "strategy_review"
   );
+
+  // Detect failed creative generation for the viewed campaign so we can offer
+  // an explicit brief-editing recovery action.
+  const { data: failedCreativeRuns } = trpc.agent.getAgentRuns.useQuery(
+    { campaignId: viewCampaign?.id ?? 0, agentType: "creative", status: "failed" },
+    { enabled: !!viewCampaign }
+  );
+  const hasFailedCreativeRun = (failedCreativeRuns?.length ?? 0) > 0;
 
   const approveStrategyMutation = trpc.approval.approveAction.useMutation({
     onSuccess: () => {
@@ -360,6 +388,67 @@ export default function Campaigns() {
     { key: "active", label: "Active" },
     { key: "completed", label: "Completed" },
   ];
+
+  function openEditBrief(campaign: any) {
+    setEditBriefForm(prefillBriefFromCampaign(campaign));
+    setEditBriefErrors({});
+    setEditBriefOpen(true);
+  }
+
+  function closeEditBrief() {
+    setEditBriefOpen(false);
+    setEditBriefErrors({});
+  }
+
+  function handleEditBriefChange(field: keyof CreativeBriefForm, value: string) {
+    setEditBriefForm((prev) => ({ ...prev, [field]: value }));
+    if (editBriefErrors[field]) {
+      setEditBriefErrors((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    }
+  }
+
+  function handleFillFromBusiness() {
+    if (!viewCampaign) return;
+    const linkedBusiness = businessList?.find(
+      (b: any) => b.id === viewCampaign.businessId
+    );
+    const business = linkedBusiness ?? primaryBusiness;
+    if (!business) {
+      toast.info("No business profile is available to copy from.");
+      return;
+    }
+    setEditBriefForm((prev) => applyBusinessProfileToBrief(prev, business));
+    toast.success("Empty fields filled from the linked business profile.");
+  }
+
+  function handleSaveBrief(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!viewCampaign || updateMutation.isPending) return;
+    const trimmed = buildCampaignUpdatePayload(editBriefForm);
+    const { valid, errors } = validateCreativeBrief(trimmed);
+    if (!valid) {
+      setEditBriefErrors(errors);
+      return;
+    }
+    updateMutation.mutate(
+      {
+        id: viewCampaign.id,
+        ...trimmed,
+      },
+      {
+        onSuccess: () => {
+          closeEditBrief();
+          // Keep the read-only view in sync with the saved snapshot.
+          setViewCampaign((prev: any) => (prev ? { ...prev, ...trimmed } : prev));
+          toast.success("Creative brief updated. You can now retry generation.");
+        },
+      }
+    );
+  }
 
   function handleCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -1277,8 +1366,215 @@ export default function Campaigns() {
                     {runStrategyAgentMutation.isPending && runStrategyAgentMutation.variables?.campaignId === viewCampaign.id ? "Starting..." : "Start Strategy"}
                   </Button>
                 )}
+                {hasFailedCreativeRun && (
+                  <Button
+                    variant="outline"
+                    onClick={() => openEditBrief(viewCampaign)}
+                  >
+                    <Edit className="w-4 h-4 mr-2" />
+                    Edit Creative Brief
+                  </Button>
+                )}
               </div>
             </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Edit Creative Brief Dialog */}
+      {editBriefOpen && viewCampaign && (
+        <Dialog open={editBriefOpen} onOpenChange={(open) => !open && closeEditBrief()}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Edit Creative Brief</DialogTitle>
+              <DialogDescription>
+                Update the campaign grounding details before retrying creative generation.
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={handleSaveBrief} className="space-y-4 mt-4">
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleFillFromBusiness}
+                  disabled={!businessList?.length}
+                >
+                  <Wand2 className="w-3 h-3 mr-1" />
+                  Use Business Profile
+                </Button>
+              </div>
+
+              <div>
+                <Label htmlFor="brief-name">Campaign Name</Label>
+                <Input
+                  id="brief-name"
+                  value={editBriefForm.name}
+                  onChange={(e) => handleEditBriefChange("name", e.target.value)}
+                  placeholder="Campaign name"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="brief-productOrService">Product or Service *</Label>
+                <Textarea
+                  id="brief-productOrService"
+                  value={editBriefForm.productOrService}
+                  onChange={(e) => handleEditBriefChange("productOrService", e.target.value)}
+                  placeholder="What product or service are you promoting?"
+                  className={editBriefErrors.productOrService ? "border-red-500" : ""}
+                />
+                {editBriefErrors.productOrService && (
+                  <p className="text-xs text-red-500 mt-1">{editBriefErrors.productOrService}</p>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="brief-targetBuyer">Target Buyer *</Label>
+                <Textarea
+                  id="brief-targetBuyer"
+                  value={editBriefForm.targetBuyer}
+                  onChange={(e) => handleEditBriefChange("targetBuyer", e.target.value)}
+                  placeholder="Who is the ideal buyer?"
+                  className={editBriefErrors.targetBuyer ? "border-red-500" : ""}
+                />
+                {editBriefErrors.targetBuyer && (
+                  <p className="text-xs text-red-500 mt-1">{editBriefErrors.targetBuyer}</p>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="brief-mainPainPoint">Main Pain Point *</Label>
+                <Textarea
+                  id="brief-mainPainPoint"
+                  value={editBriefForm.mainPainPoint}
+                  onChange={(e) => handleEditBriefChange("mainPainPoint", e.target.value)}
+                  placeholder="What problem does your product solve for the buyer?"
+                  className={editBriefErrors.mainPainPoint ? "border-red-500" : ""}
+                />
+                {editBriefErrors.mainPainPoint && (
+                  <p className="text-xs text-red-500 mt-1">{editBriefErrors.mainPainPoint}</p>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="brief-preferredCta">Preferred CTA *</Label>
+                <Input
+                  id="brief-preferredCta"
+                  value={editBriefForm.preferredCta}
+                  onChange={(e) => handleEditBriefChange("preferredCta", e.target.value)}
+                  placeholder="e.g. Book a Demo"
+                  className={editBriefErrors.preferredCta ? "border-red-500" : ""}
+                />
+                {editBriefErrors.preferredCta && (
+                  <p className="text-xs text-red-500 mt-1">{editBriefErrors.preferredCta}</p>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="brief-primaryOutcome">Primary Outcome</Label>
+                <Input
+                  id="brief-primaryOutcome"
+                  value={editBriefForm.primaryOutcome}
+                  onChange={(e) => handleEditBriefChange("primaryOutcome", e.target.value)}
+                  placeholder="What should the campaign achieve?"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="brief-targetAudience">Target Audience</Label>
+                <Textarea
+                  id="brief-targetAudience"
+                  value={editBriefForm.targetAudience}
+                  onChange={(e) => handleEditBriefChange("targetAudience", e.target.value)}
+                  placeholder="Broader audience or segments"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="brief-coreMessage">Core Message</Label>
+                <Textarea
+                  id="brief-coreMessage"
+                  value={editBriefForm.coreMessage}
+                  onChange={(e) => handleEditBriefChange("coreMessage", e.target.value)}
+                  placeholder="The single message the campaign should communicate"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="brief-offerDetails">Offer Details</Label>
+                <Textarea
+                  id="brief-offerDetails"
+                  value={editBriefForm.offerDetails}
+                  onChange={(e) => handleEditBriefChange("offerDetails", e.target.value)}
+                  placeholder="Specific offers or incentives"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="brief-excludedOffers">Excluded Offers / Words</Label>
+                <Textarea
+                  id="brief-excludedOffers"
+                  value={editBriefForm.excludedOffers}
+                  onChange={(e) => handleEditBriefChange("excludedOffers", e.target.value)}
+                  placeholder="Words or offers to avoid"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="brief-referenceStyle">Reference Style</Label>
+                <Input
+                  id="brief-referenceStyle"
+                  value={editBriefForm.referenceStyle}
+                  onChange={(e) => handleEditBriefChange("referenceStyle", e.target.value)}
+                  placeholder="Reference brand or style"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="brief-contentStyle">Content Style</Label>
+                <Select
+                  value={editBriefForm.contentStyle}
+                  onValueChange={(value) => handleEditBriefChange("contentStyle", value)}
+                >
+                  <SelectTrigger id="brief-contentStyle">
+                    <SelectValue placeholder="Select style" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CONTENT_STYLE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <Button
+                  type="submit"
+                  className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
+                  disabled={updateMutation.isPending}
+                >
+                  {updateMutation.isPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save Brief"
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={closeEditBrief}
+                  disabled={updateMutation.isPending}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </form>
           </DialogContent>
         </Dialog>
       )}
