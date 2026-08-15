@@ -11,6 +11,13 @@ import { runStrategyAgent } from "./lib/agents/strategy-agent";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
 import { transitionCampaignState } from "./lib/workflow/engine";
+import {
+  acquireCreativeGenerationClaim,
+  attachCreativeGenerationOperationReference,
+  generateOwnerToken,
+  releaseClaimWithResult,
+  type CreativeGenerationClaim,
+} from "./lib/creative/creative-generation-claim";
 
 function campaignSuggestionSchema() {
   return z.object({
@@ -504,6 +511,20 @@ export const campaignRouter = createRouter({
 
       let strategyRunId: number | null = null;
       let creativeRunId: number | null = null;
+      let claim: CreativeGenerationClaim | null = null;
+      let ownerToken: string | null = null;
+      let released = false;
+
+      const releaseClaimOnce = async (status: "completed" | "failed") => {
+        if (released || !claim || !ownerToken) return { released: true } as const;
+        released = true;
+        return releaseClaimWithResult({
+          claimId: claim.id,
+          ownerToken,
+          status,
+          context: "campaignRouter.regenerateFromProfile",
+        });
+      };
 
       try {
         // 1. Load campaign
@@ -533,6 +554,33 @@ export const campaignRouter = createRouter({
           throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
         }
         console.log(`[regenerateFromProfile] business loaded | businessId=${business.id} | name=${business.name}`);
+
+        // Authoritative atomic claim: only one regeneration can proceed.
+        ownerToken = generateOwnerToken();
+        const claimResult = await acquireCreativeGenerationClaim({
+          userId,
+          campaignId,
+          operationSource: "profile",
+          ownerToken,
+        });
+
+        if (!claimResult.acquired) {
+          const existingRunId = claimResult.existingClaim.operationReferenceId;
+          if (existingRunId) {
+            return {
+              success: true,
+              reused: true,
+              strategyRunId: existingRunId,
+              creativeRunId: null,
+            };
+          }
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Regeneration is already being prepared for this campaign.",
+          });
+        }
+
+        claim = claimResult.claim;
 
         // 3. Parse website evidence
         const evidence = (business.websiteEvidence || {}) as {
@@ -621,6 +669,32 @@ export const campaignRouter = createRouter({
         strategyRunId = strategyResult.runId;
         console.log(`[regenerateFromProfile] strategy regenerated | campaignId=${campaignId} | strategyRunId=${strategyRunId}`);
 
+        const attachResult = await attachCreativeGenerationOperationReference({
+          claimId: claim!.id,
+          ownerToken: ownerToken!,
+          operationReferenceId: strategyRunId,
+        });
+
+        if (!attachResult.attached) {
+          // The strategy run is already bound to another operation. Abandon
+          // this claim without deleting any AI-generated content; old agent runs
+          // have already been cleared as part of the regeneration flow, which
+          // is the destructive step that precedes strategy generation.
+          const releaseResult = await releaseClaimWithResult({
+            claimId: claim!.id,
+            ownerToken: ownerToken!,
+            status: "failed",
+            context: "campaignRouter.regenerateFromProfile reference collision",
+          });
+          if (!releaseResult.released) {
+            console.error(`[regenerateFromProfile] failed-release failed after reference collision | campaignId=${campaignId} | claimId=${claim!.id} | releaseError=${releaseResult.error.message}`);
+          }
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Regeneration operation already exists for this strategy run.",
+          });
+        }
+
         // Advance workflow to strategy_generated and then strategy_approved so creative can run
         await transitionCampaignState(campaignId, userId, "generate_strategy");
         console.log(`[regenerateFromProfile] campaign state transitioned to strategy_generated | campaignId=${campaignId}`);
@@ -687,6 +761,15 @@ export const campaignRouter = createRouter({
 
         console.log(`[regenerateFromProfile] route completed | campaignId=${campaignId} | strategyRunId=${strategyRunId} | creativeRunId=${creativeRunId}`);
 
+        const releaseResult = await releaseClaimOnce("completed");
+        if (!releaseResult.released) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Regeneration completed, but the operation could not be closed cleanly. Please retry.",
+          });
+        }
+
         return {
           success: true,
           strategyRunId,
@@ -695,6 +778,10 @@ export const campaignRouter = createRouter({
       } catch (err: any) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         console.error(`[regenerateFromProfile] step failed | campaignId=${campaignId} | userId=${userId} | error="${errorMessage}"`, err);
+
+        // Release the authoritative claim so later regeneration attempts can proceed.
+        // Release failure is logged without ownerToken; preserve the original error.
+        await releaseClaimOnce("failed");
 
         // Mark any runs we created as failed so the UI does not show them as completed
         if (strategyRunId) {

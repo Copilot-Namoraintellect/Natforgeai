@@ -1,8 +1,10 @@
+import { randomBytes } from "crypto";
 import { TRPCError } from "@trpc/server";
 import { eq, and, or, lt, isNull, isNotNull } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
 import { creativeGenerationClaims } from "@db/schema";
 import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
+import { logError } from "../logger";
 
 export const CREATIVE_GENERATION_OPERATION_SOURCES = [
   "job",
@@ -218,6 +220,19 @@ export async function acquireCreativeGenerationClaim({
   }
 }
 
+export interface AttachCreativeGenerationOperationReferenceSuccess {
+  attached: true;
+}
+
+export interface AttachCreativeGenerationOperationReferenceCollision {
+  attached: false;
+  existingClaim: CreativeGenerationClaim;
+}
+
+export type AttachCreativeGenerationOperationReferenceResult =
+  | AttachCreativeGenerationOperationReferenceSuccess
+  | AttachCreativeGenerationOperationReferenceCollision;
+
 export async function attachCreativeGenerationOperationReference({
   claimId,
   ownerToken,
@@ -226,28 +241,57 @@ export async function attachCreativeGenerationOperationReference({
   claimId: number;
   ownerToken: string;
   operationReferenceId: number;
-}): Promise<void> {
+}): Promise<AttachCreativeGenerationOperationReferenceResult> {
   assertValidId(claimId, "claimId");
   assertValidOwnerToken(ownerToken);
   assertValidId(operationReferenceId, "operationReferenceId");
 
   const db = getDb();
-  const result = await db
-    .update(creativeGenerationClaims)
-    .set({ operationReferenceId })
-    .where(
-      and(
-        eq(creativeGenerationClaims.id, claimId),
-        eq(creativeGenerationClaims.ownerToken, ownerToken)
-      )
+  try {
+    const result = await db
+      .update(creativeGenerationClaims)
+      .set({ operationReferenceId })
+      .where(
+        and(
+          eq(creativeGenerationClaims.id, claimId),
+          eq(creativeGenerationClaims.ownerToken, ownerToken)
+        )
+      );
+
+    const affectedRows = getAffectedRows(result);
+    if (affectedRows !== 1) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "Claim attachment failed: claim not found or ownerToken mismatch",
+      });
+    }
+
+    return { attached: true };
+  } catch (err: unknown) {
+    if (!isMySqlDuplicateKeyError(err)) {
+      throw err;
+    }
+
+    const existingClaim = await findExistingClaimByReference(
+      // source is unknown here; we must infer it from the row we own.
+      // Re-read the claim to obtain the source, then look up the duplicate.
+      (await db
+        .select({ operationSource: creativeGenerationClaims.operationSource })
+        .from(creativeGenerationClaims)
+        .where(eq(creativeGenerationClaims.id, claimId))
+        .limit(1))[0]?.operationSource as CreativeGenerationOperationSource,
+      operationReferenceId
     );
 
-  const affectedRows = getAffectedRows(result);
-  if (affectedRows !== 1) {
+    if (existingClaim) {
+      return { attached: false, existingClaim };
+    }
+
     throw new TRPCError({
-      code: "FORBIDDEN",
+      code: "INTERNAL_SERVER_ERROR",
       message:
-        "Claim attachment failed: claim not found or ownerToken mismatch",
+        "Creative generation operation reference collision detected but the existing operation could not be located",
     });
   }
 }
@@ -320,6 +364,76 @@ export async function getActiveCreativeGenerationClaim({
     .limit(1);
 
   return claim ?? null;
+}
+
+export function generateOwnerToken(): string {
+  return randomBytes(32).toString("hex"); // 64 characters
+}
+
+export interface ReleaseClaimSuccess {
+  released: true;
+}
+
+export interface ReleaseClaimFailure {
+  released: false;
+  error: Error;
+}
+
+export type ReleaseClaimResult = ReleaseClaimSuccess | ReleaseClaimFailure;
+
+export async function releaseClaimWithResult({
+  claimId,
+  ownerToken,
+  status,
+  context,
+}: {
+  claimId: number;
+  ownerToken: string;
+  status: "completed" | "failed";
+  context: string;
+}): Promise<ReleaseClaimResult> {
+  try {
+    await releaseCreativeGenerationClaim({ claimId, ownerToken, status });
+    return { released: true };
+  } catch (err: unknown) {
+    logError("[creative-claim] release failed", {
+      context,
+      claimId,
+      status,
+      error: err instanceof Error ? err.message : String(err),
+      // ownerToken is deliberately omitted from all logs
+    });
+    return {
+      released: false,
+      error: err instanceof Error ? err : new Error(String(err)),
+    };
+  }
+}
+
+export async function releaseClaimSafely({
+  claimId,
+  ownerToken,
+  status,
+  context,
+}: {
+  claimId: number;
+  ownerToken: string;
+  status: "completed" | "failed";
+  context: string;
+}): Promise<void> {
+  const result = await releaseClaimWithResult({
+    claimId,
+    ownerToken,
+    status,
+    context,
+  });
+  if (!result.released) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message:
+        "Generation operation could not be closed cleanly. Please retry.",
+    });
+  }
 }
 
 export async function classifyStaleCreativeGenerationClaims({

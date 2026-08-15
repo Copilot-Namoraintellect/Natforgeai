@@ -26,6 +26,11 @@ vi.mock("../billing/credit-engine", () => ({
   deductCredits: vi.fn(async () => ({ newBalance: 100 })),
 }));
 
+vi.mock("../creative/creative-generation-claim", () => ({
+  releaseClaimSafely: vi.fn(),
+  releaseClaimWithResult: vi.fn(async () => ({ released: true })),
+}));
+
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string | undefined;
 }
@@ -106,7 +111,7 @@ describe("processContentGenerationJob", () => {
       },
     } as any);
 
-    await processContentGenerationJob({ jobId: 189, userId: 18, campaignId: 30 });
+    await processContentGenerationJob({ jobId: 189, userId: 18, campaignId: 30, claimId: 2001, ownerToken: "test-owner-token" });
 
     const completed = db.agentRunUpdates.filter((u: any) => u.status === "completed");
     const failed = db.agentRunUpdates.filter((u: any) => u.status === "failed");
@@ -131,7 +136,7 @@ describe("processContentGenerationJob", () => {
     vi.mocked(getDb).mockReturnValue(db as any);
     vi.mocked(runCreativeAgent).mockRejectedValue(new Error("creative failed"));
 
-    await expect(processContentGenerationJob({ jobId: 189, userId: 18, campaignId: 30 })).rejects.toThrow("creative failed");
+    await expect(processContentGenerationJob({ jobId: 189, userId: 18, campaignId: 30, claimId: 2002, ownerToken: "test-owner-token" })).rejects.toThrow("creative failed");
 
     const completed = db.agentRunUpdates.filter((u: any) => u.status === "completed");
     const failed = db.agentRunUpdates.filter((u: any) => u.status === "failed");
@@ -155,7 +160,7 @@ describe("processContentGenerationJob", () => {
       metrics: {},
     } as any);
 
-    await processContentGenerationJob({ jobId: 189, userId: 18, campaignId: 30 });
+    await processContentGenerationJob({ jobId: 189, userId: 18, campaignId: 30, claimId: 2003, ownerToken: "test-owner-token" });
 
     expect(runCreativeAgent).not.toHaveBeenCalled();
     const completed = db.agentRunUpdates.filter((u: any) => u.status === "completed");

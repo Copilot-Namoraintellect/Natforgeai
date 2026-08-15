@@ -74,6 +74,8 @@ export interface ContentGenerationJobData {
   campaignId: number;
   userId: number;
   regenerate: boolean;
+  claimId?: number;
+  ownerToken?: string;
 }
 
 export function toSafeBullMqJobId(value: string | number): string {

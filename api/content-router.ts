@@ -12,6 +12,12 @@ import { checkContentSafety } from "./lib/safety/checker";
 import { isFacebookPublishingReady, isInstagramPublishingReady } from "./lib/integrations/platforms";
 import { scheduleContentGenerationJob, isBullMQAvailable } from "./lib/queue/bullmq";
 import { processContentGenerationJob } from "./lib/jobs/content-generation-job";
+import {
+  acquireCreativeGenerationClaim,
+  attachCreativeGenerationOperationReference,
+  generateOwnerToken,
+  releaseClaimWithResult,
+} from "./lib/creative/creative-generation-claim";
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
@@ -55,7 +61,8 @@ function isApprovedImageReadySocialPost(post: any): boolean {
   return true;
 }
 
-function mapGenerationStatus(status: string | null | undefined): "queued" | "processing" | "completed" | "failed" {
+function mapGenerationStatus(status: string | null | undefined): "queued" | "processing" | "completed" | "failed" | "preparing" {
+  if (status === "preparing") return "preparing";
   if (status === "pending") return "queued";
   if (status === "running") return "processing";
   if (status === "completed") return "completed";
@@ -251,57 +258,133 @@ export const contentRouter = createRouter({
         workflowState: campaign.workflowState,
       });
 
-      const recentCreativeRuns = await db
-        .select()
-        .from(agentRuns)
-        .where(
-          and(
-            eq(agentRuns.userId, userId),
-            eq(agentRuns.campaignId, campaignId),
-            eq(agentRuns.agentType, "creative")
-          )
-        )
-        .orderBy(desc(agentRuns.createdAt))
-        .limit(25);
-
-      const activeJob = recentCreativeRuns.find((run) => {
-        return (
-          isContentGenerationJobRun(run) &&
-          (run.status === "pending" || run.status === "running")
-        );
+      // Authoritative claim: at most one active creative-generation operation
+      // per (userId, campaignId). The database unique key is the source of truth.
+      const ownerToken = generateOwnerToken();
+      const claimResult = await acquireCreativeGenerationClaim({
+        userId,
+        campaignId,
+        operationSource: "job",
+        ownerToken,
       });
 
-      if (activeJob) {
+      if (!claimResult.acquired) {
+        const existing = claimResult.existingClaim;
         return {
-          jobId: activeJob.id,
+          jobId: existing.operationReferenceId ?? null,
           campaignId,
-          status: mapGenerationStatus(activeJob.status),
+          status: existing.operationReferenceId ? "queued" : "preparing",
           reused: true,
         };
       }
 
-      const [jobInsert] = await db
-        .insert(agentRuns)
-        .values({
-          userId,
-          campaignId,
-          agentType: "creative",
-          status: "pending",
-          input: {
-            jobType: "content_generation_job",
-            regenerate: !!input.regenerate,
-          } as any,
-        });
-
-      const jobId = Number((jobInsert as any).insertId);
+      const claim = claimResult.claim;
+      let jobId!: number;
 
       try {
+        // Advisory dedup: a pre-existing job row from before the claim table
+        // existed (or a race that completed before attachment) can be reused.
+        const recentCreativeRuns = await db
+          .select()
+          .from(agentRuns)
+          .where(
+            and(
+              eq(agentRuns.userId, userId),
+              eq(agentRuns.campaignId, campaignId),
+              eq(agentRuns.agentType, "creative")
+            )
+          )
+          .orderBy(desc(agentRuns.createdAt))
+          .limit(25);
+
+        const activeJob = recentCreativeRuns.find((run) => {
+          return (
+            isContentGenerationJobRun(run) &&
+            (run.status === "pending" || run.status === "running")
+          );
+        });
+
+        if (activeJob) {
+          const releaseResult = await releaseClaimWithResult({
+            claimId: claim.id,
+            ownerToken,
+            status: "completed",
+            context: "contentRouter.generateForCampaign advisory dedup",
+          });
+          if (!releaseResult.released) {
+            logError("[content.generateForCampaign] completed-release failed for advisory dedup", {
+              campaignId,
+              userId,
+              claimId: claim.id,
+              releaseError: releaseResult.error.message,
+            });
+          }
+          return {
+            jobId: activeJob.id,
+            campaignId,
+            status: mapGenerationStatus(activeJob.status),
+            reused: true,
+          };
+        }
+
+        const [jobInsert] = await db
+          .insert(agentRuns)
+          .values({
+            userId,
+            campaignId,
+            agentType: "creative",
+            status: "pending",
+            input: {
+              jobType: "content_generation_job",
+              regenerate: !!input.regenerate,
+            } as any,
+          });
+
+        jobId = Number((jobInsert as any).insertId);
+
+        const attachResult = await attachCreativeGenerationOperationReference({
+          claimId: claim.id,
+          ownerToken,
+          operationReferenceId: jobId,
+        });
+
+        if (!attachResult.attached) {
+          // The job id collided with an existing operation reference. This is
+          // pathological, but we must release our claim and reuse the winner.
+          await db
+            .update(agentRuns)
+            .set({ status: "failed", error: "operation reference collision", completedAt: new Date() })
+            .where(eq(agentRuns.id, jobId));
+          const releaseResult = await releaseClaimWithResult({
+            claimId: claim.id,
+            ownerToken,
+            status: "failed",
+            context: "contentRouter.generateForCampaign reference collision",
+          });
+          if (!releaseResult.released) {
+            logError("[content.generateForCampaign] failed-release failed after reference collision", {
+              campaignId,
+              userId,
+              claimId: claim.id,
+              releaseError: releaseResult.error.message,
+            });
+          }
+          return {
+            jobId: attachResult.existingClaim.operationReferenceId ?? null,
+            campaignId,
+            status: attachResult.existingClaim.operationReferenceId ? "queued" : "preparing",
+            reused: true,
+          };
+        }
+
         if (isBullMQAvailable()) {
           await scheduleContentGenerationJob({
             jobId,
             userId,
             campaignId,
             regenerate: !!input.regenerate,
+            claimId: claim.id,
+            ownerToken,
           });
         } else {
           setTimeout(() => {
@@ -310,31 +393,65 @@ export const contentRouter = createRouter({
               userId,
               campaignId,
               regenerate: !!input.regenerate,
+              claimId: claim.id,
+              ownerToken,
             });
           }, 0);
         }
-      } catch (enqueueErr: any) {
-        await db
-          .update(agentRuns)
-          .set({
-            status: "failed",
-            error: enqueueErr?.message || "Failed to enqueue content generation job.",
-            completedAt: new Date(),
-          })
-          .where(eq(agentRuns.id, jobId));
 
+        return {
+          jobId,
+          campaignId,
+          status: "queued",
+        };
+      } catch (err: any) {
+        if (jobId !== undefined) {
+          await db
+            .update(agentRuns)
+            .set({
+              status: "failed",
+              error: err?.message || "Failed to enqueue content generation job.",
+              completedAt: new Date(),
+            })
+            .where(eq(agentRuns.id, jobId))
+            .catch((cleanupErr: any) => {
+              logError("[content.generateForCampaign] failed to mark job row failed", {
+                campaignId,
+                userId,
+                jobId,
+                error: cleanupErr?.message || String(cleanupErr),
+              });
+            });
+        }
+
+        const releaseResult = await releaseClaimWithResult({
+          claimId: claim.id,
+          ownerToken,
+          status: "failed",
+          context: "contentRouter.generateForCampaign enqueue failure",
+        });
+        if (!releaseResult.released) {
+          // Release failure is already logged by releaseClaimWithResult without
+          // ownerToken. Preserve the original enqueue/validation error as the
+          // primary failure surfaced to the caller.
+          logError("[content.generateForCampaign] claim release failed after error", {
+            campaignId,
+            userId,
+            claimId: claim.id,
+            releaseError: releaseResult.error.message,
+          });
+        }
+
+        if (err instanceof TRPCError) {
+          throw err;
+        }
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message:
+            err?.message ||
             "Content generation could not be queued. No credits were charged. Please try again after the service issue is resolved.",
         });
       }
-
-      return {
-        jobId,
-        campaignId,
-        status: "queued",
-      };
     }),
 
   getGenerationJobStatus: authedQuery

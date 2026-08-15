@@ -10,6 +10,11 @@ import { runAudienceIntelligenceAgent } from "../agents/audience-intelligence-ag
 import { checkAudienceAgentAccess } from "../audience/access";
 import { canRunAutonomousWorkflow } from "../billing/cost-control";
 import { ingestAudienceData } from "../audience/ingest";
+import {
+  acquireCreativeGenerationClaim,
+  generateOwnerToken,
+  releaseClaimWithResult,
+} from "../creative/creative-generation-claim";
 
 export async function onAgentRunComplete(runId: number) {
   const db = getDb();
@@ -242,79 +247,128 @@ export async function onStrategyApproved(
 
   if (!campaign) return;
 
-  // Check if creative agent already ran for this campaign
-  const existingCreative = await db
-    .select()
-    .from(agentRuns)
-    .where(
-      and(
-        eq(agentRuns.campaignId, campaignId),
-        eq(agentRuns.agentType, "creative"),
-        eq(agentRuns.userId, userId)
-      )
-    )
-    .orderBy(desc(agentRuns.createdAt))
-    .limit(1);
+  // Authoritative atomic claim for the auto-creative step of this approval.
+  const ownerToken = generateOwnerToken();
+  const claimResult = await acquireCreativeGenerationClaim({
+    userId,
+    campaignId,
+    operationSource: "approval",
+    operationReferenceId: approvalId,
+    ownerToken,
+  });
 
-  if (existingCreative.length > 0 && ["running", "completed"].includes(existingCreative[0].status)) {
-    console.log(`[Workflow] Skipping duplicate creative run for campaign ${campaignId}. Existing run ${existingCreative[0].id} is ${existingCreative[0].status}.`);
+  if (!claimResult.acquired) {
+    console.log(`[Workflow] Skipping duplicate creative run for campaign ${campaignId}. Existing claim ${claimResult.existingClaim.id}.`);
     return;
   }
 
-  // Check cost control before auto-triggering
-  const autoCheck = await canRunAutonomousWorkflow(userId, campaignId);
-  if (!autoCheck.allowed) {
-    console.log(`[Workflow] Auto-creative blocked for campaign ${campaignId}: ${autoCheck.reason}`);
-    return;
-  }
+  const claim = claimResult.claim;
+  let released = false;
 
-  // Transition to strategy_approved
-  await transitionCampaignState(campaignId, userId, "approve_strategy");
+  const releaseClaimOnce = async (status: "completed" | "failed") => {
+    if (released) return { released: true } as const;
+    released = true;
+    return releaseClaimWithResult({
+      claimId: claim.id,
+      ownerToken,
+      status,
+      context: "workflow.onStrategyApproved",
+    });
+  };
 
-  // Run Audience Intelligence after strategy approval to refine audience segments
-  // before content generation. This is credit-safe: if no permissioned source data
-  // exists, the agent returns early without calling the LLM.
   try {
-    const access = await checkAudienceAgentAccess(userId, null);
-    if (access.allowed) {
-      const existingAiRun = await db
-        .select()
-        .from(agentRuns)
-        .where(
-          and(
-            eq(agentRuns.campaignId, campaignId),
-            eq(agentRuns.agentType, "audience"),
-            eq(agentRuns.userId, userId)
-          )
+    // Advisory dedup: a pre-existing creative run from before the claim table existed.
+    const existingCreative = await db
+      .select()
+      .from(agentRuns)
+      .where(
+        and(
+          eq(agentRuns.campaignId, campaignId),
+          eq(agentRuns.agentType, "creative"),
+          eq(agentRuns.userId, userId)
         )
-        .orderBy(desc(agentRuns.createdAt))
-        .limit(1);
+      )
+      .orderBy(desc(agentRuns.createdAt))
+      .limit(1);
 
-      if (existingAiRun.length > 0 && ["running", "completed"].includes(existingAiRun[0].status)) {
-        console.log(`[Workflow] Skipping duplicate audience-intelligence run for campaign ${campaignId}.`);
-      } else {
-        console.log(`[Workflow] Running audience-intelligence for campaign ${campaignId} before creative generation.`);
-        await ingestAudienceData({ userId, businessId: campaign.businessId, campaignId });
-        await runAudienceIntelligenceAgent({ userId, campaignId, autoCreateLeads: false });
+    if (existingCreative.length > 0 && ["running", "completed"].includes(existingCreative[0].status)) {
+      console.log(`[Workflow] Skipping duplicate creative run for campaign ${campaignId}. Existing run ${existingCreative[0].id} is ${existingCreative[0].status}.`);
+      const releaseResult = await releaseClaimOnce("completed");
+      if (!releaseResult.released) {
+        throw new Error(`Existing creative run found but the operation claim could not be released for campaign ${campaignId}.`);
       }
+      return;
+    }
+
+    // Check cost control before auto-triggering
+    const autoCheck = await canRunAutonomousWorkflow(userId, campaignId);
+    if (!autoCheck.allowed) {
+      console.log(`[Workflow] Auto-creative blocked for campaign ${campaignId}: ${autoCheck.reason}`);
+      const releaseResult = await releaseClaimOnce("completed");
+      if (!releaseResult.released) {
+        throw new Error(`Auto-creative blocked but the operation claim could not be released for campaign ${campaignId}.`);
+      }
+      return;
+    }
+
+    // Transition to strategy_approved
+    await transitionCampaignState(campaignId, userId, "approve_strategy");
+
+    // Run Audience Intelligence after strategy approval to refine audience segments
+    // before content generation. This is credit-safe: if no permissioned source data
+    // exists, the agent returns early without calling the LLM.
+    try {
+      const access = await checkAudienceAgentAccess(userId, null);
+      if (access.allowed) {
+        const existingAiRun = await db
+          .select()
+          .from(agentRuns)
+          .where(
+            and(
+              eq(agentRuns.campaignId, campaignId),
+              eq(agentRuns.agentType, "audience"),
+              eq(agentRuns.userId, userId)
+            )
+          )
+          .orderBy(desc(agentRuns.createdAt))
+          .limit(1);
+
+        if (existingAiRun.length > 0 && ["running", "completed"].includes(existingAiRun[0].status)) {
+          console.log(`[Workflow] Skipping duplicate audience-intelligence run for campaign ${campaignId}.`);
+        } else {
+          console.log(`[Workflow] Running audience-intelligence for campaign ${campaignId} before creative generation.`);
+          await ingestAudienceData({ userId, businessId: campaign.businessId, campaignId });
+          await runAudienceIntelligenceAgent({ userId, campaignId, autoCreateLeads: false });
+        }
+      }
+    } catch (err: any) {
+      console.error(`[Workflow] Audience-intelligence pre-creative failed for campaign ${campaignId}:`, err.message);
+      // Continue to creative generation even if audience intelligence fails
+    }
+
+    // Transition to creatives_generating before running the creative agent
+    await transitionCampaignState(campaignId, userId, "generate_creatives");
+
+    // Auto-trigger creative agent
+    try {
+      const result = await runCreativeAgent({
+        userId,
+        campaignId,
+        generationOperation: { source: "approval", id: approvalId },
+      });
+      await onAgentRunComplete(result.packRunId);
+      const releaseResult = await releaseClaimOnce("completed");
+      if (!releaseResult.released) {
+        throw new Error(`Creative generation completed but the operation claim could not be released for campaign ${campaignId}.`);
+      }
+    } catch (err: any) {
+      console.error(`[Workflow] Auto-creative failed | campaignId=${campaignId} | error="${err.message}"`);
+      // Release failure is logged without ownerToken; preserve the original error.
+      await releaseClaimOnce("failed");
     }
   } catch (err: any) {
-    console.error(`[Workflow] Audience-intelligence pre-creative failed for campaign ${campaignId}:`, err.message);
-    // Continue to creative generation even if audience intelligence fails
-  }
-
-  // Transition to creatives_generating before running the creative agent
-  await transitionCampaignState(campaignId, userId, "generate_creatives");
-
-  // Auto-trigger creative agent
-  try {
-    const result = await runCreativeAgent({
-      userId,
-      campaignId,
-      generationOperation: { source: "approval", id: approvalId },
-    });
-    await onAgentRunComplete(result.packRunId);
-  } catch (err: any) {
-    console.error(`[Workflow] Auto-creative failed | campaignId=${campaignId} | error="${err.message}"`);
+    console.error(`[Workflow] onStrategyApproved failed | campaignId=${campaignId} | error="${err.message}"`);
+    // Release failure is logged without ownerToken; preserve the original error.
+    await releaseClaimOnce("failed");
   }
 }

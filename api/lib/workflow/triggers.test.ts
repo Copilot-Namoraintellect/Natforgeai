@@ -38,6 +38,16 @@ vi.mock("../audience/ingest", () => ({
   ingestAudienceData: vi.fn(async () => {}),
 }));
 
+vi.mock("../creative/creative-generation-claim", () => ({
+  generateOwnerToken: vi.fn(() => "test-owner-token"),
+  acquireCreativeGenerationClaim: vi.fn(async () => ({
+    acquired: true,
+    claim: { id: 1001, ownerToken: "test-owner-token" },
+  })),
+  releaseClaimSafely: vi.fn(),
+  releaseClaimWithResult: vi.fn(async () => ({ released: true })),
+}));
+
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as
     | string

@@ -6,12 +6,15 @@ import { runCreativeAgent } from "../agents/creative-agent";
 import { ensureApprovedMessagePack, saveApprovedMessagePack } from "../creative/campaign-message-architect";
 import { logError, logInfo } from "../logger";
 import { onAgentRunComplete } from "../workflow/triggers";
+import { releaseClaimWithResult } from "../creative/creative-generation-claim";
 
 export interface ContentGenerationJobInput {
   jobId: number;
   userId: number;
   campaignId: number;
   regenerate?: boolean;
+  claimId?: number;
+  ownerToken?: string;
 }
 
 export interface ContentGenerationDurations {
@@ -41,9 +44,43 @@ function toSafeContentJobFailureMessage(err: unknown): string {
   return msg;
 }
 
+function validateClaimInput(input: ContentGenerationJobInput): void {
+  if (
+    typeof input.claimId !== "number" ||
+    !Number.isFinite(input.claimId) ||
+    !Number.isInteger(input.claimId) ||
+    input.claimId <= 0
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Content generation job is missing a valid claimId",
+    });
+  }
+  if (typeof input.ownerToken !== "string" || input.ownerToken.length === 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Content generation job is missing a valid ownerToken",
+    });
+  }
+}
+
 export async function processContentGenerationJob(input: ContentGenerationJobInput): Promise<void> {
+  validateClaimInput(input);
+
   const db = getDb();
   const totalStartedAt = Date.now();
+  let released = false;
+
+  const releaseClaimOnce = async (status: "completed" | "failed") => {
+    if (released) return { released: true } as const;
+    released = true;
+    return releaseClaimWithResult({
+      claimId: input.claimId!,
+      ownerToken: input.ownerToken!,
+      status,
+      context: "processContentGenerationJob",
+    });
+  };
 
   const markFailed = async (errorMessage: string, durations: ContentGenerationDurations) => {
     await db
@@ -174,6 +211,14 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
           } as any,
         })
         .where(eq(agentRuns.id, input.jobId));
+      const releaseResult = await releaseClaimOnce("completed");
+      if (!releaseResult.released) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Existing content was found, but the operation could not be closed cleanly. Please retry.",
+        });
+      }
       return;
     }
 
@@ -270,6 +315,15 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
       userId: input.userId,
       jobId: input.jobId,
     });
+
+    const releaseResult = await releaseClaimOnce("completed");
+    if (!releaseResult.released) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message:
+          "Content generation completed, but the operation could not be closed cleanly. Please retry.",
+      });
+    }
   } catch (err: any) {
     durations.totalDurationMs = Date.now() - totalStartedAt;
     const message = toSafeContentJobFailureMessage(err);
@@ -281,6 +335,10 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
       safeError: message,
     });
     await markFailed(message, durations);
+
+    // Release failure is logged without ownerToken; preserve the original error.
+    await releaseClaimOnce("failed");
+
     throw err instanceof Error ? err : new Error(message);
   }
 }

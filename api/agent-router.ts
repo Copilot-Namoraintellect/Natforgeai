@@ -15,6 +15,7 @@ import {
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { runStrategyAgent } from "./lib/agents/strategy-agent";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
+import { logError } from "./lib/logger";
 import { runDistributionAgent } from "./lib/agents/distribution-agent";
 import { runAudienceAgent } from "./lib/agents/audience-agent";
 import { runAudienceIntelligenceAgent } from "./lib/agents/audience-intelligence-agent";
@@ -25,6 +26,12 @@ import { generateFollowUpSequence, generateProposal, generateMeetingPrompt } fro
 import { onAgentRunComplete } from "./lib/workflow/triggers";
 import { transitionCampaignState } from "./lib/workflow/engine";
 import { TRPCError } from "@trpc/server";
+import {
+  acquireCreativeGenerationClaim,
+  attachCreativeGenerationOperationReference,
+  generateOwnerToken,
+  releaseClaimWithResult,
+} from "./lib/creative/creative-generation-claim";
 
 export const agentRouter = createRouter({
   runStrategyAgent: aiActionQuery
@@ -211,35 +218,24 @@ export const agentRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
 
-      // Deduplication guard — don't run if a creative agent is already running or genuinely completed
-      const existingCreative = await db
-        .select()
-        .from(agentRuns)
-        .where(
-          and(
-            eq(agentRuns.campaignId, input.campaignId),
-            eq(agentRuns.agentType, "creative"),
-            eq(agentRuns.userId, ctx.user.id)
-          )
-        )
-        .orderBy(desc(agentRuns.createdAt))
-        .limit(1);
+      // Authoritative atomic claim for this direct creative-agent call.
+      const ownerToken = generateOwnerToken();
+      const claimResult = await acquireCreativeGenerationClaim({
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+        operationSource: "agent",
+        ownerToken,
+      });
 
-      const workflowContext = (campaign.workflowContext || {}) as { savedPosts?: number } | undefined;
-      const savedPosts = typeof workflowContext?.savedPosts === "number" ? workflowContext.savedPosts : null;
-      const existingRun = existingCreative[0];
-      const hasNoContent = savedPosts === 0;
-
-      if (
-        existingRun &&
-        ((existingRun.status === "running") ||
-          (existingRun.status === "completed" && !hasNoContent))
-      ) {
+      if (!claimResult.acquired) {
+        const existingRunId = claimResult.existingClaim.operationReferenceId;
         return {
           success: true,
           skipped: true,
-          reason: `A creative agent run already exists with status "${existingRun.status}".`,
-          packRunId: existingRun.id,
+          reason: claimResult.existingClaim.operationReferenceId
+            ? `A creative agent run already exists (operation ${existingRunId}).`
+            : "A creative generation operation is already being prepared for this campaign.",
+          packRunId: existingRunId,
           assetsRunId: null,
           pack: null,
           assets: null,
@@ -248,70 +244,183 @@ export const agentRouter = createRouter({
         };
       }
 
-      // Persist an outer creative-operation row so billing and dedup have a stable
-      // identity for this direct-agent call that is distinct from the nested
-      // model-execution run rows created by runAgent inside runCreativeAgent.
-      const [operationInsert] = await db.insert(agentRuns).values({
-        userId: ctx.user.id,
-        campaignId: input.campaignId,
-        agentType: "creative",
-        status: "running",
-        input: {
-          jobType: "content_generation_job",
-          source: "agent_router",
-        } as any,
-        startedAt: new Date(),
-      });
-      const operationRowId = Number((operationInsert as any).insertId);
+      const claim = claimResult.claim;
+      let released = false;
 
-      // Transition campaign to creatives_generating before starting
-      try {
-        await transitionCampaignState(input.campaignId, ctx.user.id, "generate_creatives");
-      } catch {
-        // If transition fails (wrong current state), continue anyway and let the agent run
-      }
+      const releaseClaimOnce = async (status: "completed" | "failed") => {
+        if (released) return { released: true } as const;
+        released = true;
+        return releaseClaimWithResult({
+          claimId: claim.id,
+          ownerToken,
+          status,
+          context: "agentRouter.runCreativeAgent",
+        });
+      };
 
-      let result: Awaited<ReturnType<typeof runCreativeAgent>> | undefined;
       try {
-        result = await runCreativeAgent({
+        // Advisory dedup: a pre-existing creative run from before the claim table
+        // existed may already be active or completed with content.
+        const existingCreative = await db
+          .select()
+          .from(agentRuns)
+          .where(
+            and(
+              eq(agentRuns.campaignId, input.campaignId),
+              eq(agentRuns.agentType, "creative"),
+              eq(agentRuns.userId, ctx.user.id)
+            )
+          )
+          .orderBy(desc(agentRuns.createdAt))
+          .limit(1);
+
+        const workflowContext = (campaign.workflowContext || {}) as { savedPosts?: number } | undefined;
+        const savedPosts = typeof workflowContext?.savedPosts === "number" ? workflowContext.savedPosts : null;
+        const existingRun = existingCreative[0];
+        const hasNoContent = savedPosts === 0;
+
+        if (
+          existingRun &&
+          ((existingRun.status === "running") ||
+            (existingRun.status === "completed" && !hasNoContent))
+        ) {
+          const releaseResult = await releaseClaimOnce("completed");
+          if (!releaseResult.released) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message:
+                "A creative agent run already exists, but the operation could not be closed cleanly. Please retry.",
+            });
+          }
+          return {
+            success: true,
+            skipped: true,
+            reason: `A creative agent run already exists with status "${existingRun.status}".`,
+            packRunId: existingRun.id,
+            assetsRunId: null,
+            pack: null,
+            assets: null,
+            savedPosts: 0,
+            savedAssets: 0,
+          };
+        }
+
+        // Persist an outer creative-operation row so billing and dedup have a stable
+        // identity for this direct-agent call that is distinct from the nested
+        // model-execution run rows created by runAgent inside runCreativeAgent.
+        const [operationInsert] = await db.insert(agentRuns).values({
           userId: ctx.user.id,
           campaignId: input.campaignId,
-          generationOperation: { source: "agent", id: operationRowId },
+          agentType: "creative",
+          status: "running",
+          input: {
+            jobType: "content_generation_job",
+            source: "agent_router",
+          } as any,
+          startedAt: new Date(),
         });
-      } catch (err: any) {
+        const operationRowId = Number((operationInsert as any).insertId);
+
+        const attachResult = await attachCreativeGenerationOperationReference({
+          claimId: claim.id,
+          ownerToken,
+          operationReferenceId: operationRowId,
+        });
+
+        if (!attachResult.attached) {
+          // The outer row id collided with an existing operation reference.
+          // Release our row and claim, then report reuse.
+          await db
+            .update(agentRuns)
+            .set({ status: "failed", error: "operation reference collision", completedAt: new Date() })
+            .where(eq(agentRuns.id, operationRowId));
+          const releaseResult = await releaseClaimWithResult({
+            claimId: claim.id,
+            ownerToken,
+            status: "failed",
+            context: "agentRouter.runCreativeAgent reference collision",
+          });
+          if (!releaseResult.released) {
+            logError("[agentRouter.runCreativeAgent] failed-release failed after reference collision", {
+              campaignId: input.campaignId,
+              userId: ctx.user.id,
+              claimId: claim.id,
+              releaseError: releaseResult.error.message,
+            });
+          }
+          return {
+            success: false,
+            skipped: true,
+            packRunId: attachResult.existingClaim.operationReferenceId ?? null,
+          };
+        }
+
+        // Transition campaign to creatives_generating before starting
+        try {
+          await transitionCampaignState(input.campaignId, ctx.user.id, "generate_creatives");
+        } catch {
+          // If transition fails (wrong current state), continue anyway and let the agent run
+        }
+
+        let result: Awaited<ReturnType<typeof runCreativeAgent>> | undefined;
+        try {
+          result = await runCreativeAgent({
+            userId: ctx.user.id,
+            campaignId: input.campaignId,
+            generationOperation: { source: "agent", id: operationRowId },
+          });
+        } catch (err: any) {
+          await db
+            .update(agentRuns)
+            .set({
+              status: "failed",
+              error: err?.message || String(err),
+              completedAt: new Date(),
+            })
+            .where(eq(agentRuns.id, operationRowId));
+          // Release failure is logged without ownerToken; preserve the original
+          // generation error as the primary failure returned to the caller.
+          await releaseClaimOnce("failed");
+          throw err;
+        }
+
         await db
           .update(agentRuns)
           .set({
-            status: "failed",
-            error: err?.message || String(err),
+            status: "completed",
             completedAt: new Date(),
+            output: {
+              success: true,
+              packRunId: result!.packRunId,
+              savedPosts: result!.savedPosts,
+              savedAssets: result!.savedAssets,
+            } as any,
           })
           .where(eq(agentRuns.id, operationRowId));
+
+        const releaseResult = await releaseClaimOnce("completed");
+        if (!releaseResult.released) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Creative generation completed, but the operation could not be closed cleanly. Please retry.",
+          });
+        }
+
+        // Trigger workflow advancement asynchronously so the HTTP response is fast
+        Promise.resolve().then(() =>
+          onAgentRunComplete(result.packRunId).catch((err) => {
+            console.error("[AgentRouter] onAgentRunComplete failed:", err.message);
+          })
+        );
+
+        return { success: true, ...result };
+      } catch (err) {
+        // Ensure the claim is released on any unexpected error path not handled above.
+        // Preserve the original error; release failure is logged without ownerToken.
+        await releaseClaimOnce("failed");
         throw err;
       }
-
-      await db
-        .update(agentRuns)
-        .set({
-          status: "completed",
-          completedAt: new Date(),
-          output: {
-            success: true,
-            packRunId: result!.packRunId,
-            savedPosts: result!.savedPosts,
-            savedAssets: result!.savedAssets,
-          } as any,
-        })
-        .where(eq(agentRuns.id, operationRowId));
-
-      // Trigger workflow advancement asynchronously so the HTTP response is fast
-      Promise.resolve().then(() =>
-        onAgentRunComplete(result.packRunId).catch((err) => {
-          console.error("[AgentRouter] onAgentRunComplete failed:", err.message);
-        })
-      );
-
-      return { success: true, ...result };
     }),
 
   runAudienceAgent: aiActionQuery

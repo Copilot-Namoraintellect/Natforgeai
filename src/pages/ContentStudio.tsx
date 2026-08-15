@@ -761,15 +761,25 @@ export default function ContentStudio() {
     strategyAgentRuns
   );
   const generationJobIsActive =
-    generationJobStatus?.status === "queued" || generationJobStatus?.status === "processing";
+    generationJobStatus?.status === "queued" ||
+    generationJobStatus?.status === "processing" ||
+    generationJobStatus?.status === "preparing";
 
   const generateForCampaignMutation = trpc.content.generateForCampaign.useMutation({
     onSuccess: (data) => {
-      setActiveGenerationJobId(data.jobId);
+      if (data.jobId && data.jobId > 0) {
+        setActiveGenerationJobId(data.jobId);
+      } else if (data.status === "preparing") {
+        setActiveGenerationJobId(null);
+      }
       setLastNotifiedGenerationJobId(null);
       utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
       if (data.reused) {
-        toast.info("Content generation is already in progress. Tracking the existing job in Agent Activity.");
+        if (data.status === "preparing") {
+          toast.info("Content generation is already being prepared. Progress will appear in Agent Activity once the job is ready.");
+        } else {
+          toast.info("Content generation is already in progress. Tracking the existing job in Agent Activity.");
+        }
       } else {
         toast.info("Content generation queued. You can track live progress in Agent Activity.");
       }

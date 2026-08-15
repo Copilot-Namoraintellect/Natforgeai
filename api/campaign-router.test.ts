@@ -22,6 +22,17 @@ vi.mock("./lib/workflow/triggers", () => ({
   onAgentRunComplete: vi.fn(async () => undefined),
 }));
 
+vi.mock("./lib/creative/creative-generation-claim", () => ({
+  generateOwnerToken: vi.fn(() => "test-owner-token"),
+  acquireCreativeGenerationClaim: vi.fn(async () => ({
+    acquired: true,
+    claim: { id: 1001, ownerToken: "test-owner-token" },
+  })),
+  attachCreativeGenerationOperationReference: vi.fn(async () => ({ attached: true })),
+  releaseClaimSafely: vi.fn(),
+  releaseClaimWithResult: vi.fn(async () => ({ released: true })),
+}));
+
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as
     | string

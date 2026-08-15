@@ -45,6 +45,17 @@ vi.mock("./lib/billing/credit-engine", () => ({
   deductCredits: vi.fn(async () => ({ newBalance: 0 })),
 }));
 
+vi.mock("./lib/creative/creative-generation-claim", () => ({
+  generateOwnerToken: vi.fn(() => "test-owner-token"),
+  acquireCreativeGenerationClaim: vi.fn(async () => ({
+    acquired: true,
+    claim: { id: 1001, ownerToken: "test-owner-token" },
+  })),
+  attachCreativeGenerationOperationReference: vi.fn(async () => ({ attached: true })),
+  releaseClaimSafely: vi.fn(),
+  releaseClaimWithResult: vi.fn(async () => ({ released: true })),
+}));
+
 vi.mock("./lib/rate-limiter", () => ({
   rateLimitUser: vi.fn().mockResolvedValue(undefined),
   rateLimitPublic: vi.fn().mockResolvedValue(undefined),
@@ -480,6 +491,51 @@ describe("contentRouter.generateForCampaign", () => {
     expect(result.jobId).toBe(778);
     expect(result.reused).toBe(true);
     expect(scheduleContentGenerationJob).not.toHaveBeenCalled();
+  });
+
+  it("returns preparing/in-progress when claim collides before a job reference exists", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { scheduleContentGenerationJob } = await import("./lib/queue/bullmq");
+    const { acquireCreativeGenerationClaim } = await import("./lib/creative/creative-generation-claim");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(acquireCreativeGenerationClaim).mockResolvedValueOnce({
+      acquired: false,
+      existingClaim: {
+        id: 2001,
+        operationReferenceId: null,
+        ownerToken: "hidden-owner-token",
+      },
+      reason: "active_claim_collision",
+    } as any);
+
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+        campaign: {
+          id: 28,
+          userId: 18,
+          businessId: 24,
+          workflowState: "strategy_approved",
+          workflowContext: { coreMessage: "Empower your workforce" },
+          personas: [{ name: "Small Business Owner" }],
+          coreMessage: "Empower your workforce",
+        },
+        postCount: 0,
+      }) as unknown as ReturnType<typeof getDb>
+    );
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.generateForCampaign({ campaignId: 28 });
+
+    expect(result.status).toBe("preparing");
+    expect(result.jobId).toBeNull();
+    expect(result.reused).toBe(true);
+    expect(scheduleContentGenerationJob).not.toHaveBeenCalled();
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("hidden-owner-token");
+    expect(serialized).not.toContain('"jobId":0');
+    expect(serialized).not.toContain('"jobId": 0');
   });
 
   it("rejects generation when campaign is not in an eligible workflow state", async () => {
