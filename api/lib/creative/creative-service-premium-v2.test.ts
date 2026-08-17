@@ -47,7 +47,26 @@ vi.mock("./campaign-message-architect", async () => {
 import { generatePremiumLeaflet } from "./service";
 import * as architect from "./campaign-message-architect";
 import * as creditEngine from "../billing/credit-engine";
+import { computeCreativeBriefFingerprint } from "./brief-grounding";
 import { ensureFixtureLogos, resolveFixtureLogoPath } from "./premium-v2/fixture-logos";
+
+const campaignRow = {
+  id: 28,
+  userId: 10,
+  businessId: 24,
+  name: "Print Campaign",
+  productOrService: "Printing, Copying, Scanning, Laminating, Binding, Courier",
+  targetBuyer: "Local businesses",
+  mainPainPoint: "Slow turnaround on print jobs",
+  offerDetails: "10% off first order",
+  excludedOffers: "",
+  preferredCta: "Get a Quote",
+  platforms: "Instagram, Facebook",
+  primaryOutcome: "Leads",
+  coreMessage: "Fast local printing",
+};
+
+const campaignFingerprint = computeCreativeBriefFingerprint(campaignRow);
 
 function createMockDb() {
   return {
@@ -61,21 +80,7 @@ function createMockDb() {
               return [{ id: 100, userId: 10, campaignId: 28, title: "V2 Post", hook: "Hook", cta: "Post CTA", platform: "Instagram", metadata: {} }];
             }
             if (tableName === "campaigns") {
-              return [{
-                id: 28,
-                userId: 10,
-                businessId: 24,
-                name: "Print Campaign",
-                productOrService: "Printing, Copying, Scanning, Laminating, Binding, Courier",
-                targetBuyer: "Local businesses",
-                mainPainPoint: "Slow turnaround on print jobs",
-                offerDetails: "10% off first order",
-                excludedOffers: "",
-                preferredCta: "Get a Quote",
-                platforms: "Instagram, Facebook",
-                primaryOutcome: "Leads",
-                coreMessage: "Fast local printing",
-              }];
+              return [campaignRow];
             }
             if (tableName === "businesses") {
               return [{
@@ -120,6 +125,7 @@ const validPack: architect.CampaignMessagePack = {
   platformCaptions: [],
   messagePackSource: "user_structured_copy",
   validation: { passed: true, score: 90, rejections: [], warnings: [] },
+  creativeBriefFingerprint: campaignFingerprint,
 };
 
 describe("generatePremiumLeaflet V2 provider", () => {
@@ -179,6 +185,7 @@ describe("generatePremiumLeaflet V2 provider", () => {
       platformCaptions: [],
       messagePackSource: "user_structured_copy",
       validation: { passed: true, score: 20, rejections: [], warnings: [] },
+      creativeBriefFingerprint: campaignFingerprint,
     };
     vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(badPack);
 

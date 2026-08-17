@@ -167,7 +167,7 @@ describe("Campaign Message Architect recovery", () => {
     ).toBe(true);
   });
 
-  it("uses authoritative business record name and product/service, filtering generic website headings", async () => {
+  it("uses campaign product/service when present, falling back to the business record only when the campaign value is missing", async () => {
     const { getDb } = await import("../../queries/connection");
 
     vi.mocked(getDb).mockReturnValue({
@@ -184,7 +184,7 @@ describe("Campaign Message Architect recovery", () => {
                   id: 30,
                   businessId: 300,
                   name: "zurohub",
-                  productOrService: "Comprehensive Financial Solutions, Streamlined Mass Disbursements",
+                  productOrService: "Payout platform",
                   targetBuyer: "frontline teams",
                   mainPainPoint: "manual payout reconciliation",
                   preferredCta: "Awareness: Learn More",

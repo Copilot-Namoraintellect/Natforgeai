@@ -530,7 +530,7 @@ export const agentRouter = createRouter({
     .input(
       z.object({
         campaignId: z.number(),
-        isB2B: z.boolean().default(false),
+        isB2B: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {

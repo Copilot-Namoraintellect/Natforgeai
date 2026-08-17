@@ -18,6 +18,10 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { extractCampaignKeywords, computeBaselineScore } from "../audience/scoring";
 import { hasAudienceSourceData } from "../audience/source-data";
 import { normaliseOutput, type AudienceIntelligenceOutput } from "./audience-intelligence-normalise";
+import {
+  buildGroundedCreativeBrief,
+  type BusinessTypeClassification,
+} from "../creative/brief-grounding";
 
 // ─── Strict Output Schema ───
 // OpenAI structured output requires EVERY property to be in the required array.
@@ -91,6 +95,9 @@ export async function runAudienceIntelligenceAgent({
     const [b] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
     business = b ?? null;
   }
+
+  const brief = buildGroundedCreativeBrief({ campaign, business });
+  const businessType: BusinessTypeClassification = brief.businessType;
 
   const workflowContext = (campaign.workflowContext || {}) as Record<string, unknown>;
   const audienceProfiles = Array.isArray(workflowContext?.audienceProfiles)
@@ -257,14 +264,21 @@ export async function runAudienceIntelligenceAgent({
 CAMPAIGN:
 - Name: ${campaign.name}
 - Goal: ${campaign.goal}
-- Target Audience: ${campaign.targetAudience || "Not specified"}
-- Product/Service: ${campaign.productOrService || "Not specified"}
-- Offer: ${campaign.offerDetails || "Not specified"}
-- Primary Outcome: ${campaign.primaryOutcome || "Not specified"}
-- Core Message: ${campaign.coreMessage || "Not specified"}
-- Location: ${business?.location || campaign.targetAudience || "Not specified"}
+- Primary Outcome: ${brief.primaryOutcome || "Not specified"}
+- Target Audience: ${brief.targetAudience || "Not specified"}
+- Target Buyer: ${brief.targetBuyer || "Not specified"}
+- Main Pain Point: ${brief.mainPainPoint || "Not specified"}
+- Product/Service: ${brief.productOrService || "Not specified"}
+- Offer: ${brief.offerDetails || "Not specified"}
+- Preferred CTA: ${brief.preferredCta || "Not specified"}
+- Excluded Offers/Words: ${brief.excludedOffers || "None specified"}
+- Reference Style: ${brief.referenceStyle || "Not specified"}
+- Content Style: ${brief.contentStyle || "Not specified"}
+- Core Message: ${brief.coreMessage || "Not specified"}
+- Location: ${business?.location || "Not specified"}
 - Industry: ${business?.industry || "Not specified"}
-- Brand Tone: ${business?.brandTone || "professional"}
+- Brand Tone: ${business?.brandTone || brief.contentStyle || "professional"}
+- Business Type: ${businessType === "not_specified" ? "Not specified" : businessType}
 
 BUSINESS CONTEXT:
 - Name: ${business?.name || "Not specified"}

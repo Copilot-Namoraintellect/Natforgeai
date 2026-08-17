@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { computeCreativeBriefFingerprint } from "./brief-grounding";
 
 vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
@@ -48,16 +49,6 @@ const stalePack: CampaignMessagePack = {
   validation: { passed: true, score: 100, rejections: [], warnings: [] },
 };
 
-const newPack: CampaignMessagePack = {
-  headline: "New refined headline for Centurion homeowners",
-  subheadline: "New refined subheadline about electrical safety.",
-  benefitBullets: ["New benefit 1", "New benefit 2", "New benefit 3"],
-  cta: "Request a Quote",
-  footerContact: { location: "Centurion" },
-  platformCaptions: [],
-  validation: { passed: true, score: 100, rejections: [], warnings: [] },
-};
-
 const business = {
   id: 20,
   name: "Sparky Pros",
@@ -83,6 +74,19 @@ const campaign = {
   platforms: "Instagram, Facebook",
   primaryOutcome: "Leads",
   coreMessage: "Safe homes",
+};
+
+const currentFingerprint = computeCreativeBriefFingerprint(campaign);
+
+const newPack: CampaignMessagePack = {
+  headline: "New refined headline for Centurion homeowners",
+  subheadline: "New refined subheadline about electrical safety.",
+  benefitBullets: ["New benefit 1", "New benefit 2", "New benefit 3"],
+  cta: "Request a Quote",
+  footerContact: { location: "Centurion" },
+  platformCaptions: [],
+  validation: { passed: true, score: 100, rejections: [], warnings: [] },
+  creativeBriefFingerprint: currentFingerprint,
 };
 
 const post = {
@@ -118,7 +122,7 @@ describe("normalizeLeafletInputs uses approved message pack", () => {
     expect(result.approvedMessagePack).toBe(newPack);
   });
 
-  it("falls back to stale DB metadata only when no pack is provided", async () => {
+  it("ignores stale DB metadata that lacks a matching fingerprint", async () => {
     const { getDb } = await import("../../queries/connection");
     vi.mocked(getDb).mockReturnValue(createMockDb({ messagePack: stalePack }) as any);
 
@@ -129,9 +133,7 @@ describe("normalizeLeafletInputs uses approved message pack", () => {
       creativeType: "leaflet",
     });
 
-    expect(result.leafletHeadline).toBe(stalePack.headline);
-    expect(result.leafletSubheadline).toBe(stalePack.subheadline);
-    expect(result.leafletCta).toBe(stalePack.cta);
-    expect(result.serviceBullets).toEqual(stalePack.benefitBullets);
+    expect(result.approvedMessagePack).toBeUndefined();
+    expect(result.leafletHeadline).not.toBe(stalePack.headline);
   });
 });

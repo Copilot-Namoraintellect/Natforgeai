@@ -51,6 +51,11 @@ import {
   type CampaignMessagePack,
   type MessagePackSource,
 } from "./campaign-message-architect";
+import {
+  buildGroundedCreativeBrief,
+  computeCreativeBriefFingerprint,
+  isApprovedMessagePackCompatible,
+} from "./brief-grounding";
 import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendererResult } from "./providers/template-renderer";
 import { buildPremiumV2Brief } from "./premium-v2/brief";
 import { validatePremiumV2Quality } from "./premium-v2/quality";
@@ -292,9 +297,19 @@ export async function normalizeLeafletInputs({
 
   // Prefer the approved Campaign Message Architect pack for headline/subheadline/CTA.
   // A caller may pass a refined pack so we do not reload stale copy.
+  const currentFingerprint = campaign?.id
+    ? computeCreativeBriefFingerprint(campaign)
+    : "";
+
   let approvedMessagePack: CampaignMessagePack | undefined = providedMessagePack;
+  if (approvedMessagePack && currentFingerprint && !isApprovedMessagePackCompatible(approvedMessagePack, currentFingerprint)) {
+    approvedMessagePack = undefined;
+  }
   if (!approvedMessagePack && campaign?.id) {
-    approvedMessagePack = (await loadApprovedMessagePack(campaign.id)) || undefined;
+    const loaded = await loadApprovedMessagePack(campaign.id);
+    if (loaded && isApprovedMessagePackCompatible(loaded, currentFingerprint)) {
+      approvedMessagePack = loaded;
+    }
   }
 
   const leafletHeadline = approvedMessagePack?.headline || offerToHeadline(campaign.offerDetails) || campaign.primaryOutcome || post?.title || business.name;
@@ -1914,6 +1929,8 @@ export async function generateCaptionPack({
   if (!business) business = {};
   if (!campaign) campaign = {};
 
+  const brief = buildGroundedCreativeBrief({ campaign, business });
+
   const brandColors = (business.brandColors as string[] | undefined) || [];
 
   const postMeta = (post.metadata || {}) as any;
@@ -1989,16 +2006,16 @@ GENERATED ASSET CONTEXT:
 ${isDraftAsset ? "- This is a draft/preview image, NOT a premium provider-rendered leaflet. Do NOT use words like premium, luxury, high-end, exclusive, bespoke, or elite. Keep the copy practical and grounded." : "- This is a premium provider-rendered leaflet. The copy can reflect a polished, customer-ready presentation."}
 
 CAMPAIGN BRIEF:
-- Primary outcome: ${campaign.primaryOutcome || "N/A"}
-- Target buyer: ${campaign.targetBuyer || campaign.targetAudience || "N/A"}
-- Main pain point: ${campaign.mainPainPoint || "N/A"}
-- Product/service being promoted: ${campaign.productOrService || business.productOrService || "N/A"}
-- Offer (use EXACTLY this wording and formatting): ${formattedOffer || campaign.offerDetails || "None — do not invent offers or discounts"}
+- Primary outcome: ${brief.primaryOutcome || "N/A"}
+- Target buyer: ${brief.targetBuyer || brief.targetAudience || "N/A"}
+- Main pain point: ${brief.mainPainPoint || "N/A"}
+- Product/service being promoted: ${brief.productOrService || business.productOrService || "N/A"}
+- Offer (use EXACTLY this wording and formatting): ${formattedOffer || brief.offerDetails || "None — do not invent offers or discounts"}
 - Headline (use EXACTLY this wording): ${leafletHeadline || post.title || "N/A"}
 - Preferred CTA: ${normalizedCta || "Request a Quote Today"}
-- Exclusions (NEVER use): ${campaign.excludedOffers || business.avoidWords || "None specified"}
-- Reference style: ${campaign.referenceStyle || "N/A"}
-- Content style: ${campaign.contentStyle || "N/A"}
+- Exclusions (NEVER use): ${brief.excludedOffers || "None specified"}
+- Reference style: ${brief.referenceStyle || "N/A"}
+- Content style: ${brief.contentStyle || "N/A"}
 - Selected Platforms: ${selectedPlatforms.join(", ")}
 
 MASTER POST:

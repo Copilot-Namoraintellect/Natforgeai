@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { buildPremiumV2Brief, parseRefinementMode } from "./brief";
 import type { ApprovedCopyPack } from "./curation";
+import { computeCreativeBriefFingerprint } from "../brief-grounding";
 
 const baseBusiness = {
   id: 1,
@@ -45,6 +46,7 @@ const approvedPack: ApprovedCopyPack = {
   subheadline: "Approved subheadline",
   benefitBullets: ["Benefit A", "Benefit B", "Benefit C"],
   cta: "Approved CTA",
+  creativeBriefFingerprint: computeCreativeBriefFingerprint(baseCampaign),
 };
 
 describe("buildPremiumV2Brief", () => {

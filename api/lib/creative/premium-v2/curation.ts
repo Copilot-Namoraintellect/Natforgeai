@@ -60,6 +60,7 @@ export interface ApprovedCopyPack {
   cta?: string;
   footerContact?: { location?: string };
   proofPoints?: string[];
+  creativeBriefFingerprint?: string;
 }
 
 export function asString(value: unknown): string | undefined {

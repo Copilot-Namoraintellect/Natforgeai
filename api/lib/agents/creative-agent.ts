@@ -19,6 +19,7 @@ import {
 } from "../creative/campaign-message-architect";
 import { ctaMatchesSelectedStage } from "../creative/cta-utils";
 import { normalizeCtaText } from "../creative/cta-utils";
+import { buildGroundedCreativeBrief } from "../creative/brief-grounding";
 
 // Valid content_posts.type enum values from db/schema.ts
 const CONTENT_POST_TYPES = new Set([
@@ -971,44 +972,27 @@ export async function runCreativeAgent({
   const offers = campaign.offers as any[];
   const funnelStages = campaign.funnelStages as any[];
 
-  // Campaign brief precision fields
-  const brief = {
-    primaryOutcome: campaign.primaryOutcome,
-    campaignObjective: campaign.goal,
-    targetBuyer: campaign.targetBuyer,
-    mainPainPoint: campaign.mainPainPoint,
-    productOrService: campaign.productOrService,
-    offerDetails: campaign.offerDetails,
-    preferredCta: campaign.preferredCta,
-    funnelStage:
-      Array.isArray(campaign.funnelStages) && campaign.funnelStages.length > 0
-        ? String((campaign.funnelStages as any[])[0]?.stage || "")
-        : null,
-    excludedOffers: campaign.excludedOffers,
-    referenceStyle: campaign.referenceStyle,
-    contentStyle: campaign.contentStyle,
-  };
+  // Load linked business profile for optional fallback and evidence.
+  let business: any = null;
+  if (campaign.businessId) {
+    const [biz] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
+    business = biz;
+  }
+
+  // Use the shared resolver so the current campaign brief is the source of truth
+  // and historical workflowContext values cannot override it.
+  const brief = buildGroundedCreativeBrief({ campaign, business });
   const hasExplicitOffer = !!(brief.offerDetails && brief.offerDetails.trim().length > 0) || (offers && offers.length > 0);
 
-  // Fallback: get location from workflowContext or business
-  let location = strategyContext?.location || null;
-  let industry = strategyContext?.industry || null;
-  let businessEvidence: {
+  // Location/industry: current business profile first, historical workflowContext only as safe fallback.
+  let location = business?.location || strategyContext?.location || null;
+  let industry = business?.industry || strategyContext?.industry || null;
+  const businessEvidence: {
     businessCategory?: string;
     productsServices?: string[];
     targetCustomers?: string[];
     location?: string;
-  } | null = null;
-  let business: any = null;
-  if (campaign.businessId) {
-    const [biz] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
-    if (biz) {
-      business = biz;
-      location = location || biz.location || null;
-      industry = industry || biz.industry || null;
-      businessEvidence = (biz.websiteEvidence || null) as any;
-    }
-  }
+  } | null = (business?.websiteEvidence || null) as any;
 
   logInfo("[CreativeAgent] business evidence loaded", {
     campaignId,
@@ -1094,15 +1078,15 @@ CAMPAIGN DETAILS:
 - Primary Outcome: ${brief.primaryOutcome || "Not specified"}
 - Target Buyer: ${brief.targetBuyer || campaign.targetAudience || "Not specified"}
 - Main Pain Point: ${brief.mainPainPoint || "Not specified"}
-- Product/Service Being Promoted: ${brief.productOrService || strategyContext?.valueProposition || coreMessage || "Not specified"}
+- Product/Service Being Promoted: ${brief.productOrService || coreMessage || "Not specified"}
 - Explicit Offer (only use this): ${brief.offerDetails || (offers && offers.length > 0 ? JSON.stringify(offers) : "None — do not invent offers")}
 - Preferred CTA: ${brief.preferredCta || ctaStrategy || approvedMessagePack.cta}
 - What NOT to say / excluded offers: ${brief.excludedOffers || "None specified"}
-- Reference Style / Example: ${brief.referenceStyle || strategyContext?.campaignTheme || "Not specified"}
+- Reference Style / Example: ${brief.referenceStyle || "Not specified"}
 - Preferred Content Style: ${brief.contentStyle || "Not specified"}
 - Core Message: ${coreMessage || "Not specified"}
 - CTA Strategy: ${ctaStrategy || "Not specified"}
-- Target Audience: ${campaign.targetAudience || "Not specified"}
+- Target Audience: ${brief.targetAudience || "Not specified"}
 - Platforms: ${campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn"}
 - Location: ${location || "Not specified"}
 - Industry: ${industry || "Not specified"}

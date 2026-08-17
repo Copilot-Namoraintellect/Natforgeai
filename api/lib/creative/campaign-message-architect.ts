@@ -43,6 +43,10 @@ import { adaptApprovedToCampaignMessagePack } from "./message-approval/compatibi
 import { type LegacyLoadedShadowContextInput } from "./message-approval/integration/legacy-shadow-context";
 import { buildMessageApprovalContextLock } from "./message-approval/context-lock";
 import { verifyCanaryApprovalProof } from "./message-approval/canary-proof";
+import {
+  computeCreativeBriefFingerprint,
+  isApprovedMessagePackCompatible,
+} from "./brief-grounding";
 
 // ─── Public types ───
 
@@ -92,6 +96,8 @@ export interface CampaignMessagePack {
   invalidationReason?: string;
   /** Additive Slice 2 canary approval identity metadata. */
   v2ApprovalEnvelope?: V2ApprovalEnvelope;
+  /** Stable fingerprint of the campaign brief that produced this pack. */
+  creativeBriefFingerprint?: string;
 }
 
 export interface CopyValidationResult {
@@ -941,14 +947,14 @@ function buildValidationContext(business: any, campaign: any): ValidationContext
     ? sanitize(campaign.funnelStages[0]?.stage)
     : "";
   const authoritativeBusinessName = sanitize(business?.name);
-  const authoritativeProductOrService =
-    sanitiseGroundedCapability(sanitize(business?.productOrService)) || sanitize(business?.productOrService);
   const campaignProductOrService =
     sanitiseGroundedCapability(sanitize(campaign?.productOrService)) || sanitize(campaign?.productOrService);
+  const businessProductOrService =
+    sanitiseGroundedCapability(sanitize(business?.productOrService)) || sanitize(business?.productOrService);
   return {
     businessName: authoritativeBusinessName,
     campaignName: sanitize(campaign?.name),
-    productOrService: authoritativeProductOrService || campaignProductOrService,
+    productOrService: campaignProductOrService || businessProductOrService,
     targetCustomer: sanitize(campaign?.targetBuyer || business?.targetCustomer || business?.targetAudience),
     mainPainPoint: sanitize(campaign?.mainPainPoint),
     offerDetails: sanitize(campaign?.offerDetails),
@@ -1372,8 +1378,21 @@ export async function saveApprovedMessagePack(
 ): Promise<number> {
   const db = getDb();
   const saveMode = options?.mode || "legacy";
+
+  // Ground the pack to the current campaign brief so later edits can detect
+  // stale approved packs without a schema migration.
+  const [campaignForFingerprint] = await db
+    .select()
+    .from(campaigns)
+    .where(eq(campaigns.id, campaignId))
+    .limit(1);
+  const creativeBriefFingerprint = campaignForFingerprint
+    ? computeCreativeBriefFingerprint(campaignForFingerprint)
+    : pack.creativeBriefFingerprint ?? "";
+
   const enriched = enrichMessagePackMetadata({
     ...pack,
+    creativeBriefFingerprint,
     messagePackSource: pack.messagePackSource || "ai_refined_pack",
     validation: normaliseValidationResult(pack.validation),
   });
@@ -1407,6 +1426,7 @@ export async function saveApprovedMessagePack(
     status: "ready",
     metadata: {
       approvedMessagePack: enriched,
+      creativeBriefFingerprint,
       generatedAt: new Date().toISOString(),
       score: enriched.validation.score,
       passed: enriched.validation.passed,
@@ -1446,9 +1466,8 @@ export async function saveApprovedMessagePack(
     }
   }
 
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
-  if (campaign) {
-    const workflowContext = (campaign.workflowContext || {}) as any;
+  if (campaignForFingerprint) {
+    const workflowContext = (campaignForFingerprint.workflowContext || {}) as any;
     await db
       .update(campaigns)
       .set({
@@ -1456,6 +1475,7 @@ export async function saveApprovedMessagePack(
           ...workflowContext,
           approvedMessagePack: enriched,
           approvedMessagePackAt: new Date().toISOString(),
+          creativeBriefFingerprint,
           v2ApprovalEnvelope: enriched.v2ApprovalEnvelope || workflowContext.v2ApprovalEnvelope,
         } as any,
       })
@@ -2225,7 +2245,26 @@ async function refineApprovedMessagePackLegacy(
 async function ensureApprovedMessagePackLegacy(
   opts: BuildApprovedMessagePackOptions
 ): Promise<CampaignMessagePack> {
-  const existing = await loadApprovedMessagePack(opts.campaignId);
+  const db = getDb();
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(eq(campaigns.id, opts.campaignId))
+    .limit(1);
+  const currentFingerprint = campaign
+    ? computeCreativeBriefFingerprint(campaign)
+    : "";
+
+  const loaded = await loadApprovedMessagePack(opts.campaignId);
+  const existing = loaded && isApprovedMessagePackCompatible(loaded, currentFingerprint) ? loaded : null;
+
+  if (loaded && !existing) {
+    logInfo("[CampaignMessageArchitect] ignoring stale approved message pack", {
+      campaignId: opts.campaignId,
+      userId: opts.userId,
+      reason: "creative_brief_fingerprint_mismatch",
+    });
+  }
 
   if (existing?.isGeneric) {
     const invalidatedId = await invalidateApprovedMessagePack(

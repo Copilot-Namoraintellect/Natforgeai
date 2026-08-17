@@ -3,6 +3,7 @@ import { buildPremiumV2Brief, parseRefinementMode } from "./brief";
 import { curateServices, inferBusinessCategory, inferLayoutDensity, normalizeServices } from "./curation";
 import { validatePremiumV2Quality, assertV2LayoutGuarantees } from "./quality";
 import { getCategoryPreset } from "./presets";
+import { computeCreativeBriefFingerprint } from "../brief-grounding";
 import type { PremiumLeafletV2Brief } from "./types";
 
 function makeBusiness(overrides: any = {}) {
@@ -245,16 +246,18 @@ describe("'Include all services' service curation", () => {
 
 describe("Design-only refinement preserves copy", () => {
   it("does not rewrite approved headline, CTA, or services", async () => {
+    const campaign = makeCampaign();
     const approvedPack = {
       headline: "Approved headline",
       subheadline: "Approved subheadline",
       benefitBullets: ["Benefit A", "Benefit B"],
       cta: "Approved CTA",
+      creativeBriefFingerprint: computeCreativeBriefFingerprint(campaign),
     };
 
     const brief = await buildPremiumV2Brief({
       business: makeBusiness(),
-      campaign: makeCampaign(),
+      campaign,
       approvedMessagePack: approvedPack,
       refinementInstruction: "Make the design darker and move the logo",
     });

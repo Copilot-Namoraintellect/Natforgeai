@@ -30,6 +30,10 @@ import {
 import type { BusinessEvidence, CampaignEvidence, ApprovedCopyPack } from "./curation";
 import { resolveBrandKit } from "./brand-kit";
 import { buildCommercialBenefits, buildCommercialHeadline, buildCommercialSubheadline, isWeak, rejectWeakCopy } from "./copy";
+import {
+  computeCreativeBriefFingerprint,
+  isApprovedMessagePackCompatible,
+} from "../brief-grounding";
 
 function getAuthoritativeBusinessName(business: Record<string, any>): string {
   const fromRecord = asString(business.name);
@@ -220,11 +224,26 @@ function resolveSubheadline(
   return buildCommercialSubheadline(business, campaign);
 }
 
+function filterCompatibleApprovedPack(
+  rawCampaign: any,
+  approvedPack: ApprovedCopyPack | null | undefined
+): ApprovedCopyPack | undefined {
+  if (!approvedPack) return undefined;
+  const fingerprint = rawCampaign?.id
+    ? computeCreativeBriefFingerprint(rawCampaign)
+    : "";
+  if (fingerprint && !isApprovedMessagePackCompatible(approvedPack, fingerprint)) {
+    return undefined;
+  }
+  return approvedPack;
+}
+
 export async function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): Promise<PremiumLeafletV2Brief> {
-  const { business: rawBusiness, campaign: rawCampaign, post, approvedMessagePack, refinementInstruction, brandKit: injectedBrandKit } = input;
+  const { business: rawBusiness, campaign: rawCampaign, post, approvedMessagePack: inputPack, refinementInstruction, brandKit: injectedBrandKit } = input;
 
   const business = toBusinessEvidence(rawBusiness);
   const campaign = toCampaignEvidence(rawCampaign || {});
+  const approvedMessagePack = filterCompatibleApprovedPack(rawCampaign, inputPack);
   const category: PremiumV2BusinessCategory = inferBusinessCategory(business, campaign);
   const refinementMode = parseRefinementMode(refinementInstruction);
   const allServicesRequested = isAllServicesRequest(refinementInstruction);
@@ -310,10 +329,11 @@ export async function buildPremiumV2Brief(input: BuildPremiumV2BriefInput): Prom
 
 /** Synchronous variant for callers that already have a resolved BrandKit. */
 export function buildPremiumV2BriefSync(input: BuildPremiumV2BriefInput & { brandKit: PremiumV2BrandKit }): PremiumLeafletV2Brief {
-  const { business: rawBusiness, campaign: rawCampaign, post, approvedMessagePack, refinementInstruction, brandKit } = input;
+  const { business: rawBusiness, campaign: rawCampaign, post, approvedMessagePack: inputPack, refinementInstruction, brandKit } = input;
 
   const business = toBusinessEvidence(rawBusiness);
   const campaign = toCampaignEvidence(rawCampaign || {});
+  const approvedMessagePack = filterCompatibleApprovedPack(rawCampaign, inputPack);
   const category: PremiumV2BusinessCategory = inferBusinessCategory(business, campaign);
   const refinementMode = parseRefinementMode(refinementInstruction);
   const allServicesRequested = isAllServicesRequest(refinementInstruction);

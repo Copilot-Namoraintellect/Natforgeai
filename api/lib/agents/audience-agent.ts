@@ -3,6 +3,10 @@ import { runAgent } from "./runner";
 import { getDb } from "../../queries/connection";
 import { campaigns, businesses } from "@db/schema";
 import { eq } from "drizzle-orm";
+import {
+  buildGroundedCreativeBrief,
+  type BusinessTypeClassification,
+} from "../creative/brief-grounding";
 
 // ─── Schema Normalisation Helpers ───
 // OpenAI structured output requires EVERY property to be in the `required` array.
@@ -153,10 +157,11 @@ export type AudienceDiscoveryOutput = z.infer<typeof AudienceDiscoverySchema>;
 export async function runAudienceAgent({
   userId,
   campaignId,
-  isB2B = false,
+  isB2B: explicitIsB2B,
 }: {
   userId: number;
   campaignId: number;
+  /** Explicit override. When omitted, the agent classifies from campaign + business evidence. */
   isB2B?: boolean;
 }) {
   const db = getDb();
@@ -171,31 +176,50 @@ export async function runAudienceAgent({
     throw new Error("Campaign not found");
   }
 
+  let business: typeof businesses.$inferSelect | null = null;
+  if (campaign.businessId) {
+    const [biz] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
+    business = biz ?? null;
+  }
+
+  const brief = buildGroundedCreativeBrief({ campaign, business });
+
+  // Explicit caller choice wins; otherwise infer from evidence. Never silently default to B2C.
+  const businessType: BusinessTypeClassification =
+    typeof explicitIsB2B === "boolean"
+      ? explicitIsB2B
+        ? "B2B"
+        : "B2C"
+      : brief.businessType;
+  const isB2B = businessType === "B2B";
+
   const strategyContext = campaign.workflowContext as any;
   const personas = campaign.personas as any[];
 
-  // Fallback: if workflowContext doesn't have location, try to get it from the campaign's business
-  let location = strategyContext?.location || null;
-  let industry = strategyContext?.industry || null;
-  if (!location && campaign.businessId) {
-    const [biz] = await db.select().from(businesses).where(eq(businesses.id, campaign.businessId)).limit(1);
-    if (biz) {
-      location = biz.location || null;
-      industry = industry || biz.industry || null;
-    }
-  }
+  // Location and industry: current business profile first, then historical workflowContext as safe fallback.
+  const location = business?.location || strategyContext?.location || null;
+  const industry = business?.industry || strategyContext?.industry || null;
 
   const prompt = `You are an audience research and targeting expert. Discover and define the optimal target audience for the following campaign.
 
 CAMPAIGN:
 - Name: ${campaign.name}
 - Goal: ${campaign.goal}
-- Target Audience: ${campaign.targetAudience || "Not specified"}
-- Core Message: ${campaign.coreMessage || "Not specified"}
+- Primary Outcome: ${brief.primaryOutcome || "Not specified"}
+- Target Audience: ${brief.targetAudience || "Not specified"}
+- Target Buyer: ${brief.targetBuyer || "Not specified"}
+- Main Pain Point: ${brief.mainPainPoint || "Not specified"}
+- Core Message: ${brief.coreMessage || "Not specified"}
+- Product/Service: ${brief.productOrService || "Not specified"}
+- Offer Details: ${brief.offerDetails || "Not specified"}
+- Preferred CTA: ${brief.preferredCta || "Not specified"}
+- Excluded Offers/Words: ${brief.excludedOffers || "None specified"}
+- Reference Style: ${brief.referenceStyle || "Not specified"}
+- Content Style: ${brief.contentStyle || "Not specified"}
 - Platforms: ${campaign.platforms || "Not specified"}
 - Industry: ${industry || "Not specified"}
 - Location: ${location || "Not specified"}
-- Business Type: ${isB2B ? "B2B" : "B2C"}
+- Business Type: ${businessType === "not_specified" ? "Not specified" : businessType}
 
 PERSONAS:
 ${personas ? JSON.stringify(personas.map((p: any) => ({ name: p.name, demographics: p.demographics, painPoints: p.painPoints }))) : "General audience"}

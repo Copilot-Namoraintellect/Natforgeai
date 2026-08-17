@@ -56,6 +56,7 @@ vi.mock("./campaign-message-architect", async () => {
 
 import { generatePremiumLeaflet } from "./service";
 import * as architect from "./campaign-message-architect";
+import { computeCreativeBriefFingerprint } from "./brief-grounding";
 import type { CampaignMessagePack } from "./campaign-message-architect";
 
 const specificPack: CampaignMessagePack = {
@@ -85,6 +86,27 @@ const genericPack: CampaignMessagePack = {
 };
 
 function createMockDbWithNullRootFields(approvedPack: CampaignMessagePack) {
+  const campaignRow = {
+    id: 28,
+    userId: 10,
+    businessId: 24,
+    name: "Zuto Campaign",
+    productOrService: "Instant payouts",
+    targetBuyer: "Restaurant and delivery platform owners",
+    mainPainPoint: "Waiting; settlements",
+    offerDetails: null,
+    excludedOffers: null,
+    preferredCta: null,
+    platforms: "Instagram, Facebook",
+    primaryOutcome: null,
+    coreMessage: null,
+    workflowContext: {},
+  };
+  const approvedPackWithFingerprint = {
+    ...approvedPack,
+    creativeBriefFingerprint: computeCreativeBriefFingerprint(campaignRow),
+  };
+
   return {
     select: vi.fn(() => ({
       from: vi.fn((table: any) => {
@@ -102,24 +124,7 @@ function createMockDbWithNullRootFields(approvedPack: CampaignMessagePack) {
               metadata: {},
             },
           ],
-          campaigns: [
-            {
-              id: 28,
-              userId: 10,
-              businessId: 24,
-              name: "Zuto Campaign",
-              productOrService: "Instant payouts",
-              targetBuyer: "Restaurant and delivery platform owners",
-              mainPainPoint: "Waiting; settlements",
-              offerDetails: null,
-              excludedOffers: null,
-              preferredCta: null,
-              platforms: "Instagram, Facebook",
-              primaryOutcome: null,
-              coreMessage: null,
-              workflowContext: {},
-            },
-          ],
+          campaigns: [campaignRow],
           businesses: [
             {
               id: 24,
@@ -141,8 +146,8 @@ function createMockDbWithNullRootFields(approvedPack: CampaignMessagePack) {
             {
               id: 457,
               metadata: {
-                approvedMessagePack: approvedPack,
-                messagePackSource: approvedPack.messagePackSource,
+                approvedMessagePack: approvedPackWithFingerprint,
+                messagePackSource: approvedPackWithFingerprint.messagePackSource,
                 isGeneric: false,
                 specificityScore: 104,
               },
@@ -166,6 +171,26 @@ function createMockDbWithNullRootFields(approvedPack: CampaignMessagePack) {
 }
 
 function createMockDb() {
+  const campaignRow = {
+    id: 28,
+    userId: 10,
+    businessId: 24,
+    name: "Zuto Campaign",
+    productOrService: "Instant payouts",
+    targetBuyer: "Restaurants, delivery platforms and frontline teams",
+    mainPainPoint: "Waiting; payouts",
+    offerDetails: "Same-night settlement for restaurants and delivery platforms",
+    excludedOffers: "",
+    preferredCta: "Book a Zuto Hub Demo",
+    platforms: "Instagram, Facebook",
+    primaryOutcome: "Leads",
+    coreMessage: "Fallback core message",
+    workflowContext: {},
+  };
+  const campaignFingerprint = computeCreativeBriefFingerprint(campaignRow);
+  const specificPackWithFingerprint = { ...specificPack, creativeBriefFingerprint: campaignFingerprint };
+  const genericPackWithFingerprint = { ...genericPack, creativeBriefFingerprint: campaignFingerprint };
+
   return {
     select: vi.fn(() => ({
       from: vi.fn((table: any) => {
@@ -183,24 +208,7 @@ function createMockDb() {
               metadata: {},
             },
           ],
-          campaigns: [
-            {
-              id: 28,
-              userId: 10,
-              businessId: 24,
-              name: "Zuto Campaign",
-              productOrService: "Instant payouts",
-              targetBuyer: "Restaurants, delivery platforms and frontline teams",
-              mainPainPoint: "Waiting; payouts",
-              offerDetails: "Same-night settlement for restaurants and delivery platforms",
-              excludedOffers: "",
-              preferredCta: "Book a Zuto Hub Demo",
-              platforms: "Instagram, Facebook",
-              primaryOutcome: "Leads",
-              coreMessage: "Fallback core message",
-              workflowContext: {},
-            },
-          ],
+          campaigns: [campaignRow],
           businesses: [
             {
               id: 24,
@@ -222,8 +230,8 @@ function createMockDb() {
             {
               id: 2,
               metadata: {
-                approvedMessagePack: genericPack,
-                messagePackSource: "ai_refined_pack",
+                approvedMessagePack: genericPackWithFingerprint,
+                messagePackSource: genericPackWithFingerprint.messagePackSource,
                 isGeneric: true,
                 specificityScore: 10,
               },
@@ -232,8 +240,8 @@ function createMockDb() {
             {
               id: 1,
               metadata: {
-                approvedMessagePack: specificPack,
-                messagePackSource: "user_structured_copy",
+                approvedMessagePack: specificPackWithFingerprint,
+                messagePackSource: specificPackWithFingerprint.messagePackSource,
                 isGeneric: false,
                 specificityScore: 104,
               },
@@ -379,6 +387,26 @@ const campaign23GenericPack: CampaignMessagePack = {
 };
 
 function createMockDbForCampaign23() {
+  const campaignRow = {
+    id: 23,
+    userId: 10,
+    businessId: 31,
+    name: "3@1 Newmarket Campaign",
+    productOrService: "Printing, courier and business services",
+    targetBuyer: "Small businesses and households in Alberton",
+    mainPainPoint: "Finding reliable printing and courier services locally",
+    offerDetails: null,
+    excludedOffers: null,
+    preferredCta: "Request a Quote",
+    platforms: "Instagram, Facebook",
+    primaryOutcome: null,
+    coreMessage: null,
+    workflowContext: {},
+  };
+  const campaignFingerprint = computeCreativeBriefFingerprint(campaignRow);
+  const specificPackWithFingerprint = { ...campaign23SpecificPack, creativeBriefFingerprint: campaignFingerprint };
+  const genericPackWithFingerprint = { ...campaign23GenericPack, creativeBriefFingerprint: campaignFingerprint };
+
   return {
     select: vi.fn(() => ({
       from: vi.fn((table: any) => {
@@ -396,24 +424,7 @@ function createMockDbForCampaign23() {
               metadata: {},
             },
           ],
-          campaigns: [
-            {
-              id: 23,
-              userId: 10,
-              businessId: 31,
-              name: "3@1 Newmarket Campaign",
-              productOrService: "Printing, courier and business services",
-              targetBuyer: "Small businesses and households in Alberton",
-              mainPainPoint: "Finding reliable printing and courier services locally",
-              offerDetails: null,
-              excludedOffers: null,
-              preferredCta: "Request a Quote",
-              platforms: "Instagram, Facebook",
-              primaryOutcome: null,
-              coreMessage: null,
-              workflowContext: {},
-            },
-          ],
+          campaigns: [campaignRow],
           businesses: [
             {
               id: 31,
@@ -444,8 +455,8 @@ function createMockDbForCampaign23() {
             {
               id: 3,
               metadata: {
-                approvedMessagePack: campaign23GenericPack,
-                messagePackSource: campaign23GenericPack.messagePackSource,
+                approvedMessagePack: genericPackWithFingerprint,
+                messagePackSource: genericPackWithFingerprint.messagePackSource,
                 isGeneric: true,
                 specificityScore: 15,
               },
@@ -454,8 +465,8 @@ function createMockDbForCampaign23() {
             {
               id: 2,
               metadata: {
-                approvedMessagePack: campaign23SpecificPack,
-                messagePackSource: campaign23SpecificPack.messagePackSource,
+                approvedMessagePack: specificPackWithFingerprint,
+                messagePackSource: specificPackWithFingerprint.messagePackSource,
                 isGeneric: false,
                 specificityScore: 110,
               },
@@ -570,6 +581,26 @@ describe("Campaign #23 regression", () => {
 
     // Mock DB with an existing premium image rendered from the old generic pack
     // and a newer, manually restored specific pack.
+    const campaign23Row = {
+      id: 23,
+      userId: 10,
+      businessId: 31,
+      name: "3@1 Newmarket Campaign",
+      productOrService: "Printing, courier and business services",
+      targetBuyer: "Small businesses and households in Alberton",
+      mainPainPoint: "Finding reliable printing and courier services locally",
+      offerDetails: null,
+      excludedOffers: null,
+      preferredCta: "Request a Quote",
+      platforms: "Instagram, Facebook",
+      primaryOutcome: null,
+      coreMessage: null,
+      workflowContext: {},
+    };
+    const campaign23Fingerprint = computeCreativeBriefFingerprint(campaign23Row);
+    const genericPackWithFingerprint = { ...campaign23GenericPack, creativeBriefFingerprint: campaign23Fingerprint };
+    const specificPackWithFingerprint = { ...campaign23SpecificPack, creativeBriefFingerprint: campaign23Fingerprint };
+
     const rowsByTable: Record<string, any[]> = {
       content_posts: [
         {
@@ -583,24 +614,7 @@ describe("Campaign #23 regression", () => {
           metadata: {},
         },
       ],
-      campaigns: [
-        {
-          id: 23,
-          userId: 10,
-          businessId: 31,
-          name: "3@1 Newmarket Campaign",
-          productOrService: "Printing, courier and business services",
-          targetBuyer: "Small businesses and households in Alberton",
-          mainPainPoint: "Finding reliable printing and courier services locally",
-          offerDetails: null,
-          excludedOffers: null,
-          preferredCta: "Request a Quote",
-          platforms: "Instagram, Facebook",
-          primaryOutcome: null,
-          coreMessage: null,
-          workflowContext: {},
-        },
-      ],
+      campaigns: [campaign23Row],
       businesses: [
         {
           id: 31,
@@ -626,7 +640,7 @@ describe("Campaign #23 regression", () => {
           createdAt: new Date("2026-07-01T00:00:00Z"),
           metadata: {
             assetTier: "premium",
-            approvedMessagePack: campaign23GenericPack,
+            approvedMessagePack: genericPackWithFingerprint,
           },
         },
       ],
@@ -634,8 +648,8 @@ describe("Campaign #23 regression", () => {
         {
           id: 3,
           metadata: {
-            approvedMessagePack: campaign23GenericPack,
-            messagePackSource: campaign23GenericPack.messagePackSource,
+            approvedMessagePack: genericPackWithFingerprint,
+            messagePackSource: genericPackWithFingerprint.messagePackSource,
             isGeneric: true,
             specificityScore: 15,
           },
@@ -644,8 +658,8 @@ describe("Campaign #23 regression", () => {
         {
           id: 2,
           metadata: {
-            approvedMessagePack: campaign23SpecificPack,
-            messagePackSource: campaign23SpecificPack.messagePackSource,
+            approvedMessagePack: specificPackWithFingerprint,
+            messagePackSource: specificPackWithFingerprint.messagePackSource,
             isGeneric: false,
             specificityScore: 110,
           },
