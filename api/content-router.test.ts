@@ -52,6 +52,19 @@ vi.mock("./lib/workflow/triggers", () => ({
   onAgentRunComplete: vi.fn(),
 }));
 
+vi.mock("./lib/workflow/strategy-approval", () => ({
+  isApprovedStrategyCurrent: vi.fn(() => true),
+  isStrategyGeneratedForCurrentBrief: vi.fn(() => true),
+  getStrategyApprovalStatus: vi.fn(() => ({
+    currentFingerprint: "test-fingerprint-ready",
+    strategyFingerprint: "test-fingerprint-ready",
+    approvedStrategyFingerprint: "test-fingerprint-ready",
+    isCurrent: true,
+    hasApprovedStrategy: true,
+    strategyGeneratedForCurrentBrief: true,
+  })),
+}));
+
 vi.mock("./lib/queue/bullmq", () => ({
   scheduleContentGenerationJob: vi.fn(async () => ({ id: "content-generate:28" })),
   isBullMQAvailable: vi.fn(() => true),
@@ -737,6 +750,38 @@ describe("contentRouter.generateForCampaign", () => {
     const caller = contentRouter.createCaller(buildCtx(18));
     const status = await caller.getGenerationJobStatus({ campaignId: 28, jobId: 904 });
     expect(status?.status).toBe("failed");
+  });
+
+  it("rejects stale approved strategy with PRECONDITION_FAILED before claiming or queueing", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+    const { isApprovedStrategyCurrent } = await import("./lib/workflow/strategy-approval");
+    const { scheduleContentGenerationJob } = await import("./lib/queue/bullmq");
+    const { acquireCreativeGenerationClaim } = await import("./lib/creative/creative-generation-claim");
+
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+        campaign: {
+          id: 28,
+          userId: 18,
+          businessId: 24,
+          workflowState: "strategy_approved",
+          workflowContext: { coreMessage: "Empower your workforce" },
+          personas: [{ name: "Small Business Owner" }],
+          coreMessage: "Empower your workforce",
+        },
+        postCount: 0,
+      }) as unknown as ReturnType<typeof getDb>
+    );
+    vi.mocked(isApprovedStrategyCurrent).mockReturnValueOnce(false);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.generateForCampaign({ campaignId: 28 })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+    expect(scheduleContentGenerationJob).not.toHaveBeenCalled();
   });
 });
 

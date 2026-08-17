@@ -37,6 +37,10 @@ vi.mock("../creative/creative-generation-claim", () => ({
   })),
 }));
 
+vi.mock("../workflow/strategy-approval", () => ({
+  isApprovedStrategyCurrent: vi.fn(() => true),
+}));
+
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string | undefined;
 }
@@ -171,5 +175,26 @@ describe("processContentGenerationJob", () => {
     expect(runCreativeAgent).not.toHaveBeenCalled();
     const completed = db.agentRunUpdates.filter((u: any) => u.status === "completed");
     expect(completed).toHaveLength(1);
+  });
+
+  it("rejects stale approved strategy with PRECONDITION_FAILED before creative work or credit claims", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const { deductCredits } = await import("../billing/credit-engine");
+    const { isApprovedStrategyCurrent } = await import("../workflow/strategy-approval");
+    const { processContentGenerationJob } = await import("./content-generation-job");
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(isApprovedStrategyCurrent).mockReturnValueOnce(false);
+
+    await expect(
+      processContentGenerationJob({ jobId: 189, userId: 18, campaignId: 30, claimId: 2004, ownerToken: "test-owner-token" })
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+
+    // Validation runs before any creative work, credit charge, or claim lifecycle.
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(deductCredits).not.toHaveBeenCalled();
+    expect(db.agentRunUpdates).toHaveLength(0);
   });
 });

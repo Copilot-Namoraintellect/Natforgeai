@@ -12,6 +12,7 @@ import {
   type CreativeGenerationClaimHeartbeatController,
 } from "../creative/creative-generation-claim";
 import { env } from "../env";
+import { isApprovedStrategyCurrent } from "../workflow/strategy-approval";
 
 export interface ContentGenerationJobInput {
   jobId: number;
@@ -110,6 +111,25 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
       .where(eq(agentRuns.id, input.jobId));
   };
 
+  const durations = defaultDurations();
+
+  // Load the campaign and verify the approved strategy still matches the
+  // current brief before marking the job running. This keeps stale-strategy
+  // rejections free of side effects on the job row.
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(and(eq(campaigns.id, input.campaignId), eq(campaigns.userId, input.userId)))
+    .limit(1);
+
+  if (campaign && !isApprovedStrategyCurrent(campaign)) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "The approved strategy no longer matches the current campaign brief. Regenerate the strategy for approval before creating content.",
+    });
+  }
+
   await db
     .update(agentRuns)
     .set({
@@ -125,15 +145,7 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
     heartbeatIntervalSeconds: env.creativeGenerationHeartbeatIntervalSeconds,
   });
 
-  const durations = defaultDurations();
-
   try {
-    const [campaign] = await db
-      .select()
-      .from(campaigns)
-      .where(and(eq(campaigns.id, input.campaignId), eq(campaigns.userId, input.userId)))
-      .limit(1);
-
     if (!campaign) {
       throw new TRPCError({
         code: "NOT_FOUND",
@@ -168,6 +180,14 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
         code: "BAD_REQUEST",
         message:
           "Campaign is missing creative context (core message, personas, or approved strategy). Generate and approve a strategy first.",
+      });
+    }
+
+    if (!isApprovedStrategyCurrent(campaign)) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "The approved strategy no longer matches the current campaign brief. Regenerate the strategy for approval before creating content.",
       });
     }
 

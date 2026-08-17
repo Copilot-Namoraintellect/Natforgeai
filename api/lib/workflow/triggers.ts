@@ -19,6 +19,10 @@ import {
   type CreativeGenerationClaimHeartbeatController,
 } from "../creative/creative-generation-claim";
 import { env } from "../env";
+import {
+  getStrategyApprovalStatus,
+  buildStrategyApprovalLineage,
+} from "./strategy-approval";
 
 export async function onAgentRunComplete(runId: number) {
   const db = getDb();
@@ -55,7 +59,7 @@ export async function onAgentRunComplete(runId: number) {
       .limit(1);
 
     if (updatedCampaign) {
-      await createApprovalRequest({
+      const { id: approvalRequestId } = await createApprovalRequest({
         userId: run.userId,
         campaignId: run.campaignId,
         approvalType: "strategy_review",
@@ -64,6 +68,21 @@ export async function onAgentRunComplete(runId: number) {
         aiRecommendation: "Based on the campaign goal and target audience, this strategy aligns with best practices for the selected platforms.",
         riskLevel: "low",
       });
+
+      const status = getStrategyApprovalStatus(updatedCampaign);
+      await db
+        .update(campaigns)
+        .set({
+          workflowContext: {
+            ...(updatedCampaign.workflowContext || {}),
+            strategyApprovalLineage: buildStrategyApprovalLineage(
+              status.currentFingerprint,
+              run.id,
+              approvalRequestId
+            ),
+          } as any,
+        })
+        .where(eq(campaigns.id, run.campaignId));
     }
   } else if (["strategy_approved", "creatives_generating"].includes(state) && run.agentType === "creative") {
     if (state === "strategy_approved") {
@@ -251,6 +270,52 @@ export async function onStrategyApproved(
 
   if (!campaign) return;
 
+  // Defence in depth: the synchronous approval router already validates, but
+  // the async trigger may run after a brief edit. Reject stale strategy
+  // approvals before any credits or claims are consumed.
+  const status = getStrategyApprovalStatus(campaign);
+  const lineage = status.lineage;
+  const currentFingerprint = status.currentFingerprint;
+
+  if (!lineage) {
+    console.error(`[Workflow] No strategy approval lineage for campaign ${campaignId}. Refusing to authorise creative generation.`);
+    return;
+  }
+
+  if (lineage.approvalRequestId !== approvalId) {
+    console.error(
+      `[Workflow] Strategy approval lineage mismatch for campaign ${campaignId}: expected request ${lineage.approvalRequestId}, got ${approvalId}.`
+    );
+    return;
+  }
+
+  if (lineage.creativeBriefFingerprint !== currentFingerprint) {
+    console.error(
+      `[Workflow] Strategy approval fingerprint mismatch for campaign ${campaignId}. Refusing to authorise creative generation.`
+    );
+    return;
+  }
+
+  const [run] = await db
+    .select()
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.id, lineage.strategyRunId),
+        eq(agentRuns.campaignId, campaignId),
+        eq(agentRuns.userId, userId),
+        eq(agentRuns.agentType, "strategy")
+      )
+    )
+    .limit(1);
+
+  if (!run || run.status !== "completed") {
+    console.error(
+      `[Workflow] Linked strategy run ${lineage.strategyRunId} is missing or not completed for campaign ${campaignId}. Refusing to authorise creative generation.`
+    );
+    return;
+  }
+
   // Authoritative atomic claim for the auto-creative step of this approval.
   const ownerToken = generateOwnerToken();
   const claimResult = await acquireCreativeGenerationClaim({
@@ -320,8 +385,27 @@ export async function onStrategyApproved(
       return;
     }
 
-    // Transition to strategy_approved
+    // Transition to strategy_approved and record the authorised fingerprint so
+    // later creative generation can prove it matches the current brief.
     await transitionCampaignState(campaignId, userId, "approve_strategy");
+    const [approvedCampaign] = await db
+      .select()
+      .from(campaigns)
+      .where(eq(campaigns.id, campaignId))
+      .limit(1);
+    await db
+      .update(campaigns)
+      .set({
+        workflowContext: {
+          ...(approvedCampaign?.workflowContext || {}),
+          approvedStrategyFingerprint: currentFingerprint,
+          strategyApprovalLineage: {
+            ...lineage,
+            status: "approved",
+          },
+        } as any,
+      })
+      .where(eq(campaigns.id, campaignId));
 
     // Run Audience Intelligence after strategy approval to refine audience segments
     // before content generation. This is credit-safe: if no permissioned source data

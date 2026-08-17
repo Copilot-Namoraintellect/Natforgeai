@@ -1,11 +1,15 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { approvalRequests, campaigns, contentPosts, socialIntegrations } from "@db/schema";
+import { approvalRequests, campaigns, contentPosts, socialIntegrations, agentRuns } from "@db/schema";
 import { eq, and, or, desc, count, inArray, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { onApprovalResolved } from "./lib/workflow/triggers";
 import { createApprovalRequest } from "./lib/workflow/engine";
+import {
+  getStrategyApprovalStatus,
+  isLineageAuthoritative,
+} from "./lib/workflow/strategy-approval";
 
 const beyondStrategyReviewStates = new Set([
   "strategy_approved",
@@ -22,10 +26,87 @@ const beyondStrategyReviewStates = new Set([
   "completed",
 ]);
 
+/**
+ * Validate that a pending strategy_review approval can still be authorised.
+ * Authorisation requires a durable lineage in workflowContext that links the
+ * approval request, strategy run and brief fingerprint. A mismatch means the
+ * strategy is stale and approving it would ground creatives in an out-of-date
+ * brief.
+ */
+async function validateStrategyApprovalLineage(approval: {
+  id: number;
+  campaignId: number | null;
+  userId: number;
+}) {
+  if (!approval.campaignId) return;
+
+  const db = getDb();
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(and(eq(campaigns.id, approval.campaignId), eq(campaigns.userId, approval.userId)))
+    .limit(1);
+
+  if (!campaign) return;
+
+  const status = getStrategyApprovalStatus(campaign);
+  if (!status.lineage) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "This approval request is not linked to a recorded strategy lineage. Regenerate the strategy for approval.",
+    });
+  }
+
+  if (status.lineage.approvalRequestId !== approval.id) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "This approval request is not the current strategy approval request. Review the pending request created for the current brief.",
+    });
+  }
+
+  if (
+    !isLineageAuthoritative(campaign, {
+      strategyRunId: status.lineage.strategyRunId,
+      approvalRequestId: approval.id,
+    })
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "The campaign brief has changed since this strategy was generated. Regenerate the strategy for approval before authorising creative work.",
+    });
+  }
+
+  const [run] = await db
+    .select()
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.id, status.lineage.strategyRunId),
+        eq(agentRuns.campaignId, approval.campaignId),
+        eq(agentRuns.userId, approval.userId),
+        eq(agentRuns.agentType, "strategy")
+      )
+    )
+    .limit(1);
+
+  if (!run || run.status !== "completed") {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "The strategy run linked to this approval request is missing or not complete. Regenerate the strategy for approval.",
+    });
+  }
+}
+
 async function repairStaleApprovals(userId: number) {
   const db = getDb();
 
-  // Find pending strategy approvals for campaigns that have already moved beyond strategy review
+  // Only auto-repair campaign_launch approvals. strategy_review approvals must be
+  // resolved through lineage-aware validation so historical requests are preserved
+  // as evidence and cannot be auto-approved after the brief changes.
   const stale = await db
     .select({ id: approvalRequests.id, campaignId: approvalRequests.campaignId })
     .from(approvalRequests)
@@ -33,7 +114,7 @@ async function repairStaleApprovals(userId: number) {
     .where(
       and(
         eq(approvalRequests.userId, userId),
-        eq(approvalRequests.approvalType, "strategy_review"),
+        eq(approvalRequests.approvalType, "campaign_launch"),
         eq(approvalRequests.status, "pending"),
         eq(campaigns.userId, userId)
       )
@@ -48,7 +129,7 @@ async function repairStaleApprovals(userId: number) {
 
     if (!campaign) continue;
 
-    // If campaign has moved beyond strategy review, auto-resolve the stale pending approval
+    // If campaign has moved beyond launch approval, auto-resolve the stale pending launch approval
     if (beyondStrategyReviewStates.has(campaign.workflowState)) {
       await db
         .update(approvalRequests)
@@ -58,11 +139,11 @@ async function repairStaleApprovals(userId: number) {
           description: `Auto-resolved: campaign workflow state is now ${campaign.workflowState}.`,
         })
         .where(eq(approvalRequests.id, row.id));
-      console.log(`[ApprovalRepair] Auto-resolved stale strategy approval ${row.id} for campaign ${row.campaignId} (state=${campaign.workflowState})`);
+      console.log(`[ApprovalRepair] Auto-resolved stale launch approval ${row.id} for campaign ${row.campaignId} (state=${campaign.workflowState})`);
       continue;
     }
 
-    // If campaign already has content posts, auto-resolve stale strategy approval
+    // If campaign already has published content, auto-resolve stale launch approval
     const [contentCount] = await db
       .select({ value: count() })
       .from(contentPosts)
@@ -77,7 +158,7 @@ async function repairStaleApprovals(userId: number) {
           description: `Auto-resolved: campaign already has ${contentCount.value} generated content posts.`,
         })
         .where(eq(approvalRequests.id, row.id));
-      console.log(`[ApprovalRepair] Auto-resolved stale strategy approval ${row.id} for campaign ${row.campaignId} (contentCount=${contentCount.value})`);
+      console.log(`[ApprovalRepair] Auto-resolved stale launch approval ${row.id} for campaign ${row.campaignId} (contentCount=${contentCount.value})`);
     }
   }
 }
@@ -339,6 +420,14 @@ export const approvalRouter = createRouter({
         });
       }
 
+      if (request.approvalType === "strategy_review") {
+        await validateStrategyApprovalLineage({
+          id: request.id,
+          campaignId: request.campaignId,
+          userId: ctx.user.id,
+        });
+      }
+
       await db
         .update(approvalRequests)
         .set({
@@ -445,6 +534,14 @@ export const approvalRouter = createRouter({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `Approval request is already ${request.status}`,
+        });
+      }
+
+      if (request.approvalType === "strategy_review") {
+        await validateStrategyApprovalLineage({
+          id: request.id,
+          campaignId: request.campaignId,
+          userId: ctx.user.id,
         });
       }
 

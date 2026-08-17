@@ -2,7 +2,7 @@ import { z } from "zod";
 import { generateObject } from "ai";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { campaigns, businesses, agentRuns, contentPosts, campaignAssets } from "@db/schema";
+import { campaigns, businesses, agentRuns, contentPosts, campaignAssets, approvalRequests } from "@db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { checkLimit, incrementCampaignUsage, incrementResultUsage } from "./lib/subscription";
 import { TRPCError } from "@trpc/server";
@@ -10,7 +10,11 @@ import { defaultModel } from "./lib/agents/openai";
 import { runStrategyAgent } from "./lib/agents/strategy-agent";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
-import { transitionCampaignState } from "./lib/workflow/engine";
+import { transitionCampaignState, createApprovalRequest } from "./lib/workflow/engine";
+import {
+  getStrategyApprovalStatus,
+  buildStrategyApprovalLineage,
+} from "./lib/workflow/strategy-approval";
 import {
   acquireCreativeGenerationClaim,
   attachCreativeGenerationOperationReference,
@@ -67,6 +71,35 @@ export const campaignRouter = createRouter({
           )
         );
       return camp ?? null;
+    }),
+
+  strategyApprovalStatus: authedQuery
+    .input(z.object({ id: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      const [camp] = await db
+        .select()
+        .from(campaigns)
+        .where(
+          and(
+            eq(campaigns.id, input.id),
+            eq(campaigns.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!camp) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
+      const status = getStrategyApprovalStatus(camp);
+      return {
+        isApprovedStrategyCurrent: status.isCurrent,
+        hasApprovedStrategy: status.hasApprovedStrategy,
+        currentFingerprint: status.currentFingerprint,
+        approvedStrategyFingerprint: status.approvedStrategyFingerprint,
+        strategyFingerprint: status.strategyFingerprint,
+      };
     }),
 
   create: authedQuery
@@ -198,8 +231,11 @@ export const campaignRouter = createRouter({
               return;
             }
 
-            // Deduplication guard
-            const existing = await db
+            // Fingerprint-aware deduplication: reuse a completed strategy run whose
+            // brief fingerprint matches the current campaign brief. Historical runs
+            // are preserved.
+            const currentFingerprint = getStrategyApprovalStatus({ ...input, id: campaignId }).currentFingerprint;
+            const previousRuns = await db
               .select()
               .from(agentRuns)
               .where(
@@ -208,14 +244,22 @@ export const campaignRouter = createRouter({
                   eq(agentRuns.agentType, "strategy")
                 )
               )
-              .orderBy(desc(agentRuns.createdAt))
-              .limit(1);
+              .orderBy(desc(agentRuns.createdAt));
 
-            if (existing.length > 0 && ["running", "completed"].includes(existing[0].status)) {
-              console.log(`[CampaignCreate] Strategy agent already ${existing[0].status} for campaign ${campaignId}`);
-              if (existing[0].status === "completed") {
-                await onAgentRunComplete(existing[0].id);
-              }
+            const reusableRun = previousRuns.find((run) => {
+              const output = (run.output || {}) as Record<string, unknown>;
+              return run.status === "completed" && output.creativeBriefFingerprint === currentFingerprint;
+            });
+
+            if (reusableRun) {
+              console.log(`[CampaignCreate] Reusing completed strategy run ${reusableRun.id} with matching fingerprint for campaign ${campaignId}`);
+              await onAgentRunComplete(reusableRun.id);
+              return;
+            }
+
+            const activeRun = previousRuns.find((run) => run.status === "running");
+            if (activeRun) {
+              console.log(`[CampaignCreate] Strategy agent already running for campaign ${campaignId}`);
               return;
             }
 
@@ -621,11 +665,8 @@ export const campaignRouter = createRouter({
           .where(eq(campaigns.id, campaignId));
         console.log(`[regenerateFromProfile] campaign brief updated | campaignId=${campaignId}`);
 
-        // 5. Delete old agent runs so regeneration is not blocked by dedup guards
-        await db
-          .delete(agentRuns)
-          .where(and(eq(agentRuns.campaignId, campaignId), eq(agentRuns.userId, userId)));
-        console.log(`[regenerateFromProfile] old agent runs deleted | campaignId=${campaignId}`);
+        // 5. Historical agent runs are preserved. Strategy deduplication is now
+        // fingerprint-aware, so a changed brief naturally produces a new run.
 
         // Snapshot existing AI-generated content so we can delete ONLY the old items after new content is created
         const oldContentPosts = await db
@@ -694,9 +735,9 @@ export const campaignRouter = createRouter({
 
         if (!attachResult.attached) {
           // The strategy run is already bound to another operation. Abandon
-          // this claim without deleting any AI-generated content; old agent runs
-          // have already been cleared as part of the regeneration flow, which
-          // is the destructive step that precedes strategy generation.
+          // this claim without deleting any AI-generated content or historical
+          // agent runs. The new strategy run remains valid; this claim simply
+          // lost the race.
           const releaseResult = await releaseClaimOnce("failed");
           if (!releaseResult.released) {
             console.error(`[regenerateFromProfile] failed-release failed after reference collision | campaignId=${campaignId} | claimId=${claim!.id} | releaseError=${releaseResult.error.message}`);
@@ -712,6 +753,32 @@ export const campaignRouter = createRouter({
         console.log(`[regenerateFromProfile] campaign state transitioned to strategy_generated | campaignId=${campaignId}`);
         await transitionCampaignState(campaignId, userId, "approve_strategy");
         console.log(`[regenerateFromProfile] campaign state transitioned to strategy_approved | campaignId=${campaignId}`);
+
+        // Record the authorised brief fingerprint and lineage so creative
+        // generation can verify it is grounded in the current brief.
+        const [regeneratedCampaign] = await db
+          .select()
+          .from(campaigns)
+          .where(eq(campaigns.id, campaignId))
+          .limit(1);
+        if (regeneratedCampaign) {
+          const { currentFingerprint } = getStrategyApprovalStatus(regeneratedCampaign);
+          await db
+            .update(campaigns)
+            .set({
+              workflowContext: {
+                ...(regeneratedCampaign.workflowContext || {}),
+                approvedStrategyFingerprint: currentFingerprint,
+                strategyApprovalLineage: buildStrategyApprovalLineage(
+                  currentFingerprint,
+                  strategyRunId!,
+                  0, // auto-approved via full regeneration, no approval request
+                  "approved"
+                ),
+              } as any,
+            })
+            .where(eq(campaigns.id, campaignId));
+        }
 
         // 7. Move to creatives_generating so the UI shows a loading/progress state
         await transitionCampaignState(campaignId, userId, "generate_creatives");
@@ -818,6 +885,254 @@ export const campaignRouter = createRouter({
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: errorMessage || "Failed to regenerate campaign from profile. Please try again.",
+        });
+      }
+    }),
+
+  regenerateStrategyForApproval: authedQuery
+    .input(z.object({ campaignId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const { campaignId } = input;
+      const { id: userId } = ctx.user;
+
+      console.log(`[regenerateStrategyForApproval] route entered | campaignId=${campaignId} | userId=${userId}`);
+
+      const [campaign] = await db
+        .select()
+        .from(campaigns)
+        .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
+        .limit(1);
+
+      if (!campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
+      if (!campaign.businessId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Campaign is not linked to a business. Complete business onboarding first.",
+        });
+      }
+
+      const [business] = await db
+        .select()
+        .from(businesses)
+        .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, userId)))
+        .limit(1);
+
+      if (!business) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+      }
+
+      const currentFingerprint = getStrategyApprovalStatus(campaign).currentFingerprint;
+
+      // Authoritative atomic claim: only one strategy-regeneration operation at a time.
+      const ownerToken = generateOwnerToken();
+      const claimResult = await acquireCreativeGenerationClaim({
+        userId,
+        campaignId,
+        operationSource: "strategy_regeneration",
+        ownerToken,
+        leaseExpiresAt: calculateLeaseExpiresAt(env.creativeGenerationRunningLeaseSeconds),
+      });
+
+      if (!claimResult.acquired) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Strategy regeneration is already in progress for this campaign. Please wait for it to complete.",
+        });
+      }
+
+      const claim = claimResult.claim;
+      let released = false;
+
+      const releaseClaimOnce = async (status: "completed" | "failed") => {
+        if (released) return { released: true } as const;
+        released = true;
+        return releaseClaimWithResult({
+          claimId: claim.id,
+          ownerToken,
+          status,
+          context: "campaignRouter.regenerateStrategyForApproval",
+        });
+      };
+
+      try {
+        // Look for an existing completed strategy run whose stored brief fingerprint
+        // matches the current brief. Historical runs are preserved; we reuse only
+        // when the lineage would be identical.
+        const previousStrategyRuns = await db
+          .select()
+          .from(agentRuns)
+          .where(
+            and(
+              eq(agentRuns.campaignId, campaignId),
+              eq(agentRuns.userId, userId),
+              eq(agentRuns.agentType, "strategy"),
+              eq(agentRuns.status, "completed")
+            )
+          )
+          .orderBy(desc(agentRuns.createdAt));
+
+        const reusableRun = previousStrategyRuns.find((run) => {
+          const output = (run.output || {}) as Record<string, unknown>;
+          return output.creativeBriefFingerprint === currentFingerprint;
+        });
+
+        // If we have a reusable completed strategy for this exact brief, do not run
+        // a new strategy agent. We still need a pending strategy_review request for it.
+        let strategyRunId: number;
+        let strategyRunIsReused = false;
+        if (reusableRun) {
+          strategyRunId = reusableRun.id;
+          strategyRunIsReused = true;
+          console.log(`[regenerateStrategyForApproval] reusing completed strategy run ${strategyRunId} with matching fingerprint | campaignId=${campaignId}`);
+        } else {
+          // Clear any approved-strategy fingerprint so the UI and backend treat the
+          // strategy as stale until the new request is approved.
+          await db
+            .update(campaigns)
+            .set({
+              workflowContext: {
+                ...(campaign.workflowContext || {}),
+                approvedStrategyFingerprint: null,
+              } as any,
+            })
+            .where(eq(campaigns.id, campaignId));
+
+          // Regenerate strategy from the current persisted brief.
+          const strategyResult = await runStrategyAgent({
+            userId,
+            campaignId,
+            business: {
+              name: business.name,
+              industry: business.industry,
+              location: business.location || (business.websiteEvidence as any)?.location,
+              productOrService: business.productOrService,
+              targetCustomer: business.targetCustomer,
+              brandTone: business.brandTone,
+              mainGoal: business.mainGoal,
+              monthlyBudget: business.monthlyBudget,
+              preferredPlatforms: business.preferredPlatforms,
+              website: business.website,
+              websiteEvidence: business.websiteEvidence,
+            },
+          });
+          strategyRunId = strategyResult.runId;
+        }
+
+        // Reconcile pending strategy_review requests. Only reuse a pending request
+        // when it is durably linked to the same fingerprint, run and approval ID.
+        const lineage = buildStrategyApprovalLineage(
+          currentFingerprint,
+          strategyRunId,
+          0, // placeholder until we create/find the request
+          "pending"
+        );
+
+        const existingPendingRequests = await db
+          .select()
+          .from(approvalRequests)
+          .where(
+            and(
+              eq(approvalRequests.campaignId, campaignId),
+              eq(approvalRequests.userId, userId),
+              eq(approvalRequests.approvalType, "strategy_review"),
+              eq(approvalRequests.status, "pending")
+            )
+          )
+          .orderBy(desc(approvalRequests.createdAt));
+
+        let approvalRequestId: number;
+        const matchingRequest = existingPendingRequests.find((req) => {
+          const campaignCtx = (campaign.workflowContext || {}) as Record<string, unknown>;
+          const existingLineage = campaignCtx.strategyApprovalLineage as Record<string, unknown> | undefined;
+          return (
+            existingLineage &&
+            existingLineage.creativeBriefFingerprint === currentFingerprint &&
+            existingLineage.strategyRunId === strategyRunId &&
+            existingLineage.approvalRequestId === req.id
+          );
+        });
+
+        if (matchingRequest) {
+          approvalRequestId = matchingRequest.id;
+          lineage.approvalRequestId = approvalRequestId;
+          console.log(`[regenerateStrategyForApproval] reusing pending strategy_review ${approvalRequestId} with matching lineage | campaignId=${campaignId}`);
+        } else {
+          // Any older pending request is for a different brief/run and must be
+          // preserved as historical evidence, not approved.
+          for (const oldRequest of existingPendingRequests) {
+            await db
+              .update(approvalRequests)
+              .set({
+                status: "rejected",
+                rejectedAt: new Date(),
+                description: `${oldRequest.description || ""}\n\nSuperseded: a new strategy was generated for the current campaign brief.`.trim(),
+              })
+              .where(eq(approvalRequests.id, oldRequest.id));
+            console.log(`[regenerateStrategyForApproval] superseded old pending strategy_review ${oldRequest.id} | campaignId=${campaignId}`);
+          }
+
+          // Create exactly one pending strategy_review request for the current lineage.
+          const { id: newApprovalRequestId } = await createApprovalRequest({
+            userId,
+            campaignId,
+            approvalType: "strategy_review",
+            title: `Approve Strategy: ${campaign.name}`,
+            description: strategyRunIsReused
+              ? `The strategy for "${campaign.name}" matches the current campaign brief. Review and approve to continue to creative content generation.`
+              : `The strategy for "${campaign.name}" has been regenerated from the current campaign brief. Review and approve to continue to creative content generation.`,
+            aiRecommendation: "Based on the updated campaign brief and business profile, this strategy aligns with the current goal and target audience.",
+            riskLevel: "low",
+          });
+          approvalRequestId = newApprovalRequestId;
+          lineage.approvalRequestId = approvalRequestId;
+        }
+
+        // Move the campaign back to strategy review and persist the lineage.
+        const currentWorkflowState = campaign.workflowState;
+        await db
+          .update(campaigns)
+          .set({
+            workflowState: "strategy_generated",
+            workflowContext: {
+              ...(campaign.workflowContext || {}),
+              strategyFingerprint: currentFingerprint,
+              strategyRunId,
+              strategyApprovalLineage: lineage,
+              lastTransition: {
+                from: currentWorkflowState,
+                to: "strategy_generated",
+                action: "regenerate_strategy_for_approval",
+                at: new Date().toISOString(),
+              },
+            } as any,
+            updatedAt: new Date(),
+          })
+          .where(eq(campaigns.id, campaignId));
+
+        await releaseClaimOnce("completed");
+
+        console.log(`[regenerateStrategyForApproval] completed | campaignId=${campaignId} | strategyRunId=${strategyRunId} | approvalRequestId=${approvalRequestId} | reused=${strategyRunIsReused}`);
+
+        return {
+          success: true,
+          strategyRunId,
+          approvalRequestId,
+          reused: strategyRunIsReused,
+        };
+      } catch (err: any) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        console.error(`[regenerateStrategyForApproval] step failed | campaignId=${campaignId} | userId=${userId} | error="${errorMessage}"`, err);
+        await releaseClaimOnce("failed");
+        if (err instanceof TRPCError) {
+          throw err;
+        }
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: errorMessage || "Failed to regenerate strategy for approval. Please try again.",
         });
       }
     }),

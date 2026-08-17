@@ -656,6 +656,15 @@ export default function ContentStudio() {
     { id: numericCampaignId },
     { enabled: hasCampaignId }
   );
+  const { data: strategyApprovalStatus } = trpc.campaign.strategyApprovalStatus.useQuery(
+    { id: numericCampaignId },
+    { enabled: hasCampaignId }
+  );
+  const approvedStrategyIsStale =
+    !!campaignForContext &&
+    ["strategy_approved", "creatives_generating", "creatives_ready"].includes(campaignForContext.workflowState) &&
+    strategyApprovalStatus !== undefined &&
+    !strategyApprovalStatus.isApprovedStrategyCurrent;
   const { data: businessForContext } = trpc.business.get.useQuery(
     { id: campaignForContext?.businessId ?? 0 },
     { enabled: !!campaignForContext?.businessId }
@@ -1466,12 +1475,28 @@ Include:
     }
   }
 
+  const regenerateStrategyForApprovalMutation = trpc.campaign.regenerateStrategyForApproval.useMutation({
+    onSuccess: () => {
+      utils.content.list.invalidate();
+      utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
+      utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
+      utils.campaign.get.invalidate({ id: numericCampaignId });
+      utils.campaign.strategyApprovalStatus.invalidate({ id: numericCampaignId });
+      utils.approval.listApprovals.invalidate();
+      toast.success("Strategy regenerated for approval. Review it in Approval Centre.");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to regenerate strategy for approval.");
+    },
+  });
+
   const regenerateFromProfileMutation = trpc.campaign.regenerateFromProfile.useMutation({
     onSuccess: () => {
       utils.content.list.invalidate();
       utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
       utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
       utils.campaign.get.invalidate({ id: numericCampaignId });
+      utils.campaign.strategyApprovalStatus.invalidate({ id: numericCampaignId });
       utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
       toast.success("Campaign pack regenerated from the updated business profile.");
     },
@@ -3820,7 +3845,10 @@ Include:
                   </Badge>
                 ) : (
                   <Badge variant="outline" className="text-amber-600 border-amber-200 bg-amber-50">
-                    {filtered.filter((c) => !getApprovalState(c)).length} pending approval
+                    {(() => {
+                      const count = filtered.filter((c) => !getApprovalState(c)).length;
+                      return `${count} content item${count === 1 ? "" : "s"} awaiting review`;
+                    })()}
                   </Badge>
                 )}
                 {(() => {
@@ -5294,21 +5322,29 @@ Include:
               variant="outline"
               className="border-[#00D4FF]/50 text-[#00D4FF] hover:bg-[#00D4FF]/10"
               onClick={() => {
-                if (campaignForContext.workflowState === "strategy_approved" || campaignForContext.workflowState === "creatives_generating" || campaignForContext.workflowState === "creatives_ready") {
+                if (approvedStrategyIsStale) {
+                  regenerateStrategyForApprovalMutation.mutate({ campaignId: numericCampaignId });
+                } else if (campaignForContext.workflowState === "strategy_approved" || campaignForContext.workflowState === "creatives_generating" || campaignForContext.workflowState === "creatives_ready") {
                   generateForCampaignMutation.mutate({ campaignId: numericCampaignId });
                 } else {
                   toast.info("Please approve the strategy first before generating content.");
                 }
               }}
-              disabled={isGeneratingContent}
+              disabled={
+                isGeneratingContent ||
+                regenerateStrategyForApprovalMutation.isPending ||
+                regenerateFromProfileMutation.isPending
+              }
             >
-              {isGeneratingContent ? (
+              {isGeneratingContent || regenerateStrategyForApprovalMutation.isPending ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : (
                 <Sparkles className="w-4 h-4 mr-2" />
               )}
-              {isGeneratingContent
+              {isGeneratingContent || regenerateStrategyForApprovalMutation.isPending
                 ? "Generating..."
+                : approvedStrategyIsStale
+                ? "Regenerate Strategy for Approval"
                 : campaignNeedsRecovery
                 ? "Retry Content Generation"
                 : "Generate from Approved Strategy"}
@@ -5412,15 +5448,23 @@ Include:
               ) : (
                 <Button
                   variant="outline"
-                  onClick={() => generateForCampaignMutation.mutate({ campaignId: numericCampaignId })}
-                  disabled={isGeneratingContent}
+                  onClick={() => {
+                    if (approvedStrategyIsStale) {
+                      regenerateStrategyForApprovalMutation.mutate({ campaignId: numericCampaignId });
+                    } else {
+                      generateForCampaignMutation.mutate({ campaignId: numericCampaignId });
+                    }
+                  }}
+                  disabled={isGeneratingContent || regenerateStrategyForApprovalMutation.isPending}
                 >
-                  {isGeneratingContent ? (
+                  {isGeneratingContent || regenerateStrategyForApprovalMutation.isPending ? (
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   ) : (
                     <Sparkles className="w-4 h-4 mr-2" />
                   )}
-                  Retry Content Generation
+                  {approvedStrategyIsStale
+                    ? "Regenerate Strategy for Approval"
+                    : "Retry Content Generation"}
                 </Button>
               )}
               <Link to="/agent-activity">

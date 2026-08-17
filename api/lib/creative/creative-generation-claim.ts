@@ -11,6 +11,7 @@ export const CREATIVE_GENERATION_OPERATION_SOURCES = [
   "agent",
   "profile",
   "approval",
+  "strategy_regeneration",
 ] as const;
 
 export type CreativeGenerationOperationSource =

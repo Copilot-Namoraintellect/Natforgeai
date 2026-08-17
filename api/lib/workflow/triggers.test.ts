@@ -38,6 +38,24 @@ vi.mock("../audience/ingest", () => ({
   ingestAudienceData: vi.fn(async () => {}),
 }));
 
+vi.mock("../creative/brief-grounding", () => ({
+  buildGroundedCreativeBrief: vi.fn(() => ({
+    fingerprint: "test-fingerprint",
+    productOrService: "service",
+    targetBuyer: "buyer",
+    mainPainPoint: "pain",
+    preferredCta: "cta",
+    primaryOutcome: "outcome",
+    targetAudience: "audience",
+    coreMessage: "message",
+    offerDetails: "",
+    excludedOffers: "",
+    referenceStyle: "",
+    contentStyle: "",
+    businessType: "B2B",
+  })),
+}));
+
 vi.mock("../creative/creative-generation-claim", () => ({
   generateOwnerToken: vi.fn(() => "test-owner-token"),
   acquireCreativeGenerationClaim: vi.fn(async () => ({
@@ -62,56 +80,101 @@ function getTableName(table: unknown): string | undefined {
     | undefined;
 }
 
+function flattenSqlChunks(sql: any): any[] {
+  if (!sql || typeof sql !== "object" || !Array.isArray(sql.queryChunks)) {
+    return [];
+  }
+  const out: any[] = [];
+  for (const chunk of sql.queryChunks) {
+    if (chunk && typeof chunk === "object" && Array.isArray(chunk.queryChunks)) {
+      out.push(...flattenSqlChunks(chunk));
+    } else {
+      out.push(chunk);
+    }
+  }
+  return out;
+}
+
+function getColumnFilter(condition: unknown, columnName: string): unknown | null {
+  const chunks = flattenSqlChunks(condition);
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (chunk && typeof chunk === "object" && chunk.name === columnName) {
+      // Find the next parameter chunk after this column (skip string chunks).
+      for (let j = i + 1; j < chunks.length; j++) {
+        const candidate = chunks[j];
+        if (
+          candidate &&
+          typeof candidate === "object" &&
+          !("name" in candidate) &&
+          "value" in candidate &&
+          !Array.isArray(candidate.value)
+        ) {
+          return candidate.value;
+        }
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
 function createWorkflowDbMock({
   initialRun,
   campaign,
   existingAudienceRun,
+  agentRunsRows,
 }: {
   initialRun?: Record<string, unknown>;
   campaign: Record<string, unknown>;
   existingAudienceRun?: Record<string, unknown>;
+  agentRunsRows?: Record<string, unknown>[];
 }) {
+  const runs =
+    agentRunsRows ??
+    ([
+      initialRun ? { ...initialRun } : null,
+      existingAudienceRun ? { ...existingAudienceRun } : null,
+    ].filter(Boolean) as Record<string, unknown>[]);
+
   const state = {
     campaign: { ...campaign },
-    agentRunsSelectCount: 0,
     insertCalls: [] as Array<{ table: string; values: unknown }>,
   };
+
+  function filterRows(rows: unknown[], condition: unknown) {
+    let result = rows;
+    const typeFilter = getColumnFilter(condition, "agentType");
+    if (typeFilter !== null) {
+      result = result.filter((r) => (r as any).agentType === typeFilter);
+    }
+    const idFilter = getColumnFilter(condition, "id");
+    if (idFilter !== null) {
+      result = result.filter((r) => (r as any).id === idFilter);
+    }
+    return result;
+  }
 
   const db = {
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => ({
-        where: vi.fn(() => ({
-          orderBy: vi.fn(() => ({
-            limit: vi.fn(async () => {
-              const tableName = getTableName(table);
-              if (tableName === "agent_runs") {
-                state.agentRunsSelectCount += 1;
-                if (state.agentRunsSelectCount === 1) {
-                  return initialRun ? [initialRun] : [];
-                }
-                return existingAudienceRun ? [existingAudienceRun] : [];
-              }
-              if (tableName === "campaigns") {
-                return [state.campaign];
-              }
-              return [];
-            }),
-          })),
-          limit: vi.fn(async () => {
-            const tableName = getTableName(table);
-            if (tableName === "agent_runs") {
-              state.agentRunsSelectCount += 1;
-              if (state.agentRunsSelectCount === 1) {
-                return initialRun ? [initialRun] : [];
-              }
-              return existingAudienceRun ? [existingAudienceRun] : [];
-            }
-            if (tableName === "campaigns") {
-              return [state.campaign];
-            }
-            return [];
-          }),
-        })),
+        where: vi.fn((condition: unknown) => {
+          const tableName = getTableName(table);
+          let baseRows: unknown[] = [];
+          if (tableName === "agent_runs") {
+            baseRows = runs;
+          } else if (tableName === "campaigns") {
+            baseRows = [state.campaign];
+          }
+          const filtered = tableName === "agent_runs" ? filterRows(baseRows, condition) : baseRows;
+          return {
+            orderBy: vi.fn(() => ({
+              limit: vi.fn(async () => filtered),
+            })),
+            limit: vi.fn(async () => filtered),
+            then: (resolve: (value: unknown[]) => unknown) => Promise.resolve(filtered).then(resolve),
+          };
+        }),
       })),
     })),
     insert: vi.fn((table: unknown) => ({
@@ -119,6 +182,17 @@ function createWorkflowDbMock({
         state.insertCalls.push({ table: getTableName(table) || "unknown", values });
         return [{ insertId: 999 }];
       }),
+    })),
+    update: vi.fn((table: unknown) => ({
+      set: vi.fn((payload: any) => ({
+        where: vi.fn(async () => {
+          const tableName = getTableName(table);
+          if (tableName === "campaigns") {
+            state.campaign = { ...state.campaign, ...payload };
+          }
+          return [];
+        }),
+      })),
     })),
   };
 
@@ -141,16 +215,6 @@ describe("onAgentRunComplete integration path", () => {
       createdAt: new Date().toISOString(),
     };
 
-    const existingAudienceRun = {
-      id: 610,
-      userId: 42,
-      campaignId: 29,
-      agentType: "audience",
-      status: "running",
-      error: null,
-      createdAt: new Date().toISOString(),
-    };
-
     const campaign = {
       id: 29,
       userId: 42,
@@ -167,9 +231,17 @@ describe("onAgentRunComplete integration path", () => {
     const { onAgentRunComplete } = await import("./triggers");
 
     const { db } = createWorkflowDbMock({
-      initialRun: creativeCompletedRun,
+      agentRunsRows: [
+        creativeCompletedRun,
+        {
+          id: 610,
+          userId: 42,
+          campaignId: 29,
+          agentType: "audience",
+          status: "running",
+        },
+      ],
       campaign,
-      existingAudienceRun,
     });
 
     vi.mocked(getDb).mockReturnValue(db as any);
@@ -218,7 +290,7 @@ describe("onAgentRunComplete integration path", () => {
     const { onAgentRunComplete } = await import("./triggers");
 
     const { db } = createWorkflowDbMock({
-      initialRun: failedRun,
+      agentRunsRows: [failedRun],
       campaign,
     });
 
@@ -269,13 +341,36 @@ describe("onStrategyApproved", () => {
     } as any);
 
     const { db } = createWorkflowDbMock({
-      initialRun: undefined,
+      agentRunsRows: [
+        {
+          id: 10,
+          userId: 42,
+          campaignId: 29,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+        {
+          id: 610,
+          userId: 42,
+          campaignId: 29,
+          agentType: "audience",
+          status: "running",
+        },
+      ],
       campaign: {
         id: 29,
         userId: 42,
         businessId: 7,
         workflowState: "strategy_approved",
-        workflowContext: {},
+        workflowContext: {
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "test-fingerprint",
+            strategyRunId: 10,
+            approvalRequestId: 555,
+            status: "pending",
+          },
+        },
         platforms: "Instagram, Facebook",
       },
     });
@@ -299,19 +394,36 @@ describe("onStrategyApproved", () => {
     const { onStrategyApproved } = await import("./triggers");
 
     const { db } = createWorkflowDbMock({
-      initialRun: {
-        id: 500,
-        userId: 42,
-        campaignId: 29,
-        agentType: "creative",
-        status: "running",
-      },
+      agentRunsRows: [
+        {
+          id: 10,
+          userId: 42,
+          campaignId: 29,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+        {
+          id: 500,
+          userId: 42,
+          campaignId: 29,
+          agentType: "creative",
+          status: "running",
+        },
+      ],
       campaign: {
         id: 29,
         userId: 42,
         businessId: 7,
         workflowState: "strategy_approved",
-        workflowContext: {},
+        workflowContext: {
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "test-fingerprint",
+            strategyRunId: 10,
+            approvalRequestId: 556,
+            status: "pending",
+          },
+        },
       },
     });
     vi.mocked(getDb).mockReturnValue(db as any);

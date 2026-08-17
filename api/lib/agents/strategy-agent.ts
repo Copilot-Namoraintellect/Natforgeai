@@ -2,8 +2,9 @@ import { z } from "zod";
 import { runAgent } from "./runner";
 import { strategyAgentPrompt } from "./prompts";
 import { getDb } from "../../queries/connection";
-import { campaigns } from "@db/schema";
+import { agentRuns, campaigns } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { buildGroundedCreativeBrief } from "../creative/brief-grounding";
 
 function parseBudgetNumber(value: unknown): number {
   if (typeof value === "number") return value;
@@ -118,9 +119,10 @@ export async function runStrategyAgent({
 }) {
   const db = getDb();
 
-  // Load audience intelligence summaries from previous campaigns for the same business/user
+  // Load the persisted campaign so the fingerprint is computed from the
+  // current brief, even when the caller did not pass an explicit campaignBrief.
   const [currentCampaign] = await db
-    .select({ businessId: campaigns.businessId })
+    .select()
     .from(campaigns)
     .where(and(eq(campaigns.userId, userId), eq(campaigns.id, campaignId)))
     .limit(1);
@@ -176,6 +178,26 @@ export async function runStrategyAgent({
       "You are a world-class marketing strategist. You create detailed, actionable marketing strategies for businesses. Always respond with valid structured data.",
   });
 
+  // Compute the fingerprint of the brief that produced this strategy so later
+  // workflow steps can detect whether the campaign brief changed afterwards.
+  const fingerprintSource = campaignBrief
+    ? ({ ...campaignBrief } as Record<string, unknown>)
+    : currentCampaign ?? {};
+  const briefFingerprint = buildGroundedCreativeBrief({ campaign: fingerprintSource }).fingerprint;
+
+  // Record the brief fingerprint on the agent run so we can later find a
+  // completed strategy run that matches a given brief fingerprint without
+  // deleting historical runs.
+  await db
+    .update(agentRuns)
+    .set({
+      output: {
+        ...(result.output as any),
+        creativeBriefFingerprint: briefFingerprint,
+      } as any,
+    })
+    .where(eq(agentRuns.id, result.runId));
+
   // Save strategy output to campaign
   await db
     .update(campaigns)
@@ -188,6 +210,7 @@ export async function runStrategyAgent({
       workflowContext: {
         strategyGeneratedAt: new Date().toISOString(),
         strategyRunId: result.runId,
+        strategyFingerprint: briefFingerprint,
         positioning: result.output.positioning,
         valueProposition: result.output.valueProposition,
         coreMessage: result.output.coreMessage,

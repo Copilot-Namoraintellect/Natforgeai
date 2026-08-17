@@ -5,6 +5,7 @@ import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegra
 import { eq, and, or, desc, count, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { env } from "./lib/env";
+import { isApprovedStrategyCurrent } from "./lib/workflow/strategy-approval";
 import { createApprovalRequest } from "./lib/workflow/engine";
 import { logInfo, logError } from "./lib/logger";
 import { publishSinglePost, finalizeCampaignPublishState } from "./lib/workflow/publishing-runner";
@@ -251,6 +252,21 @@ export const contentRouter = createRouter({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Campaign is missing creative context (core message, personas, or approved strategy). Generate and approve a strategy first.",
+        });
+      }
+
+      if (!isApprovedStrategyCurrent(campaign)) {
+        logError("[content.generateForCampaign] approved strategy is stale or missing", {
+          campaignId,
+          userId,
+          stage: "validation",
+          workflowState: campaign.workflowState,
+          workflowContext: campaign.workflowContext,
+        });
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "The approved strategy no longer matches the current campaign brief. Regenerate the strategy for approval before creating content.",
         });
       }
 
