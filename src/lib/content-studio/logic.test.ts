@@ -5,6 +5,9 @@ import {
   getCampaignImageAssetUrl,
   getImageUrl,
   findLeafletCandidate,
+  findDurableLeafletRecord,
+  resolveLeafletPreviewState,
+  type LeafletPreviewState,
   getCampaignPlatformStatuses,
   hasConnectedPublishPlatform,
   isPlatformConnected,
@@ -132,24 +135,273 @@ describe("content-studio logic", () => {
     });
   });
 
-  describe("findLeafletCandidate", () => {
-    it("prefers items with leaflet metadata", () => {
+  describe("findLeafletCandidate / findDurableLeafletRecord", () => {
+    it("prefers the newest explicit leaflet record with a usable URL", () => {
       const items = [
-        { id: 1, metadata: { imageProvider: "openai-leaflet" } },
-        { id: 2, metadata: { assetType: "leaflet" } },
+        { id: 1, createdAt: "2026-08-01T00:00:00Z", metadata: { assetType: "leaflet", imageUrl: "https://example.com/leaflet.png" } },
+        { id: 2, createdAt: "2026-08-02T00:00:00Z", metadata: { assetType: "leaflet", imageUrl: "https://example.com/leaflet2.png" } },
       ];
       expect((findLeafletCandidate(items) as any)?.id).toBe(2);
+      expect((findDurableLeafletRecord(items) as any)?.id).toBe(2);
     });
 
-    it("falls back to OpenAI provider or imageUrl-bearing records", () => {
-      expect((findLeafletCandidate([{ metadata: { imageProvider: "openai-leaflet" } }]) as any)?.metadata?.imageProvider).toBe(
-        "openai-leaflet"
-      );
-      expect(findLeafletCandidate([{ type: "social_post", aiGenerated: true }])).toBeTruthy();
+    it("accepts a legacy master_campaign_post record with a usable URL", () => {
+      const record = {
+        id: 1,
+        createdAt: "2026-08-01T00:00:00Z",
+        metadata: { assetKind: "master_campaign_post", imageUrl: "https://example.com/leaflet.png" },
+      };
+      expect(findLeafletCandidate([record])).toBe(record);
+      expect(findDurableLeafletRecord([record])).toBe(record);
+    });
+
+    it("accepts a record-level assetType leaflet with a usable URL", () => {
+      const record = {
+        id: 1,
+        createdAt: "2026-08-01T00:00:00Z",
+        assetType: "leaflet",
+        url: "https://example.com/leaflet.png",
+        metadata: {},
+      };
+      expect(findLeafletCandidate([record])).toBe(record);
+      expect(findDurableLeafletRecord([record])).toBe(record);
+    });
+
+    it("ignores records without a non-empty preview URL", () => {
+      const items = [
+        { id: 1, createdAt: "2026-08-01T00:00:00Z", metadata: { assetType: "leaflet" } },
+        { id: 2, createdAt: "2026-08-02T00:00:00Z", metadata: { assetType: "leaflet", imageUrl: "" } },
+      ];
+      expect(findLeafletCandidate(items)).toBeUndefined();
+      expect(findDurableLeafletRecord(items)).toBeUndefined();
+    });
+
+    it("does not treat a plain generated social post as a leaflet", () => {
+      expect(findLeafletCandidate([{ type: "social_post", aiGenerated: true, createdAt: "2026-08-01T00:00:00Z" }])).toBeUndefined();
+      expect(findDurableLeafletRecord([{ type: "social_post", aiGenerated: true, createdAt: "2026-08-01T00:00:00Z" }])).toBeUndefined();
+    });
+
+    it("does not treat an aiGenerated social post with an imageUrl as a leaflet", () => {
+      expect(
+        findLeafletCandidate([
+          {
+            type: "social_post",
+            aiGenerated: true,
+            createdAt: "2026-08-01T00:00:00Z",
+            metadata: { imageUrl: "https://example.com/post.png" },
+          },
+        ])
+      ).toBeUndefined();
+      expect(
+        findDurableLeafletRecord([
+          {
+            type: "social_post",
+            aiGenerated: true,
+            createdAt: "2026-08-01T00:00:00Z",
+            metadata: { imageUrl: "https://example.com/post.png" },
+          },
+        ])
+      ).toBeUndefined();
+    });
+
+    it("does not treat an OpenAI source image as a leaflet", () => {
+      expect(
+        findLeafletCandidate([
+          {
+            id: 1,
+            createdAt: "2026-08-01T00:00:00Z",
+            metadata: { imageSource: "openai", imageUrl: "https://example.com/openai.png" },
+          },
+        ])
+      ).toBeUndefined();
+      expect(
+        findDurableLeafletRecord([
+          {
+            id: 1,
+            createdAt: "2026-08-01T00:00:00Z",
+            metadata: { imageSource: "openai", imageUrl: "https://example.com/openai.png" },
+          },
+        ])
+      ).toBeUndefined();
+    });
+
+    it("does not treat a generic image with a provider as a leaflet", () => {
+      expect(
+        findLeafletCandidate([
+          {
+            id: 1,
+            createdAt: "2026-08-01T00:00:00Z",
+            provider: "internal",
+            assetType: "image",
+            url: "https://example.com/generic.png",
+            metadata: {},
+          },
+        ])
+      ).toBeUndefined();
+      expect(
+        findDurableLeafletRecord([
+          {
+            id: 1,
+            createdAt: "2026-08-01T00:00:00Z",
+            provider: "internal",
+            assetType: "image",
+            url: "https://example.com/generic.png",
+            metadata: {},
+          },
+        ])
+      ).toBeUndefined();
+    });
+
+    it("does not treat supporting text assets with imageUrl metadata as leaflets", () => {
+      const assets = [
+        { id: 1, assetType: "caption_pack", createdAt: "2026-08-01T00:00:00Z", metadata: { imageUrl: "x.png" } },
+        { id: 2, assetType: "message_pack", createdAt: "2026-08-01T00:00:00Z", metadata: { imageUrl: "y.png" } },
+      ];
+      expect(findLeafletCandidate(assets)).toBeUndefined();
+      expect(findDurableLeafletRecord(assets)).toBeUndefined();
+    });
+
+    it("rejects malformed or unusable preview URLs", () => {
+      const candidates = [
+        { id: 1, createdAt: "2026-08-01T00:00:00Z", metadata: { assetType: "leaflet", imageUrl: null } },
+        { id: 2, createdAt: "2026-08-01T00:00:00Z", metadata: { assetType: "leaflet", imageUrl: "" } },
+        { id: 3, createdAt: "2026-08-01T00:00:00Z", metadata: { assetType: "leaflet", imageUrl: "   " } },
+        { id: 4, createdAt: "2026-08-01T00:00:00Z", metadata: { assetType: "leaflet", imageUrl: "[object Object]" } },
+        { id: 5, createdAt: "2026-08-01T00:00:00Z", metadata: { assetType: "leaflet", imageUrl: "javascript:alert(1)" } },
+        { id: 6, createdAt: "2026-08-01T00:00:00Z", metadata: { assetType: "leaflet", url: { path: "/oops.png" } } },
+      ];
+      for (const c of candidates) {
+        expect(findLeafletCandidate([c])).toBeUndefined();
+        expect(findDurableLeafletRecord([c])).toBeUndefined();
+      }
     });
 
     it("ignores caption pack assets", () => {
-      expect(findLeafletCandidate([{ metadata: { assetType: "caption_pack", imageUrl: "x.png" } }])).toBeUndefined();
+      expect(findLeafletCandidate([{ id: 1, createdAt: "2026-08-01T00:00:00Z", metadata: { assetType: "caption_pack", imageUrl: "x.png" } }])).toBeUndefined();
+      expect(findDurableLeafletRecord([{ id: 1, createdAt: "2026-08-01T00:00:00Z", metadata: { assetType: "caption_pack", imageUrl: "x.png" } }])).toBeUndefined();
+    });
+  });
+
+  describe("resolveLeafletPreviewState", () => {
+    it("returns ready when a durable leaflet record with a usable URL exists", () => {
+      const state = resolveLeafletPreviewState({
+        durableRecord: { url: "https://example.com/leaflet.png", status: "ready" },
+      });
+      expect(state.status).toBe("ready");
+      expect((state as Extract<LeafletPreviewState, { status: "ready" }>).imageUrl).toBe("https://example.com/leaflet.png");
+    });
+
+    it("returns not_generated when generated metadata exists but no durable preview URL exists", () => {
+      const state = resolveLeafletPreviewState({
+        durableRecord: { url: "", status: "ready" },
+      });
+      expect(state.status).toBe("not_generated");
+    });
+
+    it("returns not_generated after a completed creative run without a leaflet record", () => {
+      const state = resolveLeafletPreviewState({
+        durableRecord: null,
+        job: { status: "completed" },
+      });
+      expect(state.status).toBe("not_generated");
+    });
+
+    it("returns not_generated for an audience-ready campaign without a leaflet record", () => {
+      const state = resolveLeafletPreviewState({
+        durableRecord: null,
+        job: null,
+      });
+      expect(state.status).toBe("not_generated");
+    });
+
+    it("returns generating while a leaflet-specific job is queued or processing", () => {
+      expect(resolveLeafletPreviewState({ durableRecord: null, job: { status: "queued" } }).status).toBe("generating");
+      expect(resolveLeafletPreviewState({ durableRecord: null, job: { status: "processing" } }).status).toBe("generating");
+      expect(resolveLeafletPreviewState({ durableRecord: null, job: { status: "preparing" } }).status).toBe("generating");
+    });
+
+    it("returns failed when the leaflet job failed", () => {
+      const state = resolveLeafletPreviewState({
+        durableRecord: null,
+        job: { status: "failed", error: "Provider rejected the prompt" },
+      });
+      expect(state.status).toBe("failed");
+      expect((state as Extract<LeafletPreviewState, { status: "failed" }>).error).toBe("Provider rejected the prompt");
+    });
+
+    it("returns cancelled when the leaflet job was cancelled", () => {
+      expect(resolveLeafletPreviewState({ durableRecord: null, job: { status: "cancelled" } }).status).toBe("cancelled");
+    });
+
+    it("returns timed_out when polling exceeded its bounded limit", () => {
+      const state = resolveLeafletPreviewState({
+        durableRecord: null,
+        job: { status: "processing" },
+        timedOut: { attempts: 24, elapsedMs: 60000 },
+      });
+      expect(state.status).toBe("timed_out");
+      expect((state as Extract<LeafletPreviewState, { status: "timed_out" }>).attempts).toBe(24);
+    });
+
+    it("returns ready over generating when a durable record appears while a job is still active", () => {
+      const state = resolveLeafletPreviewState({
+        durableRecord: { url: "https://example.com/leaflet.png" },
+        job: { status: "processing" },
+      });
+      expect(state.status).toBe("ready");
+    });
+
+    it("returns failed when a durable record is present but marked failed", () => {
+      const state = resolveLeafletPreviewState({
+        durableRecord: { url: "", status: "failed", error: "Image render failed" },
+      });
+      expect(state.status).toBe("failed");
+    });
+
+    it("prefers an explicit error over a generic message when failed", () => {
+      const state = resolveLeafletPreviewState({
+        durableRecord: null,
+        job: { status: "failed" },
+        error: "Manual generation error",
+      });
+      expect(state.status).toBe("failed");
+      expect((state as Extract<LeafletPreviewState, { status: "failed" }>).error).toBe("Manual generation error");
+    });
+
+    it("rejects malformed or placeholder preview URLs", () => {
+      const urls = ["", "   ", "[object Object]", "javascript:alert(1)", null as any, { path: "/nope.png" } as any];
+      for (const url of urls) {
+        expect(
+          resolveLeafletPreviewState({ durableRecord: { url, status: "ready" } }).status
+        ).toBe("not_generated");
+      }
+    });
+
+    it("does not treat a premium/audience_ready campaign without an explicit leaflet as ready", () => {
+      expect(
+        resolveLeafletPreviewState({
+          durableRecord: null,
+          job: null,
+        }).status
+      ).toBe("not_generated");
+    });
+
+    it("does not treat saved assets without a leaflet record as ready", () => {
+      expect(
+        resolveLeafletPreviewState({
+          durableRecord: null,
+          job: { status: "completed" },
+        }).status
+      ).toBe("not_generated");
+    });
+
+    it("does not treat a completed creative run without a leaflet as ready", () => {
+      expect(
+        resolveLeafletPreviewState({
+          durableRecord: null,
+          job: { status: "completed" },
+        }).status
+      ).toBe("not_generated");
     });
   });
 });

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -211,7 +211,10 @@ import {
   getApprovedMessagePackForDetails,
   getActiveGenerationRunId,
   isCaptionPackAsset,
+  isLeafletCandidate,
   findLeafletCandidate,
+  findDurableLeafletRecord,
+  resolveLeafletPreviewState,
   campaignNeedsRecoveryDecision,
   campaignHasGeneratedContent,
   isPlatformConnected,
@@ -224,7 +227,9 @@ import {
   getLeafletActions,
   asNumber,
   asString,
+  type LeafletPreviewState,
 } from "../lib/content-studio/logic";
+import { useLeafletPolling } from "../lib/content-studio/useLeafletPolling";
 
 function getRunId(c: unknown): string {
   return asString(getContentMeta(c).generationRunId) || "legacy-group";
@@ -597,6 +602,9 @@ export default function ContentStudio() {
   const [allowNoLogoById, setAllowNoLogoById] = useState<Record<number, boolean>>({});
   const [activeGenerationJobId, setActiveGenerationJobId] = useState<number | null>(null);
   const [lastNotifiedGenerationJobId, setLastNotifiedGenerationJobId] = useState<number | null>(null);
+
+  // Leaflet preview state: track last generation error and timeout state for bounded polling.
+  const [leafletGenerationError, setLeafletGenerationError] = useState<string | null>(null);
 
   const LEAFLET_TEMPLATE_OPTIONS: { value: LeafletTemplateId; label: string; description: string; icon: LucideIcon }[] = [
     { value: "auto", label: "Auto-detect", description: "Pick the best layout from your business category", icon: LayoutTemplate },
@@ -1199,6 +1207,7 @@ Include:
       } else {
         toast.error(message || "We could not generate the basic draft. Please try again.");
       }
+      setLeafletGenerationError(message || "We could not generate the basic draft.");
     },
   });
 
@@ -1241,6 +1250,7 @@ Include:
       } else {
         toast.error(message || "We could not generate the Premium Marketing Leaflet. No credits were deducted. Try a Basic Draft instead.");
       }
+      setLeafletGenerationError(message || "We could not generate the Premium Marketing Leaflet.");
     },
   });
 
@@ -1251,7 +1261,7 @@ Include:
     const displayIterations = currentIterations.length > 0 ? currentIterations : campaignIterations;
 
     const hasLeafletImage = (iteration?: ContentIteration) =>
-      !!iteration && !!getImageUrl(findLeafletCandidate(iteration.items, campaignAssets) || iteration.leaflet, campaignAssets);
+      !!iteration && !!findDurableLeafletRecord(iteration.items, allImageRecords);
 
     const selected = displayIterations.find((i) => i.id === selectedIterationId);
     // Respect an explicit user selection that already carries a leaflet image.
@@ -1280,35 +1290,81 @@ Include:
   );
 
   const selectedIterationItems = selectedIteration?.items || [];
-  const leafletCandidate = selectedIteration?.leaflet || findLeafletCandidate(selectedIterationItems, campaignAssets);
-  const leafletImageUrl = getImageUrl(leafletCandidate, campaignAssets);
-  const isLeafletGenerating =
-    selectedIteration &&
-    !leafletCandidate &&
-    (getContentMeta(selectedIteration.leaflet).imageStatus === "generating" ||
-      selectedIterationItems.some((i) => getContentMeta(i).imageStatus === "generating") ||
-      generatePremiumLeafletMutation.isPending);
-  const isLeafletMissingButReady =
-    selectedIteration &&
-    selectedIteration.tier === "premium" &&
-    !leafletCandidate &&
-    !isLeafletGenerating;
+  const durableLeafletRecord = useMemo(() => {
+    const fromIteration = findDurableLeafletRecord(selectedIterationItems, allImageRecords);
+    if (fromIteration) return fromIteration;
+    return findDurableLeafletRecord(allImageRecords, allImageRecords);
+  }, [selectedIterationItems, allImageRecords]);
+  const leafletImageUrl = durableLeafletRecord ? getImageUrl(durableLeafletRecord, allImageRecords) : undefined;
 
-  // Poll/refetch briefly when a premium leaflet should exist but the candidate hasn't appeared yet.
+  const activeLeafletJob = useMemo(() => {
+    if (generateImageMutation.isPending || generatePremiumLeafletMutation.isPending) {
+      return { status: "processing" as const };
+    }
+    const pending = allImageRecords.find((r) => {
+      if (!isLeafletCandidate(r)) return false;
+      const status = (r as any).status;
+      const meta = getContentMeta(r);
+      return status === "pending" || status === "queued" || status === "processing" || meta.imageStatus === "generating";
+    });
+    if (pending) return { status: "processing" as const };
+    return null;
+  }, [generateImageMutation.isPending, generatePremiumLeafletMutation.isPending, allImageRecords]);
+
+  const leafletPreviewInput = useMemo(() => {
+    const recordMeta = durableLeafletRecord ? (getContentMeta(durableLeafletRecord) as any) : null;
+    const recordStatus = (durableLeafletRecord as any)?.status;
+    return {
+      durableRecord: durableLeafletRecord
+        ? {
+            url: leafletImageUrl || "",
+            status: recordStatus,
+            error: recordMeta?.error || (durableLeafletRecord as any)?.error,
+          }
+        : null,
+      job: activeLeafletJob,
+      error: leafletGenerationError,
+    };
+  }, [durableLeafletRecord, leafletImageUrl, activeLeafletJob, leafletGenerationError]);
+
+  const leafletPreviewStateBase = useMemo(
+    () => resolveLeafletPreviewState({ ...leafletPreviewInput, timedOut: undefined }),
+    [leafletPreviewInput]
+  );
+
+  const handleLeafletPoll = useCallback(() => {
+    utils.image.list.invalidate({ campaignId: numericCampaignId });
+    utils.content.list.invalidate();
+  }, [numericCampaignId, utils.image.list, utils.content.list]);
+
+  const { timedOut: leafletTimedOut, reset: resetLeafletPollingBase } = useLeafletPolling({
+    enabled: hasCampaignId,
+    status: leafletPreviewStateBase.status,
+    onPoll: handleLeafletPoll,
+    maxAttempts: 24,
+    intervalMs: 2500,
+  });
+
+  const leafletPreviewState = useMemo(
+    () => resolveLeafletPreviewState({ ...leafletPreviewInput, timedOut: leafletTimedOut }),
+    [leafletPreviewInput, leafletTimedOut]
+  );
+
+  const resetLeafletPolling = useCallback(() => {
+    setLeafletGenerationError(null);
+    resetLeafletPollingBase();
+  }, [resetLeafletPollingBase]);
+
+  // Reset leaflet-specific failure/timeout state when the campaign changes or a new leaflet generation starts.
   useEffect(() => {
-    if (!isLeafletMissingButReady || !hasCampaignId) return;
-    let count = 0;
-    const interval = setInterval(() => {
-      count += 1;
-      if (count > 12) {
-        clearInterval(interval);
-        return;
-      }
-      utils.content.list.invalidate();
-      utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
-    }, 2500);
-    return () => clearInterval(interval);
-  }, [isLeafletMissingButReady, hasCampaignId, numericCampaignId, utils.content.list, utils.content.campaignAssets]);
+    resetLeafletPolling();
+  }, [numericCampaignId]);
+
+  useEffect(() => {
+    if (generateImageMutation.isPending || generatePremiumLeafletMutation.isPending) {
+      resetLeafletPolling();
+    }
+  }, [generateImageMutation.isPending, generatePremiumLeafletMutation.isPending, resetLeafletPolling]);
 
   // Scroll to the Marketing Leaflet section once the leaflet imageUrl becomes available.
   useEffect(() => {
@@ -3469,12 +3525,10 @@ Include:
     }
 
     const hasCaptionPack = campaignAssets?.some((a) => a.assetType === "caption_pack");
-    const masterVisual =
-      filtered?.find((c) => ((c.metadata as any)?.assetKind === "master_campaign_post")) ||
-      filtered?.find((c) => c.type === "social_post");
-    const hasImage = !!((masterVisual?.metadata as any)?.imageUrl);
-    const isImageGenerating = ((masterVisual?.metadata as any)?.imageStatus) === "generating" || generateImageMutation.isPending;
-    const isImageFailed = ((masterVisual?.metadata as any)?.imageStatus) === "failed";
+    const durableLeafletMeta = durableLeafletRecord ? (getContentMeta(durableLeafletRecord) as any) : null;
+    const hasImage = leafletPreviewState.status === "ready";
+    const isImageGenerating = leafletPreviewState.status === "generating";
+    const isImageFailed = leafletPreviewState.status === "failed" || leafletPreviewState.status === "timed_out";
     const approvalsPending = approvals?.filter((a) => a.status === "pending").length || 0;
     const allApproved = filtered?.every((c) => getApprovalState(c));
 
@@ -3549,8 +3603,7 @@ Include:
     };
 
     const isPremiumLeafletAsset =
-      (masterVisual?.metadata as any)?.assetTier === "premium" ||
-      (masterVisual?.metadata as any)?.imageSource === "premium";
+      durableLeafletMeta?.assetTier === "premium" || durableLeafletMeta?.imageSource === "premium";
     const leafletStatusLabel = isPremiumLeafletAsset ? "Premium Leaflet ready" : "Basic Draft ready";
 
     const items = [
@@ -3615,7 +3668,7 @@ Include:
     const supportingAssets = selectedIteration?.isLegacy
       ? []
       : (campaignAssets || []).filter(
-          (a) => !isCaptionPackAsset(a) && getRunId(a) === selectedIteration?.runId && a !== leafletCandidate
+          (a) => !isCaptionPackAsset(a) && getRunId(a) === selectedIteration?.runId && a !== findDurableLeafletRecord(selectedIterationItems, allImageRecords)
         );
 
     const tierLabel: Record<string, string> = {
@@ -3910,8 +3963,8 @@ Include:
           </div>
         )}
 
-        {/* Main Output Area — current iteration only */}
-        {selectedIteration && (
+        {/* Main Output Area */}
+        {(selectedIteration || hasCampaignId) && (
           <div className="space-y-8">
             {/* Marketing Leaflet */}
             <section id="marketing-leaflet-section" className="space-y-3">
@@ -3920,44 +3973,99 @@ Include:
                   <Image className="w-5 h-5 text-[#00D4FF]" />
                   Marketing Leaflet
                 </h3>
-                {leafletCandidate && (
-                  <div className="flex items-center gap-2">
-                    {statusBadgeFor(leafletCandidate)}
+                <div className="flex items-center gap-2">
+                  {leafletPreviewState.status === "generating" && (
+                    <Badge variant="outline" className="border-blue-200 text-blue-700 bg-blue-50">
+                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                      Generating
+                    </Badge>
+                  )}
+                  {leafletPreviewState.status === "failed" && (
+                    <Badge variant="outline" className="border-red-200 text-red-700 bg-red-50">
+                      Failed
+                    </Badge>
+                  )}
+                  {leafletPreviewState.status === "timed_out" && (
+                    <Badge variant="outline" className="border-amber-200 text-amber-700 bg-amber-50">
+                      <AlertCircle className="w-3 h-3 mr-1" />
+                      Preview unavailable
+                    </Badge>
+                  )}
+                  {leafletPreviewState.status === "ready" && (
+                    <Badge variant="outline" className="border-emerald-200 text-emerald-700 bg-emerald-50">
+                      <CheckCircle2 className="w-3 h-3 mr-1" />
+                      Ready
+                    </Badge>
+                  )}
+                  {selectedIteration && (
                     <Badge variant="outline" className={iterationBadgeClasses(selectedIteration)}>
                       {iterationLabel(selectedIteration)}
                     </Badge>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
-              {leafletCandidate && leafletImageUrl ? (
-                renderMasterImageSection(leafletCandidate, false, false, true)
-              ) : isLeafletGenerating || isLeafletMissingButReady || (leafletCandidate && !leafletImageUrl) ? (
+              {leafletPreviewState.status === "ready" && durableLeafletRecord ? (
+                renderMasterImageSection(durableLeafletRecord, false, false, true)
+              ) : leafletPreviewState.status === "generating" ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center min-h-[380px] text-center px-6">
                   <Loader2 className="w-10 h-10 text-[#00D4FF] animate-spin mb-3" />
-                  <p className="text-sm font-medium text-slate-800">Loading leaflet preview…</p>
+                  <p className="text-sm font-medium text-slate-800">Generating marketing leaflet…</p>
                   <p className="text-xs text-slate-500 mt-1 max-w-sm">
-                    The leaflet was generated. Refreshing the workspace now.
+                    This can take a few moments. Polling will stop automatically once the preview is ready.
                   </p>
                 </div>
-              ) : selectedIterationItems[0] ? (
-                renderMasterImageSection(selectedIterationItems[0], false, false, true)
-              ) : null}
+              ) : leafletPreviewState.status === "failed" ? (
+                <div className="rounded-2xl border border-red-200 bg-red-50 flex flex-col items-center justify-center min-h-[380px] text-center px-6">
+                  <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
+                  <p className="text-sm font-medium text-red-800">Leaflet generation failed</p>
+                  <p className="text-xs text-red-600 mt-1 max-w-sm">
+                    {(leafletPreviewState as Extract<LeafletPreviewState, { status: "failed" }>).error ||
+                      "We could not generate the marketing leaflet. No credits were deducted. Try again or contact support."}
+                  </p>
+                </div>
+              ) : leafletPreviewState.status === "timed_out" ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 flex flex-col items-center justify-center min-h-[380px] text-center px-6">
+                  <AlertCircle className="w-10 h-10 text-amber-400 mb-3" />
+                  <p className="text-sm font-medium text-amber-800">Preview status could not be confirmed</p>
+                  <p className="text-xs text-amber-700 mt-1 max-w-sm">
+                    We stopped checking automatically after{" "}
+                    {(leafletPreviewState as Extract<LeafletPreviewState, { status: "timed_out" }>).attempts} attempts. You can refresh manually.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-3"
+                    onClick={() => resetLeafletPolling()}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 mr-1" />
+                    Refresh preview
+                  </Button>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center min-h-[380px] text-center px-6">
+                  <Image className="w-10 h-10 text-slate-300 mb-3" />
+                  <p className="text-sm font-medium text-slate-800">Marketing leaflet has not been generated.</p>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                    Generate a Basic Draft or Premium leaflet to see the preview here.
+                  </p>
+                </div>
+              )}
             </section>
 
             {/* Caption Pack */}
-            {selectedIteration.captionPack && (
+            {selectedIteration?.captionPack && (
               <section className="space-y-3">
                 {renderCaptionPack(
                   selectedIteration.captionPack,
                   selectedIteration.captionPack?.metadata?.contentPostId ??
-                    leafletCandidate?.id ??
+                    (durableLeafletRecord as any)?.id ??
                     0
                 )}
               </section>
             )}
 
             {/* Master Video Ad */}
-            {videoEnabled && selectedIteration.videoConcept && (
+            {videoEnabled && selectedIteration?.videoConcept && (
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
@@ -4018,10 +4126,10 @@ Include:
                   {previousIterations.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {previousIterations
-                        .filter((iteration) => findLeafletCandidate(iteration.items, campaignAssets) || iteration.videoConcept)
+                        .filter((iteration) => findDurableLeafletRecord(iteration.items, allImageRecords) || iteration.videoConcept)
                         .map((iteration) => {
-                          const prevLeaflet = findLeafletCandidate(iteration.items, campaignAssets) || iteration.leaflet;
-                          const thumbnailUrl = getImageUrl(prevLeaflet, campaignAssets);
+                          const prevLeaflet = findDurableLeafletRecord(iteration.items, allImageRecords) || iteration.leaflet;
+                          const thumbnailUrl = getImageUrl(prevLeaflet, allImageRecords);
                           const thumbnailBroken = brokenIterationIds.has(iteration.id);
                           return (
                             <button

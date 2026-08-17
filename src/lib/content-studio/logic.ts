@@ -116,40 +116,56 @@ export function isCaptionPackAsset(a: unknown): boolean {
   return asset?.assetType === "caption_pack" || getContentMeta(asset).assetType === "caption_pack";
 }
 
+function isUsableLeafletImageUrl(url: unknown): url is string {
+  if (typeof url !== "string") return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  if (trimmed === "[object Object]") return false;
+  if (trimmed.toLowerCase().startsWith("javascript:")) return false;
+  // Established renderer-supported forms: absolute http(s) URLs and absolute paths.
+  return /^https?:\/\//i.test(trimmed) || trimmed.startsWith("/");
+}
+
+export function getLeafletOwnImageUrl(c: unknown): string | undefined {
+  if (!c) return undefined;
+  const item = c as Record<string, unknown>;
+  const meta = getContentMeta(item);
+  const candidates = [meta?.imageUrl, meta?.url, item?.url, item?.imageUrl];
+  for (const candidate of candidates) {
+    if (isUsableLeafletImageUrl(candidate)) return candidate;
+  }
+  return undefined;
+}
+
 export function isLeafletCandidate(c: unknown): boolean {
   if (!c) return false;
   const item = c as Record<string, unknown>;
   const meta = getContentMeta(item);
   if (isCaptionPackAsset(c)) return false;
-  if (meta?.assetType === "leaflet" || meta?.assetKind === "master_campaign_post") return true;
-  if (meta?.imageProvider === "openai-leaflet" || meta?.imageSource === "openai") return true;
-  // A generated social post is a valid leaflet candidate even before its hero image is rendered.
-  if (item?.type === "social_post" && item?.aiGenerated) return true;
-  if (typeof meta?.imageUrl === "string" || typeof item?.imageUrl === "string") return true;
+  // Only explicit leaflet identities are accepted as durable evidence.
+  // Generic imageSource, imageProvider, provider strings, aiGenerated, or premium tier
+  // are never enough on their own.
+  if (meta?.assetType === "leaflet" || item?.assetType === "leaflet") return true;
+  if (meta?.assetKind === "master_campaign_post") return true;
   return false;
 }
 
 export function findLeafletCandidate(items: unknown[], assets?: unknown[]): unknown | undefined {
   if (!items?.length) return undefined;
-  // Prefer explicit leaflet markers, then OpenAI sources, then any generated social post / imageUrl-bearing non-caption record.
-  const candidates = items.filter(isLeafletCandidate);
-  return (
-    candidates.find((c) => {
-      const meta = getContentMeta(c);
-      return meta?.assetType === "leaflet" || meta?.assetKind === "master_campaign_post";
-    }) ||
-    candidates.find((c) => {
-      const meta = getContentMeta(c);
-      return meta?.imageProvider === "openai-leaflet" || meta?.imageSource === "openai";
-    }) ||
-    candidates.find((c) => {
-      const item = c as Record<string, unknown>;
-      return item?.type === "social_post" && item?.aiGenerated;
-    }) ||
-    candidates.find((c) => getImageUrl(c, assets)) ||
-    candidates[0]
+  // The assets parameter is kept for the existing call signature but is no longer used
+  // for URL resolution; a candidate must carry its own usable preview URL.
+  void assets;
+  const candidates = items.filter((c) => isLeafletCandidate(c) && !!getLeafletOwnImageUrl(c));
+  if (!candidates.length) return undefined;
+  candidates.sort(
+    (a, b) =>
+      new Date(((b as Record<string, unknown>).createdAt as string) || 0).getTime() -
+      new Date(((a as Record<string, unknown>).createdAt as string) || 0).getTime()
   );
+  return candidates[0];
 }
+
+export const findDurableLeafletRecord = findLeafletCandidate;
 
 export function campaignHasGeneratedContent(params: {
   postCount: number | undefined;
@@ -560,4 +576,72 @@ export function getPublishDialogButtonLabel({
 
   // Approval-required or contract-error states should not trigger a publish action.
   return "Confirm Publish";
+}
+
+// ─── Shared Marketing Leaflet preview state resolver ───
+
+export type LeafletPreviewJobStatus =
+  | "queued"
+  | "processing"
+  | "preparing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface LeafletPreviewJob {
+  status: LeafletPreviewJobStatus;
+  error?: string | null;
+}
+
+export type LeafletPreviewState =
+  | { status: "idle" }
+  | { status: "generating" }
+  | { status: "ready"; imageUrl: string; record: unknown }
+  | { status: "not_generated" }
+  | { status: "failed"; error: string | null }
+  | { status: "cancelled" }
+  | { status: "timed_out"; attempts: number; elapsedMs: number };
+
+export interface ResolveLeafletPreviewStateInput {
+  durableRecord: { url: string; status?: string; error?: string | null } | null | undefined;
+  job?: LeafletPreviewJob | null | undefined;
+  error?: string | null;
+  timedOut?: { attempts: number; elapsedMs: number } | null;
+}
+
+export function resolveLeafletPreviewState(
+  input: ResolveLeafletPreviewStateInput
+): LeafletPreviewState {
+  const { durableRecord, job, error, timedOut } = input;
+
+  if (timedOut) {
+    return { status: "timed_out", attempts: timedOut.attempts, elapsedMs: timedOut.elapsedMs };
+  }
+
+  if (durableRecord) {
+    if (durableRecord.status === "failed") {
+      return { status: "failed", error: durableRecord.error || error || "Leaflet generation failed." };
+    }
+    if (isUsableLeafletImageUrl(durableRecord.url)) {
+      return { status: "ready", imageUrl: durableRecord.url, record: durableRecord };
+    }
+  }
+
+  if (job) {
+    if (job.status === "failed") {
+      return { status: "failed", error: error || job.error || "Leaflet generation failed." };
+    }
+    if (job.status === "cancelled") {
+      return { status: "cancelled" };
+    }
+    if (job.status === "queued" || job.status === "processing" || job.status === "preparing") {
+      return { status: "generating" };
+    }
+  }
+
+  if (error) {
+    return { status: "failed", error };
+  }
+
+  return { status: "not_generated" };
 }
