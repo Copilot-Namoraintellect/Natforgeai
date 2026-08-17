@@ -1560,6 +1560,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           iterationNumber: nextIterationNumber,
           assetType,
           assetTier: "standard",
+          creativeBriefFingerprint: brief.fingerprint,
         },
       });
       savedPosts++;
@@ -1661,6 +1662,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           iterationNumber: nextIterationNumber,
           assetType,
           assetTier: "standard",
+          creativeBriefFingerprint: brief.fingerprint,
         } as any,
       });
       savedAssets++;
@@ -1769,6 +1771,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         status: "ready",
         metadata: {
           hooks: pack.hooks.map((h: any) => ({ text: h.text, angle: h.angle })),
+          creativeBriefFingerprint: brief.fingerprint,
         } as any,
       });
       savedAssets++;
@@ -1795,6 +1798,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         status: "ready",
         metadata: {
           ctaVariations: pack.ctaVariations.map((c: any) => ({ text: c.text, angle: c.angle })),
+          creativeBriefFingerprint: brief.fingerprint,
         } as any,
       });
       savedAssets++;
@@ -1854,6 +1858,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           adaptedHashtags: adaptation.adaptedHashtags,
           bestTimeToPost: adaptation.bestTimeToPost,
           formatNotes: adaptation.formatNotes,
+          creativeBriefFingerprint: brief.fingerprint,
         } as any,
       });
       savedAssets++;
@@ -1887,6 +1892,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
             platform: p.platform,
             hashtags: p.hashtags,
           })),
+          creativeBriefFingerprint: brief.fingerprint,
         } as any,
       });
       savedAssets++;

@@ -82,6 +82,11 @@ function getNextIterationNumber(postMeta: any, existingImages: any[]): number {
   return maxExisting + 1;
 }
 
+function getCampaignFingerprint(campaign: any): string | undefined {
+  if (!campaign?.id) return undefined;
+  return computeCreativeBriefFingerprint(campaign);
+}
+
 function toJobStatus(status: ProviderStatus): "queued" | "rendering" | "completed" | "failed" | "cancelled" {
   switch (status) {
     case "done":
@@ -500,6 +505,7 @@ export async function generateBasicDraftLeaflet({
         assetType: "leaflet",
         assetTier: "basic",
         approvedMessagePack: draftApprovedMessagePack,
+        creativeBriefFingerprint: getCampaignFingerprint(campaign),
       },
     });
 
@@ -549,6 +555,7 @@ export async function generateBasicDraftLeaflet({
           iterationNumber,
           assetType: "leaflet",
           assetTier: "basic",
+          creativeBriefFingerprint: getCampaignFingerprint(campaign),
         },
       })
       .where(eq(contentPosts.id, post.id));
@@ -1577,6 +1584,7 @@ export async function generatePremiumLeaflet({
         assetTier: "premium",
         approvedMessagePack,
         brandAsset: brandAssetMetadata,
+        creativeBriefFingerprint: getCampaignFingerprint(campaign),
         ...(aiAttempts ? { attempts: aiAttempts } : {}),
         ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
         ...(fallbackMessage ? { fallbackMessage } : {}),
@@ -1633,6 +1641,7 @@ export async function generatePremiumLeaflet({
           assetType: "leaflet",
           assetTier: "premium",
           brandAsset: brandAssetMetadata,
+          creativeBriefFingerprint: getCampaignFingerprint(campaign),
           ...(aiAttempts ? { imageAttempts: aiAttempts } : {}),
         },
       })
@@ -2159,6 +2168,7 @@ OUTPUT FORMAT — return ONLY a single JSON object with these exact keys:
         iterationNumber: resolvedIterationNumber,
         assetType: "caption_pack",
         assetTier: resolvedAssetTier,
+        creativeBriefFingerprint: brief.fingerprint,
       },
     });
 

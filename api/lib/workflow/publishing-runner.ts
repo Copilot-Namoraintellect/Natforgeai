@@ -1,6 +1,7 @@
 import { getDb } from "../../queries/connection";
 import { publishingQueue, contentPosts, socialIntegrations, campaigns, approvalRequests } from "@db/schema";
 import { eq, and, lte, or } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import {
   publishToFacebook,
   publishToInstagram,
@@ -16,6 +17,7 @@ import { deductCredits } from "../billing/credit-engine";
 import { createAlert } from "../alerts";
 import { rateLimitUser } from "../rate-limiter";
 import { ingestAudienceData } from "../audience/ingest";
+import { loadAndAssertCampaignPublicationReadiness } from "../creative/publication-readiness-service";
 
 const RETRY_DELAYS_MS = [60_000, 300_000, 900_000]; // 1min, 5min, 15min
 
@@ -181,6 +183,50 @@ export async function publishSinglePost(queueItemId: number) {
     return { id: queueItemId, status: post.status, error: "Not ready for publishing" };
   }
 
+  // Load content post early so the Phase 2B readiness gate runs before any side effect.
+  const [contentPost] = post.contentPostId
+    ? await db
+        .select()
+        .from(contentPosts)
+        .where(eq(contentPosts.id, post.contentPostId))
+        .limit(1)
+    : [null];
+
+  if (contentPost?.campaignId) {
+    try {
+      await loadAndAssertCampaignPublicationReadiness({
+        db,
+        userId: post.userId,
+        campaignId: contentPost.campaignId,
+        selectedOutput: { record: contentPost, type: "content_post" },
+        requireLaunchApproval: true,
+      });
+    } catch (err: any) {
+      const message = err instanceof TRPCError ? err.message : "Publication readiness check failed";
+      // Phase 2B side-effect contract for a permanent readiness rejection:
+      // - No external platform call, credit mutation, published/scheduled state,
+      //   campaign-live transition, or success audit has occurred yet.
+      // - The only permitted mutation is an idempotent update of this queue row
+      //   to failed/blocked with a safe reason, so the worker can surface an
+      //   UnrecoverableError to BullMQ and stop retrying a non-transient failure.
+      await db
+        .update(publishingQueue)
+        .set({
+          status: "failed",
+          lastError: message,
+          retryCount: post.maxRetries || 3,
+          nextRetryAt: null,
+        })
+        .where(eq(publishingQueue.id, post.id));
+      return {
+        id: post.id,
+        status: "precondition_failed",
+        platform: post.platform,
+        error: message,
+      };
+    }
+  }
+
   // Rate limit check
   try {
     await rateLimitUser({ req: new Request("http://localhost"), resHeaders: new Headers(), user: { id: post.userId } as any }, "publish");
@@ -240,14 +286,8 @@ export async function publishSinglePost(queueItemId: number) {
       return { id: post.id, status: "pending_approval", platform: post.platform };
     }
 
-    // Get the content post
-    const [contentPost] = post.contentPostId
-      ? await db
-          .select()
-          .from(contentPosts)
-          .where(eq(contentPosts.id, post.contentPostId))
-          .limit(1)
-      : [null];
+    // Content post was loaded before the readiness gate; reuse it here.
+    const postMeta = contentPost ? (contentPost.metadata || {}) as any : {};
 
     // Get platform integration
     let integration: typeof socialIntegrations.$inferSelect | undefined;
@@ -303,7 +343,6 @@ export async function publishSinglePost(queueItemId: number) {
     }
 
     // Build content payload
-    const postMeta = contentPost ? (contentPost.metadata || {}) as any : {};
     const imageUrl: string | undefined =
       postMeta?.imageUrl || (contentPost as any)?.imageUrl || undefined;
 

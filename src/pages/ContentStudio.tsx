@@ -203,6 +203,24 @@ function actionKey(contentId: number, action: string): PendingActionKey {
   return `${contentId}:${action}`;
 }
 
+function formatCampaignPublishReadinessReasons(reasons: string[] | undefined): string {
+  if (!reasons?.length) return "";
+  const labels: Record<string, string> = {
+    campaign_missing: "Campaign not found.",
+    brief_incomplete: "Campaign brief is incomplete.",
+    leaflet_missing: "Marketing Leaflet is missing. Generate it from the current brief.",
+    leaflet_stale: "Marketing Leaflet is stale. Regenerate it from the current brief.",
+    caption_pack_missing: "Caption pack is missing. Generate it from the current brief.",
+    caption_pack_stale: "Caption pack is stale. Regenerate it from the current brief.",
+    selected_output_missing: "Selected output does not exist.",
+    selected_output_stale: "Selected output is stale. Regenerate it from the current brief.",
+    approval_pending: "Campaign launch approval is pending.",
+    output_failed: "One or more outputs are failed, cancelled, or still generating.",
+    output_stale: "Existing campaign output is stale. Regenerate it from the current brief.",
+  };
+  return reasons.map((r) => labels[r] || r).join(" ");
+}
+
 import {
   getContentMeta,
   getImageUrl,
@@ -581,6 +599,7 @@ export default function ContentStudio() {
     platformStatuses: Array<{ platform: string; status: PlatformPublishStatus }>;
     platformSafety: Array<{ platform: string; riskLevel: "low" | "medium" | "high"; requiresApproval: boolean }>;
     safetyRiskLevel: "low" | "medium" | "high";
+    readiness: { ready: boolean; reasons: string[]; [key: string]: any };
   } | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["masterVisual", "masterVideo"]));
   const [selectedIterationId, setSelectedIterationId] = useState<string | null>(null);
@@ -1392,6 +1411,10 @@ Include:
   });
 
   const ensurePublishEligibility = trpc.content.ensurePublishEligibility.useMutation();
+  const campaignPublishReadiness = trpc.content.getCampaignPublishReadiness.useQuery(
+    { campaignId: numericCampaignId },
+    { enabled: hasCampaignId }
+  );
 
   const publishCampaignPackMutation = trpc.content.publishCampaignPack.useMutation({
     onSuccess: (data) => {
@@ -3049,6 +3072,14 @@ Include:
     const approved = getApprovalState(content);
     const connected = isPlatformConnected(content.platform, connectedIntegrations);
     const captionText = getCaptionText(content);
+    // Phase 2B: per-content publish/schedule actions for campaign-linked output
+    // must reflect the server-authoritative readiness of the current campaign.
+    const isCampaignLinkedContent =
+      !!content.campaignId && content.campaignId === numericCampaignId;
+    const campaignReadinessBlocked =
+      isCampaignLinkedContent &&
+      !campaignPublishReadiness.isLoading &&
+      campaignPublishReadiness.data?.ready === false;
     const platformRequiresConnection = content.platform && ["facebook", "instagram", "linkedin", "tiktok", "twitter", "whatsapp"].includes(content.platform);
     const showConnectGuard = platformRequiresConnection && !connected;
     const meta = (content.metadata || {}) as any;
@@ -3097,7 +3128,8 @@ Include:
               variant="outline"
               className="h-8"
               onClick={() => openSchedule(content.id, content.scheduledFor)}
-              disabled={isPending(content.id, "schedule")}
+              disabled={isPending(content.id, "schedule") || campaignReadinessBlocked}
+              title={campaignReadinessBlocked ? "Campaign is not ready to publish" : undefined}
             >
               <CalendarClock className="w-3.5 h-3.5 mr-1.5" />
               {content.status === "scheduled" ? "Reschedule" : "Schedule"}
@@ -3109,7 +3141,8 @@ Include:
                 variant="outline"
                 className="h-8"
                 onClick={() => handleMarkPosted(content.id)}
-                disabled={isPending(content.id, "markPosted")}
+                disabled={isPending(content.id, "markPosted") || campaignReadinessBlocked}
+                title={campaignReadinessBlocked ? "Campaign is not ready to publish" : undefined}
               >
                 {isPending(content.id, "markPosted") ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1.5" />}
                 Mark as posted
@@ -3120,6 +3153,8 @@ Include:
                 variant="outline"
                 className="h-8"
                 onClick={() => handlePublishNow(content)}
+                disabled={campaignReadinessBlocked}
+                title={campaignReadinessBlocked ? "Campaign is not ready to publish" : undefined}
               >
                 <Upload className="w-3.5 h-3.5 mr-1.5" />
                 Publish now
@@ -3130,7 +3165,8 @@ Include:
                 variant="outline"
                 className="h-8"
                 onClick={() => handleMarkPosted(content.id)}
-                disabled={isPending(content.id, "markPosted")}
+                disabled={isPending(content.id, "markPosted") || campaignReadinessBlocked}
+                title={campaignReadinessBlocked ? "Campaign is not ready to publish" : undefined}
               >
                 {isPending(content.id, "markPosted") ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1.5" />}
                 Mark as posted
@@ -3322,6 +3358,9 @@ Include:
 
   function renderCampaignAssetCard(asset: any) {
     const meta = (asset.metadata || {}) as any;
+    const currentFingerprint = campaignPublishReadiness.data?.currentCreativeBriefFingerprint;
+    const assetFingerprint = meta.creativeBriefFingerprint;
+    const isStale = !!currentFingerprint && assetFingerprint !== currentFingerprint;
     return (
       <Card key={asset.id} className="hover:shadow-md transition-all">
         <CardContent className="p-4">
@@ -3329,6 +3368,11 @@ Include:
             <Badge variant="secondary" className="capitalize">
               {asset.assetType.replace(/_/g, " ")}
             </Badge>
+            {isStale && (
+              <Badge variant="outline" className="text-[10px] h-5 border-amber-200 text-amber-700 bg-amber-50">
+                Stale
+              </Badge>
+            )}
             {asset.status && (
               <Badge variant="outline" className="text-[10px] h-5">
                 {asset.status}
@@ -3501,8 +3545,12 @@ Include:
 
   function executePublishPack() {
     if (!urlCampaignId) return;
-    if (!publishEligibility?.canPublish) {
-      toast.error("This campaign is not ready to publish yet.");
+    if (!publishEligibility?.canPublish || !publishEligibility?.readiness?.ready) {
+      toast.error(
+        publishEligibility?.readiness?.reasons?.length
+          ? formatCampaignPublishReadinessReasons(publishEligibility.readiness.reasons)
+          : "This campaign is not ready to publish yet."
+      );
       return;
     }
     publishCampaignPackMutation.mutate({ campaignId: numericCampaignId, allowRepublish: isRepublish });
@@ -3838,6 +3886,7 @@ Include:
                     variant="outline"
                     className="text-amber-700 border-amber-200 hover:bg-amber-50"
                     onClick={handlePublishPack}
+                    disabled={!campaignPublishReadiness.data?.ready || campaignPublishReadiness.isLoading}
                   >
                     <Upload className="w-3.5 h-3.5 mr-1.5" />
                     Publish again
@@ -3846,7 +3895,7 @@ Include:
                   <Button
                     size="sm"
                     className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
-                    disabled={!canPublish}
+                    disabled={!canPublish || !campaignPublishReadiness.data?.ready || campaignPublishReadiness.isLoading}
                     onClick={handlePublishPack}
                   >
                     <Upload className="w-3.5 h-3.5 mr-1.5" />
@@ -3860,6 +3909,20 @@ Include:
                 Campaign status:{" "}
                 <span className="font-medium">
                   {campaignForContext.workflowState.replace(/_/g, " ")}
+                </span>
+              </p>
+            )}
+            {campaignPublishReadiness.isLoading && (
+              <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1.5">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Checking publish readiness…
+              </p>
+            )}
+            {campaignPublishReadiness.data && !campaignPublishReadiness.data.ready && !campaignPublishReadiness.isLoading && (
+              <p className="text-xs text-amber-700 mt-2 flex items-start gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>
+                  Publishing is blocked: {formatCampaignPublishReadinessReasons(campaignPublishReadiness.data.reasons)}
                 </span>
               </p>
             )}
@@ -4500,6 +4563,14 @@ Include:
                         </ul>
                       </div>
                     )}
+                    {eligibility.readiness && !eligibility.readiness.ready && (
+                      <div className="p-3 rounded-md bg-red-50 border border-red-200 text-xs text-red-800">
+                        <p className="font-medium">Campaign is not ready to publish</p>
+                        <p className="text-red-700/80 mt-0.5">
+                          {formatCampaignPublishReadinessReasons(eligibility.readiness.reasons)}
+                        </p>
+                      </div>
+                    )}
                     {platformGroups}
                     <div className="flex flex-wrap gap-2 pt-2">
                       <Button
@@ -4524,7 +4595,11 @@ Include:
                       <Button
                         className="flex-1 min-w-[140px] bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
                         onClick={executePublishPack}
-                        disabled={publishCampaignPackMutation.isPending || !eligibility.canPublish}
+                        disabled={
+                          publishCampaignPackMutation.isPending ||
+                          !eligibility.canPublish ||
+                          !eligibility.readiness?.ready
+                        }
                       >
                         {publishCampaignPackMutation.isPending ? (
                           <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -5148,24 +5223,11 @@ Include:
                         <Button
                           size="sm"
                           variant="outline"
-                          className={
-                            summary.campaign.workflowState === "campaign_live"
-                              ? "text-amber-700 border-amber-200 hover:bg-amber-50"
-                              : "text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-                          }
-                          onClick={() =>
-                            publishCampaignPackMutation.mutate({
-                              campaignId: summary.campaign.id,
-                              allowRepublish: summary.campaign.workflowState === "campaign_live",
-                            })
-                          }
-                          disabled={publishCampaignPackMutation.isPending}
+                          className="text-slate-500 border-slate-200 hover:bg-slate-50"
+                          onClick={() => navigate(`/content-studio/${summary.campaign.id}`)}
+                          title="Open campaign to publish"
                         >
-                          {publishCampaignPackMutation.isPending ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Megaphone className="w-3.5 h-3.5" />
-                          )}
+                          <ExternalLink className="w-3.5 h-3.5" />
                         </Button>
                       )}
                     </div>
@@ -5276,7 +5338,20 @@ Include:
               <Button variant="outline" className="flex-1" onClick={() => setScheduleOpen({ open: false, contentId: null })}>
                 Cancel
               </Button>
-              <Button className="flex-1" onClick={handleScheduleSave} disabled={!scheduleDate || isPending(scheduleOpen.contentId ?? 0, "schedule")}>
+              <Button
+                className="flex-1"
+                onClick={handleScheduleSave}
+                disabled={
+                  !scheduleDate ||
+                  isPending(scheduleOpen.contentId ?? 0, "schedule") ||
+                  (!!numericCampaignId && !campaignPublishReadiness.isLoading && campaignPublishReadiness.data?.ready === false)
+                }
+                title={
+                  !!numericCampaignId && !campaignPublishReadiness.isLoading && campaignPublishReadiness.data?.ready === false
+                    ? "Campaign is not ready to publish"
+                    : undefined
+                }
+              >
                 {isPending(scheduleOpen.contentId ?? 0, "schedule") ? "Saving..." : "Schedule"}
               </Button>
             </div>

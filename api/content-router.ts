@@ -19,6 +19,10 @@ import {
   releaseClaimWithResult,
   calculateLeaseExpiresAt,
 } from "./lib/creative/creative-generation-claim";
+import {
+  loadAndResolveCampaignPublicationReadiness,
+  loadAndAssertCampaignPublicationReadiness,
+} from "./lib/creative/publication-readiness-service";
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
@@ -658,6 +662,19 @@ export const contentRouter = createRouter({
         throw new Error("Content post not found");
       }
 
+      // Phase 2B: server-authoritative single-item readiness gate. One-off content
+      // (no campaign) is allowed; campaign-linked posts must be current and, for a
+      // final publication action, the campaign launch approval must be complete.
+      if (post.campaignId) {
+        await loadAndAssertCampaignPublicationReadiness({
+          db,
+          userId: ctx.user.id,
+          campaignId: post.campaignId,
+          selectedOutput: { record: post, type: "content_post" },
+          requireLaunchApproval: true,
+        });
+      }
+
       const currentMetadata = (post.metadata || {}) as any;
       await db
         .update(contentPosts)
@@ -848,8 +865,40 @@ export const contentRouter = createRouter({
         unavailableReason = "no_publishable_content";
       }
 
+      const readiness = await loadAndResolveCampaignPublicationReadiness({
+        db,
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+      });
+
+      // Phase 2B: the legacy integration/approval/safety eligibility must agree with
+      // the server-authoritative publication-readiness resolver. A campaign is
+      // publishable only when both legacy checks and the durable-output gate pass.
+      const legacyReady = unavailableReason === "ready";
+      const canPublish = legacyReady && readiness.ready;
+
+      // Surface combined machine-readable reasons. Legacy non-ready reasons are
+      // additive when the readiness resolver does not already report them.
+      const combinedReasons = readiness.ready
+        ? []
+        : Array.from(new Set([...(readiness.reasons || [])]));
+      if (!legacyReady && !combinedReasons.includes(unavailableReason as any)) {
+        // Map legacy eligibility blockers to the closest readiness reason when possible.
+        const legacyReasonMap: Record<string, string> = {
+          no_connected_platforms: "leaflet_missing",
+          strategy_approval_required: "approval_pending",
+          launch_approval_required: "approval_pending",
+          no_publishable_content: "selected_output_missing",
+          safety_blocked: "output_failed",
+        };
+        const mapped = legacyReasonMap[unavailableReason] || unavailableReason;
+        if (!combinedReasons.includes(mapped as any)) {
+          combinedReasons.push(mapped as any);
+        }
+      }
+
       const response = {
-        canPublish: unavailableReason === "ready",
+        canPublish,
         campaignId: input.campaignId,
         ctxUserId: ctx.user.id,
         campaignUserId: campaign.userId,
@@ -860,14 +909,27 @@ export const contentRouter = createRouter({
         pendingApprovalCount,
         publishablePostCount,
         unavailableReason,
+        reasons: combinedReasons,
         platformStatuses,
         platformSafety,
         safetyRiskLevel,
+        readiness,
       };
 
       logInfo("[PublishEligibility] Computed publish eligibility", response);
 
       return response;
+    }),
+
+  getCampaignPublishReadiness: authedQuery
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      return loadAndResolveCampaignPublicationReadiness({
+        db,
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+      });
     }),
 
   publishCampaignPack: authedQuery
@@ -892,6 +954,14 @@ export const contentRouter = createRouter({
           message: "This campaign is already live. Use Publish again if you want to republish.",
         });
       }
+
+      // Phase 2B: server-authoritative publication-readiness gate. Must run before
+      // any auto-approval, queue insertion, platform call, status mutation or billing.
+      await loadAndAssertCampaignPublicationReadiness({
+        db,
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+      });
 
       const posts = await db
         .select()

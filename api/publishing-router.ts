@@ -10,6 +10,7 @@ import { schedulePublishingJob, isBullMQAvailable } from "./lib/queue/bullmq";
 import { env } from "./lib/env";
 import { publishToFacebook } from "./lib/integrations/platforms";
 import { decryptToken } from "./lib/crypto";
+import { loadAndAssertCampaignPublicationReadiness } from "./lib/creative/publication-readiness-service";
 
 export const publishingRouter = createRouter({
   createPublishingQueue: authedQuery
@@ -29,6 +30,32 @@ export const publishingRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const createdIds: number[] = [];
+
+      // Phase 2B: pre-flight readiness check for every selected post. No queue item
+      // is inserted unless every selected campaign output is current and ready.
+      for (const post of input.posts) {
+        if (!post.contentPostId) continue;
+        const [contentPost] = await db
+          .select()
+          .from(contentPosts)
+          .where(and(eq(contentPosts.id, post.contentPostId), eq(contentPosts.userId, ctx.user.id)))
+          .limit(1);
+        if (!contentPost) {
+          throw new TRPCError({ code: "NOT_FOUND", message: `Content post ${post.contentPostId} not found` });
+        }
+        if (contentPost.campaignId && contentPost.campaignId !== input.campaignId) {
+          throw new TRPCError({ code: "NOT_FOUND", message: `Content post ${post.contentPostId} does not belong to this campaign` });
+        }
+        if (contentPost.campaignId) {
+          await loadAndAssertCampaignPublicationReadiness({
+            db,
+            userId: ctx.user.id,
+            campaignId: input.campaignId,
+            selectedOutput: { record: contentPost, type: "content_post" },
+            requireLaunchApproval: false,
+          });
+        }
+      }
 
       for (const post of input.posts) {
         const [result] = await db.insert(publishingQueue).values({
@@ -77,8 +104,33 @@ export const publishingRouter = createRouter({
         )
         .limit(1);
 
-      if (!item) {
+      if (!item || item.userId !== ctx.user.id) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Queue item not found" });
+      }
+
+      // Phase 2B: guard approval of campaign-linked posts. No status mutation or
+      // scheduling if the selected output is missing or stale.
+      if (item.contentPostId) {
+        const [contentPost] = await db
+          .select()
+          .from(contentPosts)
+          .where(and(eq(contentPosts.id, item.contentPostId), eq(contentPosts.userId, ctx.user.id)))
+          .limit(1);
+        if (!contentPost) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Content post not found" });
+        }
+        if (contentPost.campaignId && contentPost.campaignId !== item.campaignId) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Content post does not belong to this campaign" });
+        }
+        if (contentPost?.campaignId) {
+          await loadAndAssertCampaignPublicationReadiness({
+            db,
+            userId: ctx.user.id,
+            campaignId: item.campaignId,
+            selectedOutput: { record: contentPost, type: "content_post" },
+            requireLaunchApproval: false,
+          });
+        }
       }
 
       await db
@@ -119,7 +171,7 @@ export const publishingRouter = createRouter({
         )
         .limit(1);
 
-      if (!item) {
+      if (!item || item.userId !== ctx.user.id) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Queue item not found" });
       }
 
@@ -128,6 +180,30 @@ export const publishingRouter = createRouter({
           code: "BAD_REQUEST",
           message: `Post cannot be published because it is ${item.status}. Approve it first.`,
         });
+      }
+
+      // Phase 2B: single-item readiness gate before the external platform call.
+      if (item.contentPostId) {
+        const [contentPost] = await db
+          .select()
+          .from(contentPosts)
+          .where(and(eq(contentPosts.id, item.contentPostId), eq(contentPosts.userId, ctx.user.id)))
+          .limit(1);
+        if (!contentPost) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Content post not found" });
+        }
+        if (contentPost.campaignId && contentPost.campaignId !== item.campaignId) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Content post does not belong to this campaign" });
+        }
+        if (contentPost?.campaignId) {
+          await loadAndAssertCampaignPublicationReadiness({
+            db,
+            userId: ctx.user.id,
+            campaignId: item.campaignId,
+            selectedOutput: { record: contentPost, type: "content_post" },
+            requireLaunchApproval: true,
+          });
+        }
       }
 
       const result = await publishSinglePost(item.id);

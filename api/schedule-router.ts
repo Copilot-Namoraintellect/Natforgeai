@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { schedules } from "@db/schema";
+import { schedules, contentPosts } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
+import { loadAndAssertCampaignPublicationReadiness } from "./lib/creative/publication-readiness-service";
 
 export const scheduleRouter = createRouter({
   list: authedQuery
@@ -74,6 +76,28 @@ export const scheduleRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
+
+      // Phase 2B: guard scheduling of campaign-linked posts before creating the schedule row.
+      if (input.contentPostId) {
+        const [contentPost] = await db
+          .select()
+          .from(contentPosts)
+          .where(and(eq(contentPosts.id, input.contentPostId), eq(contentPosts.userId, ctx.user.id)))
+          .limit(1);
+        if (!contentPost) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Content post not found" });
+        }
+        if (contentPost.campaignId) {
+          await loadAndAssertCampaignPublicationReadiness({
+            db,
+            userId: ctx.user.id,
+            campaignId: contentPost.campaignId,
+            selectedOutput: { record: contentPost, type: "content_post" },
+            requireLaunchApproval: true,
+          });
+        }
+      }
+
       const [s] = await db.insert(schedules).values({
         userId: ctx.user.id,
         contentPostId: input.contentPostId,

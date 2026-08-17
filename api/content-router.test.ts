@@ -28,6 +28,26 @@ vi.mock("./lib/agents/creative-agent", () => ({
   runCreativeAgent: vi.fn(),
 }));
 
+vi.mock("./lib/creative/brief-grounding", () => ({
+  buildGroundedCreativeBrief: vi.fn(() => ({
+    fingerprint: "test-fingerprint-ready",
+    productOrService: "Business service",
+    targetBuyer: "Small business owners",
+    mainPainPoint: "Wasting time",
+    preferredCta: "Contact us",
+    primaryOutcome: "More leads",
+    targetAudience: "Small business owners",
+    coreMessage: "Empower your workforce",
+    offerDetails: "",
+    excludedOffers: "",
+    referenceStyle: "",
+    contentStyle: "",
+    businessType: "B2B",
+  })),
+  computeCreativeBriefFingerprint: vi.fn(() => "test-fingerprint-ready"),
+  isApprovedMessagePackCompatible: vi.fn(() => true),
+}));
+
 vi.mock("./lib/workflow/triggers", () => ({
   onAgentRunComplete: vi.fn(),
 }));
@@ -733,6 +753,11 @@ describe("contentRouter.publishCampaignPack", () => {
     status: "draft",
     workflowState: "creatives_ready",
     platforms: "instagram",
+    productOrService: "Business service",
+    targetBuyer: "Small business owners",
+    mainPainPoint: "Wasting time",
+    primaryOutcome: "More leads",
+    coreMessage: "Empower your workforce",
   };
 
   const basePost = {
@@ -747,7 +772,18 @@ describe("contentRouter.publishCampaignPack", () => {
       assetKind: "master_campaign_post",
       imageStatus: "ready",
       imageUrl: "https://example.com/master-image.png",
+      creativeBriefFingerprint: "test-fingerprint-ready",
     },
+  };
+
+  const baseApproval = {
+    id: 1,
+    userId: 18,
+    campaignId: 28,
+    approvalType: "campaign_launch",
+    status: "approved",
+    title: "Approve Launch",
+    riskLevel: "low",
   };
 
   const baseIntegration = {
@@ -767,6 +803,9 @@ describe("contentRouter.publishCampaignPack", () => {
     userId: 18,
     campaignId: 28,
     assetType: "caption_adaptation",
+    metadata: {
+      creativeBriefFingerprint: "test-fingerprint-ready",
+    },
   };
 
   it("creates a publishing_queue row when a connected Instagram integration exists", async () => {
@@ -787,6 +826,7 @@ describe("contentRouter.publishCampaignPack", () => {
       integrations: [baseIntegration],
       assets: [captionAsset],
       queue: [],
+      approvals: [baseApproval],
     });
     vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
 
@@ -822,6 +862,7 @@ describe("contentRouter.publishCampaignPack", () => {
       integrations: [],
       assets: [captionAsset],
       queue: [],
+      approvals: [baseApproval],
     });
     vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
 
@@ -859,6 +900,7 @@ describe("contentRouter.publishCampaignPack", () => {
       integrations: [wrongBusinessIntegration],
       assets: [captionAsset],
       queue: [],
+      approvals: [baseApproval],
     });
     vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
 
@@ -883,6 +925,7 @@ describe("contentRouter.publishCampaignPack", () => {
       integrations: [baseIntegration],
       assets: [captionAsset],
       queue: [],
+      approvals: [baseApproval],
     });
     vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
 
@@ -925,6 +968,11 @@ describe("contentRouter.publishCampaignPack", () => {
       platforms: "Facebook, Instagram",
       name: "3@1 Newmarket Campaign",
       aiGenerated: true,
+      productOrService: "Business service",
+      targetBuyer: "Small business owners",
+      mainPainPoint: "Wasting time",
+      primaryOutcome: "More leads",
+      coreMessage: "Empower your workforce",
     };
 
     const post = {
@@ -939,7 +987,18 @@ describe("contentRouter.publishCampaignPack", () => {
         assetKind: "master_campaign_post",
         imageStatus: "ready",
         imageUrl: "/generated/images/23/premium-leaflet-internal_12ad3497-86bb-4c5b-9759-93bf8da278b9.png",
+        creativeBriefFingerprint: "test-fingerprint-ready",
       },
+    };
+
+    const campaign23Approval = {
+      id: 1,
+      userId: 14,
+      campaignId: 23,
+      approvalType: "campaign_launch",
+      status: "approved",
+      title: "Approve Launch",
+      riskLevel: "low",
     };
 
     const fbIntegration = {
@@ -970,8 +1029,9 @@ describe("contentRouter.publishCampaignPack", () => {
       campaign: campaign23Publish,
       posts: [post],
       integrations: [fbIntegration, igIntegration],
-      assets: [{ id: 1, userId: 14, campaignId: 23, assetType: "caption_adaptation" }],
+      assets: [{ id: 1, userId: 14, campaignId: 23, assetType: "caption_adaptation", metadata: { creativeBriefFingerprint: "test-fingerprint-ready" } }],
       queue: [],
+      approvals: [campaign23Approval],
     });
     vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
 
@@ -1016,6 +1076,11 @@ describe("contentRouter.publishCampaignPack", () => {
       platforms: "Facebook, Instagram",
       name: "3@1 Newmarket Campaign",
       aiGenerated: true,
+      productOrService: "Business service",
+      targetBuyer: "Small business owners",
+      mainPainPoint: "Wasting time",
+      primaryOutcome: "More leads",
+      coreMessage: "Empower your workforce",
     };
 
     const fbPost = {
@@ -1033,6 +1098,7 @@ describe("contentRouter.publishCampaignPack", () => {
         assetKind: "social_post",
         imageStatus: "ready",
         imageUrl: "https://example.com/fb.png",
+        creativeBriefFingerprint: "test-fingerprint-ready",
       },
     };
 
@@ -1048,11 +1114,24 @@ describe("contentRouter.publishCampaignPack", () => {
       cta: "Shop now",
       metadata: {
         approved: true,
-        assetKind: "social_post",
+        assetKind: "master_campaign_post",
         imageStatus: "ready",
         imageUrl: "https://example.com/ig.png",
+        creativeBriefFingerprint: "test-fingerprint-ready",
       },
     };
+
+    const campaign23Approval = {
+      id: 1,
+      userId: 14,
+      campaignId: 23,
+      approvalType: "campaign_launch",
+      status: "approved",
+      title: "Approve Launch",
+      riskLevel: "low",
+    };
+
+    const readyCaptionAsset = { id: 1, userId: 14, campaignId: 23, assetType: "caption_adaptation", metadata: { creativeBriefFingerprint: "test-fingerprint-ready" } };
 
     const fbIntegration = {
       id: 9,
@@ -1082,8 +1161,9 @@ describe("contentRouter.publishCampaignPack", () => {
       campaign: campaign23Publish,
       posts: [fbPost, igPost],
       integrations: [fbIntegration, igIntegration],
-      assets: [{ id: 1, userId: 14, campaignId: 23, assetType: "caption_adaptation" }],
+      assets: [readyCaptionAsset],
       queue: [],
+      approvals: [campaign23Approval],
     });
     vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
 
@@ -1100,7 +1180,7 @@ describe("contentRouter.publishCampaignPack", () => {
       campaign: campaign23Publish,
       posts: [fbPost, igPost],
       integrations: [fbIntegration, igIntegration],
-      assets: [{ id: 1, userId: 14, campaignId: 23, assetType: "caption_adaptation" }],
+      assets: [readyCaptionAsset],
       queue: [
         {
           id: 1,
@@ -1123,6 +1203,7 @@ describe("contentRouter.publishCampaignPack", () => {
           lastError: "Content safety check flagged medium risk; awaiting approval",
         },
       ],
+      approvals: [campaign23Approval],
     });
     vi.mocked(getDb).mockReturnValue(retryDb as unknown as ReturnType<typeof getDb>);
 
@@ -1353,7 +1434,7 @@ describe("contentRouter.ensurePublishEligibility", () => {
     expect(approvalInsertSpy).toBeUndefined();
   });
 
-  it("returns ready when an approved campaign_launch approval exists", async () => {
+  it("legacy eligibility true but missing leaflet => canPublish false", async () => {
     const { getDb } = await import("./queries/connection");
     const { contentRouter } = await import("./content-router");
 
@@ -1377,8 +1458,11 @@ describe("contentRouter.ensurePublishEligibility", () => {
     const caller = contentRouter.createCaller(buildCtxForCampaign23());
     const result = await caller.ensurePublishEligibility({ campaignId: 23 });
 
-    expect(result.canPublish).toBe(true);
+    // Phase 2B: legacy eligibility must agree with server readiness.
+    expect(result.canPublish).toBe(false);
     expect(result.unavailableReason).toBe("ready");
+    expect(result.readiness.ready).toBe(false);
+    expect(result.readiness.reasons).toContain("leaflet_missing");
     expect(result.launchApproved).toBe(true);
     expect(result.pendingApprovalCount).toBe(0);
 
@@ -1392,7 +1476,7 @@ describe("contentRouter.ensurePublishEligibility", () => {
     expect(approvalInsertSpy).toBeUndefined();
   });
 
-  it("draft social_post with ready image and approved launch approval is publishable (does not require metadata.approved)", async () => {
+  it("draft social_post with ready image and approved launch approval is not publishable without a durable current leaflet", async () => {
     const { getDb } = await import("./queries/connection");
     const { contentRouter } = await import("./content-router");
 
@@ -1426,8 +1510,11 @@ describe("contentRouter.ensurePublishEligibility", () => {
     const caller = contentRouter.createCaller(buildCtxForCampaign23());
     const result = await caller.ensurePublishEligibility({ campaignId: 23 });
 
-    expect(result.canPublish).toBe(true);
+    // Phase 2B: legacy eligibility alone is no longer sufficient.
+    expect(result.canPublish).toBe(false);
     expect(result.unavailableReason).toBe("ready");
+    expect(result.readiness.ready).toBe(false);
+    expect(result.readiness.reasons).toContain("leaflet_missing");
     expect(result.publishablePostCount).toBe(1);
     expect(result.launchApproved).toBe(true);
 
@@ -1537,7 +1624,7 @@ describe("contentRouter.ensurePublishEligibility", () => {
     expect(result.canPublish).toBe(false);
   });
 
-  it("returns the exact ready payload with connected Facebook and Instagram platform statuses", async () => {
+  it("returns the exact ready payload with connected Facebook and Instagram platform statuses but canPublish false without leaflet", async () => {
     const { getDb } = await import("./queries/connection");
     const { contentRouter } = await import("./content-router");
 
@@ -1561,12 +1648,719 @@ describe("contentRouter.ensurePublishEligibility", () => {
     const caller = contentRouter.createCaller(buildCtxForCampaign23());
     const result = await caller.ensurePublishEligibility({ campaignId: 23 });
 
-    expect(result.canPublish).toBe(true);
+    expect(result.canPublish).toBe(false);
     expect(result.unavailableReason).toBe("ready");
+    expect(result.readiness.ready).toBe(false);
+    expect(result.readiness.reasons).toContain("leaflet_missing");
     expect(result.platformStatuses).toEqual([
       { platform: "Facebook", status: "connected" },
       { platform: "Instagram", status: "connected" },
     ]);
     expect(result.platformStatuses.some((s) => s.status === "connected")).toBe(true);
+  });
+
+  it("legacy eligibility true + complete current output => canPublish true", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const completeCampaign = {
+      ...campaign23,
+      productOrService: "Business service",
+      targetBuyer: "Small business owners",
+      mainPainPoint: "Wasting time",
+      primaryOutcome: "More leads",
+      coreMessage: "Empower your workforce",
+    };
+
+    const currentPost = {
+      ...approvedPost,
+      metadata: {
+        ...approvedPost.metadata,
+        creativeBriefFingerprint: "test-fingerprint-ready",
+      },
+    };
+
+    const leafletPost = {
+      id: 112,
+      userId: 14,
+      campaignId: 23,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {
+        assetKind: "master_campaign_post",
+        imageUrl: "https://example.com/leaflet.png",
+        creativeBriefFingerprint: "test-fingerprint-ready",
+      },
+    };
+
+    const currentCaptionPack = {
+      id: 2,
+      userId: 14,
+      campaignId: 23,
+      assetType: "caption_pack",
+      metadata: { creativeBriefFingerprint: "test-fingerprint-ready" },
+    };
+
+    const currentSupportingAsset = {
+      id: 3,
+      userId: 14,
+      campaignId: 23,
+      assetType: "ad_copy",
+      metadata: { creativeBriefFingerprint: "test-fingerprint-ready" },
+    };
+
+    const mockDb = createMockDb({
+      campaign: completeCampaign,
+      posts: [currentPost, leafletPost],
+      integrations: [facebookIntegration, instagramIntegration],
+      assets: [currentCaptionPack, currentSupportingAsset],
+      approvals: [
+        {
+          id: 99,
+          userId: 14,
+          campaignId: 23,
+          approvalType: "campaign_launch",
+          status: "approved",
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtxForCampaign23());
+    const result = await caller.ensurePublishEligibility({ campaignId: 23 });
+
+    expect(result.canPublish).toBe(true);
+    expect(result.unavailableReason).toBe("ready");
+    expect(result.readiness.ready).toBe(true);
+    expect(result.readiness.reasons).toEqual([]);
+  });
+
+  it("legacy eligibility true + stale output => canPublish false", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const completeCampaign = {
+      ...campaign23,
+      productOrService: "Business service",
+      targetBuyer: "Small business owners",
+      mainPainPoint: "Wasting time",
+      primaryOutcome: "More leads",
+      coreMessage: "Empower your workforce",
+    };
+
+    const currentPost = {
+      ...approvedPost,
+      metadata: {
+        ...approvedPost.metadata,
+        creativeBriefFingerprint: "test-fingerprint-ready",
+      },
+    };
+
+    const leafletPost = {
+      id: 112,
+      userId: 14,
+      campaignId: 23,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {
+        assetKind: "master_campaign_post",
+        imageUrl: "https://example.com/leaflet.png",
+        creativeBriefFingerprint: "test-fingerprint-ready",
+      },
+    };
+
+    const currentCaptionPack = {
+      id: 2,
+      userId: 14,
+      campaignId: 23,
+      assetType: "caption_pack",
+      metadata: { creativeBriefFingerprint: "test-fingerprint-ready" },
+    };
+
+    const staleSupportingAsset = {
+      id: 3,
+      userId: 14,
+      campaignId: 23,
+      assetType: "ad_copy",
+      metadata: { creativeBriefFingerprint: "stale-fingerprint" },
+    };
+
+    const mockDb = createMockDb({
+      campaign: completeCampaign,
+      posts: [currentPost, leafletPost],
+      integrations: [facebookIntegration, instagramIntegration],
+      assets: [currentCaptionPack, staleSupportingAsset],
+      approvals: [
+        {
+          id: 99,
+          userId: 14,
+          campaignId: 23,
+          approvalType: "campaign_launch",
+          status: "approved",
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtxForCampaign23());
+    const result = await caller.ensurePublishEligibility({ campaignId: 23 });
+
+    expect(result.canPublish).toBe(false);
+    expect(result.unavailableReason).toBe("ready");
+    expect(result.readiness.ready).toBe(false);
+    expect(result.readiness.reasons).toContain("output_stale");
+  });
+
+  it("readiness true + disconnected required platform => canPublish false", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const completeCampaign = {
+      ...campaign23,
+      productOrService: "Business service",
+      targetBuyer: "Small business owners",
+      mainPainPoint: "Wasting time",
+      primaryOutcome: "More leads",
+      coreMessage: "Empower your workforce",
+    };
+
+    const currentPost = {
+      ...approvedPost,
+      metadata: {
+        ...approvedPost.metadata,
+        creativeBriefFingerprint: "test-fingerprint-ready",
+      },
+    };
+
+    const leafletPost = {
+      id: 112,
+      userId: 14,
+      campaignId: 23,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {
+        assetKind: "master_campaign_post",
+        imageUrl: "https://example.com/leaflet.png",
+        creativeBriefFingerprint: "test-fingerprint-ready",
+      },
+    };
+
+    const currentCaptionPack = {
+      id: 2,
+      userId: 14,
+      campaignId: 23,
+      assetType: "caption_pack",
+      metadata: { creativeBriefFingerprint: "test-fingerprint-ready" },
+    };
+
+    const mockDb = createMockDb({
+      campaign: completeCampaign,
+      posts: [currentPost, leafletPost],
+      integrations: [],
+      assets: [currentCaptionPack],
+      approvals: [
+        {
+          id: 99,
+          userId: 14,
+          campaignId: 23,
+          approvalType: "campaign_launch",
+          status: "approved",
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtxForCampaign23());
+    const result = await caller.ensurePublishEligibility({ campaignId: 23 });
+
+    expect(result.canPublish).toBe(false);
+    expect(result.unavailableReason).toBe("no_connected_platforms");
+    expect(result.readiness.ready).toBe(true);
+    expect(result.readiness.reasons).toEqual([]);
+  });
+});
+
+
+describe("contentRouter.publishCampaignPack Phase 2B gate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const readyCampaign = {
+    id: 28,
+    userId: 18,
+    businessId: 24,
+    status: "draft",
+    workflowState: "creatives_ready",
+    platforms: "instagram",
+    productOrService: "Business service",
+    targetBuyer: "Small business owners",
+    mainPainPoint: "Wasting time",
+    primaryOutcome: "More leads",
+    coreMessage: "Empower your workforce",
+  };
+
+  const readyLeafletPost = {
+    id: 125,
+    userId: 18,
+    campaignId: 28,
+    type: "social_post",
+    platform: "Instagram",
+    status: "draft",
+    metadata: {
+      approved: true,
+      assetKind: "master_campaign_post",
+      imageStatus: "ready",
+      imageUrl: "https://example.com/master-image.png",
+      creativeBriefFingerprint: "test-fingerprint-ready",
+    },
+  };
+
+  const readyCaptionAsset = {
+    id: 1,
+    userId: 18,
+    campaignId: 28,
+    assetType: "caption_adaptation",
+    metadata: { creativeBriefFingerprint: "test-fingerprint-ready" },
+  };
+
+  const readyApproval = {
+    id: 1,
+    userId: 18,
+    campaignId: 28,
+    approvalType: "campaign_launch",
+    status: "approved",
+    title: "Approve Launch",
+    riskLevel: "low",
+  };
+
+  it("rejects when no durable leaflet exists and creates no queue row", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    const postWithoutLeaflet = {
+      ...readyLeafletPost,
+      metadata: {
+        ...readyLeafletPost.metadata,
+        assetKind: "social_post",
+      },
+    };
+
+    const mockDb = createMockDb({
+      campaign: readyCampaign,
+      posts: [postWithoutLeaflet],
+      integrations: [],
+      assets: [readyCaptionAsset],
+      queue: [],
+      approvals: [readyApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.publishCampaignPack({ campaignId: 28 })).rejects.toThrow(
+      "Marketing Leaflet is missing"
+    );
+
+    expect(mockDb.insertValuesByTableName.has("publishing_queue")).toBe(false);
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
+
+  it("rejects when a generic image is used instead of an explicit leaflet", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    const genericImagePost = {
+      ...readyLeafletPost,
+      metadata: {
+        ...readyLeafletPost.metadata,
+        assetKind: "social_post",
+        imageSource: "openai",
+      },
+    };
+
+    const mockDb = createMockDb({
+      campaign: readyCampaign,
+      posts: [genericImagePost],
+      integrations: [],
+      assets: [readyCaptionAsset],
+      queue: [],
+      approvals: [readyApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.publishCampaignPack({ campaignId: 28 })).rejects.toThrow(
+      "Marketing Leaflet is missing"
+    );
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the leaflet has no creativeBriefFingerprint and creates no queue row", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    const staleLeafletPost = {
+      ...readyLeafletPost,
+      metadata: {
+        ...readyLeafletPost.metadata,
+        creativeBriefFingerprint: undefined,
+      },
+    };
+
+    const mockDb = createMockDb({
+      campaign: readyCampaign,
+      posts: [staleLeafletPost],
+      integrations: [],
+      assets: [readyCaptionAsset],
+      queue: [],
+      approvals: [readyApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.publishCampaignPack({ campaignId: 28 })).rejects.toThrow(
+      "Marketing Leaflet is stale"
+    );
+    expect(mockDb.insertValuesByTableName.has("publishing_queue")).toBe(false);
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the caption pack is missing", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({
+      campaign: readyCampaign,
+      posts: [readyLeafletPost],
+      integrations: [],
+      assets: [],
+      queue: [],
+      approvals: [readyApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.publishCampaignPack({ campaignId: 28 })).rejects.toThrow(
+      "Caption pack is missing"
+    );
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the caption pack fingerprint does not match the current campaign", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    const staleCaptionAsset = {
+      ...readyCaptionAsset,
+      metadata: { creativeBriefFingerprint: "stale-fingerprint" },
+    };
+
+    const mockDb = createMockDb({
+      campaign: readyCampaign,
+      posts: [readyLeafletPost],
+      integrations: [],
+      assets: [staleCaptionAsset],
+      queue: [],
+      approvals: [readyApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.publishCampaignPack({ campaignId: 28 })).rejects.toThrow(
+      "Caption pack is stale"
+    );
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
+
+  it("rejects when an included supporting asset is stale", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    const staleSupportingAsset = {
+      id: 2,
+      userId: 18,
+      campaignId: 28,
+      assetType: "ad_copy",
+      metadata: { creativeBriefFingerprint: "stale-fingerprint" },
+    };
+
+    const mockDb = createMockDb({
+      campaign: readyCampaign,
+      posts: [readyLeafletPost],
+      integrations: [],
+      assets: [readyCaptionAsset, staleSupportingAsset],
+      queue: [],
+      approvals: [readyApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.publishCampaignPack({ campaignId: 28 })).rejects.toThrow(
+      /stale/i
+    );
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the campaign_launch approval is pending", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    const pendingApproval = { ...readyApproval, status: "pending" };
+
+    const mockDb = createMockDb({
+      campaign: readyCampaign,
+      posts: [readyLeafletPost],
+      integrations: [],
+      assets: [readyCaptionAsset],
+      queue: [],
+      approvals: [pendingApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.publishCampaignPack({ campaignId: 28 })).rejects.toThrow(
+      "Campaign launch approval is pending"
+    );
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
+
+  it("allows publication when all required outputs are present and current", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 123,
+      status: "published",
+      platform: "instagram",
+      postId: "ext-125",
+    } as any);
+
+    const mockDb = createMockDb({
+      campaign: readyCampaign,
+      posts: [readyLeafletPost],
+      integrations: [],
+      assets: [readyCaptionAsset],
+      queue: [],
+      approvals: [readyApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.publishCampaignPack({ campaignId: 28 });
+
+    expect(result.manualPosting).toBe(true);
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
+});
+
+describe("contentRouter.markAsManuallyPosted Phase 2B gate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("allows one-off content with no campaign", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const oneOffPost = {
+      id: 200,
+      userId: 18,
+      campaignId: null,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {},
+    };
+
+    const mockDb = createMockDb({ posts: [oneOffPost] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.markAsManuallyPosted({ id: 200 });
+
+    expect(result.success).toBe(true);
+    const updateSetSpy = mockDb.updateSetByTableName.get("content_posts");
+    expect(updateSetSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a campaign-linked post when the output is stale", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const campaign = {
+      id: 28,
+      userId: 18,
+      businessId: 24,
+      status: "draft",
+      workflowState: "creatives_ready",
+      platforms: "instagram",
+      productOrService: "Business service",
+      targetBuyer: "Small business owners",
+      mainPainPoint: "Wasting time",
+      primaryOutcome: "More leads",
+      coreMessage: "Empower your workforce",
+    };
+
+    const stalePost = {
+      id: 201,
+      userId: 18,
+      campaignId: 28,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {
+        imageStatus: "ready",
+        imageUrl: "https://example.com/post.png",
+      },
+    };
+
+    const mockDb = createMockDb({ campaign, posts: [stalePost] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.markAsManuallyPosted({ id: 201 })).rejects.toThrow(
+      "Selected output is stale"
+    );
+    const updateSetSpy = mockDb.updateSetByTableName.get("content_posts");
+    expect(updateSetSpy).toBeUndefined();
+  });
+});
+
+describe("contentRouter.getCampaignPublishReadiness", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the server-computed readiness result", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const campaign = {
+      id: 28,
+      userId: 18,
+      businessId: 24,
+      status: "draft",
+      workflowState: "creatives_ready",
+      platforms: "instagram",
+      productOrService: "Business service",
+      targetBuyer: "Small business owners",
+      mainPainPoint: "Wasting time",
+      primaryOutcome: "More leads",
+      coreMessage: "Empower your workforce",
+    };
+
+    const leaflet = {
+      id: 125,
+      userId: 18,
+      campaignId: 28,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {
+        assetKind: "master_campaign_post",
+        imageStatus: "ready",
+        imageUrl: "https://example.com/master-image.png",
+        creativeBriefFingerprint: "test-fingerprint-ready",
+      },
+    };
+
+    const captionAsset = {
+      id: 1,
+      userId: 18,
+      campaignId: 28,
+      assetType: "caption_adaptation",
+      metadata: { creativeBriefFingerprint: "test-fingerprint-ready" },
+    };
+
+    const mockDb = createMockDb({
+      campaign,
+      posts: [leaflet],
+      assets: [captionAsset],
+      approvals: [
+        {
+          id: 1,
+          userId: 18,
+          campaignId: 28,
+          approvalType: "campaign_launch",
+          status: "approved",
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.getCampaignPublishReadiness({ campaignId: 28 });
+
+    expect(result.ready).toBe(true);
+    expect(result.reasons).toEqual([]);
+    expect(result.requiredOutputs.leaflet.present).toBe(true);
+    expect(result.requiredOutputs.leaflet.current).toBe(true);
+    expect(result.requiredOutputs.captionPack.present).toBe(true);
+    expect(result.requiredOutputs.captionPack.current).toBe(true);
+  });
+});
+
+
+describe("contentRouter.ownership Phase 2B gate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns not found when publishing another user's campaign", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const otherUserCampaign = {
+      id: 50,
+      userId: 99,
+      businessId: 24,
+      status: "draft",
+      workflowState: "creatives_ready",
+      platforms: "instagram",
+      productOrService: "Business service",
+      targetBuyer: "Small business owners",
+      mainPainPoint: "Wasting time",
+      primaryOutcome: "More leads",
+      coreMessage: "Empower your workforce",
+    };
+
+    const mockDb = createMockDb({ campaign: otherUserCampaign });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx(18));
+    await expect(caller.publishCampaignPack({ campaignId: 50 })).rejects.toThrow(/not found/i);
+    await expect(caller.getCampaignPublishReadiness({ campaignId: 50 })).rejects.toThrow(/not found/i);
+  });
+
+  it("returns not found when marking another user's post as manually posted", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const otherUserPost = {
+      id: 500,
+      userId: 99,
+      campaignId: 28,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: { creativeBriefFingerprint: "test-fingerprint-ready" },
+    };
+
+    const mockDb = createMockDb({ posts: [otherUserPost] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx(18));
+    await expect(caller.markAsManuallyPosted({ id: 500 })).rejects.toThrow(/not found/i);
   });
 });

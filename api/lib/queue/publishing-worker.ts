@@ -1,4 +1,4 @@
-import { Job } from "bullmq";
+import { Job, UnrecoverableError } from "bullmq";
 import { createPublishingWorker, type PublishingJobData } from "./bullmq";
 import { publishSinglePost } from "../workflow/publishing-runner";
 import { isRedisConfigured } from "../redis";
@@ -9,6 +9,12 @@ export async function processPublishingJob(job: Job<PublishingJobData>): Promise
   console.log(`[Publishing Worker] Processing job ${job.id} for ${platform} (queueItem: ${queueItemId})`);
 
   const result = await publishSinglePost(queueItemId);
+
+  // Permanent readiness failures (missing/stale output, approval pending,
+  // failed/cancelled/generating output) are not transient and must not be retried.
+  if (result.status === "precondition_failed") {
+    throw new UnrecoverableError(result.error || `Publishing blocked: ${result.status}`);
+  }
 
   if (result.status === "failed" || result.status === "safety_blocked") {
     throw new Error(result.error || `Publishing failed: ${result.status}`);
