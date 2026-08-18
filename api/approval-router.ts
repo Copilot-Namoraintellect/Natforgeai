@@ -9,6 +9,7 @@ import { createApprovalRequest } from "./lib/workflow/engine";
 import {
   getStrategyApprovalStatus,
   isLineageAuthoritative,
+  validateStrategyRunForCampaign,
 } from "./lib/workflow/strategy-approval";
 
 const beyondStrategyReviewStates = new Set([
@@ -97,6 +98,14 @@ async function validateStrategyApprovalLineage(approval: {
       code: "PRECONDITION_FAILED",
       message:
         "The strategy run linked to this approval request is missing or not complete. Regenerate the strategy for approval.",
+    });
+  }
+
+  const semanticValidation = await validateStrategyRunForCampaign(campaign, approval.userId, run);
+  if (!semanticValidation.valid) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `The strategy linked to this approval no longer matches the current campaign brief: ${semanticValidation.reason}. Regenerate the strategy for approval.`,
     });
   }
 }

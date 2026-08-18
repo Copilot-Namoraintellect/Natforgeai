@@ -14,7 +14,7 @@ import {
   contentPosts,
 } from "@db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
-import { runStrategyAgent } from "./lib/agents/strategy-agent";
+import { runStrategyAgent, chargeForStrategyRun } from "./lib/agents/strategy-agent";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { logError } from "./lib/logger";
 import { runDistributionAgent } from "./lib/agents/distribution-agent";
@@ -25,6 +25,7 @@ import { checkAudienceAgentAccess } from "./lib/audience/access";
 import { generateReply } from "./lib/agents/engagement-agent";
 import { generateFollowUpSequence, generateProposal, generateMeetingPrompt } from "./lib/agents/sales-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
+import { assertApprovedStrategySemanticallyValid } from "./lib/workflow/strategy-approval";
 import { transitionCampaignState } from "./lib/workflow/engine";
 import { TRPCError } from "@trpc/server";
 import {
@@ -172,6 +173,9 @@ export const agentRouter = createRouter({
         strategyText: input.strategyText,
       });
 
+      // Charge only after the strategy output has passed validation.
+      await chargeForStrategyRun(ctx.user.id, input.campaignId, result);
+
       // Trigger workflow advancement
       await onAgentRunComplete(result.runId);
 
@@ -222,6 +226,10 @@ export const agentRouter = createRouter({
       if (!campaign) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
+
+      // Every campaign-linked creative entry point must validate the approved
+      // strategy semantically before acquiring a claim or running the agent.
+      await assertApprovedStrategySemanticallyValid(campaign, ctx.user.id);
 
       // Authoritative atomic claim for this direct creative-agent call.
       const ownerToken = generateOwnerToken();

@@ -10,6 +10,19 @@ vi.mock("./lib/agents/creative-agent", () => ({
   runCreativeAgent: vi.fn(),
 }));
 
+vi.mock("./lib/workflow/strategy-approval", () => ({
+  assertApprovedStrategySemanticallyValid: vi.fn(async () => undefined),
+  getStrategyApprovalStatus: vi.fn(() => ({
+    currentFingerprint: "test-fingerprint",
+    strategyFingerprint: "test-fingerprint",
+    approvedStrategyFingerprint: "test-fingerprint",
+    isCurrent: true,
+    hasApprovedStrategy: true,
+    strategyGeneratedForCurrentBrief: true,
+    lineage: null,
+  })),
+}));
+
 vi.mock("./lib/workflow/engine", () => ({
   transitionCampaignState: vi.fn(async () => "creatives_generating"),
   createApprovalRequest: vi.fn(async () => ({ id: 1 })),
@@ -764,6 +777,31 @@ describe("agentRouter.runCreativeAgent", () => {
     expect(releaseClaimWithResult).toHaveBeenCalledWith(
       expect.objectContaining({ status: "failed", context: "agentRouter.runCreativeAgent" })
     );
+  });
+
+  it("rejects a fingerprint-matching but semantically invalid approved strategy before claim, run or billing", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { assertApprovedStrategySemanticallyValid } = await import("./lib/workflow/strategy-approval");
+    const { agentRouter } = await import("./agent-router");
+
+    vi.mocked(assertApprovedStrategySemanticallyValid).mockRejectedValueOnce(
+      new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "The approved strategy no longer matches the current campaign brief: stale audience classification.",
+      })
+    );
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    await expect(caller.runCreativeAgent({ campaignId: 28 })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(0);
   });
 
   it("does not release a terminal shortcut as completed when attachment fails", async () => {

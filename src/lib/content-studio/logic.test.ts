@@ -17,6 +17,7 @@ import {
   getPublishResultToast,
   getLeafletActions,
   getPublishDialogButtonLabel,
+  getStrategyActionDecision,
 } from "./logic";
 
 describe("content-studio logic", () => {
@@ -723,5 +724,47 @@ describe("getPublishDialogButtonLabel", () => {
       isRepublish: false,
     });
     expect(label).toBe("Confirm Manual Posting");
+  });
+});
+
+describe("getStrategyActionDecision", () => {
+  it("returns Regenerate Strategy for Approval when the server reports stale", () => {
+    const decision = getStrategyActionDecision({
+      isStale: true,
+      canGenerateContent: false,
+      canRegenerateStrategy: true,
+    });
+    expect(decision.label).toBe("Regenerate Strategy for Approval");
+    expect(decision.action).toBe("regenerate");
+  });
+
+  it("returns Regenerate Strategy for Approval when canRegenerateStrategy is true", () => {
+    const decision = getStrategyActionDecision({
+      isStale: false,
+      canGenerateContent: false,
+      canRegenerateStrategy: true,
+    });
+    expect(decision.label).toBe("Regenerate Strategy for Approval");
+    expect(decision.action).toBe("regenerate");
+  });
+
+  it("returns Generate from Approved Strategy when the server reports current and approved", () => {
+    const decision = getStrategyActionDecision({
+      isStale: false,
+      canGenerateContent: true,
+      canRegenerateStrategy: false,
+    });
+    expect(decision.label).toBe("Generate from Approved Strategy");
+    expect(decision.action).toBe("generate");
+  });
+
+  it("does not return Generate from Approved Strategy for the Campaign #30 stale state", () => {
+    const decision = getStrategyActionDecision({
+      isStale: true,
+      canGenerateContent: false,
+      canRegenerateStrategy: true,
+    });
+    expect(decision.label).not.toBe("Generate from Approved Strategy");
+    expect(decision.label).toBe("Regenerate Strategy for Approval");
   });
 });

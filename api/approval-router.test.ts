@@ -9,6 +9,10 @@ vi.mock("./lib/workflow/triggers", () => ({
   onApprovalResolved: vi.fn(async () => undefined),
 }));
 
+vi.mock("./lib/agents/strategy-agent", () => ({
+  validateStrategyOutputAgainstCampaign: vi.fn(() => ({ valid: true })),
+}));
+
 vi.mock("./lib/creative/brief-grounding", () => ({
   buildGroundedCreativeBrief: vi.fn(() => ({
     fingerprint: "fp-current",
@@ -332,6 +336,62 @@ describe("approvalRouter.strategy_review lineage validation", () => {
       code: "BAD_REQUEST",
     });
 
+    expect(db.state.updatedApprovals).toHaveLength(0);
+  });
+
+  it("rejects a fingerprint-matching strategy_review whose linked run fails semantic validation", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { approvalRouter } = await import("./approval-router");
+    const { validateStrategyOutputAgainstCampaign } = await import("./lib/agents/strategy-agent");
+
+    vi.mocked(validateStrategyOutputAgainstCampaign).mockReturnValue({
+      valid: false,
+      reason: "Strategy output contains stale audience classification: small businesses.",
+    });
+
+    const db = createMockDb({
+      campaign: {
+        id: 42,
+        userId: 18,
+        workflowState: "strategy_generated",
+        workflowContext: {
+          strategyFingerprint: "fp-current",
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "fp-current",
+            strategyRunId: 245,
+            approvalRequestId: 34,
+            status: "pending",
+          },
+        },
+      },
+      approvals: [
+        {
+          id: 34,
+          userId: 18,
+          campaignId: 42,
+          approvalType: "strategy_review",
+          status: "pending",
+        },
+      ],
+      agentRuns: [
+        {
+          id: 245,
+          userId: 18,
+          campaignId: 42,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "fp-current", __invalid: true },
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = approvalRouter.createCaller(buildCtx());
+    await expect(caller.approveAction({ approvalId: 34 })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+
+    // Approval 34 remains pending; no historical record is deleted.
     expect(db.state.updatedApprovals).toHaveLength(0);
   });
 });

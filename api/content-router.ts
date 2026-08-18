@@ -5,7 +5,10 @@ import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegra
 import { eq, and, or, desc, count, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { env } from "./lib/env";
-import { isApprovedStrategyCurrent } from "./lib/workflow/strategy-approval";
+import {
+  isApprovedStrategyCurrent,
+  assertApprovedStrategySemanticallyValid,
+} from "./lib/workflow/strategy-approval";
 import { createApprovalRequest } from "./lib/workflow/engine";
 import { logInfo, logError } from "./lib/logger";
 import { publishSinglePost, finalizeCampaignPublishState } from "./lib/workflow/publishing-runner";
@@ -268,6 +271,22 @@ export const contentRouter = createRouter({
           message:
             "The approved strategy no longer matches the current campaign brief. Regenerate the strategy for approval before creating content.",
         });
+      }
+
+      // Defence in depth: a fingerprint match is not enough. The linked strategy
+      // run output must still be semantically valid for the current brief.
+      try {
+        await assertApprovedStrategySemanticallyValid(campaign, userId);
+      } catch (err: any) {
+        if (err instanceof TRPCError && err.code === "PRECONDITION_FAILED") {
+          logError("[content.generateForCampaign] approved strategy failed semantic validation", {
+            campaignId,
+            userId,
+            stage: "validation",
+            reason: err.message,
+          });
+        }
+        throw err;
       }
 
       logInfo("[content.generateForCampaign] prerequisites validated", {

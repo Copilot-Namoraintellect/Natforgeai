@@ -69,6 +69,7 @@ import { PremiumTemplateGallery } from "@/components/content/PremiumTemplateGall
 import type { GalleryTemplate } from "@/components/content/PremiumTemplateGallery";
 import { toast } from "sonner";
 import { formatContentGenerationError } from "@/lib/content-generation-errors";
+import { getStrategyActionDecision } from "@/lib/content-studio/logic";
 
 const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
 const ENABLE_BASIC_DRAFT_VIDEO = import.meta.env.VITE_ENABLE_BASIC_DRAFT_VIDEO === "true";
@@ -660,13 +661,10 @@ export default function ContentStudio() {
     { id: numericCampaignId },
     { enabled: hasCampaignId }
   );
-  const approvedStrategyIsStale =
-    !!campaignForContext &&
-    ["strategy_approved", "creatives_generating", "creatives_ready", "audience_ready"].includes(
-      campaignForContext.workflowState
-    ) &&
-    strategyApprovalStatus !== undefined &&
-    !strategyApprovalStatus.isApprovedStrategyCurrent;
+  // The server is the authoritative source for whether the approved strategy is
+  // semantically current. Do not infer stale state from workflowState or the
+  // presence of a fingerprint alone.
+  const approvedStrategyIsStale = !!strategyApprovalStatus?.isStale;
   const { data: businessForContext } = trpc.business.get.useQuery(
     { id: campaignForContext?.businessId ?? 0 },
     { enabled: !!campaignForContext?.businessId }
@@ -5345,11 +5343,9 @@ Include:
               )}
               {isGeneratingContent || regenerateStrategyForApprovalMutation.isPending
                 ? "Generating..."
-                : approvedStrategyIsStale
-                ? "Regenerate Strategy for Approval"
                 : campaignNeedsRecovery
                 ? "Retry Content Generation"
-                : "Generate from Approved Strategy"}
+                : getStrategyActionDecision(strategyApprovalStatus).label}
             </Button>
           )}
         </div>
@@ -5464,8 +5460,8 @@ Include:
                   ) : (
                     <Sparkles className="w-4 h-4 mr-2" />
                   )}
-                  {approvedStrategyIsStale
-                    ? "Regenerate Strategy for Approval"
+                  {strategyApprovalStatus?.isStale
+                    ? getStrategyActionDecision(strategyApprovalStatus).label
                     : "Retry Content Generation"}
                 </Button>
               )}

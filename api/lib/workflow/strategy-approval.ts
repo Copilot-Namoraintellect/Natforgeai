@@ -1,4 +1,9 @@
 import { buildGroundedCreativeBrief } from "../creative/brief-grounding";
+import { validateStrategyOutputAgainstCampaign } from "../agents/strategy-agent";
+import { getDb } from "../../queries/connection";
+import { agentRuns } from "@db/schema";
+import { eq, and } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 
 export interface StrategyApprovalLineage {
   /** Fingerprint of the campaign brief that produced the linked strategy. */
@@ -26,6 +31,11 @@ export interface StrategyApprovalStatus {
   strategyGeneratedForCurrentBrief: boolean;
   /** Active lineage entry, if any. */
   lineage: StrategyApprovalLineage | null;
+}
+
+export interface SemanticStrategyValidationResult {
+  valid: boolean;
+  reason?: string;
 }
 
 function readContextString(value: unknown): string | null {
@@ -129,4 +139,76 @@ export function isLineageAuthoritative(
   if (input.strategyRunId != null && lineage.strategyRunId !== input.strategyRunId) return false;
   if (input.approvalRequestId != null && lineage.approvalRequestId !== input.approvalRequestId) return false;
   return true;
+}
+
+/**
+ * Load the lineage-linked strategy run and validate its output against the
+ * current persisted campaign brief. An existing run can be supplied to avoid a
+ * duplicate database query when the caller has already loaded it.
+ */
+export async function validateStrategyRunForCampaign(
+  campaign: unknown,
+  userId: number,
+  existingRun?: { status: string; output: unknown } | null
+): Promise<SemanticStrategyValidationResult> {
+  const status = getStrategyApprovalStatus(campaign);
+  const lineage = status.lineage;
+  if (!lineage) {
+    return { valid: false, reason: "No strategy approval lineage recorded." };
+  }
+
+  let run = existingRun;
+  if (!run) {
+    const db = getDb();
+    const campaignId = (campaign as Record<string, number> | null | undefined)?.id;
+    if (campaignId == null) {
+      return { valid: false, reason: "Campaign identifier is missing." };
+    }
+    const [dbRun] = await db
+      .select()
+      .from(agentRuns)
+      .where(
+        and(
+          eq(agentRuns.id, lineage.strategyRunId),
+          eq(agentRuns.campaignId, campaignId),
+          eq(agentRuns.userId, userId),
+          eq(agentRuns.agentType, "strategy")
+        )
+      )
+      .limit(1);
+    run = dbRun;
+  }
+
+  if (!run || run.status !== "completed") {
+    return { valid: false, reason: "Linked strategy run is missing or not completed." };
+  }
+
+  return validateStrategyOutputAgainstCampaign(run.output, campaign);
+}
+
+/**
+ * Shared impure assertion used by every campaign-linked creative generation
+ * entry point. Throws PRECONDITION_FAILED if the approved strategy is missing,
+ * fingerprint-stale, or semantically invalid for the current brief.
+ */
+export async function assertApprovedStrategySemanticallyValid(
+  campaign: unknown,
+  userId: number
+): Promise<void> {
+  const status = getStrategyApprovalStatus(campaign);
+  if (!status.isCurrent) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "The approved strategy is stale or missing. Regenerate the strategy for approval before creating content.",
+    });
+  }
+
+  const semantic = await validateStrategyRunForCampaign(campaign, userId);
+  if (!semantic.valid) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `The approved strategy no longer matches the current campaign brief: ${semantic.reason}. Regenerate the strategy for approval before creating content.`,
+    });
+  }
 }

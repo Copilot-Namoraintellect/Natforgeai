@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { TRPCError } from "@trpc/server";
 
 vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock("../creative/creative-generation-claim", () => ({
 
 vi.mock("../workflow/strategy-approval", () => ({
   isApprovedStrategyCurrent: vi.fn(() => true),
+  assertApprovedStrategySemanticallyValid: vi.fn(async () => undefined),
 }));
 
 function getTableName(table: unknown): string | undefined {
@@ -181,18 +183,51 @@ describe("processContentGenerationJob", () => {
     const { getDb } = await import("../../queries/connection");
     const { runCreativeAgent } = await import("../agents/creative-agent");
     const { deductCredits } = await import("../billing/credit-engine");
-    const { isApprovedStrategyCurrent } = await import("../workflow/strategy-approval");
+    const { assertApprovedStrategySemanticallyValid } = await import("../workflow/strategy-approval");
     const { processContentGenerationJob } = await import("./content-generation-job");
+
+    vi.mocked(assertApprovedStrategySemanticallyValid).mockRejectedValueOnce(
+      new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "The approved strategy is stale or missing. Regenerate the strategy for approval before creating content.",
+      })
+    );
 
     const db = createMockDb();
     vi.mocked(getDb).mockReturnValue(db as any);
-    vi.mocked(isApprovedStrategyCurrent).mockReturnValueOnce(false);
 
     await expect(
       processContentGenerationJob({ jobId: 189, userId: 18, campaignId: 30, claimId: 2004, ownerToken: "test-owner-token" })
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
 
     // Validation runs before any creative work, credit charge, or claim lifecycle.
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(deductCredits).not.toHaveBeenCalled();
+    expect(db.agentRunUpdates).toHaveLength(0);
+  });
+
+  it("rejects a fingerprint-matching but semantically invalid strategy before job status, claim, queue, output or billing mutation", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const { deductCredits } = await import("../billing/credit-engine");
+    const { assertApprovedStrategySemanticallyValid } = await import("../workflow/strategy-approval");
+    const { processContentGenerationJob } = await import("./content-generation-job");
+
+    vi.mocked(assertApprovedStrategySemanticallyValid).mockRejectedValueOnce(
+      new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "The approved strategy no longer matches the current campaign brief: stale audience classification.",
+      })
+    );
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await expect(
+      processContentGenerationJob({ jobId: 189, userId: 18, campaignId: 30, claimId: 2005, ownerToken: "test-owner-token" })
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+
+    // No job status update to running, no creative work, no credit charge.
     expect(runCreativeAgent).not.toHaveBeenCalled();
     expect(deductCredits).not.toHaveBeenCalled();
     expect(db.agentRunUpdates).toHaveLength(0);

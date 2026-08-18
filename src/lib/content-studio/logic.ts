@@ -645,3 +645,27 @@ export function resolveLeafletPreviewState(
 
   return { status: "not_generated" };
 }
+
+export interface StrategyApprovalStatusLike {
+  isStale?: boolean;
+  canGenerateContent?: boolean;
+  canRegenerateStrategy?: boolean;
+}
+
+/**
+ * Decide the primary strategy action label from the server-authoritative status.
+ *
+ * The server resolves semantic validity; the client must not re-infer it. This
+ * helper keeps the Content Studio button decision testable and aligned with the
+ * backend contract.
+ */
+export function getStrategyActionDecision(
+  status: StrategyApprovalStatusLike | undefined
+):
+  | { label: "Regenerate Strategy for Approval"; action: "regenerate" }
+  | { label: "Generate from Approved Strategy"; action: "generate" } {
+  if (status?.canRegenerateStrategy || status?.isStale) {
+    return { label: "Regenerate Strategy for Approval", action: "regenerate" };
+  }
+  return { label: "Generate from Approved Strategy", action: "generate" };
+}

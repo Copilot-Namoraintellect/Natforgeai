@@ -12,7 +12,7 @@ import {
   type CreativeGenerationClaimHeartbeatController,
 } from "../creative/creative-generation-claim";
 import { env } from "../env";
-import { isApprovedStrategyCurrent } from "../workflow/strategy-approval";
+import { assertApprovedStrategySemanticallyValid } from "../workflow/strategy-approval";
 
 export interface ContentGenerationJobInput {
   jobId: number;
@@ -122,12 +122,8 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
     .where(and(eq(campaigns.id, input.campaignId), eq(campaigns.userId, input.userId)))
     .limit(1);
 
-  if (campaign && !isApprovedStrategyCurrent(campaign)) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message:
-        "The approved strategy no longer matches the current campaign brief. Regenerate the strategy for approval before creating content.",
-    });
+  if (campaign) {
+    await assertApprovedStrategySemanticallyValid(campaign, input.userId);
   }
 
   await db
@@ -180,14 +176,6 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
         code: "BAD_REQUEST",
         message:
           "Campaign is missing creative context (core message, personas, or approved strategy). Generate and approve a strategy first.",
-      });
-    }
-
-    if (!isApprovedStrategyCurrent(campaign)) {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message:
-          "The approved strategy no longer matches the current campaign brief. Regenerate the strategy for approval before creating content.",
       });
     }
 

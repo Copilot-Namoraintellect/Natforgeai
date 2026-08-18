@@ -14,6 +14,7 @@ vi.mock("./lib/agents/creative-agent", () => ({
 
 vi.mock("./lib/agents/strategy-agent", () => ({
   runStrategyAgent: vi.fn(),
+  chargeForStrategyRun: vi.fn(),
 }));
 
 vi.mock("./lib/creative/creative-generation-claim", async (importOriginal) => {

@@ -404,6 +404,131 @@ export async function getWalletWithStats(userId: number) {
 }
 
 /**
+ * Refund credits for a failed operation. Idempotent when an idempotencyKey is
+ * supplied: repeated calls with the same key return the existing refund without
+ * crediting the wallet twice.
+ */
+export async function refundCredits({
+  userId,
+  amount,
+  description,
+  idempotencyKey,
+  metadata,
+}: {
+  userId: number;
+  amount: number;
+  description: string;
+  idempotencyKey?: string;
+  metadata?: Record<string, any>;
+}): Promise<{ newBalance: number; alreadyRefunded?: boolean }> {
+  if (amount <= 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Refund amount must be positive.",
+    });
+  }
+
+  const db = getDb();
+  const wallet = await ensureWallet(userId);
+
+  if (idempotencyKey) {
+    try {
+      return await db.transaction(async (tx) => {
+        await tx.insert(creditTransactions).values({
+          userId,
+          walletId: wallet.id,
+          type: "refund",
+          amount,
+          balanceAfter: 0,
+          description,
+          metadata: metadata as any,
+          idempotencyKey,
+        });
+
+        const updateResult = await tx.execute(
+          sql`UPDATE credit_wallets
+              SET balance = balance + ${amount}, updatedAt = NOW()
+              WHERE id = ${wallet.id}`
+        );
+
+        const walletAffectedRows = (updateResult as any)?.[0]?.affectedRows ?? 0;
+        if (walletAffectedRows === 0) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Refund succeeded but wallet could not be updated.",
+          });
+        }
+
+        const [updatedWallet] = await tx
+          .select()
+          .from(creditWallets)
+          .where(eq(creditWallets.id, wallet.id))
+          .limit(1);
+        const newBalance = updatedWallet?.balance ?? wallet.balance + amount;
+
+        await tx
+          .update(creditTransactions)
+          .set({ balanceAfter: newBalance })
+          .where(eq(creditTransactions.idempotencyKey, idempotencyKey));
+
+        return { newBalance };
+      });
+    } catch (err) {
+      if (isMySqlDuplicateKeyError(err)) {
+        const [existing] = await db
+          .select()
+          .from(creditTransactions)
+          .where(eq(creditTransactions.idempotencyKey, idempotencyKey))
+          .limit(1);
+
+        if (!existing) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Refund idempotency key collision detected but existing transaction could not be retrieved",
+          });
+        }
+
+        if (
+          existing.userId !== userId ||
+          existing.walletId !== wallet.id ||
+          existing.type !== "refund" ||
+          existing.amount !== amount
+        ) {
+          throwIdempotencyCollision();
+        }
+
+        return { newBalance: existing.balanceAfter, alreadyRefunded: true };
+      }
+      throw err;
+    }
+  }
+
+  // Non-idempotent path: preserve existing behaviour for callers that do not
+  // supply an idempotency key.
+  const newBalance = wallet.balance + amount;
+  await db
+    .update(creditWallets)
+    .set({
+      balance: newBalance,
+      updatedAt: new Date(),
+    })
+    .where(eq(creditWallets.id, wallet.id));
+
+  await db.insert(creditTransactions).values({
+    userId,
+    walletId: wallet.id,
+    type: "refund",
+    amount,
+    balanceAfter: newBalance,
+    description,
+    metadata: metadata as any,
+  });
+
+  return { newBalance };
+}
+
+/**
  * Admin: Adjust a user's credit balance.
  */
 export async function adminAdjustCredits({

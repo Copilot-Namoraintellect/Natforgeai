@@ -22,6 +22,7 @@ import { env } from "../env";
 import {
   getStrategyApprovalStatus,
   buildStrategyApprovalLineage,
+  validateStrategyRunForCampaign,
 } from "./strategy-approval";
 
 export async function onAgentRunComplete(runId: number) {
@@ -312,6 +313,17 @@ export async function onStrategyApproved(
   if (!run || run.status !== "completed") {
     console.error(
       `[Workflow] Linked strategy run ${lineage.strategyRunId} is missing or not completed for campaign ${campaignId}. Refusing to authorise creative generation.`
+    );
+    return;
+  }
+
+  // A fingerprint match is not sufficient: the linked strategy output must still
+  // be semantically grounded in the current brief. Pass the already-loaded run
+  // to avoid a duplicate database query.
+  const semanticValidation = await validateStrategyRunForCampaign(campaign, userId, run);
+  if (!semanticValidation.valid) {
+    console.error(
+      `[Workflow] Linked strategy run ${lineage.strategyRunId} failed semantic validation for campaign ${campaignId}: ${semanticValidation.reason}. Refusing to authorise creative generation.`
     );
     return;
   }

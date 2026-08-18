@@ -14,6 +14,10 @@ vi.mock("../agents/creative-agent", () => ({
   runCreativeAgent: vi.fn(),
 }));
 
+vi.mock("../agents/strategy-agent", () => ({
+  validateStrategyOutputAgainstCampaign: vi.fn(() => ({ valid: true })),
+}));
+
 vi.mock("../agents/distribution-agent", () => ({
   runDistributionAgent: vi.fn(),
 }));

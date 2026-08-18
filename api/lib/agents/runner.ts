@@ -55,6 +55,10 @@ export interface AgentRunOptions<TOutput> {
 export interface AgentRunResult<TOutput> {
   runId: number;
   output: TOutput;
+  promptTokens?: number;
+  completionTokens?: number;
+  actualCostUsdMicro?: number;
+  estimatedCostUsdMicro?: number;
 }
 
 export async function runAgent<TOutput>({
@@ -165,7 +169,14 @@ export async function runAgent<TOutput>({
       })
       .where(eq(agentRuns.id, runId));
 
-    return { runId, output: object };
+    return {
+      runId,
+      output: object,
+      promptTokens,
+      completionTokens,
+      actualCostUsdMicro,
+      estimatedCostUsdMicro,
+    };
   } catch (error: any) {
     // Update run as failed
     await db

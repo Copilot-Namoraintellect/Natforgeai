@@ -7,13 +7,20 @@ import { eq, and, desc, inArray } from "drizzle-orm";
 import { checkLimit, incrementCampaignUsage, incrementResultUsage } from "./lib/subscription";
 import { TRPCError } from "@trpc/server";
 import { defaultModel } from "./lib/agents/openai";
-import { runStrategyAgent } from "./lib/agents/strategy-agent";
+import {
+  runStrategyAgent,
+  chargeForStrategyRun,
+  validateStrategyOutputAgainstCampaign,
+  type StrategyAgentRunResult,
+} from "./lib/agents/strategy-agent";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
 import { transitionCampaignState, createApprovalRequest } from "./lib/workflow/engine";
 import {
   getStrategyApprovalStatus,
   buildStrategyApprovalLineage,
+  validateStrategyRunForCampaign,
+  assertApprovedStrategySemanticallyValid,
 } from "./lib/workflow/strategy-approval";
 import {
   acquireCreativeGenerationClaim,
@@ -26,6 +33,8 @@ import {
   type CreativeGenerationClaimHeartbeatController,
 } from "./lib/creative/creative-generation-claim";
 import { env } from "./lib/env";
+import { refundCredits } from "./lib/billing/credit-engine";
+import { getEstimatedAgentCost } from "./lib/billing/cost-tracker";
 
 function campaignSuggestionSchema() {
   return z.object({
@@ -93,12 +102,44 @@ export const campaignRouter = createRouter({
       }
 
       const status = getStrategyApprovalStatus(camp);
+      let isApprovedStrategyCurrent = status.isCurrent;
+      let isStale = false;
+      let reason: string | undefined;
+
+      // A fingerprint match is not enough: the lineage-linked strategy output
+      // must also be semantically grounded in the current brief. If it is not,
+      // report the strategy as stale so the UI offers regeneration instead of
+      // generation from an unsafe approved strategy.
+      if (status.lineage) {
+        const semantic = await validateStrategyRunForCampaign(camp, ctx.user.id);
+        if (!semantic.valid) {
+          isApprovedStrategyCurrent = false;
+          isStale = true;
+          reason = semantic.reason;
+        }
+      }
+
+      // Derive authoritative client flags from the validated status. The server
+      // decides whether content generation is safe and whether regeneration is
+      // required; the client must not infer semantic validity itself.
+      const current = isApprovedStrategyCurrent;
+      const approved = status.lineage?.status === "approved" && !isStale;
+      const canGenerateContent = current && approved;
+      const canRegenerateStrategy = isStale || (!current && status.lineage != null);
+
       return {
-        isApprovedStrategyCurrent: status.isCurrent,
+        isApprovedStrategyCurrent,
         hasApprovedStrategy: status.hasApprovedStrategy,
         currentFingerprint: status.currentFingerprint,
         approvedStrategyFingerprint: status.approvedStrategyFingerprint,
         strategyFingerprint: status.strategyFingerprint,
+        isStale,
+        reason,
+        current,
+        approved,
+        stale: isStale,
+        canGenerateContent,
+        canRegenerateStrategy,
       };
     }),
 
@@ -727,6 +768,9 @@ export const campaignRouter = createRouter({
         strategyRunId = strategyResult.runId;
         console.log(`[regenerateFromProfile] strategy regenerated | campaignId=${campaignId} | strategyRunId=${strategyRunId}`);
 
+        // Charge only after the validated strategy run has been produced.
+        await chargeForStrategyRun(userId, campaignId, strategyResult);
+
         const attachResult = await attachCreativeGenerationOperationReference({
           claimId: claim!.id,
           ownerToken: ownerToken!,
@@ -784,7 +828,14 @@ export const campaignRouter = createRouter({
         await transitionCampaignState(campaignId, userId, "generate_creatives");
         console.log(`[regenerateFromProfile] campaign state transitioned to creatives_generating | campaignId=${campaignId}`);
 
-        // 8. Regenerate creative pack (do NOT delete old drafts yet; we keep them as a fallback)
+        // 8. Validate the freshly approved strategy semantically before creative
+        // generation. This keeps regenerateFromProfile from bypassing the same
+        // semantic gate used by every other creative entry point.
+        if (regeneratedCampaign) {
+          await assertApprovedStrategySemanticallyValid(regeneratedCampaign, userId);
+        }
+
+        // 9. Regenerate creative pack (do NOT delete old drafts yet; we keep them as a fallback)
         console.log(`[regenerateFromProfile] creative pack generation started | campaignId=${campaignId}`);
         const creativeResult = await runCreativeAgent({
           userId,
@@ -958,10 +1009,31 @@ export const campaignRouter = createRouter({
         });
       };
 
+      let strategyResult: StrategyAgentRunResult | undefined;
+      let strategyRunCharged = false;
+
+      const refundStrategyCharge = async () => {
+        if (!strategyRunCharged || !strategyResult) return;
+        const amount = getEstimatedAgentCost("strategy");
+        try {
+          await refundCredits({
+            userId,
+            amount,
+            description: "Refund for failed strategy regeneration approval",
+            idempotencyKey: `refund-strategy-run-${strategyResult.runId}`,
+            metadata: { campaignId, runId: strategyResult.runId },
+          });
+          console.log(`[regenerateStrategyForApproval] refunded ${amount} credits for failed approval | campaignId=${campaignId} | runId=${strategyResult.runId}`);
+        } catch (refundErr: any) {
+          console.error(`[regenerateStrategyForApproval] refund failed | campaignId=${campaignId} | runId=${strategyResult.runId} | error="${refundErr.message}"`, refundErr);
+        }
+      };
+
       try {
         // Look for an existing completed strategy run whose stored brief fingerprint
-        // matches the current brief. Historical runs are preserved; we reuse only
-        // when the lineage would be identical.
+        // matches the current brief AND whose output is semantically valid for the
+        // current brief. Historical runs are preserved; we reuse only when the
+        // lineage would be identical and the output passes the validation gate.
         const previousStrategyRuns = await db
           .select()
           .from(agentRuns)
@@ -975,10 +1047,21 @@ export const campaignRouter = createRouter({
           )
           .orderBy(desc(agentRuns.createdAt));
 
-        const reusableRun = previousStrategyRuns.find((run) => {
+        let reusableRun: (typeof previousStrategyRuns)[number] | undefined;
+        for (const run of previousStrategyRuns) {
           const output = (run.output || {}) as Record<string, unknown>;
-          return output.creativeBriefFingerprint === currentFingerprint;
-        });
+          if (output.creativeBriefFingerprint !== currentFingerprint) continue;
+          // A matching fingerprint is not enough: the run output must be
+          // semantically grounded in the current brief. We do not require an
+          // existing lineage here because this path creates a new one.
+          const validation = validateStrategyOutputAgainstCampaign(run.output, campaign);
+          if (validation.valid) {
+            reusableRun = run;
+            console.log(`[regenerateStrategyForApproval] reusing completed strategy run ${run.id} with matching fingerprint and valid grounding | campaignId=${campaignId}`);
+            break;
+          }
+          console.log(`[regenerateStrategyForApproval] rejecting reusable run ${run.id}: ${validation.reason} | campaignId=${campaignId}`);
+        }
 
         // If we have a reusable completed strategy for this exact brief, do not run
         // a new strategy agent. We still need a pending strategy_review request for it.
@@ -1002,7 +1085,7 @@ export const campaignRouter = createRouter({
             .where(eq(campaigns.id, campaignId));
 
           // Regenerate strategy from the current persisted brief.
-          const strategyResult = await runStrategyAgent({
+          strategyResult = await runStrategyAgent({
             userId,
             campaignId,
             business: {
@@ -1020,6 +1103,33 @@ export const campaignRouter = createRouter({
             },
           });
           strategyRunId = strategyResult.runId;
+        }
+
+        // Attach the strategy run ID to the regeneration claim. A completed
+        // regeneration claim must never have a null operationReferenceId.
+        const attachResult = await attachCreativeGenerationOperationReference({
+          claimId: claim.id,
+          ownerToken,
+          operationReferenceId: strategyRunId,
+        });
+
+        if (!attachResult.attached) {
+          console.error(`[regenerateStrategyForApproval] claim attachment collision | campaignId=${campaignId} | runId=${strategyRunId}`);
+          const releaseResult = await releaseClaimOnce("failed");
+          if (!releaseResult.released) {
+            console.error(`[regenerateStrategyForApproval] failed-release failed after attachment collision | campaignId=${campaignId} | claimId=${claim.id} | releaseError=${releaseResult.error.message}`);
+          }
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Strategy regeneration is already in progress for this strategy run. Please wait for it to complete.",
+          });
+        }
+
+        // Charge exactly 3 credits only after the strategy output has passed
+        // validation and the claim has been bound to the run.
+        if (!strategyRunIsReused && strategyResult) {
+          await chargeForStrategyRun(userId, campaignId, strategyResult);
+          strategyRunCharged = true;
         }
 
         // Reconcile pending strategy_review requests. Only reuse a pending request
@@ -1045,16 +1155,30 @@ export const campaignRouter = createRouter({
           .orderBy(desc(approvalRequests.createdAt));
 
         let approvalRequestId: number;
-        const matchingRequest = existingPendingRequests.find((req) => {
+        let matchingRequest: (typeof existingPendingRequests)[number] | undefined;
+        for (const req of existingPendingRequests) {
           const campaignCtx = (campaign.workflowContext || {}) as Record<string, unknown>;
           const existingLineage = campaignCtx.strategyApprovalLineage as Record<string, unknown> | undefined;
-          return (
-            existingLineage &&
-            existingLineage.creativeBriefFingerprint === currentFingerprint &&
-            existingLineage.strategyRunId === strategyRunId &&
-            existingLineage.approvalRequestId === req.id
-          );
-        });
+          if (
+            !existingLineage ||
+            existingLineage.creativeBriefFingerprint !== currentFingerprint ||
+            existingLineage.strategyRunId !== strategyRunId ||
+            existingLineage.approvalRequestId !== req.id
+          ) {
+            continue;
+          }
+          // Only reuse a pending request when its linked run exists, is completed,
+          // and still passes semantic validation against the current brief.
+          const linkedRun = previousStrategyRuns.find((r) => r.id === strategyRunId);
+          if (!linkedRun) continue;
+          const validation = await validateStrategyRunForCampaign(campaign, userId, linkedRun);
+          if (!validation.valid) {
+            console.log(`[regenerateStrategyForApproval] rejecting reusable pending request ${req.id}: linked run ${strategyRunId} failed semantic validation | campaignId=${campaignId}`);
+            continue;
+          }
+          matchingRequest = req;
+          break;
+        }
 
         if (matchingRequest) {
           approvalRequestId = matchingRequest.id;
@@ -1126,6 +1250,7 @@ export const campaignRouter = createRouter({
       } catch (err: any) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         console.error(`[regenerateStrategyForApproval] step failed | campaignId=${campaignId} | userId=${userId} | error="${errorMessage}"`, err);
+        await refundStrategyCharge();
         await releaseClaimOnce("failed");
         if (err instanceof TRPCError) {
           throw err;

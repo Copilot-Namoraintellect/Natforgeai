@@ -28,6 +28,10 @@ vi.mock("./lib/agents/creative-agent", () => ({
   runCreativeAgent: vi.fn(),
 }));
 
+vi.mock("./lib/agents/strategy-agent", () => ({
+  validateStrategyOutputAgainstCampaign: vi.fn(() => ({ valid: true })),
+}));
+
 vi.mock("./lib/creative/brief-grounding", () => ({
   buildGroundedCreativeBrief: vi.fn(() => ({
     fingerprint: "test-fingerprint-ready",
@@ -55,6 +59,7 @@ vi.mock("./lib/workflow/triggers", () => ({
 vi.mock("./lib/workflow/strategy-approval", () => ({
   isApprovedStrategyCurrent: vi.fn(() => true),
   isStrategyGeneratedForCurrentBrief: vi.fn(() => true),
+  assertApprovedStrategySemanticallyValid: vi.fn(async () => undefined),
   getStrategyApprovalStatus: vi.fn(() => ({
     currentFingerprint: "test-fingerprint-ready",
     strategyFingerprint: "test-fingerprint-ready",
@@ -782,6 +787,64 @@ describe("contentRouter.generateForCampaign", () => {
 
     expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
     expect(scheduleContentGenerationJob).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fingerprint-matching but semantically invalid approved strategy before claim, queue or billing", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+    const { assertApprovedStrategySemanticallyValid } = await import("./lib/workflow/strategy-approval");
+    const { acquireCreativeGenerationClaim } = await import("./lib/creative/creative-generation-claim");
+    const { scheduleContentGenerationJob } = await import("./lib/queue/bullmq");
+    const { deductCredits } = await import("./lib/billing/credit-engine");
+
+    vi.mocked(assertApprovedStrategySemanticallyValid).mockRejectedValueOnce(
+      new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "The approved strategy no longer matches the current campaign brief: stale audience classification.",
+      })
+    );
+
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+        campaign: {
+          id: 28,
+          userId: 18,
+          businessId: 24,
+          workflowState: "strategy_approved",
+          workflowContext: {
+            coreMessage: "Empower your workforce",
+            strategyApprovalLineage: {
+              creativeBriefFingerprint: "test-fingerprint-ready",
+              strategyRunId: 245,
+              approvalRequestId: 34,
+              status: "approved",
+            },
+          },
+          personas: [{ name: "Small Business Owner" }],
+          coreMessage: "Empower your workforce",
+        },
+        postCount: 0,
+        agentRunsRows: [
+          {
+            id: 245,
+            userId: 18,
+            campaignId: 28,
+            agentType: "strategy",
+            status: "completed",
+            output: { creativeBriefFingerprint: "test-fingerprint-ready", __invalid: true },
+          },
+        ],
+      }) as unknown as ReturnType<typeof getDb>
+    );
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await expect(caller.generateForCampaign({ campaignId: 28 })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+    expect(scheduleContentGenerationJob).not.toHaveBeenCalled();
+    expect(deductCredits).not.toHaveBeenCalled();
   });
 });
 

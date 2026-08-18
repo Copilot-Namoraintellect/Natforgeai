@@ -32,6 +32,12 @@ export function strategyAgentPrompt(input: {
 }): string {
   const hasStrategy = input.strategyText && input.strategyText.trim().length > 0;
   const cb = input.campaignBrief;
+
+  // Precedence for grounding (a > b > c > d):
+  // a. current campaign brief fields;
+  // b. business profile only for missing optional context;
+  // c. website evidence only as supplementary evidence;
+  // d. safe fallback.
   const evidence = input.websiteEvidence as {
     businessCategory?: string;
     productsServices?: string[];
@@ -41,9 +47,21 @@ export function strategyAgentPrompt(input: {
     evidenceSnippets?: string[];
   } | undefined;
 
+  const effectiveProductOrService =
+    cb?.productOrService || cb?.coreMessage || input.productOrService || evidence?.productsServices?.join(", ") || "Not specified";
+  const effectiveTargetCustomer =
+    cb?.targetBuyer || cb?.targetAudience || input.targetCustomer || evidence?.targetCustomers?.join(", ") || "Not specified";
+  const effectiveMainPainPoint = cb?.mainPainPoint || "Not specified";
+  const effectivePreferredCta = cb?.preferredCta || "Not specified";
+  const effectivePrimaryOutcome = cb?.primaryOutcome || "Not specified";
+  const effectiveOfferDetails = cb?.offerDetails || "None — do not invent offers, discounts or free trials";
+  const effectiveExcludedOffers = cb?.excludedOffers || "None specified";
+  const effectiveReferenceStyle = cb?.referenceStyle || "Not specified";
+  const effectiveContentStyle = cb?.contentStyle || "Not specified";
+
   const evidenceSection = evidence
     ? `
-WEBSITE EVIDENCE — USE THIS AS THE GROUND TRUTH FOR WHAT THE BUSINESS DOES:
+WEBSITE EVIDENCE — USE ONLY AS SUPPLEMENTARY CONTEXT. IT MUST NEVER OVERRIDE THE CAMPAIGN BRIEF ABOVE:
 - Business Category: ${evidence.businessCategory || "Not specified"}
 - Products/Services Mentioned on Website: ${(evidence.productsServices || []).join(", ") || "Not specified"}
 - Target Customers Mentioned on Website: ${(evidence.targetCustomers || []).join(", ") || "Not specified"}
@@ -56,18 +74,18 @@ ${(evidence.evidenceSnippets || []).slice(0, 10).map((s) => "  - " + s).join("\n
 
   const briefSection = cb
     ? `
-CAMPAIGN BRIEF — USE THESE DETAILS EXACTLY. DO NOT IGNORE THEM:
+CAMPAIGN BRIEF — THIS IS THE AUTHORITATIVE GROUND TRUTH. USE THESE DETAILS EXACTLY AND DO NOT LET BUSINESS PROFILE OR WEBSITE EVIDENCE OVERRIDE THEM:
 - Campaign Name: ${cb.name || "Not specified"}
 - Campaign Goal: ${cb.goal || "Not specified"}
-- Primary Outcome: ${cb.primaryOutcome || "Not specified"}
-- Target Buyer: ${cb.targetBuyer || cb.targetAudience || "Not specified"}
-- Main Pain Point: ${cb.mainPainPoint || "Not specified"}
-- Product/Service Being Promoted: ${cb.productOrService || cb.coreMessage || "Not specified"}
-- Offer (only if provided): ${cb.offerDetails || "None — do not invent offers, discounts or free trials"}
-- Preferred CTA: ${cb.preferredCta || "Not specified"}
-- What NOT to say / excluded offers: ${cb.excludedOffers || "None specified"}
-- Reference Style / Example: ${cb.referenceStyle || "Not specified"}
-- Preferred Content Style: ${cb.contentStyle || "Not specified"}
+- Primary Outcome: ${effectivePrimaryOutcome}
+- Target Buyer: ${effectiveTargetCustomer}
+- Main Pain Point: ${effectiveMainPainPoint}
+- Product/Service Being Promoted: ${effectiveProductOrService}
+- Offer (only if provided): ${effectiveOfferDetails}
+- Preferred CTA: ${effectivePreferredCta}
+- What NOT to say / excluded offers: ${effectiveExcludedOffers}
+- Reference Style / Example: ${effectiveReferenceStyle}
+- Preferred Content Style: ${effectiveContentStyle}
 - Channels: ${cb.platforms || "Not specified"}
 - Budget Guidance: ${cb.budget ? "$" + cb.budget : "Not specified"}
 `
@@ -84,12 +102,12 @@ ${aiSummaries.map((summary, idx) => `--- Insight ${idx + 1} ---\n${summary}`).jo
 
   return `You are a senior marketing strategist. ${hasStrategy ? "Review and enhance the provided marketing strategy" : "Create a comprehensive marketing strategy"} for the following business.
 
-BUSINESS PROFILE:
+BUSINESS PROFILE (used only when the campaign brief does not specify a value):
 - Name: ${input.businessName}
 - Industry: ${input.industry || "Not specified"}
 - Location: ${input.location || "Not specified"}
-- Product/Service: ${input.productOrService || "Not specified"}
-- Target Customer: ${input.targetCustomer || "Not specified"}
+- Product/Service: ${effectiveProductOrService}
+- Target Customer: ${effectiveTargetCustomer}
 - Brand Tone: ${input.brandTone || "professional"}
 - Main Goal: ${input.mainGoal || "Not specified"}
 - Monthly Budget: ${input.monthlyBudget ? "$" + input.monthlyBudget : "Not specified"}
@@ -102,23 +120,25 @@ ${audienceIntelligenceSection}
 ${hasStrategy ? `EXISTING STRATEGY:\n${input.strategyText}\n\nEnhance this strategy with additional insights.` : "Create a complete marketing strategy from scratch."}
 
 Generate a structured strategy with the following sections:
-1. Target Personas (2-3 detailed buyer personas with demographics, pain points, goals)
+1. Target Personas (2-3 detailed buyer personas with demographics, pain points, goals — must match the campaign brief's Target Buyer and Main Pain Point)
 2. Positioning (how the brand stands out from competitors)
 3. Value Proposition (clear statement of unique value)
-4. Core Message (primary messaging theme — must be grounded in the campaign brief and product/service)
+4. Core Message (primary messaging theme — must be grounded in the campaign brief's Product/Service and Main Pain Point)
 5. Campaign Theme (overarching creative direction)
 6. Platform Strategy (which platforms to use and why)
 7. Funnel Stages (awareness → consideration → conversion → retention)
-8. Offers (specific lead magnets, promotions, or incentives — ONLY if explicitly provided in the brief; otherwise return empty array [])
-9. CTAs (call-to-action strategy per funnel stage — use the preferred CTA if provided)
+8. Offers (specific lead magnets, promotions, or incentives — ONLY if explicitly provided in the campaign brief; otherwise return empty array [])
+9. CTAs (call-to-action strategy per funnel stage — use the Preferred CTA exactly when provided)
 10. Budget Recommendation (how to allocate budget across channels)
 
 CRITICAL RULES:
 - For budgetRecommendation.total and budgetRecommendation.allocation.amount, return ONLY plain numbers (e.g. 5000 or 15000). Do NOT include dollar signs, commas, words, or descriptions. The system parses these as numeric values.
 - If no offer is provided in the campaign brief, the offers array MUST be empty. Do not invent discounts, free trials, free e-books, loyalty programmes, limited spots or percentages.
 - The core message must be specific to the business and product/service, not generic motivational filler.
-- NEVER classify the business as SEO, digital marketing, social media management, data analytics, restaurant services, salon services, or consulting unless the website evidence explicitly supports that classification.
-- Only include products/services in the strategy that are listed in the Website Evidence above. Do not introduce unsupported services.
+- NEVER classify the business as SEO, digital marketing, social media management, data analytics, restaurant services, salon services, or consulting unless the campaign brief explicitly states that classification.
+- Only include products/services, target customers, pain points and offers in the strategy that are grounded in the campaign brief. Website evidence may add context but cannot override the brief.
+- Do NOT use stale or conflicting audience classifications such as "small businesses", "payroll", "employee payouts", "credit access" or "mass disbursements" when they conflict with the campaign brief's Target Buyer or Product/Service.
+- Respect the "What NOT to say / excluded offers" list exactly. Do not mention excluded offers, claims or audiences anywhere in personas, core message, value proposition, positioning, campaign theme, funnel tactics, offers or CTAs.
 `;
 }
 
