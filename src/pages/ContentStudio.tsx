@@ -662,7 +662,9 @@ export default function ContentStudio() {
   );
   const approvedStrategyIsStale =
     !!campaignForContext &&
-    ["strategy_approved", "creatives_generating", "creatives_ready"].includes(campaignForContext.workflowState) &&
+    ["strategy_approved", "creatives_generating", "creatives_ready", "audience_ready"].includes(
+      campaignForContext.workflowState
+    ) &&
     strategyApprovalStatus !== undefined &&
     !strategyApprovalStatus.isApprovedStrategyCurrent;
   const { data: businessForContext } = trpc.business.get.useQuery(

@@ -30,10 +30,15 @@ import {
   isStrategyGeneratedForCurrentBrief,
 } from "./strategy-approval";
 
-function buildCampaign(context?: Record<string, unknown>, targetBuyer?: string) {
+function buildCampaign(
+  context?: Record<string, unknown>,
+  targetBuyer?: string,
+  workflowState?: string
+) {
   return {
     id: 30,
     targetBuyer: targetBuyer ?? "current",
+    workflowState: workflowState ?? "audience_ready",
     workflowContext: context || null,
   };
 }
@@ -48,10 +53,16 @@ describe("strategy-approval fingerprint helpers", () => {
     expect(status.strategyGeneratedForCurrentBrief).toBe(true);
   });
 
-  it("reports current when approved fingerprint matches the current brief", () => {
+  it("reports current when approved fingerprint and lineage match the current brief", () => {
     const campaign = buildCampaign({
       strategyFingerprint: "fp-current",
       approvedStrategyFingerprint: "fp-current",
+      strategyApprovalLineage: {
+        creativeBriefFingerprint: "fp-current",
+        strategyRunId: 1,
+        approvalRequestId: 33,
+        status: "approved",
+      },
     });
     const status = getStrategyApprovalStatus(campaign);
 
@@ -66,13 +77,19 @@ describe("strategy-approval fingerprint helpers", () => {
       {
         strategyFingerprint: "fp-current",
         approvedStrategyFingerprint: "fp-current",
+        strategyApprovalLineage: {
+          creativeBriefFingerprint: "fp-current",
+          strategyRunId: 1,
+          approvalRequestId: 33,
+          status: "approved",
+        },
       },
       "changed"
     );
     const status = getStrategyApprovalStatus(campaign);
 
     expect(status.isCurrent).toBe(false);
-    expect(status.hasApprovedStrategy).toBe(true);
+    expect(status.hasApprovedStrategy).toBe(false);
     expect(status.strategyGeneratedForCurrentBrief).toBe(false);
     expect(isApprovedStrategyCurrent(campaign)).toBe(false);
   });
@@ -82,6 +99,12 @@ describe("strategy-approval fingerprint helpers", () => {
       {
         strategyFingerprint: "fp-old",
         approvedStrategyFingerprint: "fp-old",
+        strategyApprovalLineage: {
+          creativeBriefFingerprint: "fp-old",
+          strategyRunId: 1,
+          approvalRequestId: 33,
+          status: "approved",
+        },
       },
       "changed"
     );
@@ -104,5 +127,56 @@ describe("strategy-approval fingerprint helpers", () => {
 
     expect(isApprovedStrategyCurrent(campaign)).toBe(false);
     expect(isStrategyGeneratedForCurrentBrief(campaign)).toBe(false);
+  });
+
+  it("treats a legacy approved strategy without fingerprint/lineage as stale, not current", () => {
+    // Production-shaped regression case: an older strategy_review approval exists
+    // but the campaign has no creativeBriefFingerprint, approvedStrategyFingerprint,
+    // or strategyApprovalLineage evidence. This must fail closed as stale.
+    const campaign = buildCampaign(
+      {
+        // No strategyFingerprint, approvedStrategyFingerprint, or lineage.
+      },
+      "current",
+      "audience_ready"
+    );
+    const status = getStrategyApprovalStatus(campaign);
+
+    expect(status.isCurrent).toBe(false);
+    expect(status.hasApprovedStrategy).toBe(false);
+    expect(status.strategyGeneratedForCurrentBrief).toBe(false);
+    expect(status.lineage).toBeNull();
+    expect(isApprovedStrategyCurrent(campaign)).toBe(false);
+  });
+
+  it("treats matching approved fingerprint without lineage as stale", () => {
+    const campaign = buildCampaign({
+      strategyFingerprint: "fp-current",
+      approvedStrategyFingerprint: "fp-current",
+      // strategyApprovalLineage intentionally missing
+    });
+    const status = getStrategyApprovalStatus(campaign);
+
+    expect(status.isCurrent).toBe(false);
+    expect(status.hasApprovedStrategy).toBe(false);
+    expect(isApprovedStrategyCurrent(campaign)).toBe(false);
+  });
+
+  it("treats non-approved lineage as stale even when fingerprints match", () => {
+    const campaign = buildCampaign({
+      strategyFingerprint: "fp-current",
+      approvedStrategyFingerprint: "fp-current",
+      strategyApprovalLineage: {
+        creativeBriefFingerprint: "fp-current",
+        strategyRunId: 1,
+        approvalRequestId: 33,
+        status: "pending",
+      },
+    });
+    const status = getStrategyApprovalStatus(campaign);
+
+    expect(status.isCurrent).toBe(false);
+    expect(status.hasApprovedStrategy).toBe(false);
+    expect(isApprovedStrategyCurrent(campaign)).toBe(false);
   });
 });

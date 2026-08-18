@@ -66,15 +66,28 @@ export function getStrategyApprovalStatus(campaign: unknown): StrategyApprovalSt
 
   const strategyFingerprint = readContextString(ctx?.strategyFingerprint);
   const approvedStrategyFingerprint = readContextString(ctx?.approvedStrategyFingerprint);
+  const lineage = readLineage(ctx);
+
+  // Fail closed: an approved strategy is current only when the approved
+  // fingerprint matches the current brief AND a durable lineage record exists
+  // with status "approved" for the same brief. Missing fingerprint or lineage
+  // evidence must be treated as stale, never current/approved.
+  const hasApprovedLineage =
+    lineage?.status === "approved" && lineage.creativeBriefFingerprint === brief.fingerprint;
+  const isCurrent =
+    !!approvedStrategyFingerprint &&
+    approvedStrategyFingerprint === brief.fingerprint &&
+    hasApprovedLineage;
+  const hasApprovedStrategy = isCurrent;
 
   return {
     currentFingerprint: brief.fingerprint,
     strategyFingerprint,
     approvedStrategyFingerprint,
-    isCurrent: !!approvedStrategyFingerprint && approvedStrategyFingerprint === brief.fingerprint,
-    hasApprovedStrategy: !!approvedStrategyFingerprint,
+    isCurrent,
+    hasApprovedStrategy,
     strategyGeneratedForCurrentBrief: !!strategyFingerprint && strategyFingerprint === brief.fingerprint,
-    lineage: readLineage(ctx),
+    lineage,
   };
 }
 
