@@ -140,4 +140,48 @@ describe("strategyAgentPrompt grounding precedence", () => {
     expect(prompt).toContain("What NOT to say / excluded offers: free trial; discount; lending");
     expect(prompt).not.toContain("Zuto Hub");
   });
+
+  it("instructs the model to keep product-defining fields capability-complete", () => {
+    const productOrService =
+      "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services";
+    const prompt = strategyAgentPrompt({
+      ...baseInput,
+      campaignBrief: {
+        name: "B2B Payment Orchestration",
+        goal: "Onboard qualified merchants",
+        targetBuyer: "B2B finance teams and merchant operators",
+        mainPainPoint: "manual balance verification and slow payment instructions",
+        productOrService,
+        preferredCta: "Book a Demo",
+        offerDetails: "",
+        excludedOffers: "free trial; discount; lending",
+      },
+    });
+
+    expect(prompt).toContain("core message, positioning and value proposition are the product-defining fields");
+    expect(prompt).toContain("Do not rely on persona pain points, funnel tactics, platform content, CTAs or offers to carry required product capabilities");
+  });
+
+  it("instructs the model to avoid free consultations, assessments, audits and demos unless authorised", () => {
+    const prompt = strategyAgentPrompt({
+      ...baseInput,
+      campaignBrief: {
+        name: "B2B Payment Orchestration",
+        goal: "Onboard qualified merchants",
+        targetBuyer: "B2B finance teams and merchant operators",
+        mainPainPoint: "manual balance verification and slow payment instructions",
+        productOrService:
+          "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services",
+        preferredCta: "Book a Demo",
+        offerDetails: "",
+        excludedOffers: "free trial; discount; lending",
+      },
+    });
+
+    expect(prompt).toContain("free consultations");
+    expect(prompt).toContain("free assessments");
+    expect(prompt).toContain("free audits");
+    expect(prompt).toContain("free demos");
+    expect(prompt).toContain("Do not invent or imply free consultations, assessments, audits, demos, discounts, trials, giveaways, bonuses, or promotional credits");
+  });
 });

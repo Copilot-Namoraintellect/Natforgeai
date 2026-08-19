@@ -119,11 +119,12 @@ ${audienceIntelligenceSection}
 
 GROUNDING REQUIREMENTS — THE GENERATED STRATEGY MUST:
 - Faithfully preserve every service-capability clause listed in the campaign brief's Product/Service Being Promoted. Do not collapse, paraphrase away, or omit any required capability.
+- The core message, positioning and value proposition are the product-defining fields. They must together include a complete, coherent statement of the Product/Service Being Promoted. Do not rely on persona pain points, funnel tactics, platform content, CTAs or offers to carry required product capabilities.
 - Preserve the operating context implied by the brief (e.g. B2B vs B2C, merchant/account model, transaction-level controls). Do not recast the product or service into generic payment processing, lending, banking, or broad fintech language unless the brief explicitly describes it that way.
 - Use only the Target Buyer and Main Pain Point supplied by the brief. Do not substitute a different audience or problem.
 - Avoid invented features, channels, programmes, offers, or incentives that are not grounded in the brief.
-- Avoid unsupported claims about fraud prevention, multiple payment methods, credit, loans, free trials, or scalability unless the brief explicitly authorises them.
-- If no offer is provided in the campaign brief, the offers array MUST be empty and no incentive language may appear in CTAs, core message, value proposition, positioning, campaign theme, funnel tactics, platform strategy, or persona goals.
+- Avoid unsupported claims about fraud prevention, multiple payment methods, credit, loans, free trials, free consultations, free assessments, free audits, free demos, or scalability unless the brief explicitly authorises them.
+- If no offer is provided in the campaign brief, the offers array MUST be empty and no incentive language may appear in CTAs, core message, value proposition, positioning, campaign theme, funnel tactics, platform strategy, or persona goals. Do not invent or imply free consultations, assessments, audits, demos, discounts, trials, giveaways, bonuses, or promotional credits.
 - Use the Preferred CTA exactly when provided.
 
 ${hasStrategy ? `EXISTING STRATEGY:\n${input.strategyText}\n\nEnhance this strategy with additional insights.` : "Create a complete marketing strategy from scratch."}

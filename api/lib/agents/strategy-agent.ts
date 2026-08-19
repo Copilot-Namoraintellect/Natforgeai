@@ -188,9 +188,6 @@ function simpleStem(word: string): string {
   if (word.endsWith("s") && !word.endsWith("ss") && word.length > 3) return word.slice(0, -1);
   if (word.endsWith("ed") && word.length > 3) return word.slice(0, -2);
   if (word.endsWith("ing") && word.length > 4) return word.slice(0, -3);
-  if (word.endsWith("er") && word.length > 3) return word.slice(0, -2);
-  if (word.endsWith("est") && word.length > 4) return word.slice(0, -3);
-  if (word.endsWith("ly") && word.length > 4) return word.slice(0, -2);
   return word;
 }
 
@@ -283,6 +280,89 @@ function validateCapabilityCoverage(
   return null;
 }
 
+/**
+ * Fields that make affirmative product-defining claims. Product/service
+ * capability coverage is verified only from these fields so that mentioning a
+ * capability in a persona pain point, funnel tactic or platform content type
+ * cannot falsely satisfy the product-grounding gate.
+ */
+function gatherProductDefiningText(output: StrategyOutput): string {
+  return [output.coreMessage, output.positioning, output.valueProposition]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * Fields relevant to target-buyer and pain-point coverage. These include the
+ * product-defining fields and the persona blocks, but not funnel tactics,
+ * platform content, CTAs or offers, which can mention the buyer or pain point
+ * without actually representing them.
+ */
+function gatherBuyerAndPainPointText(output: StrategyOutput): string {
+  const parts: string[] = [
+    output.coreMessage,
+    output.positioning,
+    output.valueProposition,
+    output.campaignTheme,
+  ];
+  for (const persona of output.personas) {
+    parts.push(persona.name, persona.demographics, ...persona.painPoints, ...persona.goals);
+  }
+  return parts.filter(Boolean).join(" ");
+}
+
+/**
+ * Detects whether a tactic or claim is clearly educational rather than an
+ * affirmative product offer. Educational context (e.g. "publish a guide on
+ * managing credit risk") may mention a capability without claiming the product
+ * provides it.
+ */
+function isEducationalContext(text: string): boolean {
+  const normalized = normalizeValidationText(text);
+  const educationalPatterns = [
+    /\b(educate|educating|education)\b/,
+    /\b(guide|guidebook|whitepaper|ebook|report)\s+(on|about|to)\b/,
+    /\bpublish\s+(a\s+)?(guide|whitepaper|ebook|report)\b/,
+    /\bmanaging\s+\w+\s+risk\b/,
+    /\brisk\s+(in|for|of)\b/,
+    /\bchallenges?\s+(in|of|for)\b/,
+    /\blearn\s+(about|how)\b/,
+  ];
+  return educationalPatterns.some((pattern) => pattern.test(normalized));
+}
+
+/**
+ * Affirmative product-claim collector. Unsupported product claims are only
+ * checked in fields where the strategy asserts what the product provides.
+ * Contextual fields such as persona pain points, goals, demographics, funnel
+ * metrics or platform posting frequency must not trigger a product-claim
+ * rejection on their own.
+ *
+ * Funnel tactics are included because they can actively market an unauthorized
+ * product, but purely educational tactics are excluded.
+ */
+function gatherAffirmativeProductClaimText(output: StrategyOutput): string {
+  const parts: string[] = [
+    output.coreMessage,
+    output.positioning,
+    output.valueProposition,
+  ];
+  for (const fs of output.funnelStages) {
+    for (const tactic of fs.tactics) {
+      if (!isEducationalContext(tactic)) {
+        parts.push(tactic);
+      }
+    }
+  }
+  return parts.filter(Boolean).join(" ");
+}
+
+/**
+ * Complete output text collector used for offer/claim scanning, stale-term
+ * detection and excluded-offer checks. These gates must continue to inspect
+ * every user-facing field because incentives and excluded terms can be
+ * hidden anywhere in the strategy.
+ */
 function gatherOutputText(output: StrategyOutput): string {
   const parts: string[] = [
     output.coreMessage,
@@ -308,6 +388,38 @@ function gatherOutputText(output: StrategyOutput): string {
   return parts.filter(Boolean).join(" ");
 }
 
+/**
+ * Deterministic pre-validation grounding. If the model-generated product-defining
+ * fields do not materially represent the brief's Product/Service, the
+ * authoritative brief text is placed into coreMessage. This is the smallest
+ * deterministic guarantee that the semantic validator has a coherent,
+ * capability-complete product definition to evaluate. It does not invent
+ * capabilities; it only restates the brief itself.
+ */
+export function groundProductDefiningFields(
+  output: StrategyOutput,
+  brief: { productOrService?: string | null }
+): StrategyOutput {
+  if (!brief.productOrService || !brief.productOrService.trim()) {
+    return output;
+  }
+
+  const productText = gatherProductDefiningText(output);
+  const validation = validateCapabilityCoverage(
+    productText,
+    brief.productOrService,
+    "the product/service"
+  );
+
+  if (validation && !validation.valid) {
+    const grounded = brief.productOrService.trim();
+    const coreMessage = grounded.endsWith(".") ? grounded : `${grounded}.`;
+    return { ...output, coreMessage };
+  }
+
+  return output;
+}
+
 // Deterministic detection of unauthorised offers or incentives that may be
 // hidden outside the offers array (e.g. in CTAs, core message, funnel
 // tactics). These patterns are conservative and only reject recognised
@@ -316,6 +428,18 @@ function gatherOutputText(output: StrategyOutput): string {
 const UNAUTHORISED_OFFER_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bfree\s+trial\b/i, label: "free trial" },
   { pattern: /\bfree\s+access\b/i, label: "free access" },
+  { pattern: /\bfree\s+(consultation|consultations)\b/i, label: "free consultation" },
+  { pattern: /\bfree\s+(assessment|assessments)\b/i, label: "free assessment" },
+  { pattern: /\bfree\s+(audit|audits)\b/i, label: "free audit" },
+  { pattern: /\bfree\s+(demo|demos)\b/i, label: "free demo" },
+  { pattern: /\bcomplimentary\s+(consultation|consultations)\b/i, label: "complimentary consultation" },
+  { pattern: /\bcomplimentary\s+(assessment|assessments)\b/i, label: "complimentary assessment" },
+  { pattern: /\bcomplimentary\s+(audit|audits)\b/i, label: "complimentary audit" },
+  { pattern: /\bcomplimentary\s+(demo|demos)\b/i, label: "complimentary demo" },
+  { pattern: /\bno-cost\s+(consultation|consultations)\b/i, label: "no-cost consultation" },
+  { pattern: /\bno-cost\s+(assessment|assessments)\b/i, label: "no-cost assessment" },
+  { pattern: /\bno-cost\s+(audit|audits)\b/i, label: "no-cost audit" },
+  { pattern: /\bno-cost\s+(demo|demos)\b/i, label: "no-cost demo" },
   { pattern: /\bdiscount\b/i, label: "discount" },
   { pattern: /\bcoupon\b/i, label: "coupon" },
   { pattern: /\blimited[\s-]?time\b/i, label: "limited-time incentive" },
@@ -370,18 +494,19 @@ function detectUnauthorizedOffers(
 const UNSUPPORTED_PRODUCT_CLAIM_PATTERNS: Array<{ pattern: RegExp; label: string; authorizeLabels: string[] }> = [
   { pattern: /\bfraud\s+(prevention|reduction)\b/i, label: "fraud prevention or reduction", authorizeLabels: ["fraud"] },
   { pattern: /\bmultiple\s+payment\s+methods?\b/i, label: "multiple payment methods", authorizeLabels: ["multiple payment methods"] },
-  { pattern: /\bcredit\b/i, label: "credit", authorizeLabels: ["credit"] },
-  { pattern: /\b(loan|lending)\b/i, label: "loan or lending", authorizeLabels: ["loan", "lending"] },
+  { pattern: /\bcredits?\b/i, label: "credit", authorizeLabels: ["credit"] },
+  { pattern: /\b(loans?|lending)\b/i, label: "loan or lending", authorizeLabels: ["loan", "lending"] },
 ];
 
 function detectUnsupportedProductClaims(
-  outputText: string,
+  output: StrategyOutput,
   brief: StrategyValidationInput["brief"]
 ): string[] {
   const found = new Set<string>();
+  const claimText = gatherAffirmativeProductClaimText(output);
   const authorizationSource = [brief.productOrService, brief.coreMessage].filter(Boolean).join(" ");
   for (const { pattern, label, authorizeLabels } of UNSUPPORTED_PRODUCT_CLAIM_PATTERNS) {
-    if (!pattern.test(outputText)) continue;
+    if (!pattern.test(claimText)) continue;
     const authorised = authorizeLabels.some((authLabel) =>
       isPhraseExplicitlyAuthorised(authorizationSource, authLabel)
     );
@@ -411,23 +536,27 @@ export function validateStrategyOutput({
     };
   }
 
+  const productText = gatherProductDefiningText(output);
+  const buyerAndPainText = gatherBuyerAndPainPointText(output);
   const outputText = gatherOutputText(output);
 
   // 2. Product/service materially represented (capability-level).
+  // Product claims are checked only in product-defining fields so that
+  // mentioning a capability as a customer problem or tactic does not pass.
   const productValidation = validateCapabilityCoverage(
-    outputText,
+    productText,
     brief.productOrService,
     "the product/service"
   );
   if (productValidation) return productValidation;
 
   // 3. Target buyer materially represented (capability-level).
-  const buyerValidation = validateCapabilityCoverage(outputText, brief.targetBuyer, "the target buyer");
+  const buyerValidation = validateCapabilityCoverage(buyerAndPainText, brief.targetBuyer, "the target buyer");
   if (buyerValidation) return buyerValidation;
 
   // 4. Main pain point addressed (capability-level).
   const painValidation = validateCapabilityCoverage(
-    outputText,
+    buyerAndPainText,
     brief.mainPainPoint,
     "the main pain point"
   );
@@ -499,7 +628,9 @@ export function validateStrategyOutput({
   }
 
   // 10. Unsupported product claims not authorised by the brief.
-  const unsupportedClaims = detectUnsupportedProductClaims(outputText, brief);
+  // Only affirmative product-claim fields are checked so that describing a
+  // customer problem or contextual challenge does not trigger a false positive.
+  const unsupportedClaims = detectUnsupportedProductClaims(output, brief);
   if (unsupportedClaims.length > 0) {
     return {
       valid: false,
@@ -733,15 +864,6 @@ export async function runStrategyAgent({
     const costs = calculateTokenCost(defaultModel as any, promptTokens, completionTokens);
     actualCostUsdMicro = costs.actualCostUsdMicro;
     estimatedCostUsdMicro = costs.estimatedCostUsdMicro;
-
-    await db
-      .update(agentRuns)
-      .set({
-        status: "completed",
-        output: generatedOutput as any,
-        completedAt: new Date(),
-      })
-      .where(eq(agentRuns.id, runId));
   } catch (error: any) {
     await db
       .update(agentRuns)
@@ -773,8 +895,14 @@ export async function runStrategyAgent({
   const brief = buildGroundedCreativeBrief({ campaign: fingerprintSource });
   const briefFingerprint = brief.fingerprint;
 
+  // Deterministic grounding: if the model-generated product-defining fields do
+  // not materially represent the brief, replace coreMessage with the brief's own
+  // Product/Service text. This is the smallest deterministic guarantee that
+  // required capabilities survive prompt drift before semantic validation runs.
+  const groundedOutput = groundProductDefiningFields(generatedOutput, brief);
+
   const outputWithFingerprint = {
-    ...generatedOutput,
+    ...groundedOutput,
     creativeBriefFingerprint: briefFingerprint,
   };
 
@@ -805,13 +933,16 @@ export async function runStrategyAgent({
     });
   }
 
-  // Record the brief fingerprint on the agent run so we can later find a
-  // completed strategy run that matches a given brief fingerprint without
-  // deleting historical runs.
+  // Only after validation succeeds do we record the run as completed. This
+  // guarantees that a validation-failed run is never transiently or permanently
+  // stored as completed, and that agentRuns, the returned result and the
+  // campaign record all reference the same grounded strategy.
   await db
     .update(agentRuns)
     .set({
+      status: "completed",
       output: outputWithFingerprint as any,
+      completedAt: new Date(),
     })
     .where(eq(agentRuns.id, runId));
 
@@ -820,19 +951,19 @@ export async function runStrategyAgent({
     .update(campaigns)
     .set({
       strategyDocument: strategyText || null,
-      personas: generatedOutput.personas as any,
-      funnelStages: generatedOutput.funnelStages as any,
-      offers: generatedOutput.offers as any,
-      ctaStrategy: generatedOutput.ctas.map((c) => `${c.stage}: ${c.cta}`).join("\n"),
+      personas: groundedOutput.personas as any,
+      funnelStages: groundedOutput.funnelStages as any,
+      offers: groundedOutput.offers as any,
+      ctaStrategy: groundedOutput.ctas.map((c) => `${c.stage}: ${c.cta}`).join("\n"),
       workflowContext: {
         strategyGeneratedAt: new Date().toISOString(),
         strategyRunId: runId,
         strategyFingerprint: briefFingerprint,
-        positioning: generatedOutput.positioning,
-        valueProposition: generatedOutput.valueProposition,
-        coreMessage: generatedOutput.coreMessage,
-        campaignTheme: generatedOutput.campaignTheme,
-        budgetRecommendation: generatedOutput.budgetRecommendation,
+        positioning: groundedOutput.positioning,
+        valueProposition: groundedOutput.valueProposition,
+        coreMessage: groundedOutput.coreMessage,
+        campaignTheme: groundedOutput.campaignTheme,
+        budgetRecommendation: groundedOutput.budgetRecommendation,
         location: business.location || null,
         industry: business.industry || null,
       } as any,
@@ -841,7 +972,7 @@ export async function runStrategyAgent({
 
   return {
     runId,
-    output: generatedOutput,
+    output: groundedOutput,
     promptTokens,
     completionTokens,
     actualCostUsdMicro,
