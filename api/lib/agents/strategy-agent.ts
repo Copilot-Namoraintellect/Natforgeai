@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { runAgent } from "./runner";
+import { generateObject } from "ai";
 import { strategyAgentPrompt } from "./prompts";
 import { getDb } from "../../queries/connection";
 import { agentRuns, campaigns } from "@db/schema";
@@ -9,6 +9,9 @@ import { buildGroundedCreativeBrief } from "../creative/brief-grounding";
 import { deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
 import { getEstimatedAgentCost } from "../billing/cost-tracker";
+import { defaultModel } from "./openai";
+import { calculateTokenCost } from "../billing/cost-tracker";
+import { emitAgentProviderAlert } from "./provider-error";
 
 function parseBudgetNumber(value: unknown): number {
   if (typeof value === "number") return value;
@@ -111,7 +114,7 @@ export interface StrategyAgentRunResult {
 function normalizeValidationText(value: string): string {
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/[^a-z0-9\s-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -122,6 +125,161 @@ function containsPhrase(haystack: string, needle: string): boolean {
   const normalizedNeedle = normalizeValidationText(needle);
   if (!normalizedNeedle) return false;
   return normalizedHaystack.includes(normalizedNeedle);
+}
+
+// Capability-level validation helpers.
+//
+// These replace literal substring matching for product/service, target buyer and
+// main pain point with a deterministic, rule-based check that accepts compound
+// descriptions and surface-form variations (word order, plural/singular,
+// hyphenation) while rejecting missing core capabilities or generic-only matches.
+//
+// A small, static set of explicitly documented equivalent-term groups is also
+// supported for B2B payout/financial terminology. It is not a general semantic
+// paraphrase engine and does not use AI/model calls.
+
+const VALIDATION_STOP_WORDS = new Set([
+  "a", "an", "the", "and", "or", "but", "for", "with", "without", "of", "in", "on", "at", "to", "from", "by",
+  "about", "into", "through", "during", "before", "after", "above", "below", "between", "among", "is", "are",
+  "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "can", "shall", "this", "that", "these", "those", "i", "you", "he", "she", "it",
+  "we", "they", "them", "their", "our", "us", "me", "my", "your", "his", "her", "its", "ours", "theirs", "who",
+  "what", "which", "when", "where", "why", "how", "all", "each", "every", "both", "few", "more", "most", "other",
+  "some", "such", "no", "not", "only", "own", "same", "so", "than", "too", "very", "just", "now", "then", "here",
+  "there", "once", "again", "also", "back", "still", "already", "yet", "soon", "today", "new", "old", "first",
+  "last", "long", "great", "little", "big", "high", "low", "early", "late", "right", "left", "best", "better",
+  "good", "bad", "easy", "hard", "fast", "slow", "quick", "much", "many", "most", "more", "less", "least",
+  "enough", "well", "down", "off", "over", "under", "further", "furthermore", "however", "therefore", "thus",
+  "hence", "because", "since", "while", "whereas", "although", "though", "unless", "until", "whether",
+  "either", "neither", "none", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+]);
+
+const GENERIC_MECHANISM_WORDS = new Set([
+  "platform", "platforms", "system", "systems", "solution", "solutions", "service", "services", "tool",
+  "tools", "app", "apps", "application", "applications", "software", "website", "websites", "portal",
+  "portals", "hub", "hubs", "product", "products",
+]);
+
+const GENERIC_OUTCOME_WORDS = new Set([
+  "help", "helps", "helping", "grow", "growth", "success", "successful", "succeed", "increase", "boost",
+  "improve", "better", "best", "more", "less", "greater", "maximize", "optimize", "benefit", "benefits",
+]);
+
+// Small, conservative equivalent-term groups derived from the existing B2B
+// canonical concept set used by brief-grounding.ts. These are deterministic,
+// narrowly scoped to financial/payout business terminology, and intentionally
+// do not include broad or ambiguous synonyms (e.g. "owner" is not equivalent
+// to "manager", "restaurant" is not equivalent to "eatery").
+const CAPABILITY_EQUIVALENT_GROUPS = [
+  ["payout", "payouts", "disbursement", "disbursements"],
+] as const;
+
+function tokenizeValidationText(value: string): string[] {
+  return normalizeValidationText(value)
+    .replace(/-/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function simpleStem(word: string): string {
+  if (word.endsWith("ies") && word.length > 4) return word.slice(0, -3) + "y";
+  if (word.endsWith("ied") && word.length > 4) return word.slice(0, -3) + "y";
+  if (word.endsWith("s") && !word.endsWith("ss") && word.length > 3) return word.slice(0, -1);
+  if (word.endsWith("ed") && word.length > 3) return word.slice(0, -2);
+  if (word.endsWith("ing") && word.length > 4) return word.slice(0, -3);
+  if (word.endsWith("er") && word.length > 3) return word.slice(0, -2);
+  if (word.endsWith("est") && word.length > 4) return word.slice(0, -3);
+  if (word.endsWith("ly") && word.length > 4) return word.slice(0, -2);
+  return word;
+}
+
+function isGenericCapabilityWord(word: string): boolean {
+  return GENERIC_MECHANISM_WORDS.has(word) || GENERIC_OUTCOME_WORDS.has(word);
+}
+
+function extractCapabilityTokens(phrase: string): { all: string[]; core: string[] } {
+  const all = tokenizeValidationText(phrase)
+    .map((t) => t.replace(/^-+|-+$/g, ""))
+    .filter((t) => t.length > 1 && !VALIDATION_STOP_WORDS.has(t));
+  const core = all.filter((t) => !isGenericCapabilityWord(t));
+  return { all, core };
+}
+
+function equivalentCapabilityStems(token: string): Set<string> {
+  const normalized = normalizeValidationText(token).replace(/^-+|-+$/g, "");
+  const stems = new Set<string>();
+  stems.add(normalized);
+  stems.add(simpleStem(normalized));
+
+  for (const group of CAPABILITY_EQUIVALENT_GROUPS) {
+    if (group.includes(normalized as any)) {
+      for (const equivalent of group) {
+        stems.add(equivalent);
+        stems.add(simpleStem(equivalent));
+      }
+    }
+  }
+
+  return stems;
+}
+
+function outputContainsCapabilityToken(outputText: string, token: string): boolean {
+  const outputTokens = tokenizeValidationText(outputText);
+  const outputStems = new Set(outputTokens.map(simpleStem));
+
+  for (const stem of equivalentCapabilityStems(token)) {
+    if (outputStems.has(stem)) return true;
+  }
+  return false;
+}
+
+function validateCapabilityCoverage(
+  outputText: string,
+  briefPhrase: string | null | undefined,
+  label: string
+): StrategyValidationResult | null {
+  if (!briefPhrase || !briefPhrase.trim()) return null;
+
+  const { all, core } = extractCapabilityTokens(briefPhrase);
+  if (all.length === 0) return null;
+
+  const normalizedOutput = normalizeValidationText(outputText);
+  if (!normalizedOutput) {
+    return {
+      valid: false,
+      reason: `Strategy output is empty; cannot validate ${label}: ${briefPhrase}.`,
+    };
+  }
+
+  // Core capabilities must be preserved. A missing core capability cannot be
+  // compensated for by a generic mechanism or outcome word.
+  const missingCore: string[] = [];
+  for (const token of core) {
+    if (!outputContainsCapabilityToken(outputText, token)) {
+      missingCore.push(token);
+    }
+  }
+
+  if (missingCore.length > 0) {
+    return {
+      valid: false,
+      reason: `Strategy output does not materially represent ${label}: ${briefPhrase}. Missing core capabilities: ${missingCore.slice(0, 3).join(", ")}.`,
+    };
+  }
+
+  // If the brief contains only generic mechanism/outcome words, require a
+  // strong majority of them to be present so the output is not purely generic.
+  if (core.length === 0) {
+    const presentAll = all.filter((t) => outputContainsCapabilityToken(outputText, t));
+    if (presentAll.length < Math.max(1, Math.ceil(all.length * 0.67))) {
+      return {
+        valid: false,
+        reason: `Strategy output does not materially represent ${label}: ${briefPhrase}. The description is too generic.`,
+      };
+    }
+  }
+
+  return null;
 }
 
 function gatherOutputText(output: StrategyOutput): string {
@@ -172,29 +330,25 @@ export function validateStrategyOutput({
 
   const outputText = gatherOutputText(output);
 
-  // 2. Product/service materially represented.
-  if (brief.productOrService && !containsPhrase(outputText, brief.productOrService)) {
-    return {
-      valid: false,
-      reason: `Strategy output does not materially represent the product/service: ${brief.productOrService}.`,
-    };
-  }
+  // 2. Product/service materially represented (capability-level).
+  const productValidation = validateCapabilityCoverage(
+    outputText,
+    brief.productOrService,
+    "the product/service"
+  );
+  if (productValidation) return productValidation;
 
-  // 3. Target buyer materially represented.
-  if (brief.targetBuyer && !containsPhrase(outputText, brief.targetBuyer)) {
-    return {
-      valid: false,
-      reason: `Strategy output does not materially represent the target buyer: ${brief.targetBuyer}.`,
-    };
-  }
+  // 3. Target buyer materially represented (capability-level).
+  const buyerValidation = validateCapabilityCoverage(outputText, brief.targetBuyer, "the target buyer");
+  if (buyerValidation) return buyerValidation;
 
-  // 4. Main pain point addressed.
-  if (brief.mainPainPoint && !containsPhrase(outputText, brief.mainPainPoint)) {
-    return {
-      valid: false,
-      reason: `Strategy output does not address the main pain point: ${brief.mainPainPoint}.`,
-    };
-  }
+  // 4. Main pain point addressed (capability-level).
+  const painValidation = validateCapabilityCoverage(
+    outputText,
+    brief.mainPainPoint,
+    "the main pain point"
+  );
+  if (painValidation) return painValidation;
 
   // 5. Preferred CTA used in the CTA strategy.
   if (brief.preferredCta) {
@@ -321,6 +475,7 @@ export async function runStrategyAgent({
   business,
   strategyText,
   campaignBrief,
+  onRunCreated,
 }: {
   userId: number;
   campaignId: number;
@@ -355,6 +510,13 @@ export async function runStrategyAgent({
     referenceStyle?: string;
     contentStyle?: string;
   };
+  /**
+   * Called inside the same database transaction that creates the strategy run.
+   * Receives the new run ID and the transaction object. If this callback throws,
+   * the transaction rolls back and the run row is never committed, so the
+   * caller can release the claim as failed without leaving an orphaned run.
+   */
+  onRunCreated?: (runId: number, tx: any) => void | Promise<void>;
 }): Promise<StrategyAgentRunResult> {
   const db = getDb();
 
@@ -421,16 +583,86 @@ export async function runStrategyAgent({
     });
   }
 
-  const result = await runAgent({
-    userId,
-    campaignId,
-    agentType: "strategy",
-    prompt,
-    schema: StrategyOutputSchema,
-    system:
-      "You are a world-class marketing strategist. You create detailed, actionable marketing strategies for businesses. Always respond with valid structured data.",
-    skipBilling: true,
+  // Create the run row and, atomically within the same transaction, attach it
+  // to the caller's regeneration claim. The transaction commits before any AI
+  // generation occurs, so a committed run always has its claim reference. If
+  // the callback throws (e.g. claim attachment collision), the transaction
+  // rolls back and no run row is persisted.
+  const systemPrompt =
+    "You are a world-class marketing strategist. You create detailed, actionable marketing strategies for businesses. Always respond with valid structured data.";
+  const runId = await db.transaction(async (tx) => {
+    const [insertResult] = await tx.insert(agentRuns).values({
+      userId,
+      campaignId,
+      agentType: "strategy",
+      status: "running",
+      input: { prompt, system: systemPrompt },
+      startedAt: new Date(),
+    });
+
+    const newRunId = Number(insertResult.insertId);
+    if (onRunCreated) {
+      await onRunCreated(newRunId, tx);
+    }
+    return newRunId;
   });
+
+  // Generate the strategy output outside the transaction. The run row is
+  // already committed and linked to the claim, so a later failure here leaves
+  // the reference intact.
+  let generatedOutput: StrategyOutput;
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let actualCostUsdMicro = 0;
+  let estimatedCostUsdMicro = 0;
+
+  try {
+    const genResult = await generateObject({
+      model: defaultModel,
+      system: systemPrompt,
+      prompt,
+      schema: StrategyOutputSchema,
+    });
+
+    generatedOutput = genResult.object as StrategyOutput;
+    const usage = (genResult as any).usage;
+    promptTokens = usage?.promptTokens ?? 0;
+    completionTokens = usage?.completionTokens ?? 0;
+
+    const costs = calculateTokenCost(defaultModel as any, promptTokens, completionTokens);
+    actualCostUsdMicro = costs.actualCostUsdMicro;
+    estimatedCostUsdMicro = costs.estimatedCostUsdMicro;
+
+    await db
+      .update(agentRuns)
+      .set({
+        status: "completed",
+        output: generatedOutput as any,
+        completedAt: new Date(),
+      })
+      .where(eq(agentRuns.id, runId));
+  } catch (error: any) {
+    await db
+      .update(agentRuns)
+      .set({
+        status: "failed",
+        error: error.message || String(error),
+        completedAt: new Date(),
+      })
+      .where(eq(agentRuns.id, runId));
+
+    // Preserve provider/quota observability parity with the generic agent runner.
+    // This alert is best-effort: if it fails, the original generation error is
+    // still thrown and the linked run remains failed.
+    await emitAgentProviderAlert({
+      agentType: "strategy",
+      runId,
+      userId,
+      error,
+    }).catch(() => {});
+
+    throw error;
+  }
 
   // Compute the fingerprint of the brief that produced this strategy so later
   // workflow steps can detect whether the campaign brief changed afterwards.
@@ -441,7 +673,7 @@ export async function runStrategyAgent({
   const briefFingerprint = brief.fingerprint;
 
   const outputWithFingerprint = {
-    ...result.output,
+    ...generatedOutput,
     creativeBriefFingerprint: briefFingerprint,
   };
 
@@ -464,7 +696,7 @@ export async function runStrategyAgent({
         error: validation.reason,
         completedAt: new Date(),
       })
-      .where(eq(agentRuns.id, result.runId));
+      .where(eq(agentRuns.id, runId));
 
     throw new TRPCError({
       code: "UNPROCESSABLE_CONTENT",
@@ -480,26 +712,26 @@ export async function runStrategyAgent({
     .set({
       output: outputWithFingerprint as any,
     })
-    .where(eq(agentRuns.id, result.runId));
+    .where(eq(agentRuns.id, runId));
 
   // Save strategy output to campaign
   await db
     .update(campaigns)
     .set({
       strategyDocument: strategyText || null,
-      personas: result.output.personas as any,
-      funnelStages: result.output.funnelStages as any,
-      offers: result.output.offers as any,
-      ctaStrategy: result.output.ctas.map((c) => `${c.stage}: ${c.cta}`).join("\n"),
+      personas: generatedOutput.personas as any,
+      funnelStages: generatedOutput.funnelStages as any,
+      offers: generatedOutput.offers as any,
+      ctaStrategy: generatedOutput.ctas.map((c) => `${c.stage}: ${c.cta}`).join("\n"),
       workflowContext: {
         strategyGeneratedAt: new Date().toISOString(),
-        strategyRunId: result.runId,
+        strategyRunId: runId,
         strategyFingerprint: briefFingerprint,
-        positioning: result.output.positioning,
-        valueProposition: result.output.valueProposition,
-        coreMessage: result.output.coreMessage,
-        campaignTheme: result.output.campaignTheme,
-        budgetRecommendation: result.output.budgetRecommendation,
+        positioning: generatedOutput.positioning,
+        valueProposition: generatedOutput.valueProposition,
+        coreMessage: generatedOutput.coreMessage,
+        campaignTheme: generatedOutput.campaignTheme,
+        budgetRecommendation: generatedOutput.budgetRecommendation,
         location: business.location || null,
         industry: business.industry || null,
       } as any,
@@ -507,11 +739,11 @@ export async function runStrategyAgent({
     .where(eq(campaigns.id, campaignId));
 
   return {
-    runId: result.runId,
-    output: result.output,
-    promptTokens: result.promptTokens ?? 0,
-    completionTokens: result.completionTokens ?? 0,
-    actualCostUsdMicro: result.actualCostUsdMicro ?? 0,
-    estimatedCostUsdMicro: result.estimatedCostUsdMicro ?? 0,
+    runId,
+    output: generatedOutput,
+    promptTokens,
+    completionTokens,
+    actualCostUsdMicro,
+    estimatedCostUsdMicro,
   };
 }

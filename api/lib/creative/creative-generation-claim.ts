@@ -241,18 +241,21 @@ export async function attachCreativeGenerationOperationReference({
   claimId,
   ownerToken,
   operationReferenceId,
+  db,
 }: {
   claimId: number;
   ownerToken: string;
   operationReferenceId: number;
+  /** Optional transaction or DB instance to use for the update. */
+  db?: any;
 }): Promise<AttachCreativeGenerationOperationReferenceResult> {
   assertValidId(claimId, "claimId");
   assertValidOwnerToken(ownerToken);
   assertValidId(operationReferenceId, "operationReferenceId");
 
-  const db = getDb();
+  const dbInstance = db ?? getDb();
   try {
-    const result = await db
+    const result = await dbInstance
       .update(creativeGenerationClaims)
       .set({ operationReferenceId })
       .where(
@@ -280,7 +283,9 @@ export async function attachCreativeGenerationOperationReference({
     const existingClaim = await findExistingClaimByReference(
       // source is unknown here; we must infer it from the row we own.
       // Re-read the claim to obtain the source, then look up the duplicate.
-      (await db
+      // Note: this lookup intentionally runs outside the failed transaction
+      // (if one was supplied) so it sees committed state.
+      (await getDb()
         .select({ operationSource: creativeGenerationClaims.operationSource })
         .from(creativeGenerationClaims)
         .where(eq(creativeGenerationClaims.id, claimId))

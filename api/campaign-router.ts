@@ -764,33 +764,28 @@ export const campaignRouter = createRouter({
             website: business.website,
             websiteEvidence: business.websiteEvidence,
           },
+          onRunCreated: async (runId, tx) => {
+            strategyRunId = runId;
+            const attachResult = await attachCreativeGenerationOperationReference({
+              claimId: claim!.id,
+              ownerToken: ownerToken!,
+              operationReferenceId: runId,
+              db: tx,
+            });
+            if (!attachResult.attached) {
+              console.error(`[regenerateFromProfile] claim attachment collision | campaignId=${campaignId} | runId=${runId}`);
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "Regeneration operation already exists for this strategy run.",
+              });
+            }
+          },
         });
         strategyRunId = strategyResult.runId;
         console.log(`[regenerateFromProfile] strategy regenerated | campaignId=${campaignId} | strategyRunId=${strategyRunId}`);
 
         // Charge only after the validated strategy run has been produced.
         await chargeForStrategyRun(userId, campaignId, strategyResult);
-
-        const attachResult = await attachCreativeGenerationOperationReference({
-          claimId: claim!.id,
-          ownerToken: ownerToken!,
-          operationReferenceId: strategyRunId,
-        });
-
-        if (!attachResult.attached) {
-          // The strategy run is already bound to another operation. Abandon
-          // this claim without deleting any AI-generated content or historical
-          // agent runs. The new strategy run remains valid; this claim simply
-          // lost the race.
-          const releaseResult = await releaseClaimOnce("failed");
-          if (!releaseResult.released) {
-            console.error(`[regenerateFromProfile] failed-release failed after reference collision | campaignId=${campaignId} | claimId=${claim!.id} | releaseError=${releaseResult.error.message}`);
-          }
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Regeneration operation already exists for this strategy run.",
-          });
-        }
 
         // Advance workflow to strategy_generated and then strategy_approved so creative can run
         await transitionCampaignState(campaignId, userId, "generate_strategy");
@@ -1084,7 +1079,10 @@ export const campaignRouter = createRouter({
             })
             .where(eq(campaigns.id, campaignId));
 
-          // Regenerate strategy from the current persisted brief.
+          // Regenerate strategy from the current persisted brief. The run and its
+          // claim reference are inserted atomically in one transaction, before any
+          // AI generation or semantic validation, so a committed run is never
+          // reachable without the claim retaining its operationReferenceId.
           strategyResult = await runStrategyAgent({
             userId,
             campaignId,
@@ -1101,28 +1099,47 @@ export const campaignRouter = createRouter({
               website: business.website,
               websiteEvidence: business.websiteEvidence,
             },
+            onRunCreated: async (runId, tx) => {
+              strategyRunId = runId;
+              const attachResult = await attachCreativeGenerationOperationReference({
+                claimId: claim.id,
+                ownerToken,
+                operationReferenceId: runId,
+                db: tx,
+              });
+              if (!attachResult.attached) {
+                console.error(`[regenerateStrategyForApproval] claim attachment collision | campaignId=${campaignId} | runId=${runId}`);
+                throw new TRPCError({
+                  code: "BAD_REQUEST",
+                  message: "Strategy regeneration is already in progress for this strategy run. Please wait for it to complete.",
+                });
+              }
+            },
           });
           strategyRunId = strategyResult.runId;
         }
 
-        // Attach the strategy run ID to the regeneration claim. A completed
-        // regeneration claim must never have a null operationReferenceId.
-        const attachResult = await attachCreativeGenerationOperationReference({
-          claimId: claim.id,
-          ownerToken,
-          operationReferenceId: strategyRunId,
-        });
-
-        if (!attachResult.attached) {
-          console.error(`[regenerateStrategyForApproval] claim attachment collision | campaignId=${campaignId} | runId=${strategyRunId}`);
-          const releaseResult = await releaseClaimOnce("failed");
-          if (!releaseResult.released) {
-            console.error(`[regenerateStrategyForApproval] failed-release failed after attachment collision | campaignId=${campaignId} | claimId=${claim.id} | releaseError=${releaseResult.error.message}`);
-          }
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Strategy regeneration is already in progress for this strategy run. Please wait for it to complete.",
+        // For reused runs the row already exists, so attach it now that the run
+        // ID is known. A completed regeneration claim must never have a null
+        // operationReferenceId.
+        if (strategyRunIsReused) {
+          const attachResult = await attachCreativeGenerationOperationReference({
+            claimId: claim.id,
+            ownerToken,
+            operationReferenceId: strategyRunId,
           });
+
+          if (!attachResult.attached) {
+            console.error(`[regenerateStrategyForApproval] claim attachment collision | campaignId=${campaignId} | runId=${strategyRunId}`);
+            const releaseResult = await releaseClaimOnce("failed");
+            if (!releaseResult.released) {
+              console.error(`[regenerateStrategyForApproval] failed-release failed after attachment collision | campaignId=${campaignId} | claimId=${claim.id} | releaseError=${releaseResult.error.message}`);
+            }
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Strategy regeneration is already in progress for this strategy run. Please wait for it to complete.",
+            });
+          }
         }
 
         // Charge exactly 3 credits only after the strategy output has passed

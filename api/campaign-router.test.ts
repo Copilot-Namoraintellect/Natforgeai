@@ -508,6 +508,116 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
     expect(db.state.deletedRows.some((d: any) => d.table === "agent_runs")).toBe(false);
   });
 
+  it("attaches the strategy run ID to the claim before generation or validation can fail", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent, chargeForStrategyRun } = await import("./lib/agents/strategy-agent");
+    const { createApprovalRequest } = await import("./lib/workflow/engine");
+    const { attachCreativeGenerationOperationReference, releaseClaimWithResult } = await import(
+      "./lib/creative/creative-generation-claim"
+    );
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    let onRunCreatedCalled = false;
+    vi.mocked(runStrategyAgent).mockImplementationOnce(async (args: any) => {
+      expect(args.onRunCreated).toBeTypeOf("function");
+      await args.onRunCreated(9001, { mockTx: true });
+      onRunCreatedCalled = true;
+      return {
+        runId: 9001,
+        output: {},
+        promptTokens: 100,
+        completionTokens: 50,
+        actualCostUsdMicro: 0,
+        estimatedCostUsdMicro: 0,
+      } as any;
+    });
+
+    const caller = campaignRouter.createCaller(buildCtx());
+    await caller.regenerateStrategyForApproval({ campaignId: 42 });
+
+    expect(onRunCreatedCalled).toBe(true);
+    expect(attachCreativeGenerationOperationReference).toHaveBeenCalledWith(
+      expect.objectContaining({ operationReferenceId: 9001 })
+    );
+    expect(chargeForStrategyRun).toHaveBeenCalledTimes(1);
+    expect(createApprovalRequest).toHaveBeenCalledTimes(1);
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+  });
+
+  it("retains operationReferenceId, marks run and claim failed, and charges nothing when semantic validation fails", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent, chargeForStrategyRun } = await import("./lib/agents/strategy-agent");
+    const { createApprovalRequest } = await import("./lib/workflow/engine");
+    const {
+      attachCreativeGenerationOperationReference,
+      releaseClaimWithResult,
+    } = await import("./lib/creative/creative-generation-claim");
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    vi.mocked(runStrategyAgent).mockImplementationOnce(async (args: any) => {
+      await args.onRunCreated(9001, { mockTx: true });
+      throw new TRPCError({
+        code: "UNPROCESSABLE_CONTENT",
+        message: "Strategy output failed validation",
+      });
+    });
+
+    const caller = campaignRouter.createCaller(buildCtx());
+    await expect(caller.regenerateStrategyForApproval({ campaignId: 42 })).rejects.toBeInstanceOf(TRPCError);
+
+    // The run ID was persisted to the claim before validation failed.
+    expect(attachCreativeGenerationOperationReference).toHaveBeenCalledWith(
+      expect.objectContaining({ operationReferenceId: 9001 })
+    );
+
+    // No billing, approval, or destructive side effects.
+    expect(chargeForStrategyRun).not.toHaveBeenCalled();
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(db.state.deletedRows.length).toBe(0);
+
+    // Claim released as failed.
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+  });
+
+  it("retains operationReferenceId and charges nothing when claim attachment collides during strategy creation", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent, chargeForStrategyRun } = await import("./lib/agents/strategy-agent");
+    const { createApprovalRequest } = await import("./lib/workflow/engine");
+    const {
+      attachCreativeGenerationOperationReference,
+      releaseClaimWithResult,
+    } = await import("./lib/creative/creative-generation-claim");
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(attachCreativeGenerationOperationReference).mockResolvedValueOnce({
+      attached: false,
+      existingClaim: { id: 1002 },
+    } as any);
+
+    vi.mocked(runStrategyAgent).mockImplementationOnce(async (args: any) => {
+      await args.onRunCreated(9001, { mockTx: true });
+      return { runId: 9001 } as any;
+    });
+
+    const caller = campaignRouter.createCaller(buildCtx());
+    await expect(caller.regenerateStrategyForApproval({ campaignId: 42 })).rejects.toBeInstanceOf(TRPCError);
+
+    expect(attachCreativeGenerationOperationReference).toHaveBeenCalledWith(
+      expect.objectContaining({ operationReferenceId: 9001 })
+    );
+    expect(chargeForStrategyRun).not.toHaveBeenCalled();
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+  });
+
   it("rejects when campaign is not linked to a business", async () => {
     const { getDb } = await import("./queries/connection");
     const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
@@ -611,14 +721,17 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
 
     const db = createMockDb();
     vi.mocked(getDb).mockReturnValue(db as any);
-    vi.mocked(runStrategyAgent).mockResolvedValue({
-      runId: 999,
-      output: {},
-      promptTokens: 100,
-      completionTokens: 50,
-      actualCostUsdMicro: 0,
-      estimatedCostUsdMicro: 0,
-    } as any);
+    vi.mocked(runStrategyAgent).mockImplementationOnce(async (args: any) => {
+      await args.onRunCreated(999);
+      return {
+        runId: 999,
+        output: {},
+        promptTokens: 100,
+        completionTokens: 50,
+        actualCostUsdMicro: 0,
+        estimatedCostUsdMicro: 0,
+      } as any;
+    });
 
     const caller = campaignRouter.createCaller(buildCtx());
     await caller.regenerateStrategyForApproval({ campaignId: 42 });
@@ -639,18 +752,21 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
 
     const db = createMockDb();
     vi.mocked(getDb).mockReturnValue(db as any);
-    vi.mocked(runStrategyAgent).mockResolvedValue({
-      runId: 999,
-      output: {},
-      promptTokens: 100,
-      completionTokens: 50,
-      actualCostUsdMicro: 0,
-      estimatedCostUsdMicro: 0,
-    } as any);
     vi.mocked(attachCreativeGenerationOperationReference).mockResolvedValueOnce({
       attached: false,
       existingClaim: { id: 1002 },
     } as any);
+    vi.mocked(runStrategyAgent).mockImplementationOnce(async (args: any) => {
+      await args.onRunCreated(999);
+      return {
+        runId: 999,
+        output: {},
+        promptTokens: 100,
+        completionTokens: 50,
+        actualCostUsdMicro: 0,
+        estimatedCostUsdMicro: 0,
+      } as any;
+    });
 
     const caller = campaignRouter.createCaller(buildCtx());
     await expect(caller.regenerateStrategyForApproval({ campaignId: 42 })).rejects.toBeInstanceOf(TRPCError);
@@ -781,7 +897,7 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
     });
     vi.mocked(getDb).mockReturnValue(db as any);
     vi.mocked(runStrategyAgent).mockResolvedValue({
-      runId: 246,
+      runId: 9001,
       output: {},
       promptTokens: 100,
       completionTokens: 50,
@@ -794,10 +910,10 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
 
     expect(result.success).toBe(true);
     expect(result.reused).toBe(false);
-    expect(result.strategyRunId).toBe(246);
+    expect(result.strategyRunId).toBe(9001);
     expect(runStrategyAgent).toHaveBeenCalledTimes(1);
     expect(chargeForStrategyRun).toHaveBeenCalledTimes(1);
-    expect(chargeForStrategyRun).toHaveBeenCalledWith(18, 42, expect.objectContaining({ runId: 246 }));
+    expect(chargeForStrategyRun).toHaveBeenCalledWith(18, 42, expect.objectContaining({ runId: 9001 }));
 
     // Historical run 245 is preserved; no charge is made for it.
     expect(db.state.deletedRows.some((d: any) => d.table === "agent_runs")).toBe(false);
@@ -809,7 +925,7 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
       .pop();
     expect(lastLineage.workflowContext.strategyApprovalLineage).toMatchObject({
       creativeBriefFingerprint: "fp-current",
-      strategyRunId: 246,
+      strategyRunId: 9001,
       approvalRequestId: 1,
       status: "pending",
     });
@@ -867,7 +983,7 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
     });
     vi.mocked(getDb).mockReturnValue(db as any);
     vi.mocked(runStrategyAgent).mockResolvedValue({
-      runId: 246,
+      runId: 9001,
       output: {},
       promptTokens: 100,
       completionTokens: 50,
@@ -880,7 +996,7 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
 
     expect(result.success).toBe(true);
     expect(result.reused).toBe(false);
-    expect(result.strategyRunId).toBe(246);
+    expect(result.strategyRunId).toBe(9001);
     expect(runStrategyAgent).toHaveBeenCalledTimes(1);
 
     // Approval 34 is preserved as rejected/superseded evidence, not deleted.
@@ -895,7 +1011,7 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
       .pop();
     expect(lastLineage.workflowContext.strategyApprovalLineage).toMatchObject({
       creativeBriefFingerprint: "fp-current",
-      strategyRunId: 246,
+      strategyRunId: 9001,
       approvalRequestId: 1,
       status: "pending",
     });
@@ -927,7 +1043,7 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
     });
     vi.mocked(getDb).mockReturnValue(db as any);
     vi.mocked(runStrategyAgent).mockResolvedValue({
-      runId: 246,
+      runId: 9001,
       output: {},
       promptTokens: 100,
       completionTokens: 50,
@@ -939,7 +1055,7 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
 
     // Only the new valid run is charged; the invalid reusable run 245 is ignored.
     expect(chargeForStrategyRun).toHaveBeenCalledTimes(1);
-    expect(chargeForStrategyRun).toHaveBeenCalledWith(18, 42, expect.objectContaining({ runId: 246 }));
+    expect(chargeForStrategyRun).toHaveBeenCalledWith(18, 42, expect.objectContaining({ runId: 9001 }));
   });
 });
 describe("campaignRouter.strategyApprovalStatus", () => {

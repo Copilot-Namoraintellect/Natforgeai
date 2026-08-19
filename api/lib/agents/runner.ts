@@ -7,28 +7,18 @@ import { eq } from "drizzle-orm";
 import { deductCredits, recordAiUsage, checkCredits, adminAdjustCredits } from "../billing/credit-engine";
 import { getEstimatedAgentCost, calculateTokenCost } from "../billing/cost-tracker";
 import { enforceCostControl } from "../billing/cost-control";
-import { createAlert } from "../alerts";
 import { TRPCError } from "@trpc/server";
+import {
+  isInsufficientQuotaError,
+  isProviderOrPlatformError,
+  emitAgentProviderAlert,
+} from "./provider-error";
 
 export function isTestMode(): boolean {
   return (
     process.env.NATFORGE_TEST_MODE === "true" ||
     process.env.VITEST === "true" ||
     process.env.NODE_ENV === "test"
-  );
-}
-
-function isInsufficientQuotaError(err: any): boolean {
-  if (!err) return false;
-  const statusCode = err.statusCode ?? err.status ?? err.response?.status;
-  const code = err.code ?? err.error?.code ?? err.response?.data?.error?.code;
-  const message = err.message || err.error?.message || "";
-  return (
-    statusCode === 429 ||
-    code === "insufficient_quota" ||
-    message.toLowerCase().includes("insufficient_quota") ||
-    message.toLowerCase().includes("exceeded your current quota") ||
-    message.toLowerCase().includes("billing")
   );
 }
 
@@ -194,12 +184,7 @@ export async function runAgent<TOutput>({
       error.message?.includes("response_format") ||
       error.message?.includes("Missing required") ||
       error.message?.includes("Invalid schema");
-    const isProviderError =
-      error.message?.includes("OpenAI") ||
-      error.message?.includes("fetch") ||
-      error.message?.includes("timeout") ||
-      error.message?.includes("ECONNREFUSED") ||
-      error.statusCode >= 500;
+    const isProviderError = isProviderOrPlatformError(error);
 
     const isQuotaError = isInsufficientQuotaError(error);
 
@@ -218,20 +203,8 @@ export async function runAgent<TOutput>({
       }
     }
 
-    if (isQuotaError) {
-      await createAlert({
-        severity: "critical",
-        category: "openai",
-        message: `OpenAI quota/billing exhausted: ${error.message}`,
-        details: { agentType, runId, userId, errorCode: error.code, statusCode: error.statusCode ?? error.status },
-      }).catch(() => {});
-    } else if (isProviderError) {
-      await createAlert({
-        severity: "critical",
-        category: "openai",
-        message: `AI provider error: ${error.message}`,
-        details: { agentType, runId, userId },
-      }).catch(() => {});
+    if (isQuotaError || isProviderError) {
+      await emitAgentProviderAlert({ agentType, runId, userId, error }).catch(() => {});
     }
 
     throw error;
