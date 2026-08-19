@@ -117,6 +117,15 @@ ${evidenceSection}
 ${briefSection}
 ${audienceIntelligenceSection}
 
+GROUNDING REQUIREMENTS — THE GENERATED STRATEGY MUST:
+- Faithfully preserve every service-capability clause listed in the campaign brief's Product/Service Being Promoted. Do not collapse, paraphrase away, or omit any required capability.
+- Preserve the operating context implied by the brief (e.g. B2B vs B2C, merchant/account model, transaction-level controls). Do not recast the product or service into generic payment processing, lending, banking, or broad fintech language unless the brief explicitly describes it that way.
+- Use only the Target Buyer and Main Pain Point supplied by the brief. Do not substitute a different audience or problem.
+- Avoid invented features, channels, programmes, offers, or incentives that are not grounded in the brief.
+- Avoid unsupported claims about fraud prevention, multiple payment methods, credit, loans, free trials, or scalability unless the brief explicitly authorises them.
+- If no offer is provided in the campaign brief, the offers array MUST be empty and no incentive language may appear in CTAs, core message, value proposition, positioning, campaign theme, funnel tactics, platform strategy, or persona goals.
+- Use the Preferred CTA exactly when provided.
+
 ${hasStrategy ? `EXISTING STRATEGY:\n${input.strategyText}\n\nEnhance this strategy with additional insights.` : "Create a complete marketing strategy from scratch."}
 
 Generate a structured strategy with the following sections:

@@ -94,6 +94,7 @@ export interface StrategyValidationInput {
     primaryOutcome?: string | null;
     offerDetails?: string | null;
     excludedOffers?: string | null;
+    coreMessage?: string | null;
   };
 }
 
@@ -307,6 +308,88 @@ function gatherOutputText(output: StrategyOutput): string {
   return parts.filter(Boolean).join(" ");
 }
 
+// Deterministic detection of unauthorised offers or incentives that may be
+// hidden outside the offers array (e.g. in CTAs, core message, funnel
+// tactics). These patterns are conservative and only reject recognised
+// incentive language. Ordinary informational CTAs such as "learn more" or
+// "book a demo" are not flagged.
+const UNAUTHORISED_OFFER_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /\bfree\s+trial\b/i, label: "free trial" },
+  { pattern: /\bfree\s+access\b/i, label: "free access" },
+  { pattern: /\bdiscount\b/i, label: "discount" },
+  { pattern: /\bcoupon\b/i, label: "coupon" },
+  { pattern: /\blimited[\s-]?time\b/i, label: "limited-time incentive" },
+  { pattern: /\bgiveaway\b/i, label: "giveaway" },
+  { pattern: /\bbonus\b/i, label: "bonus" },
+  { pattern: /\bpromotional\s+credit\b/i, label: "promotional credit" },
+];
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Determines whether a phrase is explicitly authorised in a source text.
+ * A phrase is NOT authorised if it only appears in a negated statement such as
+ * "no free trial" or "not a discount". This prevents excluded or negated terms
+ * from accidentally granting authorization.
+ */
+function isPhraseExplicitlyAuthorised(sourceText: string | null | undefined, phrase: string): boolean {
+  if (!sourceText || !sourceText.trim()) return false;
+  const normalizedSource = normalizeValidationText(sourceText);
+  const normalizedPhrase = normalizeValidationText(phrase);
+  if (!normalizedPhrase || !normalizedSource.includes(normalizedPhrase)) return false;
+
+  const escapedPhrase = normalizedPhrase
+    .split(/\s+/)
+    .map(escapeRegex)
+    .join("\\s+");
+  const negationPattern = new RegExp(`\\b(no|not)\\s+${escapedPhrase}\\b`, "i");
+  if (negationPattern.test(normalizedSource)) return false;
+  return true;
+}
+
+function detectUnauthorizedOffers(
+  outputText: string,
+  offerDetails?: string | null
+): string[] {
+  const found = new Set<string>();
+  for (const { pattern, label } of UNAUTHORISED_OFFER_PATTERNS) {
+    if (pattern.test(outputText) && !isPhraseExplicitlyAuthorised(offerDetails, label)) {
+      found.add(label);
+    }
+  }
+  return Array.from(found);
+}
+
+// Deterministic detection of product claims that are unsupported by the brief.
+// A claim is rejected only when it is a material claim in the output and is not
+// explicitly authorised by the campaign brief's product/service or core message.
+// The authorizeLabels are simpler lookup forms so that a brief authorising
+// "fraud prevention" also permits "fraud reduction" output, and vice versa.
+const UNSUPPORTED_PRODUCT_CLAIM_PATTERNS: Array<{ pattern: RegExp; label: string; authorizeLabels: string[] }> = [
+  { pattern: /\bfraud\s+(prevention|reduction)\b/i, label: "fraud prevention or reduction", authorizeLabels: ["fraud"] },
+  { pattern: /\bmultiple\s+payment\s+methods?\b/i, label: "multiple payment methods", authorizeLabels: ["multiple payment methods"] },
+  { pattern: /\bcredit\b/i, label: "credit", authorizeLabels: ["credit"] },
+  { pattern: /\b(loan|lending)\b/i, label: "loan or lending", authorizeLabels: ["loan", "lending"] },
+];
+
+function detectUnsupportedProductClaims(
+  outputText: string,
+  brief: StrategyValidationInput["brief"]
+): string[] {
+  const found = new Set<string>();
+  const authorizationSource = [brief.productOrService, brief.coreMessage].filter(Boolean).join(" ");
+  for (const { pattern, label, authorizeLabels } of UNSUPPORTED_PRODUCT_CLAIM_PATTERNS) {
+    if (!pattern.test(outputText)) continue;
+    const authorised = authorizeLabels.some((authLabel) =>
+      isPhraseExplicitlyAuthorised(authorizationSource, authLabel)
+    );
+    if (!authorised) found.add(label);
+  }
+  return Array.from(found);
+}
+
 /**
  * Pure strategy-output validation gate.
  *
@@ -403,6 +486,24 @@ export function validateStrategyOutput({
     return {
       valid: false,
       reason: "Strategy output invented offers that were not authorised by the campaign brief.",
+    };
+  }
+
+  // 9. Unauthorised offers or incentives hidden outside the offers array.
+  const unauthorisedOffers = detectUnauthorizedOffers(outputText, brief.offerDetails);
+  if (unauthorisedOffers.length > 0) {
+    return {
+      valid: false,
+      reason: `Strategy output contains unauthorised offer or incentive: ${unauthorisedOffers.join(", ")}.`,
+    };
+  }
+
+  // 10. Unsupported product claims not authorised by the brief.
+  const unsupportedClaims = detectUnsupportedProductClaims(outputText, brief);
+  if (unsupportedClaims.length > 0) {
+    return {
+      valid: false,
+      reason: `Strategy output contains unsupported product claim: ${unsupportedClaims.join(", ")}.`,
     };
   }
 

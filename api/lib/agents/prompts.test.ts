@@ -109,4 +109,35 @@ describe("strategyAgentPrompt grounding precedence", () => {
     expect(prompt).toContain("credit access");
     expect(prompt).toContain("mass disbursements");
   });
+
+  it("includes domain-independent grounding requirements that reference the brief's product/service", () => {
+    const productOrService =
+      "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services";
+    const prompt = strategyAgentPrompt({
+      ...baseInput,
+      campaignBrief: {
+        name: "B2B Payment Orchestration",
+        goal: "Onboard qualified merchants",
+        targetBuyer: "B2B finance teams and merchant operators",
+        mainPainPoint: "manual balance verification and slow payment instructions",
+        productOrService,
+        preferredCta: "Book a Demo",
+        offerDetails: "",
+        excludedOffers: "free trial; discount; lending",
+      },
+    });
+
+    expect(prompt).toContain("GROUNDING REQUIREMENTS");
+    expect(prompt).toContain("Faithfully preserve every service-capability clause listed in the campaign brief's Product/Service Being Promoted");
+    expect(prompt).toContain("offers array MUST be empty");
+    expect(prompt).toContain("Use the Preferred CTA exactly");
+
+    // The grounding block must reference the authoritative brief fields, not hard-code any business name.
+    expect(prompt).toContain(`Product/Service Being Promoted: ${productOrService}`);
+    expect(prompt).toContain("Target Buyer: B2B finance teams and merchant operators");
+    expect(prompt).toContain("Main Pain Point: manual balance verification and slow payment instructions");
+    expect(prompt).toContain("Offer (only if provided):");
+    expect(prompt).toContain("What NOT to say / excluded offers: free trial; discount; lending");
+    expect(prompt).not.toContain("Zuto Hub");
+  });
 });

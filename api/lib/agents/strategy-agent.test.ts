@@ -448,6 +448,524 @@ describe("validateStrategyOutput", () => {
   });
 });
 
+describe("run 247 regression — B2B payment orchestration grounding", () => {
+  const run247Brief = {
+    productOrService:
+      "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
+    targetBuyer: "B2B finance teams and merchant operators",
+    mainPainPoint: "manual balance verification and slow payment instructions",
+    preferredCta: "Book a Demo",
+    primaryOutcome: "Qualified merchant onboarding",
+    offerDetails: "",
+    excludedOffers:
+      "fraud reduction; multiple payment methods; lending; credit; loans; free trial; discount; coupon; giveaway; bonus; promotional credit; webinar; newsletter; loyalty programme",
+  };
+
+  const currentFingerprint = "fp-run247";
+
+  function buildRun247Output(overrides: Partial<StrategyOutput> = {}): StrategyOutput {
+    return {
+      personas: [
+        {
+          name: "Operations Manager Olivia",
+          demographics: "Operations manager at a small business",
+          painPoints: ["Wasting hours on manual payment reconciliation"],
+          goals: ["Automate payouts and reduce errors"],
+          platforms: ["LinkedIn", "Email"],
+        },
+      ],
+      positioning: "The smart payment platform built for small businesses that want to move money faster.",
+      valueProposition:
+        "One platform that simplifies payments, reduces fraud and scales with your business.",
+      coreMessage:
+        "Stop juggling payment methods. Get a single platform that handles payouts, fraud reduction and financial innovation for your small business.",
+      campaignTheme: "Smarter payouts for small businesses",
+      platformStrategy: [
+        {
+          platform: "LinkedIn",
+          purpose: "Reach small business decision makers",
+          contentTypes: ["sponsored posts"],
+          postingFrequency: "3x per week",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach small businesses",
+          tactics: ["Share thought leadership on payment innovation"],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Drive signups",
+          tactics: ["Offer free trial in CTA"],
+          metrics: ["conversions"],
+        },
+      ],
+      offers: [],
+      ctas: [
+        { stage: "awareness", cta: "Learn More", placement: "ad headline" },
+        { stage: "conversion", cta: "Start your free trial today", placement: "landing page" },
+      ],
+      budgetRecommendation: {
+        total: 5000,
+        allocation: [{ channel: "LinkedIn", amount: 5000, percentage: 100 }],
+      },
+      ...overrides,
+    };
+  }
+
+  function buildGroundedCompoundOutput(overrides: Partial<StrategyOutput> = {}): StrategyOutput {
+    return {
+      personas: [
+        {
+          name: "Finance Lead Farouk",
+          demographics: "Finance lead at a B2B merchant operation",
+          painPoints: ["Manual balance verification and slow payment instructions"],
+          goals: ["Control payment instructions with prefunded accounts"],
+          platforms: ["LinkedIn", "Email"],
+        },
+      ],
+      positioning:
+        "B2B payment orchestration built around prefunded merchant accounts, balance verification, transaction reservations and controlled payment instructions.",
+      valueProposition:
+        "Verify balances, reserve transactions and issue controlled payment instructions from a single prefunded merchant-account environment.",
+      coreMessage:
+        "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
+      campaignTheme: "Controlled B2B payment orchestration for merchant operators",
+      platformStrategy: [
+        {
+          platform: "LinkedIn",
+          purpose: "Reach B2B finance teams and merchant operators",
+          contentTypes: ["sponsored posts", "whitepaper downloads"],
+          postingFrequency: "3x per week",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach B2B finance teams",
+          tactics: ["Explain prefunded merchant-account administration"],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Book qualified demos",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["demo bookings"],
+        },
+      ],
+      offers: [],
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Book a Demo", placement: "landing page" },
+      ],
+      budgetRecommendation: {
+        total: 5000,
+        allocation: [{ channel: "LinkedIn", amount: 5000, percentage: 100 }],
+      },
+      ...overrides,
+    };
+  }
+
+  it("rejects the sanitised run-247 output", () => {
+    const result = validateStrategyOutput({
+      output: { ...buildRun247Output(), creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: run247Brief,
+    });
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects run-247-style output even when b2b, prefunded and merchant are present", () => {
+    const output = buildRun247Output({
+      coreMessage:
+        "B2B prefunded merchant payment platform.",
+      positioning: "B2B prefunded merchant platform.",
+      valueProposition: "B2B prefunded merchant platform.",
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: run247Brief,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/missing core capabilities/i);
+  });
+
+  it("accepts a fully grounded compound capability description", () => {
+    const result = validateStrategyOutput({
+      output: { ...buildGroundedCompoundOutput(), creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: run247Brief,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("accepts equivalent wording that preserves the material capabilities", () => {
+    const output = buildGroundedCompoundOutput({
+      coreMessage:
+        "Reservation management for transactions, balance verification, instruction controls and prefunded merchant-account administration in one B2B payment orchestration environment.",
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: run247Brief,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects a generic small-business payment-platform description", () => {
+    const output = buildGroundedCompoundOutput({
+      coreMessage: "Payment platform for small businesses that want faster payouts.",
+      positioning: "Payment platform for small businesses.",
+      valueProposition: "Payment platform for small businesses.",
+      campaignTheme: "Faster payouts for small businesses",
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: run247Brief,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/missing core capabilities/i);
+  });
+
+  it("fails when prefunded merchant-account administration is omitted", () => {
+    const output = buildGroundedCompoundOutput({
+      coreMessage:
+        "B2B payment orchestration with balance verification, transaction reservations and controlled payment-instruction services.",
+      positioning:
+        "B2B payment orchestration with balance verification, transaction reservations and controlled payment-instruction services.",
+      valueProposition:
+        "B2B payment orchestration with balance verification, transaction reservations and controlled payment-instruction services.",
+      personas: [
+        {
+          name: "Finance Lead Farouk",
+          demographics: "Finance lead at a B2B merchant operation",
+          painPoints: ["Manual balance verification and slow payment instructions"],
+          goals: ["Control payment instructions and verify balances"],
+          platforms: ["LinkedIn", "Email"],
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach B2B finance teams",
+          tactics: ["Explain balance verification and controlled payment instructions"],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Book qualified demos",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["demo bookings"],
+        },
+      ],
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: run247Brief,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/prefunded|merchant|account|administration/i);
+  });
+
+  it("fails when transaction reservations are omitted", () => {
+    const output = buildGroundedCompoundOutput({
+      coreMessage:
+        "B2B payment orchestration, prefunded merchant-account administration, balance verification and controlled payment-instruction services.",
+      positioning:
+        "B2B payment orchestration, prefunded merchant-account administration, balance verification and controlled payment-instruction services.",
+      valueProposition:
+        "B2B payment orchestration, prefunded merchant-account administration, balance verification and controlled payment-instruction services.",
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: run247Brief,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/transaction|reservations|controlled|instruction/i);
+  });
+
+  it("rejects unsupported fraud, credit and lending claims", () => {
+    const output = buildGroundedCompoundOutput({
+      coreMessage:
+        "B2B payment orchestration with fraud reduction, credit lines and lending options for merchant operators.",
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: run247Brief,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/excluded|unauthorised/i);
+  });
+
+  it("rejects a free trial hidden in ctas when offers is empty", () => {
+    const briefWithoutExcludedOffers = { ...run247Brief, excludedOffers: "" };
+    const output = buildGroundedCompoundOutput({
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Start your free trial today", placement: "landing page" },
+      ],
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithoutExcludedOffers,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/free trial/i);
+  });
+
+  it("allows an authorised offer that appears in ctas", () => {
+    const briefWithOffer = {
+      ...run247Brief,
+      offerDetails: "Start your free trial today",
+      excludedOffers:
+        "fraud reduction; multiple payment methods; lending; credit; loans; discount; coupon; giveaway; bonus; promotional credit; webinar; newsletter; loyalty programme",
+    };
+    const output = buildGroundedCompoundOutput({
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Start your free trial today", placement: "landing page" },
+      ],
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithOffer,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects an excluded offer regardless of whether it appears in offers, ctas or another user-facing field", () => {
+    const output = buildGroundedCompoundOutput({
+      offers: [],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach B2B finance teams",
+          tactics: ["Run a webinar on payment orchestration"],
+          metrics: ["registrations"],
+        },
+        {
+          stage: "conversion",
+          goal: "Book qualified demos",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["demo bookings"],
+        },
+      ],
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: run247Brief,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/webinar/i);
+  });
+
+  it("rejects a free trial when offerDetails explicitly negates it", () => {
+    const briefWithNegation = { ...run247Brief, offerDetails: "No free trial" };
+    const output = buildGroundedCompoundOutput({
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Start your free trial today", placement: "landing page" },
+      ],
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithNegation,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/free trial/i);
+  });
+
+  it("rejects a free trial when it is listed in excludedOffers", () => {
+    const briefWithExcluded = { ...run247Brief, offerDetails: "" };
+    const output = buildGroundedCompoundOutput({
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Start your free trial today", placement: "landing page" },
+      ],
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithExcluded,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/free trial/i);
+  });
+
+  it("does not let an authorised discount automatically authorise other incentives", () => {
+    const briefWithDiscount = {
+      ...run247Brief,
+      offerDetails: "10% discount",
+      excludedOffers: "",
+    };
+    const output = buildGroundedCompoundOutput({
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Enter our giveaway to win a bonus", placement: "landing page" },
+      ],
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithDiscount,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/giveaway|bonus/i);
+  });
+
+  it("rejects an offer term hidden in CTA placement", () => {
+    const briefWithoutOffer = { ...run247Brief, offerDetails: "" };
+    const output = buildGroundedCompoundOutput({
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Book a Demo", placement: "free trial banner" },
+      ],
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithoutOffer,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/free trial/i);
+  });
+
+  it("rejects an offer term hidden in funnel tactics", () => {
+    const briefWithoutOffer = { ...run247Brief, offerDetails: "" };
+    const output = buildGroundedCompoundOutput({
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach B2B finance teams",
+          tactics: ["Offer a free trial to new merchants"],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Book qualified demos",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["demo bookings"],
+        },
+      ],
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithoutOffer,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/free trial/i);
+  });
+
+  it("allows ordinary informational CTAs when no offer is provided", () => {
+    const briefWithoutOffer = { ...run247Brief, offerDetails: "" };
+    const output = buildGroundedCompoundOutput({
+      ctas: [
+        { stage: "awareness", cta: "Learn More", placement: "ad headline" },
+        { stage: "consideration", cta: "Request Information", placement: "landing page" },
+        { stage: "conversion", cta: "Book a Demo", placement: "footer" },
+      ],
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithoutOffer,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects an unsupported fraud-prevention claim", () => {
+    const briefWithoutFraud = {
+      ...run247Brief,
+      excludedOffers: "multiple payment methods; lending; credit; loans",
+    };
+    const output = buildGroundedCompoundOutput({
+      coreMessage: "B2B payment orchestration with fraud prevention for merchant operators.",
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithoutFraud,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/unsupported product claim/i);
+  });
+
+  it("allows fraud prevention when the brief explicitly authorises it", () => {
+    const briefWithFraud = {
+      ...run247Brief,
+      productOrService: `${run247Brief.productOrService} with fraud prevention`,
+    };
+    const output = buildGroundedCompoundOutput({
+      coreMessage:
+        "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations, controlled payment-instruction services and fraud prevention.",
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithFraud,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("rejects unsupported credit and lending claims", () => {
+    const briefWithoutCredit = {
+      ...run247Brief,
+      excludedOffers: "fraud reduction; multiple payment methods",
+    };
+    const output = buildGroundedCompoundOutput({
+      coreMessage: "B2B payment orchestration with credit lines and lending options for merchant operators.",
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithoutCredit,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/unsupported product claim/i);
+  });
+
+  it("allows credit and lending when the brief explicitly authorises them", () => {
+    const briefWithCredit = {
+      ...run247Brief,
+      productOrService: `${run247Brief.productOrService} with credit and lending facilities`,
+      excludedOffers:
+        "fraud reduction; multiple payment methods; free trial; discount; coupon; giveaway; bonus; promotional credit; webinar; newsletter; loyalty programme",
+    };
+    const output = buildGroundedCompoundOutput({
+      coreMessage:
+        "B2B payment orchestration with credit and lending facilities, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
+    });
+    const result = validateStrategyOutput({
+      output: { ...output, creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: briefWithCredit,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it("does not call the model during deterministic validation", () => {
+    vi.clearAllMocks();
+    validateStrategyOutput({
+      output: { ...buildRun247Output(), creativeBriefFingerprint: currentFingerprint },
+      currentFingerprint,
+      brief: run247Brief,
+    });
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+});
+
 describe("chargeForStrategyRun", () => {
   beforeEach(() => {
     vi.clearAllMocks();
