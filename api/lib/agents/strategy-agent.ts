@@ -17,6 +17,7 @@ import {
   clauseCoversText,
   extractRequiredTokens,
   outputContainsToken,
+  validateProvenance,
 } from "../creative/brief-grounding";
 import { deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
@@ -289,120 +290,286 @@ function buildCanonicalProductStatement(input: {
   return statement.endsWith(".") ? statement : `${statement}.`;
 }
 
-function findBuyerPersonaIndex(personas: StrategyOutput["personas"], targetBuyer: string): number {
-  if (!targetBuyer) return -1;
-  return personas.findIndex(
-    (p) =>
-      containsPhrase(p.name, targetBuyer) ||
-      containsPhrase(p.demographics, targetBuyer) ||
-      extractRequiredTokens(targetBuyer).every((token) =>
-        outputContainsToken(`${p.name} ${p.demographics}`, token)
-      )
-  );
-}
-
-function ensureBuyerInDemographics(demographics: string, targetBuyer: string): string {
-  if (containsPhrase(demographics, targetBuyer)) return demographics;
-  return targetBuyer;
-}
-
-function deriveBuyerName(targetBuyer: string): string {
-  if (!targetBuyer) return "Target Buyer";
-  return targetBuyer
-    .split(/\s+/)
-    .map((word) => (word.length > 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word))
-    .join(" ");
-}
-
-function containsExcludedOffer(value: string, excludedOffers: string[]): boolean {
-  if (!excludedOffers.length) return false;
-  const normalized = normalizeValidationText(value);
-  return excludedOffers.some((term) => containsPhrase(normalized, normalizeValidationText(term)));
-}
-
-function ensureDistinctPainPoint(painPoints: string[], mainPainPoint: string): string[] {
-  if (!mainPainPoint) return painPoints;
-  const exists = painPoints.some((pp) => containsPhrase(pp, mainPainPoint));
-  if (exists) return painPoints;
-  return [...painPoints, mainPainPoint];
+/**
+ * Deterministic, neutral positioning statement constructed only from brief
+ * phrases.  It never adds superlatives, outcomes or capabilities.
+ */
+function buildCanonicalPositioningStatement(brief: Pick<GroundedCreativeBrief, "productOrService" | "targetBuyer">): string {
+  const product = (brief.productOrService || "").trim();
+  const buyer = (brief.targetBuyer || "").trim();
+  if (!product && !buyer) return "";
+  if (!buyer) return product.endsWith(".") ? product : `${product}.`;
+  if (!product) return buyer.endsWith(".") ? buyer : `${buyer}.`;
+  const statement = `${product} for ${buyer}`;
+  return statement.endsWith(".") ? statement : `${statement}.`;
 }
 
 /**
- * Pure, deterministic materialisation. Deep-clones the raw model output and
- * repairs only the authoritative fields owned by each brief element.
+ * Deterministic value proposition constructed only from brief phrases.  It
+ * avoids inventing outcomes such as "improve cash flow" or "automate".
+ */
+function buildCanonicalValueProposition(
+  brief: Pick<GroundedCreativeBrief, "productOrService" | "targetBuyer" | "mainPainPoint" | "primaryOutcome">
+): string {
+  const product = (brief.productOrService || "").trim();
+  const buyer = (brief.targetBuyer || "").trim();
+  const outcome = (brief.primaryOutcome || "").trim();
+
+  if (product && buyer) {
+    const statement = `${product} for ${buyer}`;
+    const productStatement = statement.endsWith(".") ? statement.slice(0, -1) : statement;
+    if (outcome) {
+      return `${productStatement}. Intended outcome: ${outcome}.`;
+    }
+    return `${productStatement}.`;
+  }
+  if (product && outcome) {
+    return `${product.endsWith(".") ? product.slice(0, -1) : product}. Intended outcome: ${outcome}.`;
+  }
+  return product ? (product.endsWith(".") ? product : `${product}.`) : "";
+}
+
+function parseAuthorisedOffers(offerDetails: string | undefined): StrategyOutput["offers"] {
+  if (!offerDetails || !offerDetails.trim()) return [];
+  const clauses = offerDetails
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return clauses.map((clause) => ({
+    name: clause,
+    description: clause,
+    targetStage: "conversion",
+    value: clause,
+  }));
+}
+
+/**
+ * Build deterministic, neutral factual statements from the brief.
+ */
+function buildCanonicalFactualFields(contract: GroundingContract) {
+  return {
+    coreMessage: buildCanonicalProductStatement({
+      productOrService: contract.productOrService,
+      coreMessage: contract.coreMessage,
+    }),
+    positioning: buildCanonicalPositioningStatement({
+      productOrService: contract.productOrService,
+      targetBuyer: contract.targetBuyer,
+    }),
+    valueProposition: buildCanonicalValueProposition({
+      productOrService: contract.productOrService,
+      targetBuyer: contract.targetBuyer,
+      mainPainPoint: contract.mainPainPoint,
+      primaryOutcome: contract.primaryOutcome,
+    }),
+  };
+}
+
+function buildCanonicalCampaignTheme(contract: GroundingContract): string {
+  return (
+    contract.coreMessage?.trim() ||
+    buildCanonicalProductStatement({
+      productOrService: contract.productOrService,
+      coreMessage: contract.coreMessage,
+    }) ||
+    `A focused campaign for ${contract.targetBuyer || "the target buyer"}`
+  );
+}
+
+function buildCanonicalPersonaGoal(contract: GroundingContract): string {
+  const outcome = contract.primaryOutcome?.trim();
+  const pain = contract.mainPainPoint?.trim();
+  const product = contract.productOrService?.trim() || "the product";
+  if (outcome) return `Intended outcome: ${outcome}`;
+  if (pain) return `Overcome: ${pain}`;
+  return `Learn how ${product} applies to their situation`;
+}
+
+function capitaliseChannel(channel: string): string {
+  const lower = channel.toLowerCase();
+  const known: Record<string, string> = {
+    linkedin: "LinkedIn",
+    facebook: "Facebook",
+    instagram: "Instagram",
+    twitter: "Twitter",
+    x: "X",
+    tiktok: "TikTok",
+    youtube: "YouTube",
+    google: "Google",
+    pinterest: "Pinterest",
+    snapchat: "Snapchat",
+    reddit: "Reddit",
+    telegram: "Telegram",
+    whatsapp: "WhatsApp",
+    email: "Email",
+    sms: "SMS",
+    website: "Website",
+    blog: "Blog",
+    display: "Display",
+    ppc: "PPC",
+    retargeting: "Retargeting",
+    search: "Search",
+  };
+  return known[lower] || channel.charAt(0).toUpperCase() + channel.slice(1);
+}
+
+function buildCanonicalPersona(contract: GroundingContract): StrategyOutput["personas"][number] {
+  const buyer = contract.targetBuyer || "";
+  const buyerName = buyer || "Target Buyer";
+  const channels = contract.authorized.channels.map(capitaliseChannel);
+  return {
+    name: buyerName,
+    demographics: buyer,
+    painPoints: contract.mainPainPoint ? [contract.mainPainPoint] : [],
+    goals: [buildCanonicalPersonaGoal(contract)],
+    platforms: channels,
+  };
+}
+
+function buildCanonicalCtas(
+  contract: GroundingContract,
+  rawCtas: StrategyOutput["ctas"]
+): StrategyOutput["ctas"] {
+  const ctaText = contract.preferredCta?.trim() || "Learn More";
+  if (!rawCtas.length) {
+    return [
+      { stage: "awareness", cta: ctaText, placement: "ad headline" },
+      { stage: "conversion", cta: ctaText, placement: "landing page" },
+    ];
+  }
+  return rawCtas.map((cta) => ({ ...cta, cta: ctaText }));
+}
+
+function buildCanonicalPlatformStrategy(
+  contract: GroundingContract
+): StrategyOutput["platformStrategy"] {
+  const channels = contract.authorized.channels.map(capitaliseChannel);
+  return channels.map((channel) => ({
+    platform: channel,
+    purpose: `Reach ${contract.targetBuyer || "the authorised buyer"} with the authorised message on ${channel}`,
+    contentTypes: ["Authorised message"],
+    postingFrequency: "3x per week",
+  }));
+}
+
+function buildCanonicalFunnelStages(contract: GroundingContract): StrategyOutput["funnelStages"] {
+  const ctaText = contract.preferredCta?.trim() || "the authorised CTA";
+  const buyer = contract.targetBuyer || "the authorised buyer";
+  const awarenessTactic = `Publish the authorised message and direct ${buyer} toward the authorised CTA: ${ctaText}`;
+  const considerationTactic = `Reinforce the authorised message and direct ${buyer} toward the authorised CTA: ${ctaText}`;
+  const conversionTactic = `Use the authorised CTA: ${ctaText}`;
+  return [
+    {
+      stage: "awareness",
+      goal: `Reach ${buyer}`,
+      tactics: [awarenessTactic],
+      metrics: ["impressions"],
+    },
+    {
+      stage: "consideration",
+      goal: `Move ${buyer} toward the authorised CTA: ${ctaText}`,
+      tactics: [considerationTactic],
+      metrics: ["engagement"],
+    },
+    {
+      stage: "conversion",
+      goal: `Direct ${buyer} to the authorised CTA: ${ctaText}`,
+      tactics: [conversionTactic],
+      metrics: ["conversions"],
+    },
+  ];
+}
+
+function distributeBudget(
+  total: number,
+  channels: string[]
+): Array<{ channel: string; amount: number; percentage: number }> {
+  if (!channels.length || total <= 0) {
+    return [];
+  }
+  const n = channels.length;
+  const baseAmount = Math.floor(total / n);
+  const amountRemainder = total % n;
+  const basePercentage = Math.floor(100 / n);
+  const percentageRemainder = 100 % n;
+
+  return channels.map((channel, index) => ({
+    channel,
+    amount: baseAmount + (index < amountRemainder ? 1 : 0),
+    percentage: basePercentage + (index < percentageRemainder ? 1 : 0),
+  }));
+}
+
+function buildCanonicalBudgetRecommendation(
+  contract: GroundingContract
+): StrategyOutput["budgetRecommendation"] {
+  const channels = contract.authorized.channels.map(capitaliseChannel);
+  const total = channels.length > 0 ? 5000 : 0;
+  return {
+    total,
+    allocation: distributeBudget(total, channels),
+  };
+}
+
+/**
+ * Fail-closed, deterministic materialisation. Every factual and execution field
+ * is reconstructed from the grounding contract. Model-generated prose is not
+ * preserved; the taxonomy is retained only as defence in depth.
  *
- * - Product/service: only coreMessage, positioning, valueProposition.
- * - Target buyer: only persona name and demographics.
- * - Main pain point: only persona painPoints.
- * - CTA: only cta text.
- * - Offers: only the offers array when none is authorised.
+ * Ownership rules:
+ * - Product/service (coreMessage, positioning, valueProposition): always
+ *   constructed from productOrService/coreMessage/targetBuyer/mainPainPoint/
+ *   primaryOutcome.
+ * - Persona name/demographics/painPoints/goals/platforms: always constructed
+ *   from the brief.
+ * - CTAs: always preferredCta or a neutral non-offer fallback.
+ * - Offers: always parsed from offerDetails.
+ * - Campaign theme: always from authoritative core message.
+ * - Platform strategy / funnel stages: always authorised channels plus neutral
+ *   execution templates.
  */
 export function materialiseGroundedFields(
   rawOutput: StrategyOutput,
   contract: GroundingContract
 ): StrategyOutput {
   const output: StrategyOutput = structuredClone(rawOutput);
+  const canonical = buildCanonicalFactualFields(contract);
 
-  // 1. Product/service
-  const productText = gatherProductDefiningText(output);
-  const missingProductClauses = contract.productClauses.filter(
-    (clause) => !clauseCoversText(clause, productText)
-  );
-  const hasProductAuthority =
-    contract.productClauses.length > 0 || (contract.coreMessage && contract.coreMessage.trim().length > 0);
-  if (hasProductAuthority && missingProductClauses.length > 0) {
-    output.coreMessage = buildCanonicalProductStatement({
-      productOrService: contract.productClauses.map((c) => c.text).join(", ") || contract.coreMessage,
-      coreMessage: contract.coreMessage,
-    });
-  }
+  // 1. Product/service — always canonical, never model-generated.
+  output.coreMessage = canonical.coreMessage;
+  output.positioning = canonical.positioning;
+  output.valueProposition = canonical.valueProposition;
 
-  // 2. Target buyer
-  const matchingPersonaIndex = findBuyerPersonaIndex(output.personas, contract.targetBuyer);
-  const selectedPersonaIndex = matchingPersonaIndex >= 0 ? matchingPersonaIndex : 0;
-  const hasMatchingPersona = matchingPersonaIndex >= 0;
-  output.personas = output.personas.map((persona, index) => {
-    if (index !== selectedPersonaIndex) return persona;
-    const demographics = ensureBuyerInDemographics(persona.demographics, contract.targetBuyer);
-    const name = hasMatchingPersona ? persona.name : deriveBuyerName(contract.targetBuyer);
-    const safeGoals = persona.goals.filter(
-      (goal) => !containsExcludedOffer(goal, contract.excludedOffers)
-    );
-    const safePlatforms = persona.platforms.filter(
-      (platform) => !containsExcludedOffer(platform, contract.excludedOffers)
-    );
-    return {
-      ...persona,
-      name,
-      demographics,
-      goals: safeGoals,
-      platforms: safePlatforms,
-    };
-  });
+  // 2. Campaign theme — always canonical.
+  output.campaignTheme = buildCanonicalCampaignTheme(contract);
 
-  // 3. Main pain point
-  output.personas = output.personas.map((persona, index) => {
-    if (index !== selectedPersonaIndex) return persona;
-    return {
-      ...persona,
-      painPoints: ensureDistinctPainPoint(persona.painPoints, contract.mainPainPoint),
-    };
-  });
+  // 3. Personas — always grounded to the brief.
+  output.personas = [buildCanonicalPersona(contract)];
 
-  // 4. Preferred CTA
-  const preferredCta = contract.preferredCta;
-  if (preferredCta) {
-    const ctaText = gatherCtaText(output);
-    if (!containsPhrase(ctaText, preferredCta)) {
-      output.ctas = output.ctas.map((cta, index) =>
-        index === 0 ? { ...cta, cta: preferredCta } : cta
-      );
-    }
-  }
+  // 4. CTAs — always preferred CTA or neutral fallback.
+  output.ctas = buildCanonicalCtas(contract, output.ctas);
 
-  // 5. Offers
-  if (!contract.offerDetails || contract.offerDetails.trim().length === 0) {
-    output.offers = [];
+  // 5. Offers — always from offerDetails.
+  output.offers = parseAuthorisedOffers(contract.offerDetails);
+
+  // 6. Platform strategy — always authorised channels + safe templates.
+  output.platformStrategy = buildCanonicalPlatformStrategy(contract);
+
+  // 7. Funnel stages — always safe templates.
+  output.funnelStages = buildCanonicalFunnelStages(contract);
+
+  // 8. Budget — safe default derived from authorised channels.
+  output.budgetRecommendation = buildCanonicalBudgetRecommendation(contract);
+
+  // 9. Defence-in-depth provenance validation. With fail-closed materialisation
+  //    this should not trigger, but it remains as a safety net.
+  const provenance = validateProvenance(output as Record<string, unknown>, contract);
+  if (!provenance.valid) {
+    // Re-apply canonical values to any product-defining field that somehow failed.
+    output.coreMessage = canonical.coreMessage;
+    output.positioning = canonical.positioning;
+    output.valueProposition = canonical.valueProposition;
+    output.campaignTheme = buildCanonicalCampaignTheme(contract);
   }
 
   return output;
@@ -436,7 +603,9 @@ export function groundProductDefiningFields(
     excludedOffers: "",
     referenceStyle: "",
     contentStyle: "",
+    platforms: "",
     businessType: "not_specified",
+    authorisedChannels: [],
   });
   const missingProductClauses = contract.productClauses.filter(
     (clause) => !clauseCoversText(clause, productText)
@@ -577,7 +746,20 @@ export function validateGroundedStrategyOutput(
     return { valid: false, diagnostics: [d], reason: d.reason };
   }
 
-  // 2. Product/service — product-defining fields only
+  // 2. Authorised channels must be present; execution fields are not invented.
+  if (contract.authorized.channels.length === 0) {
+    const d = makeDiagnostic(
+      "authorised_channels",
+      "platforms",
+      ["at least one authorised channel"],
+      ["none"],
+      ["platformStrategy", "personas[].platforms", "budgetRecommendation.allocation"],
+      "No authorised campaign channel is available."
+    );
+    diagnostics.push(d);
+  }
+
+  // 3. Product/service — product-defining fields only
   const productText = gatherProductDefiningText(output);
   const missingProductClauses = contract.productClauses.filter(
     (clause) => !clauseCoversText(clause, productText)
@@ -748,11 +930,41 @@ export function validateGroundedStrategyOutput(
     );
   }
 
+  // 11. Provenance validation — domain-independent guard against unsupported
+  //     claims, programmes, channels and comparisons.
+  const provenance = validateProvenance(output as Record<string, unknown>, contract);
+  if (!provenance.valid) {
+    for (const pd of provenance.diagnostics) {
+      diagnostics.push({
+        gate: `provenance/${pd.classification}`,
+        authoritativeField: pd.authoritySource || getAuthoritySourceForField(pd.field, contract),
+        expectedClauses: ["authorised brief content or safe execution taxonomy"],
+        missingClauses: [pd.generatedText],
+        inspectedOutputFields: [pd.field],
+        reason: pd.reason,
+      });
+    }
+  }
+
   if (diagnostics.length > 0) {
     return { valid: false, diagnostics, reason: buildReason(diagnostics) };
   }
 
   return { valid: true };
+}
+
+function getAuthoritySourceForField(field: string, _contract: GroundingContract): string {
+  if (field.includes("coreMessage") || field.includes("positioning") || field.includes("valueProposition")) {
+    return "productOrService";
+  }
+  if (field.includes("personas")) {
+    if (field.includes("painPoints")) return "mainPainPoint";
+    return "targetBuyer";
+  }
+  if (field.includes("ctas")) return "preferredCta";
+  if (field.includes("offers")) return "offerDetails";
+  if (field.includes("platformStrategy")) return "platforms";
+  return "brief";
 }
 
 /**

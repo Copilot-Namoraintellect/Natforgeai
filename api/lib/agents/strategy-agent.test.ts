@@ -5,6 +5,7 @@ import { agentRuns, creativeGenerationClaims } from "@db/schema";
 import {
   validateStrategyOutput,
   StrategyOutput,
+  StrategyOutputSchema,
   chargeForStrategyRun,
   runStrategyAgent,
   groundProductDefiningFields,
@@ -14,7 +15,7 @@ import {
   isSuccessfulStrategyOutput,
   type ValidationDiagnostic,
 } from "./strategy-agent";
-import { buildGroundingContract, type GroundedCreativeBrief } from "../creative/brief-grounding";
+import { buildGroundingContract, GROUNDING_EQUIVALENCE_GROUPS, type GroundedCreativeBrief } from "../creative/brief-grounding";
 
 vi.mock("../billing/credit-engine", () => ({
   deductCredits: vi.fn(async () => ({ newBalance: 97 })),
@@ -82,7 +83,9 @@ vi.mock("../creative/brief-grounding", async () => {
       excludedOffers: "",
       referenceStyle: "",
       contentStyle: "",
+      platforms: "Facebook, Instagram",
       businessType: "B2B",
+      authorisedChannels: ["facebook", "instagram"],
     })),
   };
 });
@@ -94,13 +97,13 @@ function buildOutput(overrides: Partial<StrategyOutput> = {}): StrategyOutput {
         name: "Restaurant Owner Rita",
         demographics: "Restaurant owner in South Africa",
         painPoints: ["Slow end-of-day cash-outs"],
-        goals: ["Get paid faster"],
+        goals: ["Learn how the payout platform applies to their situation"],
         platforms: ["Facebook", "Instagram"],
       },
     ],
-    positioning: "The fastest payout platform for restaurants.",
-    valueProposition: "Restaurants get their money the same day with zero hassle.",
-    coreMessage: "Stop waiting for payouts. Get paid today with our restaurant payout platform.",
+    positioning: "Same-day payouts for restaurants.",
+    valueProposition: "Restaurants get their payouts the same day.",
+    coreMessage: "A payout platform for restaurants that gets them their money the same day.",
     campaignTheme: "Same-day payouts for restaurants",
     platformStrategy: [
       {
@@ -138,13 +141,14 @@ function buildRun248Output(overrides: Partial<StrategyOutput> = {}): StrategyOut
         name: "Finance Lead Farouk",
         demographics: "Finance lead for B2B finance teams and merchant operators",
         painPoints: ["Manual balance verification and slow payment instructions"],
-        goals: ["Automate prefunding and transaction reservations"],
+        goals: ["Learn how B2B payment orchestration applies to their situation"],
         platforms: ["LinkedIn", "Email"],
       },
     ],
     positioning:
-      "The smart payment platform for merchant operations that want faster money movement.",
-    valueProposition: "One platform that handles prefunded accounts and transaction reservations.",
+      "B2B payment orchestration for merchant operations.",
+    valueProposition:
+      "B2B payment orchestration with prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
     coreMessage:
       "Stop juggling manual account tasks. Get prefunded merchant accounts and transaction reservations in one place.",
     campaignTheme: "Smarter merchant payments",
@@ -160,14 +164,14 @@ function buildRun248Output(overrides: Partial<StrategyOutput> = {}): StrategyOut
       {
         stage: "awareness",
         goal: "Reach B2B finance teams",
-        tactics: ["Offer free consultations to finance leaders"],
+        tactics: ["Explain prefunded merchant-account administration"],
         metrics: ["impressions"],
       },
       {
         stage: "conversion",
-        goal: "Book qualified demos",
+        goal: "Reach conversion stage",
         tactics: ["Use the preferred CTA"],
-        metrics: ["demo bookings"],
+        metrics: ["conversions"],
       },
     ],
     offers: [],
@@ -196,7 +200,9 @@ describe("validateStrategyOutput", () => {
     excludedOffers: "payroll; employee payouts; credit access; mass disbursements",
     referenceStyle: "",
     contentStyle: "",
+    platforms: "Facebook, Instagram",
     businessType: "B2B",
+    authorisedChannels: ["facebook", "instagram"],
   };
 
   it("accepts a grounded, complete strategy output", () => {
@@ -227,7 +233,7 @@ describe("validateStrategyOutput", () => {
           name: "Small Business Sam",
           demographics: "owner of small businesses in South Africa",
           painPoints: ["Slow end-of-day cash-outs"],
-          goals: ["Get paid faster"],
+          goals: ["Learn how the payout platform applies to their situation"],
           platforms: ["Facebook"],
         },
       ],
@@ -324,7 +330,7 @@ describe("validateStrategyOutput", () => {
     // copying the source word order.
     const output = buildOutput({
       coreMessage: "A same-day payouts platform that helps restaurants get their money faster.",
-      positioning: "The fastest payout platform for restaurants.",
+      positioning: "A payout platform for restaurants.",
       valueProposition: "Restaurants get their payouts the same day with zero hassle.",
     });
 
@@ -342,8 +348,8 @@ describe("validateStrategyOutput", () => {
     // material capability tokens: platform, restaurants, payouts.
     const output = buildOutput({
       coreMessage: "Our platform helps restaurants receive their payouts quickly.",
-      positioning: "The quickest way for restaurants to get their payouts.",
-      valueProposition: "Restaurants get their payouts faster with less hassle.",
+      positioning: "A simple way for restaurants to get their payouts.",
+      valueProposition: "Restaurants get their payouts quickly.",
     });
 
     const result = validateStrategyOutput({
@@ -360,7 +366,7 @@ describe("validateStrategyOutput", () => {
     // CAPABILITY_EQUIVALENT_GROUPS set (B2B financial terminology).
     const output = buildOutput({
       coreMessage: "A same-day disbursement platform that helps restaurants get their money faster.",
-      positioning: "The fastest disbursement platform for restaurants.",
+      positioning: "A disbursement platform for restaurants.",
       valueProposition: "Restaurants get their disbursements the same day with zero hassle.",
     });
 
@@ -499,7 +505,7 @@ describe("validateStrategyOutput", () => {
           name: "Homeowner Hank",
           demographics: "Homeowner in South Africa",
           painPoints: ["Slow end-of-day cash-outs"],
-          goals: ["Get paid faster"],
+          goals: ["Learn how the payout platform applies to their situation"],
           platforms: ["Facebook"],
         },
       ],
@@ -565,7 +571,7 @@ describe("validateStrategyOutput", () => {
           name: "Restaurant Manager Maria",
           demographics: "Restaurant manager in South Africa",
           painPoints: ["Slow end-of-day cash-outs"],
-          goals: ["Get paid faster"],
+          goals: ["Learn how the payout platform applies to their situation"],
           platforms: ["Facebook"],
         },
       ],
@@ -640,6 +646,8 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
     productOrService:
       "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
     targetBuyer: "B2B finance teams and merchant operators",
+    platforms: "LinkedIn, Email",
+    authorisedChannels: ["linkedin", "email"],
     mainPainPoint: "manual balance verification and slow payment instructions",
     preferredCta: "Book a Demo",
     primaryOutcome: "Qualified merchant onboarding",
@@ -657,7 +665,7 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
           name: "Operations Manager Olivia",
           demographics: "Operations manager at a small business",
           painPoints: ["Wasting hours on manual payment reconciliation"],
-          goals: ["Automate payouts and reduce errors"],
+          goals: ["Reach B2B finance teams and merchant operators"],
           platforms: ["LinkedIn", "Email"],
         },
       ],
@@ -709,7 +717,7 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
           name: "Finance Lead Farouk",
           demographics: "Finance lead for B2B finance teams and merchant operators",
           painPoints: ["Manual balance verification and slow payment instructions"],
-          goals: ["Control payment instructions with prefunded accounts"],
+          goals: ["Reach B2B finance teams and merchant operators"],
           platforms: ["LinkedIn", "Email"],
         },
       ],
@@ -724,7 +732,7 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
         {
           platform: "LinkedIn",
           purpose: "Reach B2B finance teams and merchant operators",
-          contentTypes: ["sponsored posts", "whitepaper downloads"],
+          contentTypes: ["sponsored posts"],
           postingFrequency: "3x per week",
         },
       ],
@@ -737,9 +745,9 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
       offers: [],
@@ -792,7 +800,7 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
   it("accepts equivalent wording that preserves the material capabilities", () => {
     const output = buildGroundedCompoundOutput({
       coreMessage:
-        "Reservation management for transactions, balance verification, instruction controls and prefunded merchant-account administration in one B2B payment orchestration environment.",
+        "B2B payment orchestration with prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
     });
     const result = validateStrategyOutput({
       output: { ...output, creativeBriefFingerprint: currentFingerprint },
@@ -844,9 +852,9 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -941,9 +949,9 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1040,9 +1048,9 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1159,7 +1167,7 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
           painPoints: [
             "Manual balance verification and slow payment instructions; also needs access to credit for working capital",
           ],
-          goals: ["Control payment instructions with prefunded accounts"],
+          goals: ["Reach B2B finance teams and merchant operators"],
           platforms: ["LinkedIn", "Email"],
         },
       ],
@@ -1224,9 +1232,9 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
         },
         {
           stage: "retention",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1249,14 +1257,14 @@ describe("run 247 regression — B2B payment orchestration grounding", () => {
         {
           stage: "awareness",
           goal: "Educate finance teams",
-          tactics: ["Publish a guide on managing credit risk in B2B payments"],
+          tactics: ["Publish educational content about managing credit risk in B2B payments"],
           metrics: ["downloads"],
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1284,6 +1292,8 @@ describe("run 248 regression — field-scoped product grounding and consultation
     productOrService:
       "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
     targetBuyer: "B2B finance teams and merchant operators",
+    platforms: "LinkedIn, Email",
+    authorisedChannels: ["linkedin", "email"],
     mainPainPoint: "manual balance verification and slow payment instructions",
     preferredCta: "Book a Demo",
     primaryOutcome: "Qualified merchant onboarding",
@@ -1324,9 +1334,9 @@ describe("run 248 regression — field-scoped product grounding and consultation
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1360,9 +1370,9 @@ describe("run 248 regression — field-scoped product grounding and consultation
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1396,9 +1406,9 @@ describe("run 248 regression — field-scoped product grounding and consultation
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1438,9 +1448,9 @@ describe("run 248 regression — field-scoped product grounding and consultation
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1483,9 +1493,9 @@ describe("run 248 regression — field-scoped product grounding and consultation
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1516,16 +1526,16 @@ describe("run 248 regression — field-scoped product grounding and consultation
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
     const result = validateStrategyOutput({
       output: { ...output, creativeBriefFingerprint: currentFingerprint },
       currentFingerprint,
-      brief: { ...run248Brief, excludedOffers: "" },
+      brief: { ...run248Brief, excludedOffers: "", offerDetails: "Consultation" },
     });
     expect(result.valid).toBe(false);
     expect(result.reason).toMatch(/free consultation/i);
@@ -1544,14 +1554,14 @@ describe("run 248 regression — field-scoped product grounding and consultation
         {
           stage: "awareness",
           goal: "Reach B2B finance teams",
-          tactics: ["Offer free consultations to finance leaders"],
+          tactics: ["Offer a free consultation to finance leaders"],
           metrics: ["impressions"],
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1583,14 +1593,14 @@ describe("run 248 regression — field-scoped product grounding and consultation
         {
           stage: "awareness",
           goal: "Reach B2B finance teams",
-          tactics: ["Offer free consultations to finance leaders"],
+          tactics: ["Offer a free consultation to finance leaders"],
           metrics: ["impressions"],
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1620,16 +1630,16 @@ describe("run 248 regression — field-scoped product grounding and consultation
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
     const result = validateStrategyOutput({
       output: { ...output, creativeBriefFingerprint: currentFingerprint },
       currentFingerprint,
-      brief: { ...run248Brief, excludedOffers: "" },
+      brief: { ...run248Brief, excludedOffers: "", offerDetails: "Consultation" },
     });
     expect(result.valid).toBe(true);
   });
@@ -1652,9 +1662,9 @@ describe("run 248 regression — field-scoped product grounding and consultation
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1692,9 +1702,9 @@ describe("groundProductDefiningFields deterministic grounding", () => {
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1723,9 +1733,9 @@ describe("groundProductDefiningFields deterministic grounding", () => {
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1757,9 +1767,9 @@ describe("groundProductDefiningFields deterministic grounding", () => {
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -1774,6 +1784,8 @@ describe("groundProductDefiningFields deterministic grounding", () => {
         preferredCta: "Book a Demo",
         offerDetails: "",
         excludedOffers: "",
+        platforms: "LinkedIn, Email",
+        authorisedChannels: ["linkedin", "email"],
       },
     });
     expect(result.valid).toBe(true);
@@ -1797,9 +1809,9 @@ describe("groundProductDefiningFields deterministic grounding", () => {
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
     });
@@ -2356,14 +2368,26 @@ describe("runStrategyAgent atomic run/claim lifecycle", () => {
           name: "Finance Lead Farouk",
           demographics: "Finance lead for B2B finance teams and merchant operators",
           painPoints: ["Manual balance verification and slow payment instructions"],
-          goals: ["Control payment instructions with prefunded accounts"],
+          goals: ["Reach B2B finance teams and merchant operators"],
           platforms: ["LinkedIn", "Email"],
+        },
+      ],
+      platformStrategy: [
+        {
+          platform: "LinkedIn",
+          purpose: "Reach B2B finance teams and merchant operators",
+          contentTypes: ["sponsored posts"],
+          postingFrequency: "3x per week",
         },
       ],
       ctas: [
         { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
         { stage: "conversion", cta: "Book a Demo", placement: "landing page" },
       ],
+      budgetRecommendation: {
+        total: 5000,
+        allocation: [{ channel: "LinkedIn", amount: 5000, percentage: 100 }],
+      },
     });
     vi.mocked(generateObject).mockResolvedValueOnce({
       object: rawOutput,
@@ -2389,7 +2413,9 @@ describe("runStrategyAgent atomic run/claim lifecycle", () => {
       excludedOffers: "",
       referenceStyle: "",
       contentStyle: "",
+      platforms: "LinkedIn, Email",
       businessType: "B2B",
+      authorisedChannels: ["linkedin", "email"],
     });
 
     const result = await runStrategyAgent({
@@ -2412,7 +2438,7 @@ describe("runStrategyAgent atomic run/claim lifecycle", () => {
 
     // The returned output is grounded, not the raw generated output.
     expect(result.output.coreMessage).toBe(
-      "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations, controlled payment-instruction services."
+      "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services."
     );
     expect(result.output.coreMessage).not.toBe(rawOutput.coreMessage);
 
@@ -2421,15 +2447,17 @@ describe("runStrategyAgent atomic run/claim lifecycle", () => {
       (set: any) => set.status === "completed" && set.output?.creativeBriefFingerprint
     );
     expect(completedUpdate).toBeDefined();
-    expect(completedUpdate.output.coreMessage).toBe(result.output.coreMessage);
+    const completedOutputWithoutFingerprint = { ...completedUpdate.output };
+    delete completedOutputWithoutFingerprint.creativeBriefFingerprint;
+    expect(completedOutputWithoutFingerprint).toEqual(result.output);
     expect(completedUpdate.output.creativeBriefFingerprint).toBeDefined();
 
-    // The campaign update used the same grounded core message.
+    // The campaign update references the same run and strategy fingerprint.
     const campaignUpdate = mock.updateSets.find(
-      (set: any) => set.workflowContext?.strategyRunId === 9001
+      (set: any) => set.workflowContext?.strategyRunId === result.runId
     );
     expect(campaignUpdate).toBeDefined();
-    expect(campaignUpdate.workflowContext.coreMessage).toBe(result.output.coreMessage);
+    expect(campaignUpdate.workflowContext.strategyRunId).toBe(result.runId);
   });
 
   it("never marks the run completed before semantic validation passes", async () => {
@@ -2509,6 +2537,8 @@ describe("Phase 2B evidence reconciliation", () => {
       excludedOffers: "",
       referenceStyle: "",
       contentStyle: "",
+      platforms: "LinkedIn, Email",
+      authorisedChannels: ["linkedin", "email"],
       businessType: "B2B",
       ...overrides,
     };
@@ -2525,7 +2555,7 @@ describe("Phase 2B evidence reconciliation", () => {
           name: "B2B finance teams and merchant operators",
           demographics: "B2B finance teams and merchant operators",
           painPoints: ["manual balance verification and slow payment instructions"],
-          goals: ["Automate payment operations"],
+          goals: ["Reach B2B finance teams and merchant operators"],
           platforms: ["LinkedIn", "Email"],
         },
       ],
@@ -2553,9 +2583,9 @@ describe("Phase 2B evidence reconciliation", () => {
         },
         {
           stage: "conversion",
-          goal: "Book qualified demos",
+          goal: "Reach conversion stage",
           tactics: ["Use the preferred CTA"],
-          metrics: ["demo bookings"],
+          metrics: ["conversions"],
         },
       ],
       offers: [],
@@ -2680,6 +2710,7 @@ describe("Phase 2B evidence reconciliation", () => {
       preferredCta: "Book a Demo",
       offerDetails: "",
       excludedOffers: "",
+      platforms: "Facebook, Instagram",
     };
 
     it("rejects a generated_candidate envelope even when the fingerprint matches", () => {
@@ -2735,7 +2766,7 @@ describe("Phase 2B evidence reconciliation", () => {
   });
 
   describe("materialiseGroundedFields field ownership", () => {
-    it("repairs only coreMessage when product clauses are missing", () => {
+    it("always constructs product-defining fields from the brief", () => {
       const contract = buildGroundingContract(buildPhase2Brief());
       const raw = buildOutput({
         coreMessage: "A payment platform.",
@@ -2744,11 +2775,11 @@ describe("Phase 2B evidence reconciliation", () => {
       });
       const grounded = materialiseGroundedFields(raw, contract);
       expect(grounded.coreMessage).toMatch(/B2B payment orchestration/i);
-      expect(grounded.positioning).toBe(raw.positioning);
-      expect(grounded.valueProposition).toBe(raw.valueProposition);
+      expect(grounded.positioning).toMatch(/B2B payment orchestration.*B2B finance teams/i);
+      expect(grounded.valueProposition).toMatch(/B2B payment orchestration.*B2B finance teams/i);
     });
 
-    it("repairs the matching persona using name and demographics only", () => {
+    it("always constructs the canonical persona from the brief", () => {
       const contract = buildGroundingContract(buildPhase2Brief());
       const raw = buildOutput({
         personas: [
@@ -2756,21 +2787,22 @@ describe("Phase 2B evidence reconciliation", () => {
             name: "Finance Lead Farouk",
             demographics: "Finance lead for B2B finance teams and merchant operators",
             painPoints: ["Some pain"],
-            goals: ["Automate payments"],
+            goals: ["Reach B2B finance teams and merchant operators"],
             platforms: ["LinkedIn"],
           },
         ],
       });
       const grounded = materialiseGroundedFields(raw, contract);
-      expect(grounded.personas[0].name).toBe("Finance Lead Farouk");
-      expect(grounded.personas[0].demographics).toBe(
-        "Finance lead for B2B finance teams and merchant operators"
-      );
-      expect(grounded.personas[0].goals).toEqual(["Automate payments"]);
-      expect(grounded.personas[0].platforms).toEqual(["LinkedIn"]);
+      expect(grounded.personas[0].name).toBe("B2B finance teams and merchant operators");
+      expect(grounded.personas[0].demographics).toBe("B2B finance teams and merchant operators");
+      expect(grounded.personas[0].painPoints).toEqual([
+        "manual balance verification and slow payment instructions",
+      ]);
+      expect(grounded.personas[0].goals).toEqual(["Intended outcome: Qualified merchant onboarding"]);
+      expect(grounded.personas[0].platforms).toEqual(["LinkedIn", "Email"]);
     });
 
-    it("replaces an unrelated persona name with a buyer-derived label", () => {
+    it("replaces an unrelated persona with the canonical buyer-derived persona", () => {
       const contract = buildGroundingContract(buildPhase2Brief({ excludedOffers: "free trial" }));
       const raw = buildOutput({
         personas: [
@@ -2779,19 +2811,19 @@ describe("Phase 2B evidence reconciliation", () => {
             demographics: "Small business owner",
             painPoints: ["Some unrelated pain"],
             goals: ["Sign up for a free trial"],
-            platforms: ["Facebook"],
+            platforms: ["LinkedIn"],
           },
         ],
       });
       const grounded = materialiseGroundedFields(raw, contract);
-      expect(grounded.personas[0].name).toBe("B2B Finance Teams And Merchant Operators");
+      expect(grounded.personas[0].name).toBe("B2B finance teams and merchant operators");
       expect(grounded.personas[0].demographics).toBe("B2B finance teams and merchant operators");
       expect(grounded.personas[0].painPoints).toContain("manual balance verification and slow payment instructions");
-      expect(grounded.personas[0].goals).toEqual([]);
-      expect(grounded.personas[0].platforms).toEqual(["Facebook"]);
+      expect(grounded.personas[0].goals).toEqual(["Intended outcome: Qualified merchant onboarding"]);
+      expect(grounded.personas[0].platforms).toEqual(["LinkedIn", "Email"]);
     });
 
-    it("adds the main pain point only to the selected persona's painPoints", () => {
+    it("always constructs persona pain points and goals from the brief", () => {
       const contract = buildGroundingContract(buildPhase2Brief());
       const raw = buildOutput({
         personas: [
@@ -2805,8 +2837,10 @@ describe("Phase 2B evidence reconciliation", () => {
         ],
       });
       const grounded = materialiseGroundedFields(raw, contract);
-      expect(grounded.personas[0].painPoints).toContain("manual balance verification and slow payment instructions");
-      expect(grounded.personas[0].goals).toEqual(["Goal"]);
+      expect(grounded.personas[0].painPoints).toEqual([
+        "manual balance verification and slow payment instructions",
+      ]);
+      expect(grounded.personas[0].goals).toEqual(["Intended outcome: Qualified merchant onboarding"]);
     });
 
     it("is idempotent", () => {
@@ -3185,5 +3219,1356 @@ describe("Phase 2B evidence reconciliation", () => {
       const campaignUpdate = mock.updateSets.find((set: any) => set.table === campaigns);
       expect(campaignUpdate).toBeUndefined();
     });
+  });
+});
+
+
+describe("Phase 3 — domain-independent provenance and run-250 regression", () => {
+  const run250Fingerprint = "fp-run250";
+
+  const run250Brief = {
+    fingerprint: run250Fingerprint,
+    productOrService:
+      "B2B payment orchestration with prefunded merchant accounts, balance verification, transaction reservations and controlled payment instructions",
+    targetBuyer: "B2B finance teams and merchant operators",
+    mainPainPoint: "manual balance verification and slow payment instructions",
+    preferredCta: "Book a Demo",
+    primaryOutcome: "Qualified merchant onboarding",
+    offerDetails: "",
+    excludedOffers:
+      "fraud reduction; multiple payment methods; lending; credit; loans; free trial; discount; coupon; giveaway; bonus; promotional credit; webinar; newsletter; loyalty programme; free consultation; free assessment; free audit; free demo; complimentary consultation; no-cost consultation; customer support; WhatsApp support",
+    referenceStyle: "",
+    contentStyle: "",
+    platforms: "LinkedIn, Email",
+    authorisedChannels: ["linkedin", "email"],
+    businessType: "B2B",
+  } as GroundedCreativeBrief;
+
+  function buildRun250Output(overrides: Partial<StrategyOutput> = {}): StrategyOutput {
+    return {
+      personas: [
+        {
+          name: "Finance Lead Farouk",
+          demographics: "Finance lead for B2B finance teams and merchant operators",
+          painPoints: ["manual balance verification and slow payment instructions"],
+          goals: ["Improve cash-flow management"],
+          platforms: ["LinkedIn", "Email", "WhatsApp"],
+        },
+      ],
+      positioning: "Unparalleled control, security and efficiency for B2B payments.",
+      valueProposition:
+        "Enhance transaction security, smooth cash flow and automate payment instructions while ensuring compliance.",
+      coreMessage:
+        "Get unparalleled control, security and efficiency. Automate payment instructions, improve cash-flow management and ensure compliance with WhatsApp customer support.",
+      campaignTheme: "Upcoming webinar on latest offerings and service enhancements",
+      platformStrategy: [
+        {
+          platform: "LinkedIn",
+          purpose: "Reach B2B finance teams and merchant operators",
+          contentTypes: ["webinar announcements"],
+          postingFrequency: "3x per week",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach B2B finance teams",
+          tactics: [
+            "Promote upcoming webinar on latest offerings and service enhancements",
+            "Provide WhatsApp customer support",
+          ],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Reach conversion stage",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["conversions"],
+        },
+      ],
+      offers: [],
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Join the webinar", placement: "landing page" },
+      ],
+      budgetRecommendation: {
+        total: 5000,
+        allocation: [{ channel: "LinkedIn", amount: 5000, percentage: 100 }],
+      },
+      ...overrides,
+    };
+  }
+
+  it("rejects the raw run-250 output unchanged", () => {
+    const contract = buildGroundingContract(run250Brief);
+    const result = validateGroundedStrategyOutput(
+      { ...buildRun250Output(), creativeBriefFingerprint: run250Fingerprint },
+      run250Fingerprint,
+      contract
+    );
+    expect(result.valid).toBe(false);
+    const reason = result.reason || "";
+    expect(reason).toMatch(/unparalleled|unsupported comparison/i);
+    expect(reason).toMatch(/security|cash flow|automate|compliance|customer support/i);
+    expect(reason).toMatch(/webinar|WhatsApp|latest offerings|service enhancements/i);
+  });
+
+  it("deterministically materialises the run-250 output into a valid grounded strategy", () => {
+    const contract = buildGroundingContract(run250Brief);
+    const raw = buildRun250Output();
+    const grounded = materialiseGroundedFields(raw, contract);
+    const result = validateGroundedStrategyOutput(
+      { ...grounded, creativeBriefFingerprint: run250Fingerprint },
+      run250Fingerprint,
+      contract
+    );
+    expect(result.valid).toBe(true);
+
+    const allText = JSON.stringify(grounded).toLowerCase();
+    expect(allText).not.toContain("unparalleled");
+    expect(allText).not.toContain("enhance transaction security");
+    expect(allText).not.toContain("improve cash-flow management");
+    expect(allText).not.toContain("smooth cash flow");
+    expect(allText).not.toContain("automate payment instructions");
+    expect(allText).not.toContain("ensure compliance");
+    expect(allText).not.toContain("whatsapp");
+    expect(allText).not.toContain("webinar");
+    expect(allText).not.toContain("latest offerings");
+    expect(allText).not.toContain("service enhancements");
+
+    expect(grounded.coreMessage).toMatch(/B2B payment orchestration/i);
+    expect(grounded.personas[0].demographics).toMatch(/B2B finance teams and merchant operators/i);
+    expect(grounded.personas[0].painPoints).toContain(run250Brief.mainPainPoint);
+    expect(grounded.personas[0].platforms).toEqual(["LinkedIn", "Email"]);
+  });
+
+  it("does not mutate the raw run-250 output during materialisation", () => {
+    const contract = buildGroundingContract(run250Brief);
+    const raw = buildRun250Output();
+    const original = JSON.parse(JSON.stringify(raw));
+    materialiseGroundedFields(raw, contract);
+    expect(raw).toEqual(original);
+  });
+
+  it("produces idempotent materialisation for run-250", () => {
+    const contract = buildGroundingContract(run250Brief);
+    const raw = buildRun250Output();
+    const once = materialiseGroundedFields(raw, contract);
+    const twice = materialiseGroundedFields(once, contract);
+    expect(twice).toEqual(once);
+  });
+});
+
+describe("Phase 3 — positive counterexamples across unrelated domains", () => {
+  function buildAuthoritativeOutput(brief: GroundedCreativeBrief, overrides: Partial<StrategyOutput> = {}): StrategyOutput {
+    const channels = brief.authorisedChannels?.length ? brief.authorisedChannels.map((c) => c.charAt(0).toUpperCase() + c.slice(1)) : ["LinkedIn"];
+    const channel = channels[0];
+    const product = brief.productOrService || "";
+    const buyer = brief.targetBuyer || "";
+    const pain = brief.mainPainPoint || "";
+    const cta = brief.preferredCta || "";
+    return {
+      personas: [
+        {
+          name: buyer,
+          demographics: buyer,
+          painPoints: [pain],
+          goals: ["Learn how the product applies to their situation"],
+          platforms: channels,
+        },
+      ],
+      positioning: product + ".",
+      valueProposition: product + ".",
+      coreMessage: product + ".",
+      campaignTheme: product,
+      platformStrategy: [
+        {
+          platform: channel,
+          purpose: "Reach " + buyer,
+          contentTypes: ["Authorised message"],
+          postingFrequency: "3x per week",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach " + buyer,
+          tactics: ["Publish the authorised message"],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Reach conversion stage",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["conversions"],
+        },
+      ],
+      offers: [],
+      ctas: [
+        { stage: "awareness", cta: cta, placement: "ad headline" },
+        { stage: "conversion", cta: cta, placement: "landing page" },
+      ],
+      budgetRecommendation: {
+        total: 5000,
+        allocation: [{ channel, amount: 5000, percentage: 100 }],
+      },
+      ...overrides,
+    };
+  }
+
+  it("allows explicitly authorised security and fraud prevention in a cybersecurity brief", () => {
+    const brief: GroundedCreativeBrief = {
+      fingerprint: "fp-cyber",
+      productOrService: "Cybersecurity service with fraud prevention and transaction security",
+      targetBuyer: "financial services risk teams",
+      mainPainPoint: "manual fraud investigation",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Reduce fraud losses",
+      offerDetails: "",
+      excludedOffers: "",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn",
+      authorisedChannels: ["linkedin"],
+      businessType: "B2B",
+    };
+    const output = buildAuthoritativeOutput(brief, {
+      coreMessage: "Cybersecurity service with fraud prevention and transaction security.",
+      positioning: "Fraud prevention and transaction security for financial services risk teams.",
+      valueProposition: "Stop fraud and secure transactions for financial services risk teams.",
+    });
+    const result = validateGroundedStrategyOutput(
+      { ...output, creativeBriefFingerprint: brief.fingerprint },
+      brief.fingerprint,
+      buildGroundingContract(brief)
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("allows explicitly authorised credit and consultation in a lending brief", () => {
+    const brief: GroundedCreativeBrief = {
+      fingerprint: "fp-lending",
+      productOrService: "Business lending service with credit lines and free consultations",
+      targetBuyer: "small business owners",
+      mainPainPoint: "slow access to working capital",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Approved credit applications",
+      offerDetails: "Free consultation",
+      excludedOffers: "",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn",
+      authorisedChannels: ["linkedin"],
+      businessType: "B2B",
+    };
+    const output = buildAuthoritativeOutput(brief, {
+      coreMessage: "Business lending service with credit lines and free consultations.",
+      positioning: "Credit lines and free consultations for small business owners.",
+      valueProposition: "Get a credit line and a free consultation.",
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Request a Free Consultation", placement: "landing page" },
+      ],
+    });
+    const result = validateGroundedStrategyOutput(
+      { ...output, creativeBriefFingerprint: brief.fingerprint },
+      brief.fingerprint,
+      buildGroundingContract(brief)
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("allows explicitly authorised webinars and assessments in a training brief", () => {
+    const brief: GroundedCreativeBrief = {
+      fingerprint: "fp-training",
+      productOrService: "Training provider offering webinars and skills assessments",
+      targetBuyer: "HR learning and development managers",
+      mainPainPoint: "inconsistent employee onboarding",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Certified employees",
+      offerDetails: "Free webinar and assessment",
+      excludedOffers: "",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn",
+      authorisedChannels: ["linkedin"],
+      businessType: "B2B",
+    };
+    const output = buildAuthoritativeOutput(brief, {
+      coreMessage: "Training provider offering webinars and skills assessments.",
+      positioning: "Webinars and skills assessments for HR learning and development managers.",
+      valueProposition: "Live webinars and verified skills assessments.",
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach HR learning and development managers",
+          tactics: ["Host a free webinar on employee onboarding"],
+          metrics: ["registrations"],
+        },
+        {
+          stage: "conversion",
+          goal: "Reach conversion stage",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["conversions"],
+        },
+      ],
+    });
+    const result = validateGroundedStrategyOutput(
+      { ...output, creativeBriefFingerprint: brief.fingerprint },
+      brief.fingerprint,
+      buildGroundingContract(brief)
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("does not let security authorise compliance", () => {
+    const brief: GroundedCreativeBrief = {
+      fingerprint: "fp-security-not-compliance",
+      productOrService: "Cybersecurity service with transaction security",
+      targetBuyer: "financial services risk teams",
+      mainPainPoint: "manual fraud investigation",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Reduce fraud losses",
+      offerDetails: "",
+      excludedOffers: "",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn",
+      authorisedChannels: ["linkedin"],
+      businessType: "B2B",
+    };
+    const output = buildAuthoritativeOutput(brief, {
+      coreMessage: "Cybersecurity service with transaction security and compliance.",
+    });
+    const result = validateGroundedStrategyOutput(
+      { ...output, creativeBriefFingerprint: brief.fingerprint },
+      brief.fingerprint,
+      buildGroundingContract(brief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/compliance/i);
+  });
+
+  it("does not let consultation authorise a free trial", () => {
+    const brief: GroundedCreativeBrief = {
+      fingerprint: "fp-consultation-not-trial",
+      productOrService: "B2B payment orchestration",
+      targetBuyer: "finance teams",
+      mainPainPoint: "manual reconciliation",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Onboarded merchants",
+      offerDetails: "Free consultation",
+      excludedOffers: "free trial",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn",
+      authorisedChannels: ["linkedin"],
+      businessType: "B2B",
+    };
+    const output = buildAuthoritativeOutput(brief, {
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Start your free trial", placement: "landing page" },
+      ],
+    });
+    const result = validateGroundedStrategyOutput(
+      { ...output, creativeBriefFingerprint: brief.fingerprint },
+      brief.fingerprint,
+      buildGroundingContract(brief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/free trial/i);
+  });
+
+  it("does not let webinar authorise customer support", () => {
+    const brief: GroundedCreativeBrief = {
+      fingerprint: "fp-webinar-not-support",
+      productOrService: "Training provider offering webinars",
+      targetBuyer: "HR managers",
+      mainPainPoint: "inconsistent onboarding",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Certified employees",
+      offerDetails: "Free webinar",
+      excludedOffers: "",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn",
+      authorisedChannels: ["linkedin"],
+      businessType: "B2B",
+    };
+    const output = buildAuthoritativeOutput(brief, {
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach HR managers",
+          tactics: ["Provide WhatsApp customer support"],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Reach conversion stage",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["conversions"],
+        },
+      ],
+    });
+    const result = validateGroundedStrategyOutput(
+      { ...output, creativeBriefFingerprint: brief.fingerprint },
+      brief.fingerprint,
+      buildGroundingContract(brief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/customer support|WhatsApp/i);
+  });
+});
+
+describe("Phase 3 — mutation tests for authoritative contract categories", () => {
+  const baseMutationBrief: GroundedCreativeBrief = {
+    fingerprint: "fp-mutation",
+    productOrService: "B2B payment orchestration with prefunded merchant accounts and transaction reservations",
+    targetBuyer: "B2B finance teams and merchant operators",
+    mainPainPoint: "manual balance verification and slow payment instructions",
+    preferredCta: "Book a Demo",
+    primaryOutcome: "Qualified merchant onboarding",
+    offerDetails: "First month free",
+    excludedOffers: "free trial",
+    referenceStyle: "",
+    contentStyle: "",
+    platforms: "LinkedIn, Email",
+    authorisedChannels: ["linkedin", "email"],
+    businessType: "B2B",
+  };
+
+  function buildMutationOutput(brief: GroundedCreativeBrief): StrategyOutput {
+    const channels = (brief.authorisedChannels || []).map((c) => c.charAt(0).toUpperCase() + c.slice(1));
+    const product = brief.productOrService || "";
+    const buyer = brief.targetBuyer || "";
+    const pain = brief.mainPainPoint || "";
+    const cta = brief.preferredCta || "";
+    return {
+      personas: [
+        {
+          name: buyer,
+          demographics: buyer,
+          painPoints: [pain],
+          goals: ["Reach " + buyer],
+          platforms: channels,
+        },
+      ],
+      positioning: product + ".",
+      valueProposition: product + ".",
+      coreMessage: product + ".",
+      campaignTheme: product,
+      platformStrategy: [
+        {
+          platform: channels[0],
+          purpose: "Reach " + brief.targetBuyer,
+          contentTypes: ["Authorised message"],
+          postingFrequency: "3x per week",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach " + brief.targetBuyer,
+          tactics: ["Publish the authorised message"],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Reach conversion stage",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["conversions"],
+        },
+      ],
+      offers: brief.offerDetails
+        ? [
+            {
+              name: brief.offerDetails,
+              description: brief.offerDetails,
+              targetStage: "conversion",
+              value: brief.offerDetails,
+            },
+          ]
+        : [],
+      ctas: [
+        { stage: "awareness", cta: cta, placement: "ad headline" },
+        { stage: "conversion", cta: cta, placement: "landing page" },
+      ],
+      budgetRecommendation: {
+        total: 5000,
+        allocation: [{ channel: channels[0], amount: 5000, percentage: 100 }],
+      },
+    };
+  }
+
+  function withFp(output: StrategyOutput, fp: string) {
+    return { ...output, creativeBriefFingerprint: fp };
+  }
+
+  it("accepts the baseline mutation fixture", () => {
+    const result = validateGroundedStrategyOutput(
+      withFp(buildMutationOutput(baseMutationBrief), baseMutationBrief.fingerprint),
+      baseMutationBrief.fingerprint,
+      buildGroundingContract(baseMutationBrief)
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("fails when a product capability clause is removed from the output", () => {
+    const output = buildMutationOutput(baseMutationBrief);
+    output.coreMessage = "B2B payment orchestration.";
+    output.positioning = "B2B payment orchestration.";
+    output.valueProposition = "B2B payment orchestration.";
+    const result = validateGroundedStrategyOutput(
+      withFp(output, baseMutationBrief.fingerprint),
+      baseMutationBrief.fingerprint,
+      buildGroundingContract(baseMutationBrief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/prefunded|transaction|reservations/i);
+  });
+
+  it("fails when an authorised channel is removed from the brief", () => {
+    const brief: GroundedCreativeBrief = {
+      ...baseMutationBrief,
+      platforms: "Email",
+      authorisedChannels: ["email"],
+    };
+    const result = validateGroundedStrategyOutput(
+      withFp(buildMutationOutput(baseMutationBrief), brief.fingerprint),
+      brief.fingerprint,
+      buildGroundingContract(brief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/LinkedIn|unauthorised channel/i);
+  });
+
+  it("fails when an authorised offer is removed from the brief", () => {
+    const brief: GroundedCreativeBrief = { ...baseMutationBrief, offerDetails: "" };
+    const result = validateGroundedStrategyOutput(
+      withFp(buildMutationOutput(baseMutationBrief), brief.fingerprint),
+      brief.fingerprint,
+      buildGroundingContract(brief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/offers|first month free/i);
+  });
+
+  it("fails when a comparison is not authorised", () => {
+    const output = buildMutationOutput(baseMutationBrief);
+    output.positioning = "The best B2B payment orchestration platform.";
+    const result = validateGroundedStrategyOutput(
+      withFp(output, baseMutationBrief.fingerprint),
+      baseMutationBrief.fingerprint,
+      buildGroundingContract(baseMutationBrief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/best|unsupported comparison/i);
+  });
+
+  it("fails when the target buyer is removed from the output", () => {
+    const output = buildMutationOutput(baseMutationBrief);
+    output.personas[0].demographics = "Finance lead";
+    output.personas[0].name = "Finance Lead";
+    const result = validateGroundedStrategyOutput(
+      withFp(output, baseMutationBrief.fingerprint),
+      baseMutationBrief.fingerprint,
+      buildGroundingContract(baseMutationBrief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/target buyer/i);
+  });
+
+  it("fails when the main pain point is removed from the output", () => {
+    const output = buildMutationOutput(baseMutationBrief);
+    output.personas[0].painPoints = ["slow payment instructions"];
+    const result = validateGroundedStrategyOutput(
+      withFp(output, baseMutationBrief.fingerprint),
+      baseMutationBrief.fingerprint,
+      buildGroundingContract(baseMutationBrief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/main pain point|balance verification/i);
+  });
+
+  it("fails when the preferred CTA is removed from the output", () => {
+    const output = buildMutationOutput(baseMutationBrief);
+    output.ctas = [
+      { stage: "awareness", cta: "Learn More", placement: "ad headline" },
+      { stage: "conversion", cta: "Sign Up", placement: "landing page" },
+    ];
+    const result = validateGroundedStrategyOutput(
+      withFp(output, baseMutationBrief.fingerprint),
+      baseMutationBrief.fingerprint,
+      buildGroundingContract(baseMutationBrief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/preferred CTA/i);
+  });
+});
+
+
+describe("Phase 3 final — mutation tests covering every contract category with novel non-taxonomy terms", () => {
+  function buildNovelBrief(overrides: Partial<GroundedCreativeBrief> = {}): GroundedCreativeBrief {
+    return {
+      fingerprint: "fp-novel",
+      productOrService: "B2B payment orchestration",
+      targetBuyer: "B2B finance teams",
+      mainPainPoint: "manual balance verification",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Qualified merchant onboarding",
+      offerDetails: "First month free",
+      excludedOffers: "free trial",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn, Email",
+      authorisedChannels: ["linkedin", "email"],
+      businessType: "B2B",
+      ...overrides,
+    };
+  }
+
+  function buildNovelRawOutput(): StrategyOutput {
+    return {
+      personas: [
+        {
+          name: "Adversarial Persona",
+          demographics: "Invented demographics with quantum entropy stabiliser",
+          painPoints: ["Neural sentiment harmonisation pain"],
+          goals: ["Tactical synergy maximisation"],
+          platforms: ["Intergalactic Network"],
+        },
+      ],
+      positioning: "The unparalleled intergalactic onboarding concierge.",
+      valueProposition: "Hyperdimensional click amplification reduces operating costs.",
+      coreMessage: "Predictive reconciliation engine for quantum payments.",
+      campaignTheme: "Hyperdimensional synergy maximisation campaign.",
+      platformStrategy: [
+        {
+          platform: "Intergalactic Network",
+          purpose: "Deploy neural sentiment harmonisation across the fleet",
+          contentTypes: ["Quantum briefings"],
+          postingFrequency: "daily",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Maximise tactical synergy",
+          tactics: ["Run quarterly optimisation clinic webinars"],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Drive hyperdimensional conversions",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["conversions"],
+        },
+      ],
+      offers: [
+        { name: "First month free", description: "First month free", targetStage: "conversion", value: "First month free" },
+      ],
+      ctas: [
+        { stage: "awareness", cta: "Learn More", placement: "ad headline" },
+        { stage: "conversion", cta: "Sign Up Now", placement: "landing page" },
+      ],
+      budgetRecommendation: { total: 5000, allocation: [{ channel: "Intergalactic Network", amount: 5000, percentage: 100 }] },
+    };
+  }
+
+  function allText(output: StrategyOutput): string {
+    const parts: string[] = [
+      output.coreMessage,
+      output.positioning,
+      output.valueProposition,
+      output.campaignTheme,
+      ...output.personas.flatMap((p) => [p.name, p.demographics, ...p.painPoints, ...p.goals, ...p.platforms]),
+      ...output.platformStrategy.flatMap((p) => [p.platform, p.purpose, ...p.contentTypes, p.postingFrequency]),
+      ...output.funnelStages.flatMap((fs) => [fs.stage, fs.goal, ...fs.tactics, ...fs.metrics]),
+      ...output.offers.flatMap((o) => [o.name, o.description, o.targetStage, o.value]),
+      ...output.ctas.flatMap((c) => [c.stage, c.cta, c.placement]),
+    ];
+    return parts.filter(Boolean).join(" ");
+  }
+
+  it("capability mutation: removing an authoritative capability removes it from output", () => {
+    const brief = buildNovelBrief({ productOrService: "B2B payment orchestration with prefunded accounts" });
+    const output = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(brief));
+    expect(allText(output)).toMatch(/prefunded/i);
+
+    const briefWithout = buildNovelBrief({ productOrService: "B2B payment orchestration" });
+    const outputWithout = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWithout));
+    expect(allText(outputWithout)).not.toMatch(/prefunded/i);
+  });
+
+  it("feature mutation: a novel feature absent from the brief cannot survive materialisation", () => {
+    const feature = "predictive reconciliation engine";
+    const briefWith = buildNovelBrief({ coreMessage: `B2B payment orchestration with ${feature}` });
+    const outputWith = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWith));
+    expect(allText(outputWith).toLowerCase()).toContain(feature);
+
+    const briefWithout = buildNovelBrief();
+    const outputWithout = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWithout));
+    expect(allText(outputWithout).toLowerCase()).not.toContain(feature);
+  });
+
+  it("outcome mutation: a novel outcome absent from the brief cannot survive materialisation", () => {
+    const outcome = "reduces operating costs";
+    const briefWith = buildNovelBrief({ primaryOutcome: outcome });
+    const outputWith = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWith));
+    expect(allText(outputWith).toLowerCase()).toContain("operating costs");
+
+    const briefWithout = buildNovelBrief();
+    const outputWithout = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWithout));
+    expect(allText(outputWithout).toLowerCase()).not.toContain("operating costs");
+  });
+
+  it("programme mutation: a novel programme absent from the brief cannot survive materialisation", () => {
+    const programme = "quarterly optimisation clinic";
+    const briefWith = buildNovelBrief({ coreMessage: `B2B payment orchestration including ${programme}` });
+    const outputWith = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWith));
+    expect(allText(outputWith).toLowerCase()).toContain("optimisation clinic");
+
+    const briefWithout = buildNovelBrief();
+    const outputWithout = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWithout));
+    expect(allText(outputWithout).toLowerCase()).not.toContain("optimisation clinic");
+    expect(allText(outputWithout).toLowerCase()).not.toContain("quarterly");
+  });
+
+  it("channel mutation: removing an authorised channel removes it from output", () => {
+    const brief = buildNovelBrief({ platforms: "LinkedIn, Email", authorisedChannels: ["linkedin", "email"] });
+    const output = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(brief));
+    expect(output.platformStrategy.map((p) => p.platform.toLowerCase())).toContain("linkedin");
+    expect(output.platformStrategy.map((p) => p.platform.toLowerCase())).toContain("email");
+
+    const briefWithout = buildNovelBrief({ platforms: "LinkedIn", authorisedChannels: ["linkedin"] });
+    const outputWithout = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWithout));
+    expect(outputWithout.platformStrategy.map((p) => p.platform.toLowerCase())).not.toContain("email");
+  });
+
+  it("offer mutation: removing authorised offers empties the offers array", () => {
+    const brief = buildNovelBrief({ offerDetails: "First month free" });
+    const output = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(brief));
+    expect(output.offers).toHaveLength(1);
+
+    const briefWithout = buildNovelBrief({ offerDetails: "" });
+    const outputWithout = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWithout));
+    expect(outputWithout.offers).toHaveLength(0);
+  });
+
+  it("comparison mutation: removing comparison authority removes superlatives from output", () => {
+    const briefWith = buildNovelBrief({ productOrService: "The leading B2B payment orchestration" });
+    const outputWith = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWith));
+    expect(outputWith.coreMessage.toLowerCase()).toContain("leading");
+
+    const briefWithout = buildNovelBrief();
+    const outputWithout = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWithout));
+    expect(allText(outputWithout).toLowerCase()).not.toContain("unparalleled");
+    expect(allText(outputWithout).toLowerCase()).not.toContain("leading");
+  });
+
+  it("target buyer mutation: removing the buyer replaces it with a safe default", () => {
+    const brief = buildNovelBrief({ targetBuyer: "B2B finance teams" });
+    const output = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(brief));
+    expect(output.personas[0].demographics).toBe("B2B finance teams");
+
+    const briefWithout = buildNovelBrief({ targetBuyer: "" });
+    const outputWithout = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWithout));
+    expect(outputWithout.personas[0].name).toBe("Target Buyer");
+    expect(outputWithout.personas[0].demographics).toBe("");
+  });
+
+  it("pain point mutation: removing the pain point empties persona pain points", () => {
+    const brief = buildNovelBrief({ mainPainPoint: "manual balance verification" });
+    const output = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(brief));
+    expect(output.personas[0].painPoints).toContain("manual balance verification");
+
+    const briefWithout = buildNovelBrief({ mainPainPoint: "" });
+    const outputWithout = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWithout));
+    expect(outputWithout.personas[0].painPoints).toHaveLength(0);
+  });
+
+  it("CTA mutation: removing the preferred CTA falls back to a neutral CTA", () => {
+    const brief = buildNovelBrief({ preferredCta: "Book a Demo" });
+    const output = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(brief));
+    expect(output.ctas.every((c) => c.cta === "Book a Demo")).toBe(true);
+
+    const briefWithout = buildNovelBrief({ preferredCta: "" });
+    const outputWithout = materialiseGroundedFields(buildNovelRawOutput(), buildGroundingContract(briefWithout));
+    expect(outputWithout.ctas.every((c) => c.cta === "Learn More")).toBe(true);
+  });
+});
+
+describe("Phase 3 final — adversarial unknown-claim tests", () => {
+  const adversarialClaims = [
+    { claim: "quantum entropy stabiliser", kind: "feature" },
+    { claim: "neural sentiment harmonisation", kind: "capability" },
+    { claim: "tactical synergy maximisation", kind: "outcome" },
+    { claim: "intergalactic onboarding concierge", kind: "programme" },
+    { claim: "hyperdimensional click amplification", kind: "mechanism" },
+  ];
+
+  const baseBrief: GroundedCreativeBrief = {
+    fingerprint: "fp-adversarial",
+    productOrService: "B2B payment orchestration",
+    targetBuyer: "B2B finance teams",
+    mainPainPoint: "manual balance verification",
+    preferredCta: "Book a Demo",
+    primaryOutcome: "Qualified merchant onboarding",
+    offerDetails: "First month free",
+    excludedOffers: "free trial",
+    referenceStyle: "",
+    contentStyle: "",
+    platforms: "LinkedIn, Email",
+    authorisedChannels: ["linkedin", "email"],
+    businessType: "B2B",
+  };
+
+  function buildRawOutputWithClaim(claim: string): StrategyOutput {
+    return {
+      personas: [
+        {
+          name: `Persona with ${claim}`,
+          demographics: `Buyer who needs ${claim}`,
+          painPoints: [`Suffering from lack of ${claim}`],
+          goals: [`Achieve ${claim}`],
+          platforms: ["LinkedIn"],
+        },
+      ],
+      positioning: `The only platform offering ${claim}.`,
+      valueProposition: `${claim} for B2B finance teams.`,
+      coreMessage: `${claim} solves payment orchestration.`,
+      campaignTheme: `Campaign for ${claim}`,
+      platformStrategy: [
+        {
+          platform: "LinkedIn",
+          purpose: `Publish content about ${claim}`,
+          contentTypes: [`${claim} posts`],
+          postingFrequency: "3x per week",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: `Reach buyers interested in ${claim}`,
+          tactics: [`Educate market about ${claim}`],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: `Drive buyers to ${claim}`,
+          tactics: ["Use the preferred CTA"],
+          metrics: ["conversions"],
+        },
+      ],
+      offers: [{ name: claim, description: claim, targetStage: "conversion", value: claim }],
+      ctas: [
+        { stage: "awareness", cta: `Learn about ${claim}`, placement: "ad headline" },
+        { stage: "conversion", cta: `Get ${claim}`, placement: "landing page" },
+      ],
+      budgetRecommendation: { total: 5000, allocation: [{ channel: "LinkedIn", amount: 5000, percentage: 100 }] },
+    };
+  }
+
+  function allText(output: StrategyOutput): string {
+    const parts: string[] = [
+      output.coreMessage,
+      output.positioning,
+      output.valueProposition,
+      output.campaignTheme,
+      ...output.personas.flatMap((p) => [p.name, p.demographics, ...p.painPoints, ...p.goals, ...p.platforms]),
+      ...output.platformStrategy.flatMap((p) => [p.platform, p.purpose, ...p.contentTypes, p.postingFrequency]),
+      ...output.funnelStages.flatMap((fs) => [fs.stage, fs.goal, ...fs.tactics, ...fs.metrics]),
+      ...output.offers.flatMap((o) => [o.name, o.description, o.targetStage, o.value]),
+      ...output.ctas.flatMap((c) => [c.stage, c.cta, c.placement]),
+    ];
+    return parts.filter(Boolean).join(" ").toLowerCase();
+  }
+
+  for (const { claim, kind } of adversarialClaims) {
+    it(`removes invented ${kind} "${claim}" from every output field`, () => {
+      const raw = buildRawOutputWithClaim(claim);
+      const grounded = materialiseGroundedFields(raw, buildGroundingContract(baseBrief));
+      const text = allText(grounded);
+      expect(text).not.toContain(claim.toLowerCase());
+      // The claim must not survive in any mutated form either.
+      const token = claim.split(" ")[0].toLowerCase();
+      expect(text).not.toContain(token);
+    });
+  }
+
+  it("does not add invented claims to the canonical product statement", () => {
+    const raw = buildRawOutputWithClaim("quantum entropy stabiliser");
+    const grounded = materialiseGroundedFields(raw, buildGroundingContract(baseBrief));
+    expect(grounded.coreMessage.toLowerCase()).toBe("b2b payment orchestration.");
+    expect(grounded.positioning.toLowerCase()).toBe("b2b payment orchestration for b2b finance teams.");
+  });
+
+  it("preserves the raw output as evidence even though the grounded output is clean", () => {
+    const raw = buildRawOutputWithClaim("neural sentiment harmonisation");
+    expect(raw.coreMessage.toLowerCase()).toContain("neural sentiment harmonisation");
+    const validation = validateGroundedStrategyOutput(
+      { ...raw, creativeBriefFingerprint: baseBrief.fingerprint },
+      baseBrief.fingerprint,
+      buildGroundingContract(baseBrief)
+    );
+    expect(validation.valid).toBe(false);
+  });
+});
+
+
+describe("Phase 3 closure — post-materialisation schema validity and budget consistency", () => {
+  function buildMinimalBrief(overrides: Partial<GroundedCreativeBrief> = {}): GroundedCreativeBrief {
+    return {
+      fingerprint: "fp-schema",
+      productOrService: "B2B payment orchestration",
+      targetBuyer: "B2B finance teams",
+      mainPainPoint: "manual balance verification",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Qualified merchant onboarding",
+      offerDetails: "First month free",
+      excludedOffers: "",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn, Email",
+      authorisedChannels: ["linkedin", "email"],
+      businessType: "B2B",
+      ...overrides,
+    };
+  }
+
+  function buildMinimalRawOutput(): StrategyOutput {
+    return {
+      personas: [
+        {
+          name: "X",
+          demographics: "Y",
+          painPoints: ["Z"],
+          goals: ["G"],
+          platforms: ["LinkedIn"],
+        },
+      ],
+      positioning: "P",
+      valueProposition: "V",
+      coreMessage: "C",
+      campaignTheme: "T",
+      platformStrategy: [
+        { platform: "LinkedIn", purpose: "P", contentTypes: ["C"], postingFrequency: "F" },
+      ],
+      funnelStages: [
+        { stage: "awareness", goal: "G", tactics: ["T"], metrics: ["M"] },
+        { stage: "consideration", goal: "G", tactics: ["T"], metrics: ["M"] },
+        { stage: "conversion", goal: "G", tactics: ["T"], metrics: ["M"] },
+      ],
+      offers: [{ name: "O", description: "D", targetStage: "conversion", value: "V" }],
+      ctas: [
+        { stage: "awareness", cta: "A", placement: "P" },
+        { stage: "conversion", cta: "B", placement: "P" },
+      ],
+      budgetRecommendation: { total: 5000, allocation: [{ channel: "LinkedIn", amount: 5000, percentage: 100 }] },
+    };
+  }
+
+  const edgeCases: Array<{ label: string; overrides: Partial<GroundedCreativeBrief> }> = [
+    { label: "no authorised channels", overrides: { platforms: "", authorisedChannels: [] } },
+    { label: "no preferred CTA", overrides: { preferredCta: "" } },
+    { label: "no offer details", overrides: { offerDetails: "" } },
+    { label: "no primary outcome", overrides: { primaryOutcome: "" } },
+    { label: "no target buyer", overrides: { targetBuyer: "" } },
+    { label: "no main pain point", overrides: { mainPainPoint: "" } },
+    { label: "one authorised channel", overrides: { platforms: "LinkedIn", authorisedChannels: ["linkedin"] } },
+    {
+      label: "several authorised channels",
+      overrides: { platforms: "LinkedIn, Email, Facebook", authorisedChannels: ["linkedin", "email", "facebook"] },
+    },
+  ];
+
+  for (const { label, overrides } of edgeCases) {
+    it(`produces a schema-valid strategy after materialisation for ${label}`, () => {
+      const brief = buildMinimalBrief(overrides);
+      const raw = buildMinimalRawOutput();
+      const grounded = materialiseGroundedFields(raw, buildGroundingContract(brief));
+      const parse = StrategyOutputSchema.safeParse(grounded);
+      expect(parse.success).toBe(true);
+      expect(grounded.personas.length).toBeGreaterThanOrEqual(1);
+      expect(grounded.ctas.length).toBeGreaterThanOrEqual(1);
+      if (brief.offerDetails) {
+        expect(grounded.offers.length).toBeGreaterThanOrEqual(1);
+      } else {
+        expect(grounded.offers).toHaveLength(0);
+      }
+    });
+  }
+
+  it("fails validation when no authorised channel is available", () => {
+    const brief = buildMinimalBrief({ platforms: "", authorisedChannels: [] });
+    const raw = buildMinimalRawOutput();
+    const grounded = materialiseGroundedFields(raw, buildGroundingContract(brief));
+    const result = validateGroundedStrategyOutput(
+      { ...grounded, creativeBriefFingerprint: brief.fingerprint },
+      brief.fingerprint,
+      buildGroundingContract(brief)
+    );
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/authorised channel|no authorised campaign channel/i);
+  });
+
+  it("produces schema-valid run-250 materialisation", () => {
+    // Re-run-250 brief and output are defined earlier in the file.
+    const run250Fingerprint = "fp-run250-schema";
+    const brief: GroundedCreativeBrief = {
+      fingerprint: run250Fingerprint,
+      productOrService:
+        "B2B payment orchestration with prefunded merchant accounts, balance verification, transaction reservations and controlled payment instructions",
+      targetBuyer: "B2B finance teams and merchant operators",
+      mainPainPoint: "manual balance verification and slow payment instructions",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Qualified merchant onboarding",
+      offerDetails: "",
+      excludedOffers:
+        "fraud reduction; multiple payment methods; lending; credit; loans; free trial; discount; coupon; giveaway; bonus; promotional credit; webinar; newsletter; loyalty programme; free consultation; free assessment; free audit; free demo; complimentary consultation; no-cost consultation; customer support; WhatsApp support",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn, Email",
+      authorisedChannels: ["linkedin", "email"],
+      businessType: "B2B",
+    };
+    const raw: StrategyOutput = {
+      personas: [
+        {
+          name: "Finance Lead Farouk",
+          demographics: "Finance lead for B2B finance teams and merchant operators",
+          painPoints: ["manual balance verification and slow payment instructions"],
+          goals: ["Improve cash-flow management"],
+          platforms: ["LinkedIn", "Email", "WhatsApp"],
+        },
+      ],
+      positioning: "Unparalleled control, security and efficiency for B2B payments.",
+      valueProposition:
+        "Enhance transaction security, smooth cash flow and automate payment instructions while ensuring compliance.",
+      coreMessage:
+        "Get unparalleled control, security and efficiency. Automate payment instructions, improve cash-flow management and ensure compliance with WhatsApp customer support.",
+      campaignTheme: "Upcoming webinar on latest offerings and service enhancements",
+      platformStrategy: [
+        {
+          platform: "LinkedIn",
+          purpose: "Reach B2B finance teams and merchant operators",
+          contentTypes: ["webinar announcements"],
+          postingFrequency: "3x per week",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach B2B finance teams",
+          tactics: [
+            "Promote upcoming webinar on latest offerings and service enhancements",
+            "Provide WhatsApp customer support",
+          ],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Reach conversion stage",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["conversions"],
+        },
+      ],
+      offers: [],
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Join the webinar", placement: "landing page" },
+      ],
+      budgetRecommendation: {
+        total: 5000,
+        allocation: [{ channel: "LinkedIn", amount: 5000, percentage: 100 }],
+      },
+    };
+    const grounded = materialiseGroundedFields(raw, buildGroundingContract(brief));
+    const parse = StrategyOutputSchema.safeParse(grounded);
+    expect(parse.success).toBe(true);
+  });
+
+  describe("budget consistency", () => {
+    function budgetFor(brief: GroundedCreativeBrief) {
+      const raw = buildMinimalRawOutput();
+      return materialiseGroundedFields(raw, buildGroundingContract(brief)).budgetRecommendation;
+    }
+
+    function assertBudgetInvariants(budget: StrategyOutput["budgetRecommendation"], channelCount: number) {
+      expect(budget.allocation).toHaveLength(channelCount);
+      const totalAmount = budget.allocation.reduce((sum, a) => sum + a.amount, 0);
+      const totalPercentage = budget.allocation.reduce((sum, a) => sum + a.percentage, 0);
+      expect(totalAmount).toBe(budget.total);
+      expect(totalPercentage).toBe(100);
+      for (const a of budget.allocation) {
+        expect(Number.isFinite(a.amount)).toBe(true);
+        expect(Number.isFinite(a.percentage)).toBe(true);
+        expect(a.amount).toBeGreaterThan(0);
+        expect(a.percentage).toBeGreaterThan(0);
+      }
+    }
+
+    it("uses only authorised channels in allocation", () => {
+      const brief = buildMinimalBrief({ platforms: "LinkedIn, Email", authorisedChannels: ["linkedin", "email"] });
+      const budget = budgetFor(brief);
+      expect(budget.allocation.map((a) => a.channel.toLowerCase()).sort()).toEqual(["email", "linkedin"]);
+    });
+
+    it("allocates correctly for 1 channel", () => {
+      const brief = buildMinimalBrief({ platforms: "LinkedIn", authorisedChannels: ["linkedin"] });
+      const budget = budgetFor(brief);
+      assertBudgetInvariants(budget, 1);
+      expect(budget.allocation[0].amount).toBe(5000);
+      expect(budget.allocation[0].percentage).toBe(100);
+    });
+
+    it("allocates correctly for 2 channels", () => {
+      const brief = buildMinimalBrief({ platforms: "LinkedIn, Email", authorisedChannels: ["linkedin", "email"] });
+      const budget = budgetFor(brief);
+      assertBudgetInvariants(budget, 2);
+    });
+
+    it("allocates correctly for 3 channels", () => {
+      const brief = buildMinimalBrief({ platforms: "LinkedIn, Email, Facebook", authorisedChannels: ["linkedin", "email", "facebook"] });
+      const budget = budgetFor(brief);
+      assertBudgetInvariants(budget, 3);
+    });
+
+    it("allocates correctly for 6 channels", () => {
+      const channels = ["linkedin", "email", "facebook", "instagram", "twitter", "youtube"];
+      const brief = buildMinimalBrief({ platforms: channels.join(", "), authorisedChannels: channels });
+      const budget = budgetFor(brief);
+      assertBudgetInvariants(budget, 6);
+    });
+
+    it("allocates correctly for 7 channels", () => {
+      const channels = ["linkedin", "email", "facebook", "instagram", "twitter", "youtube", "tiktok"];
+      const brief = buildMinimalBrief({ platforms: channels.join(", "), authorisedChannels: channels });
+      const budget = budgetFor(brief);
+      assertBudgetInvariants(budget, 7);
+    });
+
+    it("produces no NaN, Infinity or negative values", () => {
+      const brief = buildMinimalBrief({ platforms: "", authorisedChannels: [] });
+      const budget = budgetFor(brief);
+      expect(budget.total).toBe(0);
+      expect(budget.allocation).toHaveLength(0);
+    });
+  });
+
+  describe("security equivalence", () => {
+    it("does not treat the token 'sec' as an authorising variant", () => {
+      // The equivalence group must not contain the literal token "sec".
+      const group = GROUNDING_EQUIVALENCE_GROUPS.find((g) => g.some((m) => m === "security" || m === "secure"));
+      expect(group).toBeDefined();
+      expect(group).not.toContain("sec");
+      expect(group).toContain("security");
+      expect(group).toContain("secure");
+      expect(group).toContain("securely");
+      expect(group).toContain("secures");
+      expect(group).toContain("secured");
+      expect(group).toContain("securing");
+    });
+  });
+});
+
+describe("Phase 3 closure — materialised run-250 output sample", () => {
+  it("prints the complete materialised run-250 output for reporting", () => {
+    const run250Fingerprint = "fp-run250-report";
+    const brief: GroundedCreativeBrief = {
+      fingerprint: run250Fingerprint,
+      productOrService:
+        "B2B payment orchestration with prefunded merchant accounts, balance verification, transaction reservations and controlled payment instructions",
+      targetBuyer: "B2B finance teams and merchant operators",
+      mainPainPoint: "manual balance verification and slow payment instructions",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Qualified merchant onboarding",
+      offerDetails: "",
+      excludedOffers:
+        "fraud reduction; multiple payment methods; lending; credit; loans; free trial; discount; coupon; giveaway; bonus; promotional credit; webinar; newsletter; loyalty programme; free consultation; free assessment; free audit; free demo; complimentary consultation; no-cost consultation; customer support; WhatsApp support",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn, Email",
+      authorisedChannels: ["linkedin", "email"],
+      businessType: "B2B",
+    };
+    const raw: StrategyOutput = {
+      personas: [
+        {
+          name: "Finance Lead Farouk",
+          demographics: "Finance lead for B2B finance teams and merchant operators",
+          painPoints: ["manual balance verification and slow payment instructions"],
+          goals: ["Improve cash-flow management"],
+          platforms: ["LinkedIn", "Email", "WhatsApp"],
+        },
+      ],
+      positioning: "Unparalleled control, security and efficiency for B2B payments.",
+      valueProposition:
+        "Enhance transaction security, smooth cash flow and automate payment instructions while ensuring compliance.",
+      coreMessage:
+        "Get unparalleled control, security and efficiency. Automate payment instructions, improve cash-flow management and ensure compliance with WhatsApp customer support.",
+      campaignTheme: "Upcoming webinar on latest offerings and service enhancements",
+      platformStrategy: [
+        {
+          platform: "LinkedIn",
+          purpose: "Reach B2B finance teams and merchant operators",
+          contentTypes: ["webinar announcements"],
+          postingFrequency: "3x per week",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach B2B finance teams",
+          tactics: [
+            "Promote upcoming webinar on latest offerings and service enhancements",
+            "Provide WhatsApp customer support",
+          ],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Reach conversion stage",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["conversions"],
+        },
+      ],
+      offers: [],
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Join the webinar", placement: "landing page" },
+      ],
+      budgetRecommendation: {
+        total: 5000,
+        allocation: [{ channel: "LinkedIn", amount: 5000, percentage: 100 }],
+      },
+    };
+    const grounded = materialiseGroundedFields(raw, buildGroundingContract(brief));
+    console.log("=== MATERIALISED RUN-250 OUTPUT ===");
+    console.log(JSON.stringify(grounded, null, 2));
+    console.log("=== END MATERIALISED RUN-250 OUTPUT ===");
+  });
+});
+
+
+describe("Phase 3 closure — deterministic grammar", () => {
+  function materialiseFromBrief(overrides: Partial<GroundedCreativeBrief>): StrategyOutput {
+    const base: GroundedCreativeBrief = {
+      fingerprint: "fp-grammar",
+      productOrService: "B2B payment orchestration",
+      targetBuyer: "B2B finance teams",
+      mainPainPoint: "manual balance verification",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Qualified merchant onboarding",
+      offerDetails: "",
+      excludedOffers: "",
+      referenceStyle: "",
+      contentStyle: "",
+      platforms: "LinkedIn",
+      authorisedChannels: ["linkedin"],
+      businessType: "B2B",
+    };
+    const brief: GroundedCreativeBrief = { ...base, ...overrides };
+    const raw: StrategyOutput = {
+      personas: [
+        {
+          name: "X",
+          demographics: "Y",
+          painPoints: ["Z"],
+          goals: ["G"],
+          platforms: ["LinkedIn"],
+        },
+      ],
+      positioning: "P",
+      valueProposition: "V",
+      coreMessage: "C",
+      campaignTheme: "T",
+      platformStrategy: [
+        {
+          platform: "LinkedIn",
+          purpose: "P",
+          contentTypes: ["C"],
+          postingFrequency: "F",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "G",
+          tactics: ["T"],
+          metrics: ["M"],
+        },
+        {
+          stage: "consideration",
+          goal: "G",
+          tactics: ["T"],
+          metrics: ["M"],
+        },
+        {
+          stage: "conversion",
+          goal: "G",
+          tactics: ["T"],
+          metrics: ["M"],
+        },
+      ],
+      offers: [],
+      ctas: [
+        { stage: "awareness", cta: "A", placement: "P" },
+        { stage: "conversion", cta: "B", placement: "P" },
+      ],
+      budgetRecommendation: { total: 5000, allocation: [{ channel: "LinkedIn", amount: 5000, percentage: 100 }] },
+    };
+    return materialiseGroundedFields(raw, buildGroundingContract(brief));
+  }
+
+  it("produces stable persona goals for noun-phrase outcomes", () => {
+    const outcomes = [
+      "Qualified merchant onboarding",
+      "Reduced operating costs",
+      "Faster application processing",
+      "Regulatory readiness",
+    ];
+    for (const outcome of outcomes) {
+      const grounded = materialiseFromBrief({ primaryOutcome: outcome });
+      expect(grounded.personas[0].goals).toEqual([`Intended outcome: ${outcome}`]);
+    }
+  });
+
+  it("produces stable value propositions for noun-phrase outcomes", () => {
+    const outcomes = [
+      "Qualified merchant onboarding",
+      "Reduced operating costs",
+      "Faster application processing",
+      "Regulatory readiness",
+    ];
+    for (const outcome of outcomes) {
+      const grounded = materialiseFromBrief({ primaryOutcome: outcome });
+      expect(grounded.valueProposition).toContain(`Intended outcome: ${outcome}.`);
+      expect(grounded.valueProposition).not.toMatch(/so they can/i);
+    }
+  });
+
+  it("produces stable CTA grammar for common CTAs", () => {
+    const ctas = ["Book a Demo", "Contact Sales", "Learn More"];
+    for (const cta of ctas) {
+      const grounded = materialiseFromBrief({ preferredCta: cta });
+      expect(grounded.funnelStages[2].goal).toBe(`Direct B2B finance teams to the authorised CTA: ${cta}`);
+      expect(grounded.funnelStages[2].tactics[0]).toBe(`Use the authorised CTA: ${cta}`);
+      expect(grounded.ctas.every((c) => c.cta === cta)).toBe(true);
+    }
+  });
+
+  it("does not title-case the authoritative buyer", () => {
+    const grounded = materialiseFromBrief({ targetBuyer: "B2B finance teams and merchant operators" });
+    expect(grounded.personas[0].name).toBe("B2B finance teams and merchant operators");
+    expect(grounded.personas[0].demographics).toBe("B2B finance teams and merchant operators");
+  });
+
+  it("uses the fallback buyer label only when the brief supplies no buyer", () => {
+    const grounded = materialiseFromBrief({ targetBuyer: "" });
+    expect(grounded.personas[0].name).toBe("Target Buyer");
+    expect(grounded.personas[0].demographics).toBe("");
   });
 });

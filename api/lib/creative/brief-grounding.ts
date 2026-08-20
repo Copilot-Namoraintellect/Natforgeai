@@ -30,6 +30,8 @@ export interface CreativeBriefFingerprintInput {
   excludedOffers?: string | null;
   referenceStyle?: string | null;
   contentStyle?: string | null;
+  /** Authorised channels/platforms supplied by the campaign brief. */
+  platforms?: string | null;
 }
 
 export type BusinessTypeClassification = "B2B" | "B2C" | "mixed" | "not_specified";
@@ -39,6 +41,8 @@ export interface GroundedCreativeBrief extends CreativeBriefFingerprintInput {
   fingerprint: string;
   /** Resolved business type; never silently defaults to B2C. */
   businessType: BusinessTypeClassification;
+  /** Authorised channels/platforms derived from the brief, normalised. */
+  authorisedChannels?: string[];
 }
 
 const FINGERPRINT_FIELDS: (keyof CreativeBriefFingerprintInput)[] = [
@@ -53,6 +57,7 @@ const FINGERPRINT_FIELDS: (keyof CreativeBriefFingerprintInput)[] = [
   "excludedOffers",
   "referenceStyle",
   "contentStyle",
+  "platforms",
 ];
 
 /**
@@ -316,6 +321,8 @@ export function buildGroundedCreativeBrief(input: GroundingInput): GroundedCreat
   const contentStyle =
     campaignInput.contentStyle || sanitizeString(business.brandTone) || sanitizeString(business.visualStyle) || "";
   const primaryOutcome = campaignInput.primaryOutcome || "";
+  const platforms = campaignInput.platforms || "";
+  const authorisedChannels = parseAuthorisedChannels(platforms);
 
   const fingerprint = computeCreativeBriefFingerprint(campaignInput);
 
@@ -345,8 +352,10 @@ export function buildGroundedCreativeBrief(input: GroundingInput): GroundedCreat
     excludedOffers,
     referenceStyle,
     contentStyle,
+    platforms,
     fingerprint,
     businessType,
+    authorisedChannels,
   };
 }
 
@@ -369,29 +378,11 @@ export function isApprovedMessagePackCompatible(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface GroundingClause {
-  field: "productOrService" | "targetBuyer" | "mainPainPoint";
+  field: "productOrService" | "coreMessage" | "targetBuyer" | "mainPainPoint" | "primaryOutcome";
   text: string;
   requiredTokens: string[];
 }
 
-export interface GroundingContract {
-  /** Stable fingerprint of the authoritative brief. */
-  fingerprint: string;
-  /** Material product/service clauses derived from the brief. */
-  productClauses: GroundingClause[];
-  /** Authoritative core message, if supplied. */
-  coreMessage: string;
-  /** Authoritative target buyer statement. */
-  targetBuyer: string;
-  /** Authoritative main pain point statement. */
-  mainPainPoint: string;
-  /** Authoritative preferred CTA, if supplied. */
-  preferredCta?: string;
-  /** Authoritative offer details, if supplied. */
-  offerDetails?: string;
-  /** Parsed excluded-offer terms. */
-  excludedOffers: string[];
-}
 
 /** Words that carry no material capability and must be ignored by the validator. */
 const GROUNDING_STOP_WORDS = new Set([
@@ -435,6 +426,10 @@ export const GROUNDING_EQUIVALENCE_GROUPS = [
   ["reserve", "reserves", "reserved", "reserving", "reservation", "reservations"],
   ["verify", "verifies", "verified", "verifying", "verification"],
   ["administer", "administers", "administered", "administering", "administration"],
+  // Phase 3 correction: bounded security/secure equivalence covers the
+  // verb/adjective form of an explicitly authorised security capability.
+  // "securities" (financial instruments) is intentionally excluded.
+  ["security", "secure", "securely", "secures", "secured", "securing"],
 ] as const;
 
 export function normalizeGroundingText(value: string): string {
@@ -530,20 +525,674 @@ function splitExcludedOffers(text: string | null | undefined): string[] {
  */
 export function buildGroundingContract(brief: GroundedCreativeBrief): GroundingContract {
   const productOrService = brief.productOrService || brief.coreMessage || "";
+  const coreMessage = brief.coreMessage || "";
   const targetBuyer = brief.targetBuyer || "";
   const mainPainPoint = brief.mainPainPoint || "";
+  const primaryOutcome = brief.primaryOutcome || "";
+  const offerDetails = brief.offerDetails || "";
+
+  const productClauses = splitProductClauses(productOrService).map((text) => ({
+    field: "productOrService" as const,
+    text,
+    requiredTokens: extractRequiredTokens(text),
+  }));
+
+  // Feature clauses are derived from the core message, if it adds detail beyond
+  // the product/service statement; otherwise they mirror product clauses.
+  const featureClauses =
+    coreMessage && coreMessage.trim().length > 0 && coreMessage !== productOrService
+      ? splitProductClauses(coreMessage).map((text) => ({
+          field: "coreMessage" as const,
+          text,
+          requiredTokens: extractRequiredTokens(text),
+        }))
+      : productClauses;
+
+  const outcomeTexts: string[] = [];
+  if (primaryOutcome) {
+    outcomeTexts.push(primaryOutcome);
+  }
+  for (const clause of productClauses) {
+    for (const token of clause.requiredTokens) {
+      if (isGenericGroundingWord(simpleStem(token))) {
+        // outcome-flavoured token embedded in product description
+        outcomeTexts.push(clause.text);
+        break;
+      }
+    }
+  }
+
+  // Authoritative sources by category:
+  // - capabilities/features: productOrService and coreMessage
+  // - outcomes: primaryOutcome, plus outcome-flavoured product clauses
+  // - channels: platforms / authorisedChannels
+  // - offers: offerDetails
+  // - programmes: productOrService, coreMessage, offerDetails (only if explicitly named)
+  // - comparisons: productOrService, coreMessage, offerDetails
+  const programmeSources = [productOrService, coreMessage, offerDetails]
+    .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+    .join(" ");
+
   return {
     fingerprint: brief.fingerprint,
-    productClauses: splitProductClauses(productOrService).map((text) => ({
-      field: "productOrService",
-      text,
-      requiredTokens: extractRequiredTokens(text),
-    })),
-    coreMessage: brief.coreMessage || "",
+    productOrService,
+    productClauses,
+    coreMessage,
     targetBuyer,
     mainPainPoint,
+    primaryOutcome,
     preferredCta: brief.preferredCta || undefined,
     offerDetails: brief.offerDetails || undefined,
     excludedOffers: splitExcludedOffers(brief.excludedOffers),
+    authorized: {
+      capabilities: productClauses,
+      features: featureClauses,
+      outcomes: outcomeTexts,
+      channels: brief.authorisedChannels || [],
+      offers: parseAuthorisedOfferClauses(offerDetails),
+      programmes: buildProgrammeAuthorizations(programmeSources),
+      comparisons: buildComparisonAuthorizations(brief),
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 — Domain-independent authorised-content contract and provenance
+// validation.  The model output is never the authority for factual claims.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Classification of provenance diagnostics.  These labels are stable and
+ * domain-independent; they describe *why* a piece of generated text is or is
+ * not acceptable, not what the specific business domain is.
+ */
+export type ProvenanceClassification =
+  | "authoritative"
+  | "safe_execution"
+  | "unauthorised_claim"
+  | "unauthorised_programme"
+  | "unauthorised_channel"
+  | "unauthorised_offer"
+  | "unsupported_comparison";
+
+export interface ProvenanceDiagnostic {
+  /** Output field path, e.g. "personas[0].goals[0]". */
+  field: string;
+  /** Generated text being classified. */
+  generatedText: string;
+  /** Authority source from the contract, if any. */
+  authoritySource?: string;
+  classification: ProvenanceClassification;
+  reason: string;
+  /** Remediation performed, if any. */
+  remediation?: "replaced" | "removed" | "none";
+}
+
+export interface AuthorizedContentContract {
+  /** Authorised product/service capabilities derived from productOrService/coreMessage. */
+  capabilities: GroundingClause[];
+  /** Authorised features derived from productOrService/coreMessage clauses. */
+  features: GroundingClause[];
+  /** Authorised outcomes/benefits derived from primaryOutcome and product clauses. */
+  outcomes: string[];
+  /** Authorised channels/platforms derived from the brief's platforms field. */
+  channels: string[];
+  /** Authorised offers parsed from offerDetails. */
+  offers: string[];
+  /**
+   * Authorised programmes (webinar, consultation, assessment, etc.).
+   * Authority sources: productOrService, coreMessage, offerDetails.
+   * A programme is authorised only when explicitly named in one of those fields.
+   */
+  programmes: string[];
+  /** Authorised comparison/superlative claims; empty unless explicitly present in brief. */
+  comparisons: string[];
+}
+
+export interface GroundingContract {
+  /** Stable fingerprint of the authoritative brief. */
+  fingerprint: string;
+  /** Original authoritative product/service statement. */
+  productOrService: string;
+  /** Material product/service clauses derived from the brief. */
+  productClauses: GroundingClause[];
+  /** Authoritative core message, if supplied. */
+  coreMessage: string;
+  /** Authoritative target buyer statement. */
+  targetBuyer: string;
+  /** Authoritative main pain point statement. */
+  mainPainPoint: string;
+  /** Authoritative primary outcome, if supplied. */
+  primaryOutcome: string;
+  /** Authoritative preferred CTA, if supplied. */
+  preferredCta?: string;
+  /** Authoritative offer details, if supplied. */
+  offerDetails?: string;
+  /** Parsed excluded-offer terms. */
+  excludedOffers: string[];
+  /** Authorised content categories derived only from the brief. */
+  authorized: AuthorizedContentContract;
+}
+
+/**
+ * Parse a comma, semicolon or newline separated channel string into normalised
+ * channel names.  Empty or non-string input yields an empty array.
+ */
+function parseAuthorisedChannels(value: unknown): string[] {
+  if (typeof value !== "string" || !value.trim()) return [];
+  return value
+    .split(/[,;\n]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Bounded, domain-independent safe execution taxonomy.  These are generic
+ * marketing/execution actions that do not assert product facts, outcomes or
+ * capabilities.  They may be used in funnel tactics, persona goals, campaign
+ * themes and platform strategy without requiring explicit product authorisation.
+ */
+export const SAFE_EXECUTION_TERMS = new Set([
+  // generic marketing verbs
+  "reach", "reachs", "reaching",
+  "engage", "engages", "engaging",
+  "connect", "connects", "connecting",
+  "build", "builds", "building",
+  "create", "creates", "creating",
+  "share", "shares", "sharing",
+  "post", "posts", "posting",
+  "publish", "publishes", "publishing",
+  "distribute", "distributes", "distributing",
+  "promote", "promotes", "promoting",
+  "advertise", "advertises", "advertising",
+  "run", "runs", "running",
+  "launch", "launches", "launching",
+  "drive", "drives", "driving",
+  "convert", "converts", "converting",
+  "nurture", "nurtures", "nurturing",
+  "retain", "retains", "retaining",
+  "measure", "measures", "measuring",
+  "track", "tracks", "tracking",
+  "test", "tests", "testing",
+  "optimise", "optimises", "optimising",
+  "optimize", "optimizes", "optimizing",
+  "guide", "guides", "guiding",
+  "educate", "educates", "educating",
+  "inform", "informs", "informing",
+  "remind", "reminds", "reminding",
+  "follow", "follows", "following",
+  "up", // as in "follow up"
+  // funnel/stage nouns
+  "awareness", "consideration", "conversion", "retention",
+  "funnel", "stage", "journey",
+  "content", "message", "messages",
+  "ad", "ads",
+  "campaign", "campaigns",
+  "audience", "audiences",
+  "traffic",
+  "lead", "leads",
+  "prospect", "prospects",
+  "engagement",
+  "impression", "impressions",
+  "click", "clicks",
+  "booking", "bookings",
+  "signup", "signups", "sign-up", "sign-ups",
+  "demo", // as a stage ("book a demo") only when not a programme
+  "demonstration",
+  "call",
+  "request",
+  "response",
+  "reply",
+  // content formats that are execution-only
+  "image", "images",
+  "video", "videos",
+  "carousel", "carousels",
+  "story", "stories",
+  "reel", "reels",
+  "testimonial", "testimonials",
+  "review", "reviews",
+  "case", "study", "case study", "case studies",
+  "post", // as in social post
+  "article", "articles",
+  "update", "updates",
+  // timing/frequency
+  "weekly", "monthly", "daily",
+  "per", "week", "month", "day",
+  "morning", "afternoon", "evening",
+  // relationship words without product fact
+  "customer", "customers",
+  "client", "clients",
+  "user", "users",
+  "buyer", "buyers",
+  "audience",
+  "community",
+  "team", "teams",
+  "decision", "maker", "makers",
+  // location/context (must still avoid invented demographics)
+  "local",
+]);
+
+/**
+ * Programme formats that require explicit authorisation.  These introduce a
+ * service, offer or ongoing commitment that must be grounded in the brief.
+ */
+export const PROGRAMME_TAXONOMY = [
+  "webinar",
+  "webinars",
+  "workshop",
+  "workshops",
+  "seminar",
+  "seminars",
+  "consultation",
+  "consultations",
+  "assessment",
+  "assessments",
+  "audit",
+  "audits",
+  "demo",
+  "demos",
+  "demonstration",
+  "demonstrations",
+  "trial",
+  "trials",
+  "free trial",
+  "free trials",
+  "newsletter",
+  "newsletters",
+  "loyalty",
+  "programme",
+  "program",
+  "programmes",
+  "programs",
+  "customer support",
+  "help desk",
+  "helpdesk",
+  "support desk",
+  "account manager",
+  "account management",
+  "e-book",
+  "ebook",
+  "whitepaper",
+  "whitepapers",
+  "report",
+  "reports",
+  "calculator",
+  "calculators",
+  "guarantee",
+  "guarantees",
+  "warranty",
+  "warranties",
+];
+
+/**
+ * Comparison and superlative patterns that require explicit authorisation.
+ */
+export const COMPARISON_TAXONOMY = [
+  "unparalleled",
+  "unmatched",
+  "unbeatable",
+  "best",
+  "leading",
+  "top",
+  "number one",
+  "#1",
+  "guaranteed",
+  "guarantee",
+  "promise",
+  "promised",
+  "risk-free",
+  "risk free",
+  "no risk",
+  "effortless",
+  "seamless",
+  "ultimate",
+  "superior",
+  "premier",
+  "first-class",
+  "first class",
+  "world-class",
+  "world class",
+  "only",
+  "fastest",
+  "easiest",
+  "most reliable",
+  "most trusted",
+];
+
+/**
+ * Factual capability/outcome words that require explicit authorisation in the
+ * brief.  These are common business claims that, if introduced by the model,
+ * would invent product capabilities or outcomes not grounded in the brief.
+ */
+export const CLAIM_REQUIRING_AUTHORIZATION_TAXONOMY = [
+  "security",
+  "secure",
+  "safeguard",
+  "safeguards",
+  "compliance",
+  "compliant",
+  "comply",
+  "regulatory",
+  "regulation",
+  "cash flow",
+  "cashflow",
+  "cash-flow",
+  "automation",
+  "automate",
+  "automated",
+  "automatic",
+  "automatically",
+  "efficiency",
+  "efficient",
+  "efficiently",
+  "control",
+  "controls",
+  "controlled",
+  "customer support",
+  "support desk",
+  "help desk",
+  "service enhancements",
+  "latest offerings",
+  "new features",
+];
+
+/**
+ * Common channel/platform names for detection.  Authorised channels are always
+ * taken from the brief; this list is used only to spot unauthorised mentions.
+ */
+export const KNOWN_CHANNELS = new Set([
+  "facebook",
+  "instagram",
+  "linkedin",
+  "twitter",
+  "x",
+  "tiktok",
+  "youtube",
+  "google",
+  "search",
+  "email",
+  "sms",
+  "whatsapp",
+  "website",
+  "blog",
+  "pinterest",
+  "snapchat",
+  "reddit",
+  "telegram",
+  "display",
+  "ppc",
+  "retargeting",
+]);
+
+function normalizeProvenanceText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeProvenanceText(value: string): string[] {
+  return normalizeProvenanceText(value)
+    .replace(/-/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function phraseExists(haystack: string, needle: string): boolean {
+  const normalizedHaystack = normalizeProvenanceText(haystack);
+  const normalizedNeedle = normalizeProvenanceText(needle);
+  if (!normalizedHaystack || !normalizedNeedle) return false;
+
+  const tokens = normalizedNeedle.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+
+  const escaped = tokens.map(escapeRegex).join("\\s+");
+  const regex = new RegExp(`\\b${escaped}\\b`, "i");
+  return regex.test(normalizedHaystack);
+}
+
+/**
+ * Check whether a claim-requiring taxonomy term is authorised by the brief.
+ * Uses the same deterministic stemming/equivalence helpers as field grounding
+ * so morphological variants (e.g. "controlled" authorising "control") are
+ * recognised without falling back to loose substring matching.
+ */
+function isClaimTermAuthorized(source: string, term: string): boolean {
+  const normalizedSource = normalizeProvenanceText(source);
+  const normalizedTerm = normalizeProvenanceText(term);
+  if (!normalizedSource || !normalizedTerm) return false;
+
+  if (normalizedTerm.includes(" ")) {
+    const tokens = normalizedTerm.split(/\s+/).map(escapeRegex);
+    const regex = new RegExp(`\\b${tokens.join("\\s+")}\\b`, "i");
+    return regex.test(normalizedSource);
+  }
+
+  return outputContainsToken(source, term);
+}
+
+function parseAuthorisedOfferClauses(offerDetails: string | undefined): string[] {
+  if (!offerDetails) return [];
+  return offerDetails
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Build the set of authorised programme formats.
+ * Programmes are authorised only when explicitly named in one of the
+ * authoritative brief fields: productOrService, coreMessage, or offerDetails.
+ * The presence of an offer does not automatically authorise unrelated
+ * programme formats.
+ */
+function buildProgrammeAuthorizations(sourcesText: string): string[] {
+  if (!sourcesText) return [];
+  const normalized = normalizeProvenanceText(sourcesText);
+  const authorised = new Set<string>();
+  for (const programme of PROGRAMME_TAXONOMY) {
+    if (normalized.includes(programme)) {
+      authorised.add(programme);
+      // Also add the stemmed/canonical form so a plural brief authorises
+      // singular output and vice versa.
+      const stemmed = simpleStem(programme);
+      if (stemmed && stemmed !== programme) authorised.add(stemmed);
+    }
+  }
+  return Array.from(authorised);
+}
+
+function buildComparisonAuthorizations(brief: GroundedCreativeBrief): string[] {
+  const sources = [
+    brief.productOrService,
+    brief.coreMessage,
+    brief.offerDetails,
+  ].filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+  const authorised: string[] = [];
+  for (const comparison of COMPARISON_TAXONOMY) {
+    for (const source of sources) {
+      if (phraseExists(source, comparison)) {
+        authorised.push(comparison);
+        break;
+      }
+    }
+  }
+  return authorised;
+}
+
+/**
+ * Authoritative sources that can explicitly authorise factual claims.  A claim
+ * is authorised only if the exact phrase appears in one of these brief fields.
+ */
+function buildClaimAuthorizationSource(contract: GroundingContract): string {
+  return [
+    contract.productOrService,
+    contract.coreMessage,
+    contract.offerDetails,
+    contract.primaryOutcome,
+  ]
+    .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+    .join(" ");
+}
+
+interface TextField {
+  path: string;
+  text: string;
+}
+
+function* walkTextFields(output: unknown, path = "output"): Generator<TextField> {
+  if (output == null) return;
+  if (typeof output === "string") {
+    if (output.trim()) yield { path, text: output };
+    return;
+  }
+  if (Array.isArray(output)) {
+    for (let i = 0; i < output.length; i++) {
+      yield* walkTextFields(output[i], `${path}[${i}]`);
+    }
+    return;
+  }
+  if (typeof output === "object") {
+    for (const [key, value] of Object.entries(output)) {
+      yield* walkTextFields(value, `${path}.${key}`);
+    }
+  }
+}
+
+export interface ProvenanceValidationResult {
+  valid: boolean;
+  diagnostics: ProvenanceDiagnostic[];
+}
+
+function isPreferredCtaField(path: string, contract: GroundingContract): boolean {
+  if (!contract.preferredCta) return false;
+  return path.includes("ctas");
+}
+
+/**
+ * Remove occurrences of the preferred CTA from text so that execution fields
+ * (funnel tactics, goals, platform purpose) can reference the authorised CTA
+ * without being flagged for embedded programme words such as "demo".
+ */
+function removePreferredCta(text: string, contract: GroundingContract): string {
+  if (!contract.preferredCta) return text;
+  const normalizedCta = normalizeProvenanceText(contract.preferredCta);
+  if (!normalizedCta) return text;
+  const escaped = normalizedCta.split(/\s+/).map(escapeRegex).join("\\s+");
+  const regex = new RegExp(`\\b${escaped}\\b`, "gi");
+  return text.replace(regex, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Domain-independent provenance validation.  Every user-facing text field is
+ * classified against the authorised-content contract and bounded taxonomies.
+ * A field fails only if it contains a comparison, programme, claim-requiring
+ * word or channel that is not explicitly authorised by the brief.  Neutral
+ * marketing execution language is not rejected.
+ *
+ * With fail-closed materialisation, this validator is defence in depth: every
+ * field should already be canonical. It remains as a safety net for any
+ * residual unsafe content.
+ */
+export function validateProvenance(
+  output: Record<string, unknown>,
+  contract: GroundingContract
+): ProvenanceValidationResult {
+  const diagnostics: ProvenanceDiagnostic[] = [];
+  const claimAuthorizationSource = buildClaimAuthorizationSource(contract);
+
+  for (const { path, text } of walkTextFields(output, "output")) {
+    // Skip fingerprint and purely numeric fields.
+    if (path === "output.creativeBriefFingerprint") continue;
+
+    // The preferred CTA is always authorised inside CTA fields.
+    if (isPreferredCtaField(path, contract) && contract.preferredCta && phraseExists(text, contract.preferredCta)) {
+      continue;
+    }
+
+    // Execution fields may reference the preferred CTA; strip it before
+    // checking programmes/claims so "Book a Demo" does not flag "demo".
+    const textToCheck = isPreferredCtaField(path, contract) ? text : removePreferredCta(text, contract);
+    if (!textToCheck) continue;
+
+    // Unsupported comparisons/superlatives. Check every taxonomy term present
+    // in the field, not only the first, so an authorised term cannot smuggle an
+    // unauthorised one through the same field.
+    let fieldHasUnauthorized = false;
+    for (const comparison of COMPARISON_TAXONOMY) {
+      if (phraseExists(textToCheck, comparison) && !phraseExists(claimAuthorizationSource, comparison)) {
+        diagnostics.push({
+          field: path,
+          generatedText: text,
+          classification: "unsupported_comparison",
+          reason: `Unsupported comparative/superlative claim: "${comparison}". Only comparisons explicitly present in the brief are allowed.`,
+          remediation: "removed",
+        });
+        fieldHasUnauthorized = true;
+      }
+    }
+    if (fieldHasUnauthorized) continue;
+
+    // Unauthorised programmes. Use the same stemming/equivalence check as field
+    // grounding so a singular authorised programme also covers plural output.
+    fieldHasUnauthorized = false;
+    for (const programme of PROGRAMME_TAXONOMY) {
+      if (
+        phraseExists(textToCheck, programme) &&
+        !contract.authorized.programmes.some((p) => isClaimTermAuthorized(textToCheck, p))
+      ) {
+        diagnostics.push({
+          field: path,
+          generatedText: text,
+          classification: "unauthorised_programme",
+          reason: `Unauthorised programme or service format: "${programme}". Programme formats must be explicitly authorised by the brief.`,
+          remediation: "removed",
+        });
+        fieldHasUnauthorized = true;
+      }
+    }
+    if (fieldHasUnauthorized) continue;
+
+    // Factual claims that require explicit authorisation (security, compliance,
+    // cash flow, automation, customer support, etc.).
+    fieldHasUnauthorized = false;
+    for (const claimTerm of CLAIM_REQUIRING_AUTHORIZATION_TAXONOMY) {
+      if (phraseExists(textToCheck, claimTerm) && !isClaimTermAuthorized(claimAuthorizationSource, claimTerm)) {
+        diagnostics.push({
+          field: path,
+          generatedText: text,
+          classification: "unauthorised_claim",
+          reason: `Unsupported factual claim: "${claimTerm}". The brief does not authorise this capability, outcome or service.`,
+          remediation: "removed",
+        });
+        fieldHasUnauthorized = true;
+      }
+    }
+    if (fieldHasUnauthorized) continue;
+
+    // Unauthorised channels.
+    const tokens = tokenizeProvenanceText(textToCheck);
+    for (const token of tokens) {
+      if (KNOWN_CHANNELS.has(token) && !contract.authorized.channels.includes(token)) {
+        diagnostics.push({
+          field: path,
+          generatedText: text,
+          classification: "unauthorised_channel",
+          reason: `Unauthorised channel "${token}". Only channels explicitly supplied by the brief are allowed.`,
+          remediation: "removed",
+        });
+        break;
+      }
+    }
+  }
+
+  return {
+    valid: diagnostics.length === 0,
+    diagnostics,
   };
 }
