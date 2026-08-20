@@ -14,7 +14,11 @@ import {
   contentPosts,
 } from "@db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
-import { runStrategyAgent, chargeForStrategyRun } from "./lib/agents/strategy-agent";
+import {
+  runStrategyAgent,
+  chargeForStrategyRun,
+  isSuccessfulStrategyOutput,
+} from "./lib/agents/strategy-agent";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { logError } from "./lib/logger";
 import { runDistributionAgent } from "./lib/agents/distribution-agent";
@@ -139,18 +143,38 @@ export const agentRouter = createRouter({
         .orderBy(desc(agentRuns.createdAt))
         .limit(1);
 
-      if (existingRun.length > 0 && ["running", "completed"].includes(existingRun[0].status)) {
-        // If completed but workflow wasn't advanced (e.g. onAgentRunComplete missed), trigger it now
-        if (existingRun[0].status === "completed") {
-          await onAgentRunComplete(existingRun[0].id);
+      if (existingRun.length > 0) {
+        const existingStatus = existingRun[0].status;
+
+        // A running strategy is never returned as a successful strategy and must
+        // not trigger a duplicate generation. Report the in-flight run.
+        if (existingStatus === "running") {
+          return {
+            success: true,
+            skipped: true,
+            reason: `A strategy agent run is already in progress (run ${existingRun[0].id}).`,
+            runId: existingRun[0].id,
+            output: null,
+          };
         }
-        return {
-          success: true,
-          skipped: true,
-          reason: `A strategy agent run already exists with status "${existingRun[0].status}".`,
-          runId: existingRun[0].id,
-          output: existingRun[0].output as any,
-        };
+
+        if (existingStatus === "completed") {
+          // Only a completed flat successful output is eligible for reuse.
+          // Evidence envelopes and malformed legacy rows fall through to
+          // generate a fresh strategy; the failed evidence is preserved for
+          // diagnostics but must not be returned as output.
+          if (isSuccessfulStrategyOutput(existingRun[0].output)) {
+            // If completed but workflow wasn't advanced (e.g. onAgentRunComplete missed), trigger it now
+            await onAgentRunComplete(existingRun[0].id);
+            return {
+              success: true,
+              skipped: true,
+              reason: `A strategy agent run already exists with status "completed".`,
+              runId: existingRun[0].id,
+              output: existingRun[0].output as any,
+            };
+          }
+        }
       }
 
       // Run strategy agent

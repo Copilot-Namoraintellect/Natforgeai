@@ -11,6 +11,7 @@ import {
   runStrategyAgent,
   chargeForStrategyRun,
   validateStrategyOutputAgainstCampaign,
+  isSuccessfulStrategyOutput,
   type StrategyAgentRunResult,
 } from "./lib/agents/strategy-agent";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
@@ -288,8 +289,9 @@ export const campaignRouter = createRouter({
               .orderBy(desc(agentRuns.createdAt));
 
             const reusableRun = previousRuns.find((run) => {
-              const output = (run.output || {}) as Record<string, unknown>;
-              return run.status === "completed" && output.creativeBriefFingerprint === currentFingerprint;
+              if (run.status !== "completed") return false;
+              if (!isSuccessfulStrategyOutput(run.output)) return false;
+              return run.output.creativeBriefFingerprint === currentFingerprint;
             });
 
             if (reusableRun) {
@@ -909,19 +911,22 @@ export const campaignRouter = createRouter({
         // Release failure is logged without ownerToken; preserve the original error.
         await releaseClaimOnce("failed");
 
-        // Mark any runs we created as failed so the UI does not show them as completed
+        // Mark any runs we created as failed so the UI does not show them as completed.
+        // Only touch rows that are still running; runStrategyAgent already persists
+        // failure evidence, so overwriting it would erase raw/grounded output and
+        // diagnostics.
         if (strategyRunId) {
           await db
             .update(agentRuns)
             .set({ status: "failed", error: errorMessage, completedAt: new Date() })
-            .where(eq(agentRuns.id, strategyRunId))
+            .where(and(eq(agentRuns.id, strategyRunId), eq(agentRuns.status, "running")))
             .catch((e) => console.error(`[regenerateFromProfile] could not mark strategy run ${strategyRunId} failed:`, e.message));
         }
         if (creativeRunId) {
           await db
             .update(agentRuns)
             .set({ status: "failed", error: errorMessage, completedAt: new Date() })
-            .where(eq(agentRuns.id, creativeRunId))
+            .where(and(eq(agentRuns.id, creativeRunId), eq(agentRuns.status, "running")))
             .catch((e) => console.error(`[regenerateFromProfile] could not mark creative run ${creativeRunId} failed:`, e.message));
         }
 
@@ -1044,8 +1049,14 @@ export const campaignRouter = createRouter({
 
         let reusableRun: (typeof previousStrategyRuns)[number] | undefined;
         for (const run of previousStrategyRuns) {
-          const output = (run.output || {}) as Record<string, unknown>;
-          if (output.creativeBriefFingerprint !== currentFingerprint) continue;
+          // Reject failure envelopes (generated_candidate, failed_validation,
+          // failed_generation, failed_schema). Only a flat, successful strategy
+          // output can be reused.
+          if (!isSuccessfulStrategyOutput(run.output)) {
+            console.log(`[regenerateStrategyForApproval] rejecting run ${run.id}: not a successful strategy output | campaignId=${campaignId}`);
+            continue;
+          }
+          if (run.output.creativeBriefFingerprint !== currentFingerprint) continue;
           // A matching fingerprint is not enough: the run output must be
           // semantically grounded in the current brief. We do not require an
           // existing lineage here because this path creates a new one.

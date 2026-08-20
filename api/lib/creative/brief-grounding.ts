@@ -9,6 +9,11 @@
  *   content cannot override a corrected campaign brief.
  * - Resolves business type (B2B/B2C) from campaign + business evidence instead
  *   of silently defaulting to B2C.
+ *
+ * Phase 2A — Strategy reliability:
+ * - Builds an immutable grounding contract from the authoritative brief.
+ * - Provides deterministic, role-aware tokenisation helpers used by the
+ *   strategy agent for materialisation and validation.
  */
 
 import { createHash } from "crypto";
@@ -357,4 +362,188 @@ export function isApprovedMessagePackCompatible(
   const stored = (pack as Record<string, unknown>).creativeBriefFingerprint;
   if (typeof stored !== "string" || stored.length === 0) return false;
   return stored === currentFingerprint;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2A — Grounding contract and deterministic tokenisation helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface GroundingClause {
+  field: "productOrService" | "targetBuyer" | "mainPainPoint";
+  text: string;
+  requiredTokens: string[];
+}
+
+export interface GroundingContract {
+  /** Stable fingerprint of the authoritative brief. */
+  fingerprint: string;
+  /** Material product/service clauses derived from the brief. */
+  productClauses: GroundingClause[];
+  /** Authoritative core message, if supplied. */
+  coreMessage: string;
+  /** Authoritative target buyer statement. */
+  targetBuyer: string;
+  /** Authoritative main pain point statement. */
+  mainPainPoint: string;
+  /** Authoritative preferred CTA, if supplied. */
+  preferredCta?: string;
+  /** Authoritative offer details, if supplied. */
+  offerDetails?: string;
+  /** Parsed excluded-offer terms. */
+  excludedOffers: string[];
+}
+
+/** Words that carry no material capability and must be ignored by the validator. */
+const GROUNDING_STOP_WORDS = new Set([
+  "a", "an", "the", "and", "or", "but", "for", "with", "without", "of", "in", "on", "at", "to", "from", "by",
+  "about", "into", "through", "during", "before", "after", "above", "below", "between", "among", "is", "are",
+  "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "can", "shall", "this", "that", "these", "those", "i", "you", "he", "she", "it",
+  "we", "they", "them", "their", "our", "us", "me", "my", "your", "his", "her", "its", "ours", "theirs", "who",
+  "what", "which", "when", "where", "why", "how", "all", "each", "every", "both", "few", "more", "most", "other",
+  "some", "such", "no", "not", "only", "own", "same", "so", "than", "too", "very", "just", "now", "then", "here",
+  "there", "once", "again", "also", "back", "still", "already", "yet", "soon", "today", "new", "old", "first",
+  "last", "long", "great", "little", "big", "high", "low", "early", "late", "right", "left", "best", "better",
+  "good", "bad", "easy", "hard", "fast", "slow", "quick", "much", "many", "most", "more", "less", "least",
+  "enough", "well", "down", "off", "over", "under", "further", "furthermore", "however", "therefore", "thus",
+  "hence", "because", "since", "while", "whereas", "although", "though", "unless", "until", "whether",
+  "either", "neither", "none", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  // Phase 2A grammatical/context words
+  "make", "made", "makes", "difficult", "help", "helps", "helping", "does", "did",
+]);
+
+/** Generic mechanism words that should not satisfy a capability clause on their own. */
+const GROUNDING_GENERIC_MECHANISM_WORDS = new Set([
+  "platform", "platforms", "system", "systems", "solution", "solutions", "service", "services", "tool",
+  "tools", "app", "apps", "application", "applications", "software", "website", "websites", "portal",
+  "portals", "hub", "hubs", "product", "products",
+]);
+
+/** Generic outcome words that should not satisfy a capability clause on their own. */
+const GROUNDING_GENERIC_OUTCOME_WORDS = new Set([
+  "grow", "growth", "success", "successful", "succeed", "increase", "boost",
+  "improve", "better", "best", "more", "less", "greater", "maximize", "optimize", "benefit", "benefits",
+]);
+
+/**
+ * Bounded, deterministic equivalence groups for genuine business terminology.
+ * These are explicit synonyms within a narrow domain, not a general paraphrase
+ * engine and not a part-of-speech model.
+ */
+export const GROUNDING_EQUIVALENCE_GROUPS = [
+  ["payout", "payouts", "disbursement", "disbursements"],
+  ["reserve", "reserves", "reserved", "reserving", "reservation", "reservations"],
+  ["verify", "verifies", "verified", "verifying", "verification"],
+  ["administer", "administers", "administered", "administering", "administration"],
+] as const;
+
+export function normalizeGroundingText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function tokenizeGroundingText(value: string): string[] {
+  return normalizeGroundingText(value)
+    .replace(/-/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+export function simpleStem(word: string): string {
+  if (word.endsWith("ies") && word.length > 4) return word.slice(0, -3) + "y";
+  if (word.endsWith("ied") && word.length > 4) return word.slice(0, -3) + "y";
+  if (word.endsWith("s") && !word.endsWith("ss") && word.length > 3) return word.slice(0, -1);
+  if (word.endsWith("ed") && word.length > 3) return word.slice(0, -2);
+  if (word.endsWith("ing") && word.length > 4) return word.slice(0, -3);
+  return word;
+}
+
+export function isGenericGroundingWord(word: string): boolean {
+  return GROUNDING_GENERIC_MECHANISM_WORDS.has(word) || GROUNDING_GENERIC_OUTCOME_WORDS.has(word);
+}
+
+export function extractRequiredTokens(text: string): string[] {
+  return tokenizeGroundingText(text)
+    .map((t) => t.replace(/^-+|-+$/g, ""))
+    .filter((t) => t.length > 1 && !GROUNDING_STOP_WORDS.has(t) && !isGenericGroundingWord(t));
+}
+
+export function getEquivalentStems(token: string): Set<string> {
+  const normalized = normalizeGroundingText(token).replace(/^-+|-+$/g, "");
+  const stems = new Set<string>();
+  stems.add(normalized);
+  stems.add(simpleStem(normalized));
+
+  for (const group of GROUNDING_EQUIVALENCE_GROUPS) {
+    if (group.some((member) => member === normalized)) {
+      for (const equivalent of group) {
+        stems.add(equivalent);
+        stems.add(simpleStem(equivalent));
+      }
+    }
+  }
+
+  return stems;
+}
+
+export function outputContainsToken(outputText: string, token: string): boolean {
+  const outputTokens = tokenizeGroundingText(outputText);
+  const outputStems = new Set(outputTokens.map(simpleStem));
+
+  for (const stem of getEquivalentStems(token)) {
+    if (outputStems.has(stem)) return true;
+  }
+  return false;
+}
+
+export function clauseCoversText(clause: GroundingClause, text: string): boolean {
+  if (!clause.requiredTokens.length) return true;
+  const normalizedText = normalizeGroundingText(text);
+  if (!normalizedText) return false;
+  return clause.requiredTokens.every((token) => outputContainsToken(text, token));
+}
+
+function splitProductClauses(text: string): string[] {
+  if (!text) return [];
+  return text
+    .split(/[,;]+/)
+    .flatMap((part) => part.split(/\band\b/i))
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function splitExcludedOffers(text: string | null | undefined): string[] {
+  if (!text) return [];
+  return text
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Build an immutable grounding contract from the authoritative grounded brief.
+ * The contract is the single source of truth for materialisation and validation;
+ * the model output is never used as authority.
+ */
+export function buildGroundingContract(brief: GroundedCreativeBrief): GroundingContract {
+  const productOrService = brief.productOrService || brief.coreMessage || "";
+  const targetBuyer = brief.targetBuyer || "";
+  const mainPainPoint = brief.mainPainPoint || "";
+  return {
+    fingerprint: brief.fingerprint,
+    productClauses: splitProductClauses(productOrService).map((text) => ({
+      field: "productOrService",
+      text,
+      requiredTokens: extractRequiredTokens(text),
+    })),
+    coreMessage: brief.coreMessage || "",
+    targetBuyer,
+    mainPainPoint,
+    preferredCta: brief.preferredCta || undefined,
+    offerDetails: brief.offerDetails || undefined,
+    excludedOffers: splitExcludedOffers(brief.excludedOffers),
+  };
 }

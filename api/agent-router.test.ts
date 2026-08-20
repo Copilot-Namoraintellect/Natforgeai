@@ -6,9 +6,27 @@ vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock("./lib/rate-limiter", () => ({
+  rateLimitUser: vi.fn().mockResolvedValue(undefined),
+  rateLimitPublic: vi.fn().mockResolvedValue(undefined),
+  checkRateLimit: vi.fn().mockResolvedValue({ allowed: true, limit: 100, remaining: 99, resetAt: Date.now() + 60 * 60 * 1000 }),
+  clearRateLimitStateForTests: vi.fn(),
+}));
+
 vi.mock("./lib/agents/creative-agent", () => ({
   runCreativeAgent: vi.fn(),
 }));
+
+vi.mock("./lib/agents/strategy-agent", async () => {
+  const actual = await vi.importActual<typeof import("./lib/agents/strategy-agent")>(
+    "./lib/agents/strategy-agent"
+  );
+  return {
+    ...actual,
+    runStrategyAgent: vi.fn(),
+    chargeForStrategyRun: vi.fn(),
+  };
+});
 
 vi.mock("./lib/workflow/strategy-approval", () => ({
   assertApprovedStrategySemanticallyValid: vi.fn(async () => undefined),
@@ -63,6 +81,7 @@ interface MockDbState {
   updatedRows: any[];
   contentPostsCount: number;
   campaign: any;
+  business: any;
 }
 
 function createMockDb({
@@ -76,11 +95,18 @@ function createMockDb({
     workflowState: "strategy_approved",
     workflowContext: {},
   },
+  business = {
+    id: 24,
+    userId: 18,
+    name: "Test Business",
+    websiteEvidence: { confidence: 0.8 },
+  },
 }: {
   existingCreativeRun?: any;
   agentRunsRows?: any[];
   contentPostsCount?: number;
   campaign?: any;
+  business?: any;
 } = {}) {
   const allAgentRunsRows = existingCreativeRun
     ? [existingCreativeRun, ...agentRunsRows]
@@ -92,11 +118,13 @@ function createMockDb({
     updatedRows: [],
     contentPostsCount,
     campaign,
+    business,
   };
 
   function buildRowsForTable(table: unknown): any[] {
     const name = getTableName(table);
     if (name === "campaigns") return [state.campaign];
+    if (name === "businesses") return [state.business];
     if (name === "agent_runs") {
       return [...state.agentRunsRows].sort((a, b) => Number(b.id) - Number(a.id));
     }
@@ -841,5 +869,199 @@ describe("agentRouter.runCreativeAgent", () => {
     expect(completedRelease).toBeUndefined();
     expect(runCreativeAgent).not.toHaveBeenCalled();
     expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(0);
+  });
+});
+
+describe("agentRouter.runStrategyAgent shortcut behaviour", () => {
+  const buildStrategyCampaign = (overrides: any = {}) => ({
+    id: 28,
+    userId: 18,
+    businessId: 24,
+    workflowState: "business_profile_complete",
+    workflowContext: {},
+    ...overrides,
+  });
+
+  const buildStrategyBusiness = (overrides: any = {}) => ({
+    id: 24,
+    userId: 18,
+    name: "Test Business",
+    websiteEvidence: { confidence: 0.8, productsServices: ["service"] },
+    ...overrides,
+  });
+
+  const validFlatOutput = {
+    creativeBriefFingerprint: "fp-current",
+    coreMessage: "service",
+    positioning: "service",
+    valueProposition: "service",
+    campaignTheme: "theme",
+    personas: [
+      {
+        name: "Buyer",
+        demographics: "buyer",
+        painPoints: ["pain"],
+        goals: ["goal"],
+        platforms: ["LinkedIn"],
+      },
+    ],
+    ctas: [{ stage: "awareness", cta: "cta", placement: "ad" }],
+    offers: [],
+    funnelStages: [],
+    platformStrategy: [],
+    budgetRecommendation: { total: 0, allocation: [] },
+  };
+
+  const failureEnvelope = {
+    evidenceVersion: 1,
+    outcome: "failed_validation",
+    creativeBriefFingerprint: "fp-current",
+    rawOutput: validFlatOutput,
+    groundedOutput: validFlatOutput,
+    validationDiagnostics: [],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns an already-running result when the latest strategy run is running", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      campaign: buildStrategyCampaign(),
+      business: buildStrategyBusiness(),
+      agentRunsRows: [
+        {
+          id: 101,
+          userId: 18,
+          campaignId: 28,
+          agentType: "strategy",
+          status: "running",
+          output: {
+            evidenceVersion: 1,
+            outcome: "generated_candidate",
+            creativeBriefFingerprint: "fp-current",
+            rawOutput: {},
+          },
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runStrategyAgent({ campaignId: 28 });
+
+    expect(result.success).toBe(true);
+    expect(result.skipped).toBe(true);
+    expect(result.runId).toBe(101);
+    expect(result.output).toBeNull();
+    expect(runStrategyAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a running row with legacy-looking flat output as completed", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      campaign: buildStrategyCampaign(),
+      business: buildStrategyBusiness(),
+      agentRunsRows: [
+        {
+          id: 102,
+          userId: 18,
+          campaignId: 28,
+          agentType: "strategy",
+          status: "running",
+          output: validFlatOutput,
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runStrategyAgent({ campaignId: 28 });
+
+    expect(result.success).toBe(true);
+    expect(result.skipped).toBe(true);
+    expect(result.output).toBeNull();
+    expect(runStrategyAgent).not.toHaveBeenCalled();
+  });
+
+  it("reuses a valid completed flat strategy output", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
+    const { onAgentRunComplete } = await import("./lib/workflow/triggers");
+    const { agentRouter } = await import("./agent-router");
+
+    const db = createMockDb({
+      campaign: buildStrategyCampaign(),
+      business: buildStrategyBusiness(),
+      agentRunsRows: [
+        {
+          id: 103,
+          userId: 18,
+          campaignId: 28,
+          agentType: "strategy",
+          status: "completed",
+          output: validFlatOutput,
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runStrategyAgent({ campaignId: 28 });
+
+    expect(result.success).toBe(true);
+    expect(result.skipped).toBe(true);
+    expect(result.runId).toBe(103);
+    expect(result.output).toEqual(validFlatOutput);
+    expect(onAgentRunComplete).toHaveBeenCalledWith(103);
+    expect(runStrategyAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a completed evidence envelope and starts a fresh run", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
+    const { onAgentRunComplete } = await import("./lib/workflow/triggers");
+    const { agentRouter } = await import("./agent-router");
+
+    vi.mocked(runStrategyAgent).mockResolvedValue({
+      runId: 104,
+      output: validFlatOutput,
+      promptTokens: 10,
+      completionTokens: 10,
+      actualCostUsdMicro: 0,
+      estimatedCostUsdMicro: 0,
+    } as any);
+
+    const db = createMockDb({
+      campaign: buildStrategyCampaign(),
+      business: buildStrategyBusiness(),
+      agentRunsRows: [
+        {
+          id: 103,
+          userId: 18,
+          campaignId: 28,
+          agentType: "strategy",
+          status: "completed",
+          output: failureEnvelope,
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runStrategyAgent({ campaignId: 28 });
+
+    expect(result.success).toBe(true);
+    expect(result.runId).toBe(104);
+    expect(runStrategyAgent).toHaveBeenCalledTimes(1);
+    expect(onAgentRunComplete).toHaveBeenCalledWith(104);
+    expect(onAgentRunComplete).not.toHaveBeenCalledWith(103);
   });
 });

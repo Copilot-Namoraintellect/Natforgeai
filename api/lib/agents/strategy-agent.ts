@@ -1,11 +1,23 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { generateObject } from "ai";
+import {
+  generateObject,
+  NoObjectGeneratedError,
+  TypeValidationError,
+} from "ai";
 import { strategyAgentPrompt } from "./prompts";
 import { getDb } from "../../queries/connection";
 import { agentRuns, campaigns } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
-import { buildGroundedCreativeBrief } from "../creative/brief-grounding";
+import {
+  buildGroundedCreativeBrief,
+  buildGroundingContract,
+  type GroundedCreativeBrief,
+  type GroundingContract,
+  clauseCoversText,
+  extractRequiredTokens,
+  outputContainsToken,
+} from "../creative/brief-grounding";
 import { deductCredits, recordAiUsage } from "../billing/credit-engine";
 import { enforceCostControl } from "../billing/cost-control";
 import { getEstimatedAgentCost } from "../billing/cost-tracker";
@@ -24,7 +36,10 @@ function parseBudgetNumber(value: unknown): number {
   return 0;
 }
 
-const StrategyOutputSchema = z.object({
+// Schema change in Phase 2A:
+// - personas and ctas are now required to contain at least one entry so that
+//   deterministic materialisation has an authoritative field to repair.
+export const StrategyOutputSchema = z.object({
   personas: z.array(
     z.object({
       name: z.string(),
@@ -33,7 +48,7 @@ const StrategyOutputSchema = z.object({
       goals: z.array(z.string()),
       platforms: z.array(z.string()),
     })
-  ),
+  ).min(1, "At least one persona is required."),
   positioning: z.string(),
   valueProposition: z.string(),
   coreMessage: z.string(),
@@ -68,7 +83,7 @@ const StrategyOutputSchema = z.object({
       cta: z.string(),
       placement: z.string(),
     })
-  ),
+  ).min(1, "At least one CTA is required."),
   budgetRecommendation: z.object({
     total: z.union([z.number(), z.string()]).transform(parseBudgetNumber),
     allocation: z.array(
@@ -86,21 +101,23 @@ export type StrategyOutput = z.infer<typeof StrategyOutputSchema>;
 export interface StrategyValidationInput {
   output: StrategyOutput & { creativeBriefFingerprint?: string };
   currentFingerprint: string;
-  brief: {
-    productOrService?: string | null;
-    targetBuyer?: string | null;
-    mainPainPoint?: string | null;
-    preferredCta?: string | null;
-    primaryOutcome?: string | null;
-    offerDetails?: string | null;
-    excludedOffers?: string | null;
-    coreMessage?: string | null;
-  };
+  brief: Omit<GroundedCreativeBrief, "fingerprint" | "businessType"> &
+    Partial<Pick<GroundedCreativeBrief, "fingerprint" | "businessType">>;
+}
+
+export interface ValidationDiagnostic {
+  gate: string;
+  authoritativeField: string;
+  expectedClauses: string[];
+  missingClauses: string[];
+  inspectedOutputFields: string[];
+  reason: string;
 }
 
 export interface StrategyValidationResult {
   valid: boolean;
   reason?: string;
+  diagnostics?: ValidationDiagnostic[];
 }
 
 export interface StrategyAgentRunResult {
@@ -110,6 +127,40 @@ export interface StrategyAgentRunResult {
   completionTokens: number;
   actualCostUsdMicro: number;
   estimatedCostUsdMicro: number;
+}
+
+/**
+ * Typed discriminator for agentRuns.output values.
+ *
+ * Failure envelopes (generated_candidate, failed_validation, failed_generation,
+ * failed_schema) carry an `outcome` property. Successful completed runs carry a
+ * flat StrategyOutput plus `creativeBriefFingerprint` and never contain an
+ * `outcome` field.
+ *
+ * This function rejects any object that owns `outcome`, then validates the
+ * remaining shape with the same schema used for generated output so successful
+ * output is not confused with a malformed legacy row.
+ */
+export function isSuccessfulStrategyOutput(
+  output: unknown
+): output is StrategyOutput & { creativeBriefFingerprint: string } {
+  if (!output || Array.isArray(output) || typeof output !== "object") return false;
+
+  // Any object that owns an outcome property is an evidence envelope, not a
+  // successful strategy, regardless of the outcome value or type.
+  if (Object.prototype.hasOwnProperty.call(output, "outcome")) return false;
+
+  const o = output as Record<string, unknown>;
+
+  // A successful flat output must carry the fingerprint of the brief that
+  // produced it.
+  if (typeof o.creativeBriefFingerprint !== "string" || o.creativeBriefFingerprint.length === 0) {
+    return false;
+  }
+
+  // Validate the remaining shape with the authoritative schema so malformed
+  // legacy rows cannot be mistaken for successful output.
+  return StrategyOutputSchema.safeParse(o).success;
 }
 
 function normalizeValidationText(value: string): string {
@@ -128,225 +179,32 @@ function containsPhrase(haystack: string, needle: string): boolean {
   return normalizedHaystack.includes(normalizedNeedle);
 }
 
-// Capability-level validation helpers.
-//
-// These replace literal substring matching for product/service, target buyer and
-// main pain point with a deterministic, rule-based check that accepts compound
-// descriptions and surface-form variations (word order, plural/singular,
-// hyphenation) while rejecting missing core capabilities or generic-only matches.
-//
-// A small, static set of explicitly documented equivalent-term groups is also
-// supported for B2B payout/financial terminology. It is not a general semantic
-// paraphrase engine and does not use AI/model calls.
+// ─────────────────────────────────────────────────────────────────────────────
+// Field ownership helpers — strict scoping per Phase 2A
+// ─────────────────────────────────────────────────────────────────────────────
 
-const VALIDATION_STOP_WORDS = new Set([
-  "a", "an", "the", "and", "or", "but", "for", "with", "without", "of", "in", "on", "at", "to", "from", "by",
-  "about", "into", "through", "during", "before", "after", "above", "below", "between", "among", "is", "are",
-  "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "will", "would", "could",
-  "should", "may", "might", "can", "shall", "this", "that", "these", "those", "i", "you", "he", "she", "it",
-  "we", "they", "them", "their", "our", "us", "me", "my", "your", "his", "her", "its", "ours", "theirs", "who",
-  "what", "which", "when", "where", "why", "how", "all", "each", "every", "both", "few", "more", "most", "other",
-  "some", "such", "no", "not", "only", "own", "same", "so", "than", "too", "very", "just", "now", "then", "here",
-  "there", "once", "again", "also", "back", "still", "already", "yet", "soon", "today", "new", "old", "first",
-  "last", "long", "great", "little", "big", "high", "low", "early", "late", "right", "left", "best", "better",
-  "good", "bad", "easy", "hard", "fast", "slow", "quick", "much", "many", "most", "more", "less", "least",
-  "enough", "well", "down", "off", "over", "under", "further", "furthermore", "however", "therefore", "thus",
-  "hence", "because", "since", "while", "whereas", "although", "though", "unless", "until", "whether",
-  "either", "neither", "none", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-]);
-
-const GENERIC_MECHANISM_WORDS = new Set([
-  "platform", "platforms", "system", "systems", "solution", "solutions", "service", "services", "tool",
-  "tools", "app", "apps", "application", "applications", "software", "website", "websites", "portal",
-  "portals", "hub", "hubs", "product", "products",
-]);
-
-const GENERIC_OUTCOME_WORDS = new Set([
-  "help", "helps", "helping", "grow", "growth", "success", "successful", "succeed", "increase", "boost",
-  "improve", "better", "best", "more", "less", "greater", "maximize", "optimize", "benefit", "benefits",
-]);
-
-// Small, conservative equivalent-term groups derived from the existing B2B
-// canonical concept set used by brief-grounding.ts. These are deterministic,
-// narrowly scoped to financial/payout business terminology, and intentionally
-// do not include broad or ambiguous synonyms (e.g. "owner" is not equivalent
-// to "manager", "restaurant" is not equivalent to "eatery").
-const CAPABILITY_EQUIVALENT_GROUPS = [
-  ["payout", "payouts", "disbursement", "disbursements"],
-] as const;
-
-function tokenizeValidationText(value: string): string[] {
-  return normalizeValidationText(value)
-    .replace(/-/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
-}
-
-function simpleStem(word: string): string {
-  if (word.endsWith("ies") && word.length > 4) return word.slice(0, -3) + "y";
-  if (word.endsWith("ied") && word.length > 4) return word.slice(0, -3) + "y";
-  if (word.endsWith("s") && !word.endsWith("ss") && word.length > 3) return word.slice(0, -1);
-  if (word.endsWith("ed") && word.length > 3) return word.slice(0, -2);
-  if (word.endsWith("ing") && word.length > 4) return word.slice(0, -3);
-  return word;
-}
-
-function isGenericCapabilityWord(word: string): boolean {
-  return GENERIC_MECHANISM_WORDS.has(word) || GENERIC_OUTCOME_WORDS.has(word);
-}
-
-function extractCapabilityTokens(phrase: string): { all: string[]; core: string[] } {
-  const all = tokenizeValidationText(phrase)
-    .map((t) => t.replace(/^-+|-+$/g, ""))
-    .filter((t) => t.length > 1 && !VALIDATION_STOP_WORDS.has(t));
-  const core = all.filter((t) => !isGenericCapabilityWord(t));
-  return { all, core };
-}
-
-function equivalentCapabilityStems(token: string): Set<string> {
-  const normalized = normalizeValidationText(token).replace(/^-+|-+$/g, "");
-  const stems = new Set<string>();
-  stems.add(normalized);
-  stems.add(simpleStem(normalized));
-
-  for (const group of CAPABILITY_EQUIVALENT_GROUPS) {
-    if (group.includes(normalized as any)) {
-      for (const equivalent of group) {
-        stems.add(equivalent);
-        stems.add(simpleStem(equivalent));
-      }
-    }
-  }
-
-  return stems;
-}
-
-function outputContainsCapabilityToken(outputText: string, token: string): boolean {
-  const outputTokens = tokenizeValidationText(outputText);
-  const outputStems = new Set(outputTokens.map(simpleStem));
-
-  for (const stem of equivalentCapabilityStems(token)) {
-    if (outputStems.has(stem)) return true;
-  }
-  return false;
-}
-
-function validateCapabilityCoverage(
-  outputText: string,
-  briefPhrase: string | null | undefined,
-  label: string
-): StrategyValidationResult | null {
-  if (!briefPhrase || !briefPhrase.trim()) return null;
-
-  const { all, core } = extractCapabilityTokens(briefPhrase);
-  if (all.length === 0) return null;
-
-  const normalizedOutput = normalizeValidationText(outputText);
-  if (!normalizedOutput) {
-    return {
-      valid: false,
-      reason: `Strategy output is empty; cannot validate ${label}: ${briefPhrase}.`,
-    };
-  }
-
-  // Core capabilities must be preserved. A missing core capability cannot be
-  // compensated for by a generic mechanism or outcome word.
-  const missingCore: string[] = [];
-  for (const token of core) {
-    if (!outputContainsCapabilityToken(outputText, token)) {
-      missingCore.push(token);
-    }
-  }
-
-  if (missingCore.length > 0) {
-    return {
-      valid: false,
-      reason: `Strategy output does not materially represent ${label}: ${briefPhrase}. Missing core capabilities: ${missingCore.slice(0, 3).join(", ")}.`,
-    };
-  }
-
-  // If the brief contains only generic mechanism/outcome words, require a
-  // strong majority of them to be present so the output is not purely generic.
-  if (core.length === 0) {
-    const presentAll = all.filter((t) => outputContainsCapabilityToken(outputText, t));
-    if (presentAll.length < Math.max(1, Math.ceil(all.length * 0.67))) {
-      return {
-        valid: false,
-        reason: `Strategy output does not materially represent ${label}: ${briefPhrase}. The description is too generic.`,
-      };
-    }
-  }
-
-  return null;
-}
-
-/**
- * Fields that make affirmative product-defining claims. Product/service
- * capability coverage is verified only from these fields so that mentioning a
- * capability in a persona pain point, funnel tactic or platform content type
- * cannot falsely satisfy the product-grounding gate.
- */
 function gatherProductDefiningText(output: StrategyOutput): string {
   return [output.coreMessage, output.positioning, output.valueProposition]
     .filter(Boolean)
     .join(" ");
 }
 
-/**
- * Fields relevant to target-buyer and pain-point coverage. These include the
- * product-defining fields and the persona blocks, but not funnel tactics,
- * platform content, CTAs or offers, which can mention the buyer or pain point
- * without actually representing them.
- */
-function gatherBuyerAndPainPointText(output: StrategyOutput): string {
-  const parts: string[] = [
-    output.coreMessage,
-    output.positioning,
-    output.valueProposition,
-    output.campaignTheme,
-  ];
-  for (const persona of output.personas) {
-    parts.push(persona.name, persona.demographics, ...persona.painPoints, ...persona.goals);
-  }
-  return parts.filter(Boolean).join(" ");
+function gatherBuyerText(output: StrategyOutput): string {
+  return output.personas
+    .map((p) => [p.name, p.demographics].filter(Boolean).join(" "))
+    .join(" ");
 }
 
-/**
- * Detects whether a tactic or claim is clearly educational rather than an
- * affirmative product offer. Educational context (e.g. "publish a guide on
- * managing credit risk") may mention a capability without claiming the product
- * provides it.
- */
-function isEducationalContext(text: string): boolean {
-  const normalized = normalizeValidationText(text);
-  const educationalPatterns = [
-    /\b(educate|educating|education)\b/,
-    /\b(guide|guidebook|whitepaper|ebook|report)\s+(on|about|to)\b/,
-    /\bpublish\s+(a\s+)?(guide|whitepaper|ebook|report)\b/,
-    /\bmanaging\s+\w+\s+risk\b/,
-    /\brisk\s+(in|for|of)\b/,
-    /\bchallenges?\s+(in|of|for)\b/,
-    /\blearn\s+(about|how)\b/,
-  ];
-  return educationalPatterns.some((pattern) => pattern.test(normalized));
+function gatherPainPointText(output: StrategyOutput): string {
+  return output.personas.flatMap((p) => p.painPoints).filter(Boolean).join(" ");
 }
 
-/**
- * Affirmative product-claim collector. Unsupported product claims are only
- * checked in fields where the strategy asserts what the product provides.
- * Contextual fields such as persona pain points, goals, demographics, funnel
- * metrics or platform posting frequency must not trigger a product-claim
- * rejection on their own.
- *
- * Funnel tactics are included because they can actively market an unauthorized
- * product, but purely educational tactics are excluded.
- */
+function gatherCtaText(output: StrategyOutput): string {
+  return output.ctas.map((c) => c.cta).join(" ");
+}
+
 function gatherAffirmativeProductClaimText(output: StrategyOutput): string {
-  const parts: string[] = [
-    output.coreMessage,
-    output.positioning,
-    output.valueProposition,
-  ];
+  const parts: string[] = [output.coreMessage, output.positioning, output.valueProposition];
   for (const fs of output.funnelStages) {
     for (const tactic of fs.tactics) {
       if (!isEducationalContext(tactic)) {
@@ -357,12 +215,6 @@ function gatherAffirmativeProductClaimText(output: StrategyOutput): string {
   return parts.filter(Boolean).join(" ");
 }
 
-/**
- * Complete output text collector used for offer/claim scanning, stale-term
- * detection and excluded-offer checks. These gates must continue to inspect
- * every user-facing field because incentives and excluded terms can be
- * hidden anywhere in the strategy.
- */
 function gatherOutputText(output: StrategyOutput): string {
   const parts: string[] = [
     output.coreMessage,
@@ -388,43 +240,220 @@ function gatherOutputText(output: StrategyOutput): string {
   return parts.filter(Boolean).join(" ");
 }
 
-/**
- * Deterministic pre-validation grounding. If the model-generated product-defining
- * fields do not materially represent the brief's Product/Service, the
- * authoritative brief text is placed into coreMessage. This is the smallest
- * deterministic guarantee that the semantic validator has a coherent,
- * capability-complete product definition to evaluate. It does not invent
- * capabilities; it only restates the brief itself.
- */
-export function groundProductDefiningFields(
-  output: StrategyOutput,
-  brief: { productOrService?: string | null }
-): StrategyOutput {
-  if (!brief.productOrService || !brief.productOrService.trim()) {
-    return output;
+function isEducationalContext(text: string): boolean {
+  const normalized = normalizeValidationText(text);
+  const educationalPatterns = [
+    /\b(educate|educating|education)\b/,
+    /\b(guide|guidebook|whitepaper|ebook|report)\s+(on|about|to)\b/,
+    /\bpublish\s+(a\s+)?(guide|whitepaper|ebook|report)\b/,
+    /\bmanaging\s+\w+\s+risk\b/,
+    /\brisk\s+(in|for|of)\b/,
+    /\bchallenges?\s+(in|of|for)\b/,
+    /\blearn\s+(about|how)\b/,
+  ];
+  return educationalPatterns.some((pattern) => pattern.test(normalized));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deterministic materialisation
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildCanonicalProductStatement(input: {
+  productOrService?: string | null;
+  coreMessage?: string | null;
+}): string {
+  const product = (input.productOrService || "").trim();
+  const coreMessage = (input.coreMessage || "").trim();
+
+  const normalize = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+
+  const productStatement = product.endsWith(".") ? product.slice(0, -1) : product;
+  const coreStatement = coreMessage.endsWith(".") ? coreMessage.slice(0, -1) : coreMessage;
+
+  if (productStatement && coreStatement) {
+    const productNorm = normalize(productStatement);
+    const coreNorm = normalize(coreStatement);
+    // Avoid duplicating a core message whose substance is already covered by
+    // the product statement.
+    if (coreNorm && (productNorm.includes(coreNorm) || coreNorm.includes(productNorm))) {
+      return productStatement.endsWith(".") ? productStatement : `${productStatement}.`;
+    }
+    return `${productStatement}. ${coreStatement}.`;
   }
 
-  const productText = gatherProductDefiningText(output);
-  const validation = validateCapabilityCoverage(
-    productText,
-    brief.productOrService,
-    "the product/service"
-  );
+  const statement = productStatement || coreStatement || "";
+  return statement.endsWith(".") ? statement : `${statement}.`;
+}
 
-  if (validation && !validation.valid) {
-    const grounded = brief.productOrService.trim();
-    const coreMessage = grounded.endsWith(".") ? grounded : `${grounded}.`;
-    return { ...output, coreMessage };
+function findBuyerPersonaIndex(personas: StrategyOutput["personas"], targetBuyer: string): number {
+  if (!targetBuyer) return -1;
+  return personas.findIndex(
+    (p) =>
+      containsPhrase(p.name, targetBuyer) ||
+      containsPhrase(p.demographics, targetBuyer) ||
+      extractRequiredTokens(targetBuyer).every((token) =>
+        outputContainsToken(`${p.name} ${p.demographics}`, token)
+      )
+  );
+}
+
+function ensureBuyerInDemographics(demographics: string, targetBuyer: string): string {
+  if (containsPhrase(demographics, targetBuyer)) return demographics;
+  return targetBuyer;
+}
+
+function deriveBuyerName(targetBuyer: string): string {
+  if (!targetBuyer) return "Target Buyer";
+  return targetBuyer
+    .split(/\s+/)
+    .map((word) => (word.length > 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word))
+    .join(" ");
+}
+
+function containsExcludedOffer(value: string, excludedOffers: string[]): boolean {
+  if (!excludedOffers.length) return false;
+  const normalized = normalizeValidationText(value);
+  return excludedOffers.some((term) => containsPhrase(normalized, normalizeValidationText(term)));
+}
+
+function ensureDistinctPainPoint(painPoints: string[], mainPainPoint: string): string[] {
+  if (!mainPainPoint) return painPoints;
+  const exists = painPoints.some((pp) => containsPhrase(pp, mainPainPoint));
+  if (exists) return painPoints;
+  return [...painPoints, mainPainPoint];
+}
+
+/**
+ * Pure, deterministic materialisation. Deep-clones the raw model output and
+ * repairs only the authoritative fields owned by each brief element.
+ *
+ * - Product/service: only coreMessage, positioning, valueProposition.
+ * - Target buyer: only persona name and demographics.
+ * - Main pain point: only persona painPoints.
+ * - CTA: only cta text.
+ * - Offers: only the offers array when none is authorised.
+ */
+export function materialiseGroundedFields(
+  rawOutput: StrategyOutput,
+  contract: GroundingContract
+): StrategyOutput {
+  const output: StrategyOutput = structuredClone(rawOutput);
+
+  // 1. Product/service
+  const productText = gatherProductDefiningText(output);
+  const missingProductClauses = contract.productClauses.filter(
+    (clause) => !clauseCoversText(clause, productText)
+  );
+  const hasProductAuthority =
+    contract.productClauses.length > 0 || (contract.coreMessage && contract.coreMessage.trim().length > 0);
+  if (hasProductAuthority && missingProductClauses.length > 0) {
+    output.coreMessage = buildCanonicalProductStatement({
+      productOrService: contract.productClauses.map((c) => c.text).join(", ") || contract.coreMessage,
+      coreMessage: contract.coreMessage,
+    });
+  }
+
+  // 2. Target buyer
+  const matchingPersonaIndex = findBuyerPersonaIndex(output.personas, contract.targetBuyer);
+  const selectedPersonaIndex = matchingPersonaIndex >= 0 ? matchingPersonaIndex : 0;
+  const hasMatchingPersona = matchingPersonaIndex >= 0;
+  output.personas = output.personas.map((persona, index) => {
+    if (index !== selectedPersonaIndex) return persona;
+    const demographics = ensureBuyerInDemographics(persona.demographics, contract.targetBuyer);
+    const name = hasMatchingPersona ? persona.name : deriveBuyerName(contract.targetBuyer);
+    const safeGoals = persona.goals.filter(
+      (goal) => !containsExcludedOffer(goal, contract.excludedOffers)
+    );
+    const safePlatforms = persona.platforms.filter(
+      (platform) => !containsExcludedOffer(platform, contract.excludedOffers)
+    );
+    return {
+      ...persona,
+      name,
+      demographics,
+      goals: safeGoals,
+      platforms: safePlatforms,
+    };
+  });
+
+  // 3. Main pain point
+  output.personas = output.personas.map((persona, index) => {
+    if (index !== selectedPersonaIndex) return persona;
+    return {
+      ...persona,
+      painPoints: ensureDistinctPainPoint(persona.painPoints, contract.mainPainPoint),
+    };
+  });
+
+  // 4. Preferred CTA
+  const preferredCta = contract.preferredCta;
+  if (preferredCta) {
+    const ctaText = gatherCtaText(output);
+    if (!containsPhrase(ctaText, preferredCta)) {
+      output.ctas = output.ctas.map((cta, index) =>
+        index === 0 ? { ...cta, cta: preferredCta } : cta
+      );
+    }
+  }
+
+  // 5. Offers
+  if (!contract.offerDetails || contract.offerDetails.trim().length === 0) {
+    output.offers = [];
   }
 
   return output;
 }
 
-// Deterministic detection of unauthorised offers or incentives that may be
-// hidden outside the offers array (e.g. in CTAs, core message, funnel
-// tactics). These patterns are conservative and only reject recognised
-// incentive language. Ordinary informational CTAs such as "learn more" or
-// "book a demo" are not flagged.
+/**
+ * Legacy compatibility wrapper: repairs only the product-defining core message
+ * when the model output does not materially represent the brief's product or
+ * service. Preserved for existing callers/tests; new code should use
+ * materialiseGroundedFields.
+ */
+export function groundProductDefiningFields(
+  output: StrategyOutput,
+  brief: { productOrService?: string | null; coreMessage?: string | null }
+): StrategyOutput {
+  const cloned: StrategyOutput = structuredClone(output);
+  if (!brief.productOrService || !brief.productOrService.trim()) {
+    return cloned;
+  }
+  const productText = gatherProductDefiningText(cloned);
+  const contract = buildGroundingContract({
+    fingerprint: "",
+    productOrService: brief.productOrService,
+    targetBuyer: "",
+    mainPainPoint: "",
+    preferredCta: "",
+    primaryOutcome: "",
+    targetAudience: "",
+    coreMessage: brief.coreMessage || "",
+    offerDetails: "",
+    excludedOffers: "",
+    referenceStyle: "",
+    contentStyle: "",
+    businessType: "not_specified",
+  });
+  const missingProductClauses = contract.productClauses.filter(
+    (clause) => !clauseCoversText(clause, productText)
+  );
+  if (missingProductClauses.length > 0) {
+    cloned.coreMessage = buildCanonicalProductStatement({
+      productOrService: brief.productOrService,
+      coreMessage: brief.coreMessage,
+    });
+  }
+  return cloned;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Validation diagnostics and gates
+// ─────────────────────────────────────────────────────────────────────────────
+
 const UNAUTHORISED_OFFER_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bfree\s+trial\b/i, label: "free trial" },
   { pattern: /\bfree\s+access\b/i, label: "free access" },
@@ -448,16 +477,17 @@ const UNAUTHORISED_OFFER_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bpromotional\s+credit\b/i, label: "promotional credit" },
 ];
 
+const UNSUPPORTED_PRODUCT_CLAIM_PATTERNS: Array<{ pattern: RegExp; label: string; authorizeLabels: string[] }> = [
+  { pattern: /\bfraud\s+(prevention|reduction)\b/i, label: "fraud prevention or reduction", authorizeLabels: ["fraud"] },
+  { pattern: /\bmultiple\s+payment\s+methods?\b/i, label: "multiple payment methods", authorizeLabels: ["multiple payment methods"] },
+  { pattern: /\bcredits?\b/i, label: "credit", authorizeLabels: ["credit"] },
+  { pattern: /\b(loans?|lending)\b/i, label: "loan or lending", authorizeLabels: ["loan", "lending"] },
+];
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Determines whether a phrase is explicitly authorised in a source text.
- * A phrase is NOT authorised if it only appears in a negated statement such as
- * "no free trial" or "not a discount". This prevents excluded or negated terms
- * from accidentally granting authorization.
- */
 function isPhraseExplicitlyAuthorised(sourceText: string | null | undefined, phrase: string): boolean {
   if (!sourceText || !sourceText.trim()) return false;
   const normalizedSource = normalizeValidationText(sourceText);
@@ -473,10 +503,7 @@ function isPhraseExplicitlyAuthorised(sourceText: string | null | undefined, phr
   return true;
 }
 
-function detectUnauthorizedOffers(
-  outputText: string,
-  offerDetails?: string | null
-): string[] {
+function detectUnauthorizedOffers(outputText: string, offerDetails?: string | null): string[] {
   const found = new Set<string>();
   for (const { pattern, label } of UNAUTHORISED_OFFER_PATTERNS) {
     if (pattern.test(outputText) && !isPhraseExplicitlyAuthorised(offerDetails, label)) {
@@ -486,21 +513,9 @@ function detectUnauthorizedOffers(
   return Array.from(found);
 }
 
-// Deterministic detection of product claims that are unsupported by the brief.
-// A claim is rejected only when it is a material claim in the output and is not
-// explicitly authorised by the campaign brief's product/service or core message.
-// The authorizeLabels are simpler lookup forms so that a brief authorising
-// "fraud prevention" also permits "fraud reduction" output, and vice versa.
-const UNSUPPORTED_PRODUCT_CLAIM_PATTERNS: Array<{ pattern: RegExp; label: string; authorizeLabels: string[] }> = [
-  { pattern: /\bfraud\s+(prevention|reduction)\b/i, label: "fraud prevention or reduction", authorizeLabels: ["fraud"] },
-  { pattern: /\bmultiple\s+payment\s+methods?\b/i, label: "multiple payment methods", authorizeLabels: ["multiple payment methods"] },
-  { pattern: /\bcredits?\b/i, label: "credit", authorizeLabels: ["credit"] },
-  { pattern: /\b(loans?|lending)\b/i, label: "loan or lending", authorizeLabels: ["loan", "lending"] },
-];
-
 function detectUnsupportedProductClaims(
   output: StrategyOutput,
-  brief: StrategyValidationInput["brief"]
+  brief: Pick<GroundedCreativeBrief, "productOrService" | "coreMessage">
 ): string[] {
   const found = new Set<string>();
   const claimText = gatherAffirmativeProductClaimText(output);
@@ -515,81 +530,146 @@ function detectUnsupportedProductClaims(
   return Array.from(found);
 }
 
+function makeDiagnostic(
+  gate: string,
+  authoritativeField: string,
+  expected: string[],
+  missing: string[],
+  inspected: string[],
+  reason: string
+): ValidationDiagnostic {
+  return {
+    gate,
+    authoritativeField,
+    expectedClauses: expected,
+    missingClauses: missing,
+    inspectedOutputFields: inspected,
+    reason,
+  };
+}
+
+function buildReason(diagnostics: ValidationDiagnostic[]): string {
+  return diagnostics.map((d) => d.reason).join("; ");
+}
+
 /**
- * Pure strategy-output validation gate.
- *
- * Confirms that a generated strategy is grounded in the current campaign brief
- * before any approval request or lineage is created. Returns a safe diagnostic
- * when validation fails so the caller can mark the run failed and release the
- * claim without exposing raw output to users.
+ * Field-scoped, clause-level validation using the grounding contract.
+ * Returns structured diagnostics while preserving the legacy { valid, reason }
+ * interface.
  */
-export function validateStrategyOutput({
-  output,
-  currentFingerprint,
-  brief,
-}: StrategyValidationInput): StrategyValidationResult {
-  // 1. Fingerprint match — proves the strategy was produced from the current brief.
+export function validateGroundedStrategyOutput(
+  output: StrategyOutput & { creativeBriefFingerprint?: string },
+  currentFingerprint: string,
+  contract: GroundingContract
+): StrategyValidationResult {
+  const diagnostics: ValidationDiagnostic[] = [];
+
+  // 1. Fingerprint match
   if (output.creativeBriefFingerprint !== currentFingerprint) {
-    return {
-      valid: false,
-      reason: "Strategy output fingerprint does not match the current campaign brief.",
-    };
+    const d = makeDiagnostic(
+      "fingerprint",
+      "creativeBriefFingerprint",
+      [currentFingerprint],
+      output.creativeBriefFingerprint ? [output.creativeBriefFingerprint] : ["missing"],
+      ["creativeBriefFingerprint"],
+      "Strategy output fingerprint does not match the current campaign brief."
+    );
+    return { valid: false, diagnostics: [d], reason: d.reason };
   }
 
+  // 2. Product/service — product-defining fields only
   const productText = gatherProductDefiningText(output);
-  const buyerAndPainText = gatherBuyerAndPainPointText(output);
+  const missingProductClauses = contract.productClauses.filter(
+    (clause) => !clauseCoversText(clause, productText)
+  );
+  if (missingProductClauses.length > 0) {
+    diagnostics.push(
+      makeDiagnostic(
+        "product/service",
+        "productOrService",
+        contract.productClauses.map((c) => c.text),
+        missingProductClauses.map((c) => c.text),
+        ["coreMessage", "positioning", "valueProposition"],
+        `Strategy output does not materially represent the product/service. Missing core capabilities: ${missingProductClauses
+          .map((c) => c.text)
+          .join(", ")}.`
+      )
+    );
+  }
+
+  // 3. Target buyer — persona name/demographics only
+  const buyerText = gatherBuyerText(output);
+  const missingBuyerTokens = contract.targetBuyer
+    ? extractRequiredTokens(contract.targetBuyer).filter((token) => !outputContainsToken(buyerText, token))
+    : [];
+  if (missingBuyerTokens.length > 0) {
+    diagnostics.push(
+      makeDiagnostic(
+        "target buyer",
+        "targetBuyer",
+        [contract.targetBuyer],
+        [missingBuyerTokens.join(" ")],
+        ["personas[].name", "personas[].demographics"],
+        `Strategy output does not materially represent the target buyer: ${contract.targetBuyer}.`
+      )
+    );
+  }
+
+  // 4. Main pain point — persona painPoints only
+  const painText = gatherPainPointText(output);
+  const missingPainTokens = contract.mainPainPoint
+    ? extractRequiredTokens(contract.mainPainPoint).filter((token) => !outputContainsToken(painText, token))
+    : [];
+  if (missingPainTokens.length > 0) {
+    diagnostics.push(
+      makeDiagnostic(
+        "main pain point",
+        "mainPainPoint",
+        [contract.mainPainPoint],
+        [missingPainTokens.join(" ")],
+        ["personas[].painPoints"],
+        `Strategy output does not materially represent the main pain point: ${contract.mainPainPoint}. Missing core capabilities: ${missingPainTokens
+          .slice(0, 3)
+          .join(", ")}.`
+      )
+    );
+  }
+
+  // 5. Preferred CTA
+  if (contract.preferredCta) {
+    const ctaText = gatherCtaText(output);
+    if (!containsPhrase(ctaText, contract.preferredCta)) {
+      diagnostics.push(
+        makeDiagnostic(
+          "preferred CTA",
+          "preferredCta",
+          [contract.preferredCta],
+          [contract.preferredCta],
+          ["ctas[].cta"],
+          `Strategy output does not use the preferred CTA: ${contract.preferredCta}.`
+        )
+      );
+    }
+  }
+
+  // 6. Excluded offers/claims
   const outputText = gatherOutputText(output);
-
-  // 2. Product/service materially represented (capability-level).
-  // Product claims are checked only in product-defining fields so that
-  // mentioning a capability as a customer problem or tactic does not pass.
-  const productValidation = validateCapabilityCoverage(
-    productText,
-    brief.productOrService,
-    "the product/service"
-  );
-  if (productValidation) return productValidation;
-
-  // 3. Target buyer materially represented (capability-level).
-  const buyerValidation = validateCapabilityCoverage(buyerAndPainText, brief.targetBuyer, "the target buyer");
-  if (buyerValidation) return buyerValidation;
-
-  // 4. Main pain point addressed (capability-level).
-  const painValidation = validateCapabilityCoverage(
-    buyerAndPainText,
-    brief.mainPainPoint,
-    "the main pain point"
-  );
-  if (painValidation) return painValidation;
-
-  // 5. Preferred CTA used in the CTA strategy.
-  if (brief.preferredCta) {
-    const ctaText = output.ctas.map((c) => c.cta).join(" ");
-    if (!containsPhrase(ctaText, brief.preferredCta)) {
-      return {
-        valid: false,
-        reason: `Strategy output does not use the preferred CTA: ${brief.preferredCta}.`,
-      };
+  for (const term of contract.excludedOffers) {
+    if (containsPhrase(outputText, term)) {
+      diagnostics.push(
+        makeDiagnostic(
+          "excluded offer/claim",
+          "excludedOffers",
+          contract.excludedOffers,
+          [term],
+          ["all user-facing fields"],
+          `Strategy output contains excluded offer or claim: ${term}.`
+        )
+      );
     }
   }
 
-  // 6. Excluded offers/claims absent.
-  if (brief.excludedOffers) {
-    const excluded = brief.excludedOffers
-      .split(/[,;\n]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    for (const term of excluded) {
-      if (containsPhrase(outputText, term)) {
-        return {
-          valid: false,
-          reason: `Strategy output contains excluded offer or claim: ${term}.`,
-        };
-      }
-    }
-  }
-
-  // 7. Stale conflicting audience classifications absent.
+  // 7. Stale conflicting audience classifications
   const staleTerms = [
     "small businesses",
     "payroll",
@@ -597,54 +677,103 @@ export function validateStrategyOutput({
     "credit access",
     "mass disbursements",
   ];
-  const briefText = [brief.productOrService, brief.targetBuyer, brief.mainPainPoint, brief.offerDetails, brief.excludedOffers]
+  const briefText = [
+    contract.productClauses.map((c) => c.text).join(" "),
+    contract.targetBuyer,
+    contract.mainPainPoint,
+    contract.offerDetails,
+  ]
     .filter(Boolean)
     .join(" ");
   for (const term of staleTerms) {
     if (!containsPhrase(briefText, term) && containsPhrase(outputText, term)) {
-      return {
-        valid: false,
-        reason: `Strategy output contains stale audience classification: ${term}.`,
-      };
+      diagnostics.push(
+        makeDiagnostic(
+          "stale audience",
+          "briefText",
+          [term],
+          [term],
+          ["all user-facing fields"],
+          `Strategy output contains stale audience classification: ${term}.`
+        )
+      );
     }
   }
 
-  // 8. Offers empty unless explicitly authorised by the brief.
-  const hasOfferDetails = !!(brief.offerDetails && brief.offerDetails.trim().length > 0);
+  // 8. Invented offers when none authorised
+  const hasOfferDetails = !!(contract.offerDetails && contract.offerDetails.trim().length > 0);
   if (!hasOfferDetails && output.offers.length > 0) {
-    return {
-      valid: false,
-      reason: "Strategy output invented offers that were not authorised by the campaign brief.",
-    };
+    diagnostics.push(
+      makeDiagnostic(
+        "invented offers",
+        "offerDetails",
+        ["none"],
+        ["offers array is non-empty"],
+        ["offers[]"],
+        "Strategy output invented offers that were not authorised by the campaign brief."
+      )
+    );
   }
 
-  // 9. Unauthorised offers or incentives hidden outside the offers array.
-  const unauthorisedOffers = detectUnauthorizedOffers(outputText, brief.offerDetails);
+  // 9. Unauthorised offers or incentives hidden outside the offers array
+  const unauthorisedOffers = detectUnauthorizedOffers(outputText, contract.offerDetails);
   if (unauthorisedOffers.length > 0) {
-    return {
-      valid: false,
-      reason: `Strategy output contains unauthorised offer or incentive: ${unauthorisedOffers.join(", ")}.`,
-    };
+    diagnostics.push(
+      makeDiagnostic(
+        "unauthorised incentive",
+        "offerDetails",
+        contract.excludedOffers,
+        unauthorisedOffers,
+        ["all user-facing fields"],
+        `Strategy output contains unauthorised offer or incentive: ${unauthorisedOffers.join(", ")}.`
+      )
+    );
   }
 
-  // 10. Unsupported product claims not authorised by the brief.
-  // Only affirmative product-claim fields are checked so that describing a
-  // customer problem or contextual challenge does not trigger a false positive.
-  const unsupportedClaims = detectUnsupportedProductClaims(output, brief);
+  // 10. Unsupported product claims
+  const unsupportedClaims = detectUnsupportedProductClaims(output, {
+    productOrService: contract.productClauses.map((c) => c.text).join(", "),
+    coreMessage: contract.coreMessage,
+  });
   if (unsupportedClaims.length > 0) {
-    return {
-      valid: false,
-      reason: `Strategy output contains unsupported product claim: ${unsupportedClaims.join(", ")}.`,
-    };
+    diagnostics.push(
+      makeDiagnostic(
+        "unsupported product claim",
+        "productOrService",
+        ["fraud", "multiple payment methods", "credit", "loan/lending"],
+        unsupportedClaims,
+        ["coreMessage", "positioning", "valueProposition", "non-educational funnel tactics"],
+        `Strategy output contains unsupported product claim: ${unsupportedClaims.join(", ")}.`
+      )
+    );
+  }
+
+  if (diagnostics.length > 0) {
+    return { valid: false, diagnostics, reason: buildReason(diagnostics) };
   }
 
   return { valid: true };
 }
 
 /**
+ * Backwards-compatible validation interface.
+ */
+export function validateStrategyOutput({
+  output,
+  currentFingerprint,
+  brief,
+}: StrategyValidationInput): StrategyValidationResult {
+  const contract = buildGroundingContract({
+    ...brief,
+    fingerprint: brief.fingerprint || currentFingerprint,
+    businessType: brief.businessType || "not_specified",
+  });
+  return validateGroundedStrategyOutput(output, currentFingerprint, contract);
+}
+
+/**
  * Pure validation gate for an existing strategy run output against the current
- * persisted campaign brief. Rejects runs whose fingerprint matches but whose
- * content is not semantically grounded in the brief.
+ * persisted campaign brief.
  */
 export function validateStrategyOutputAgainstCampaign(
   output: unknown,
@@ -652,6 +781,14 @@ export function validateStrategyOutputAgainstCampaign(
 ): StrategyValidationResult {
   const brief = buildGroundedCreativeBrief({ campaign });
   const raw = (output || {}) as Record<string, unknown>;
+
+  if (typeof raw.outcome === "string") {
+    return {
+      valid: false,
+      reason: `Strategy run output is an evidence envelope (${raw.outcome}), not a completed strategy.`,
+    };
+  }
+
   const parseResult = StrategyOutputSchema.safeParse(raw);
   if (!parseResult.success) {
     return { valid: false, reason: "Strategy output is not a valid strategy structure." };
@@ -701,6 +838,25 @@ export async function chargeForStrategyRun(
   });
 }
 
+function classifyGenerationError(error: unknown): {
+  outcome: "failed_generation" | "failed_schema";
+  gate: string;
+  reason: string;
+} {
+  if (TypeValidationError.isInstance(error) || NoObjectGeneratedError.isInstance(error)) {
+    return {
+      outcome: "failed_schema",
+      gate: "schema",
+      reason: error.message || "Structured output did not match the required schema.",
+    };
+  }
+  return {
+    outcome: "failed_generation",
+    gate: "generation",
+    reason: error instanceof Error ? error.message : String(error),
+  };
+}
+
 export async function runStrategyAgent({
   userId,
   campaignId,
@@ -742,18 +898,10 @@ export async function runStrategyAgent({
     referenceStyle?: string;
     contentStyle?: string;
   };
-  /**
-   * Called inside the same database transaction that creates the strategy run.
-   * Receives the new run ID and the transaction object. If this callback throws,
-   * the transaction rolls back and the run row is never committed, so the
-   * caller can release the claim as failed without leaving an orphaned run.
-   */
   onRunCreated?: (runId: number, tx: any) => void | Promise<void>;
 }): Promise<StrategyAgentRunResult> {
   const db = getDb();
 
-  // Load the persisted campaign so the fingerprint is computed from the
-  // current brief, even when the caller did not pass an explicit campaignBrief.
   const [currentCampaign] = await db
     .select()
     .from(campaigns)
@@ -764,12 +912,7 @@ export async function runStrategyAgent({
     ? await db
         .select({ id: campaigns.id, workflowContext: campaigns.workflowContext })
         .from(campaigns)
-        .where(
-          and(
-            eq(campaigns.userId, userId),
-            eq(campaigns.businessId, currentCampaign.businessId)
-          )
-        )
+        .where(and(eq(campaigns.userId, userId), eq(campaigns.businessId, currentCampaign.businessId)))
         .orderBy(desc(campaigns.createdAt))
         .limit(10)
     : [];
@@ -803,10 +946,6 @@ export async function runStrategyAgent({
 
   const estimatedCost = getEstimatedAgentCost("strategy");
 
-  // Preserve the pre-flight cost control that runAgent normally performs when
-  // billing is enabled. We skip billing inside runAgent so that the 3-credit
-  // charge can be tied to the strategy run ID and applied only after output
-  // validation passes.
   const costControl = await enforceCostControl(userId, estimatedCost);
   if (!costControl.allowed) {
     throw new TRPCError({
@@ -815,13 +954,18 @@ export async function runStrategyAgent({
     });
   }
 
-  // Create the run row and, atomically within the same transaction, attach it
-  // to the caller's regeneration claim. The transaction commits before any AI
-  // generation occurs, so a committed run always has its claim reference. If
-  // the callback throws (e.g. claim attachment collision), the transaction
-  // rolls back and no run row is persisted.
   const systemPrompt =
     "You are a world-class marketing strategist. You create detailed, actionable marketing strategies for businesses. Always respond with valid structured data.";
+
+  // Compute the grounding contract from the current brief before generation so
+  // the fingerprint and contract are available for every persistence path.
+  const fingerprintSource = campaignBrief
+    ? ({ ...campaignBrief } as Record<string, unknown>)
+    : currentCampaign ?? {};
+  const brief = buildGroundedCreativeBrief({ campaign: fingerprintSource });
+  const briefFingerprint = brief.fingerprint;
+  const contract = buildGroundingContract(brief);
+
   const runId = await db.transaction(async (tx) => {
     const [insertResult] = await tx.insert(agentRuns).values({
       userId,
@@ -839,9 +983,6 @@ export async function runStrategyAgent({
     return newRunId;
   });
 
-  // Generate the strategy output outside the transaction. The run row is
-  // already committed and linked to the claim, so a later failure here leaves
-  // the reference intact.
   let generatedOutput: StrategyOutput;
   let promptTokens = 0;
   let completionTokens = 0;
@@ -865,18 +1006,32 @@ export async function runStrategyAgent({
     actualCostUsdMicro = costs.actualCostUsdMicro;
     estimatedCostUsdMicro = costs.estimatedCostUsdMicro;
   } catch (error: any) {
-    await db
-      .update(agentRuns)
-      .set({
-        status: "failed",
-        error: error.message || String(error),
-        completedAt: new Date(),
-      })
-      .where(eq(agentRuns.id, runId));
+    const { outcome, gate, reason } = classifyGenerationError(error);
 
-    // Preserve provider/quota observability parity with the generic agent runner.
-    // This alert is best-effort: if it fails, the original generation error is
-    // still thrown and the linked run remains failed.
+    // Best-effort evidence persistence; a failure here must not replace the
+    // original provider error.
+    try {
+      await db
+        .update(agentRuns)
+        .set({
+          status: "failed",
+          error: reason,
+          output: {
+            evidenceVersion: 1,
+            outcome,
+            creativeBriefFingerprint: briefFingerprint,
+            validationDiagnostics: {
+              gate,
+              reason,
+            },
+          } as any,
+          completedAt: new Date(),
+        })
+        .where(eq(agentRuns.id, runId));
+    } catch {
+      // Ignore persistence failure; the original provider error is thrown below.
+    }
+
     await emitAgentProviderAlert({
       agentType: "strategy",
       runId,
@@ -887,45 +1042,46 @@ export async function runStrategyAgent({
     throw error;
   }
 
-  // Compute the fingerprint of the brief that produced this strategy so later
-  // workflow steps can detect whether the campaign brief changed afterwards.
-  const fingerprintSource = campaignBrief
-    ? ({ ...campaignBrief } as Record<string, unknown>)
-    : currentCampaign ?? {};
-  const brief = buildGroundedCreativeBrief({ campaign: fingerprintSource });
-  const briefFingerprint = brief.fingerprint;
+  // 3. Persist the raw candidate while still running so a later failure does not
+  // erase the model's output.
+  await db.update(agentRuns).set({
+    output: {
+      evidenceVersion: 1,
+      outcome: "generated_candidate",
+      creativeBriefFingerprint: briefFingerprint,
+      rawOutput: generatedOutput,
+    } as any,
+  }).where(eq(agentRuns.id, runId));
 
-  // Deterministic grounding: if the model-generated product-defining fields do
-  // not materially represent the brief, replace coreMessage with the brief's own
-  // Product/Service text. This is the smallest deterministic guarantee that
-  // required capabilities survive prompt drift before semantic validation runs.
-  const groundedOutput = groundProductDefiningFields(generatedOutput, brief);
+  // 4. Deterministic materialisation.
+  const groundedOutput = materialiseGroundedFields(generatedOutput, contract);
 
   const outputWithFingerprint = {
     ...groundedOutput,
     creativeBriefFingerprint: briefFingerprint,
   };
 
-  // Pure validation gate: reject stale/ungrounded strategy output before any
-  // charge, approval request, lineage or workflow transition.
-  const validation = validateStrategyOutput({
-    output: outputWithFingerprint,
-    currentFingerprint: briefFingerprint,
-    brief,
-  });
+  // 5. Field-scoped validation with diagnostics.
+  const validation = validateGroundedStrategyOutput(
+    outputWithFingerprint,
+    briefFingerprint,
+    contract
+  );
 
   if (!validation.valid) {
-    // Mark the run failed with a safe diagnostic. The caller releases the claim
-    // and reports a sanitized error; no credits are charged and no approval is
-    // created.
-    await db
-      .update(agentRuns)
-      .set({
-        status: "failed",
-        error: validation.reason,
-        completedAt: new Date(),
-      })
-      .where(eq(agentRuns.id, runId));
+    await db.update(agentRuns).set({
+      status: "failed",
+      error: validation.reason,
+      output: {
+        evidenceVersion: 1,
+        outcome: "failed_validation",
+        creativeBriefFingerprint: briefFingerprint,
+        rawOutput: generatedOutput,
+        groundedOutput,
+        validationDiagnostics: validation.diagnostics,
+      } as any,
+      completedAt: new Date(),
+    }).where(eq(agentRuns.id, runId));
 
     throw new TRPCError({
       code: "UNPROCESSABLE_CONTENT",
@@ -933,10 +1089,7 @@ export async function runStrategyAgent({
     });
   }
 
-  // Only after validation succeeds do we record the run as completed. This
-  // guarantees that a validation-failed run is never transiently or permanently
-  // stored as completed, and that agentRuns, the returned result and the
-  // campaign record all reference the same grounded strategy.
+  // 6. Success: flat, backward-compatible output.
   await db
     .update(agentRuns)
     .set({

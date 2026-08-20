@@ -28,6 +28,7 @@ import {
   getStrategyApprovalStatus,
   isApprovedStrategyCurrent,
   isStrategyGeneratedForCurrentBrief,
+  validateStrategyRunForCampaign,
 } from "./strategy-approval";
 
 function buildCampaign(
@@ -178,5 +179,73 @@ describe("strategy-approval fingerprint helpers", () => {
     expect(status.isCurrent).toBe(false);
     expect(status.hasApprovedStrategy).toBe(false);
     expect(isApprovedStrategyCurrent(campaign)).toBe(false);
+  });
+});
+
+describe("validateStrategyRunForCampaign", () => {
+  it("rejects a failed evidence-envelope row", async () => {
+    const campaign = buildCampaign(
+      {
+        strategyFingerprint: "fp-current",
+        approvedStrategyFingerprint: "fp-current",
+        strategyApprovalLineage: {
+          creativeBriefFingerprint: "fp-current",
+          strategyRunId: 249,
+          approvalRequestId: 34,
+          status: "approved",
+        },
+      },
+      "current",
+      "audience_ready"
+    );
+
+    const failedEnvelopeRow = {
+      status: "failed",
+      output: {
+        evidenceVersion: 1,
+        outcome: "failed_validation",
+        creativeBriefFingerprint: "fp-current",
+        rawOutput: {},
+        groundedOutput: {},
+        validationDiagnostics: { gate: "main pain point" },
+      },
+    };
+
+    const result = await validateStrategyRunForCampaign(campaign, 1, failedEnvelopeRow);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toMatch(/missing or not completed/i);
+  });
+
+  it("rejects a completed row whose output is an evidence envelope", async () => {
+    const campaign = buildCampaign(
+      {
+        strategyFingerprint: "fp-current",
+        approvedStrategyFingerprint: "fp-current",
+        strategyApprovalLineage: {
+          creativeBriefFingerprint: "fp-current",
+          strategyRunId: 249,
+          approvalRequestId: 34,
+          status: "approved",
+        },
+      },
+      "current",
+      "audience_ready"
+    );
+
+    const completedEnvelopeRow = {
+      status: "completed",
+      output: {
+        evidenceVersion: 1,
+        outcome: "failed_validation",
+        creativeBriefFingerprint: "fp-current",
+        rawOutput: {},
+        groundedOutput: {},
+        validationDiagnostics: { gate: "main pain point" },
+      },
+    };
+
+    const result = await validateStrategyRunForCampaign(campaign, 1, completedEnvelopeRow);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toBeDefined();
   });
 });

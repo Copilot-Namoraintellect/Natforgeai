@@ -5,6 +5,12 @@ vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock("./lib/subscription", () => ({
+  checkLimit: vi.fn(async () => ({ allowed: true })),
+  incrementCampaignUsage: vi.fn(),
+  incrementResultUsage: vi.fn(),
+}));
+
 vi.mock("./lib/creative/brief-grounding", () => ({
   buildGroundedCreativeBrief: vi.fn(() => ({
     fingerprint: "fp-current",
@@ -26,6 +32,16 @@ vi.mock("./lib/creative/brief-grounding", () => ({
 vi.mock("./lib/agents/strategy-agent", () => ({
   runStrategyAgent: vi.fn(),
   chargeForStrategyRun: vi.fn(),
+  isSuccessfulStrategyOutput: vi.fn((output: any) => {
+    // Default: only flat successful outputs (fingerprint and no envelope outcome)
+    // are treated as reusable strategies.
+    return (
+      typeof output === "object" &&
+      output !== null &&
+      typeof output.creativeBriefFingerprint === "string" &&
+      !("outcome" in output)
+    );
+  }),
   validateStrategyOutputAgainstCampaign: vi.fn((output: any) => {
     // Default: treat outputs as valid so existing tests keep passing.
     // Tests that need an invalid reusable run can override this per-call.
@@ -93,10 +109,17 @@ function createMockDb({
   approvalRequestsRows = [] as any[],
   agentRunsRows = [] as any[],
   campaignOverrides = {} as any,
+  businessOverrides = {} as any,
 } = {}) {
+  const allAgentRunsRows = [...agentRunsRows];
+
   const state = {
+    agentRunsRows: allAgentRunsRows,
+    insertedRows: [] as any[],
+    updatedRows: [] as any[],
     updatedCampaignStates: [] as any[],
     updatedApprovalRequests: [] as any[],
+    updatedAgentRuns: [] as any[],
     deletedRows: [] as any[],
     insertedApprovalRequest: null as any,
   };
@@ -122,6 +145,8 @@ function createMockDb({
           id: 7,
           name: "Test Business",
           websiteEvidence: {},
+          onboardingComplete: false,
+          ...businessOverrides,
         },
       ];
     }
@@ -144,6 +169,18 @@ function createMockDb({
         where: vi.fn(() => makeQueryable(baseResultFor(table))),
       })),
     })),
+    insert: vi.fn((table: unknown) => ({
+      values: vi.fn((values: any) => ({
+        // Return the same shape drizzle returns so callers can read insertId.
+        then: vi.fn((resolve: (value: unknown) => unknown) => {
+          const name = getTableName(table);
+          if (name === "approval_requests") {
+            state.insertedApprovalRequest = values;
+          }
+          return Promise.resolve(resolve([{ insertId: 1 }]));
+        }),
+      })),
+    })),
     update: vi.fn((table: unknown) => ({
       set: vi.fn((payload: any) => ({
         where: vi.fn(async () => {
@@ -153,6 +190,9 @@ function createMockDb({
           }
           if (name === "approval_requests") {
             state.updatedApprovalRequests.push(payload);
+          }
+          if (name === "agent_runs") {
+            state.updatedAgentRuns.push(payload);
           }
           return [];
         }),
@@ -175,6 +215,13 @@ function buildCtx() {
     resHeaders: new Headers(),
     user: { id: 18, tierSlug: "free" },
     session: { verified: true },
+  } as any;
+}
+
+function buildOnboardedCtx() {
+  return {
+    ...buildCtx(),
+    user: { id: 18, tierSlug: "free", onboardingComplete: true },
   } as any;
 }
 
@@ -268,6 +315,203 @@ describe("campaignRouter.regenerateFromProfile", () => {
     const caller = campaignRouter.createCaller(buildCtx());
     await expect(caller.regenerateFromProfile({ campaignId: 42 })).rejects.toBeInstanceOf(TRPCError);
     expect(runCreativeAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on semantic validation: claim failed, no charge, no creative, evidence persisted", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent, chargeForStrategyRun } = await import("./lib/agents/strategy-agent");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { createApprovalRequest } = await import("./lib/workflow/engine");
+    const { transitionCampaignState } = await import("./lib/workflow/engine");
+    const { attachCreativeGenerationOperationReference, releaseClaimWithResult } = await import(
+      "./lib/creative/creative-generation-claim"
+    );
+    const { campaignRouter } = await import("./campaign-router");
+
+    const validFlatOutput = {
+      creativeBriefFingerprint: "fp-current",
+      coreMessage: "service",
+      positioning: "service",
+      valueProposition: "service",
+      campaignTheme: "theme",
+      personas: [{ name: "Buyer", demographics: "buyer", painPoints: ["pain"], goals: ["goal"], platforms: ["LinkedIn"] }],
+      ctas: [{ stage: "awareness", cta: "cta", placement: "ad" }],
+      offers: [],
+      funnelStages: [],
+      platformStrategy: [],
+      budgetRecommendation: { total: 0, allocation: [] },
+    };
+
+    const failureEnvelope = {
+      evidenceVersion: 1,
+      outcome: "failed_validation",
+      creativeBriefFingerprint: "fp-current",
+      rawOutput: validFlatOutput,
+      groundedOutput: validFlatOutput,
+      validationDiagnostics: [{ gate: "product/service" }],
+    };
+
+    const db = createMockDb({
+      businessOverrides: {
+        onboardingComplete: true,
+        websiteEvidence: { confidence: 0.8 },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    // Simulate the real runStrategyAgent failure path: attach claim, persist
+    // candidate, persist failure envelope, then throw.
+    vi.mocked(runStrategyAgent).mockImplementationOnce(async ({ onRunCreated }: any) => {
+      const runId = 9001;
+      db.state.agentRunsRows.push({
+        id: runId,
+        userId: 18,
+        campaignId: 42,
+        agentType: "strategy",
+        status: "running",
+        output: null,
+      });
+      if (onRunCreated) {
+        await onRunCreated(runId, {
+          update: vi.fn(() => ({
+            set: vi.fn(() => ({ where: vi.fn(async () => []) })),
+          })),
+        });
+      }
+      db.state.updatedAgentRuns.push({ status: "failed", output: failureEnvelope });
+      throw new TRPCError({
+        code: "UNPROCESSABLE_CONTENT",
+        message: "Strategy output failed validation",
+      });
+    });
+
+    const caller = campaignRouter.createCaller(buildCtx());
+    await expect(caller.regenerateFromProfile({ campaignId: 42 })).rejects.toMatchObject({
+      code: "UNPROCESSABLE_CONTENT",
+    });
+
+    expect(attachCreativeGenerationOperationReference).toHaveBeenCalledWith(
+      expect.objectContaining({ operationReferenceId: 9001 })
+    );
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(chargeForStrategyRun).not.toHaveBeenCalled();
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(transitionCampaignState).not.toHaveBeenCalledWith(42, 18, "generate_creatives");
+
+    const failedRunUpdate = db.state.updatedAgentRuns.find((u: any) => u.status === "failed");
+    expect(failedRunUpdate).toBeDefined();
+    expect(failedRunUpdate.output.rawOutput).toBeDefined();
+    expect(failedRunUpdate.output.groundedOutput).toBeDefined();
+    expect(failedRunUpdate.output.validationDiagnostics).toBeDefined();
+  });
+
+  it("success lifecycle: charges once, auto-approves strategy and starts creative generation", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent, chargeForStrategyRun } = await import("./lib/agents/strategy-agent");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { transitionCampaignState } = await import("./lib/workflow/engine");
+    const { releaseClaimWithResult } = await import("./lib/creative/creative-generation-claim");
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 100,
+          userId: 18,
+          campaignId: 42,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "fp-current" },
+        },
+      ],
+      businessOverrides: {
+        onboardingComplete: true,
+        websiteEvidence: { confidence: 0.8 },
+      },
+      campaignOverrides: {
+        workflowState: "strategy_approved",
+        workflowContext: {
+          approvedStrategyFingerprint: "fp-current",
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "fp-current",
+            strategyRunId: 100,
+            approvalRequestId: 0,
+            status: "approved",
+          },
+        },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const validFlatOutput = {
+      creativeBriefFingerprint: "fp-current",
+      coreMessage: "service",
+      positioning: "service",
+      valueProposition: "service",
+      campaignTheme: "theme",
+      personas: [{ name: "Buyer", demographics: "buyer", painPoints: ["pain"], goals: ["goal"], platforms: ["LinkedIn"] }],
+      ctas: [{ stage: "awareness", cta: "cta", placement: "ad" }],
+      offers: [],
+      funnelStages: [],
+      platformStrategy: [],
+      budgetRecommendation: { total: 0, allocation: [] },
+    };
+
+    vi.mocked(runStrategyAgent).mockResolvedValue({
+      runId: 9001,
+      output: validFlatOutput,
+      promptTokens: 100,
+      completionTokens: 50,
+      actualCostUsdMicro: 0,
+      estimatedCostUsdMicro: 0,
+    } as any);
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 789,
+      savedPosts: 3,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
+
+    const caller = campaignRouter.createCaller(buildCtx());
+    const result = await caller.regenerateFromProfile({ campaignId: 42 });
+
+    expect(result.success).toBe(true);
+    expect(result.strategyRunId).toBe(9001);
+    expect(result.creativeRunId).toBe(789);
+
+    expect(chargeForStrategyRun).toHaveBeenCalledTimes(1);
+    expect(chargeForStrategyRun).toHaveBeenCalledWith(18, 42, expect.objectContaining({ runId: 9001 }));
+
+    // regenerateFromProfile auto-approves the strategy because the user has
+    // explicitly triggered a full regeneration from their business profile; no
+    // separate human approval step is required before creative generation.
+    expect(transitionCampaignState).toHaveBeenCalledWith(42, 18, "generate_strategy");
+    expect(transitionCampaignState).toHaveBeenCalledWith(42, 18, "approve_strategy");
+    expect(transitionCampaignState).toHaveBeenCalledWith(42, 18, "generate_creatives");
+
+    const lineageUpdate = db.state.updatedCampaignStates.find(
+      (u: any) => u.workflowContext?.strategyApprovalLineage?.status === "approved"
+    );
+    expect(lineageUpdate).toBeDefined();
+    expect(lineageUpdate.workflowContext.strategyApprovalLineage).toMatchObject({
+      creativeBriefFingerprint: "fp-current",
+      strategyRunId: 9001,
+      approvalRequestId: 0,
+      status: "approved",
+    });
+
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+    expect(runCreativeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 18,
+        campaignId: 42,
+        generationOperation: { source: "profile", id: 9001 },
+      })
+    );
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
   });
 });
 
@@ -1258,5 +1502,186 @@ describe("campaignRouter.regenerateFromProfile semantic gate", () => {
     await expect(caller.regenerateFromProfile({ campaignId: 42 })).rejects.toBeInstanceOf(TRPCError);
 
     expect(runCreativeAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe("campaignRouter strategy entry-point lifecycle (Phase 2B integration)", () => {
+  const validFlatOutput = {
+    creativeBriefFingerprint: "fp-current",
+    coreMessage: "service",
+    positioning: "service",
+    valueProposition: "service",
+    campaignTheme: "theme",
+    personas: [
+      {
+        name: "Buyer",
+        demographics: "buyer",
+        painPoints: ["pain"],
+        goals: ["goal"],
+        platforms: ["LinkedIn"],
+      },
+    ],
+    ctas: [{ stage: "awareness", cta: "cta", placement: "ad" }],
+    offers: [],
+    budgetRecommendation: { total: 0, allocation: [] },
+  };
+
+  const failureEnvelope = {
+    evidenceVersion: 1,
+    outcome: "failed_validation",
+    creativeBriefFingerprint: "fp-current",
+    rawOutput: validFlatOutput,
+    groundedOutput: validFlatOutput,
+    validationDiagnostics: [],
+  };
+
+  function flushMicrotasks(): Promise<void> {
+    return new Promise((resolve) => setImmediate(resolve));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("create does not reuse a failed-validation envelope and starts a new strategy run", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
+    const { onAgentRunComplete } = await import("./lib/workflow/triggers");
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 247,
+          userId: 18,
+          campaignId: 42,
+          agentType: "strategy",
+          status: "completed",
+          output: failureEnvelope,
+        },
+      ],
+      businessOverrides: {
+        onboardingComplete: true,
+        websiteEvidence: { confidence: 0.8 },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runStrategyAgent).mockResolvedValue({ runId: 248, output: validFlatOutput } as any);
+
+    const caller = campaignRouter.createCaller(buildOnboardedCtx());
+    await caller.create({
+      name: "Test",
+      goal: "Grow",
+      businessId: 7,
+      productOrService: "service",
+      targetBuyer: "buyer",
+      mainPainPoint: "pain",
+    });
+
+    await flushMicrotasks();
+
+    expect(runStrategyAgent).toHaveBeenCalledTimes(1);
+    expect(onAgentRunComplete).not.toHaveBeenCalledWith(247);
+  });
+
+  it("create reuses a valid completed flat strategy run and advances the workflow", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
+    const { onAgentRunComplete } = await import("./lib/workflow/triggers");
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 111,
+          userId: 18,
+          campaignId: 42,
+          agentType: "strategy",
+          status: "completed",
+          output: validFlatOutput,
+        },
+      ],
+      businessOverrides: {
+        onboardingComplete: true,
+        websiteEvidence: { confidence: 0.8 },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = campaignRouter.createCaller(buildOnboardedCtx());
+    await caller.create({
+      name: "Test",
+      goal: "Grow",
+      businessId: 7,
+      productOrService: "service",
+      targetBuyer: "buyer",
+      mainPainPoint: "pain",
+    });
+
+    await flushMicrotasks();
+
+    expect(runStrategyAgent).not.toHaveBeenCalled();
+    expect(onAgentRunComplete).toHaveBeenCalledWith(111);
+  });
+
+  it("regenerateStrategyForApproval does not reuse a failure-envelope completed run", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent, chargeForStrategyRun } = await import("./lib/agents/strategy-agent");
+    const { createApprovalRequest } = await import("./lib/workflow/engine");
+    const { releaseClaimWithResult } = await import("./lib/creative/creative-generation-claim");
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 249,
+          userId: 18,
+          campaignId: 42,
+          agentType: "strategy",
+          status: "completed",
+          output: failureEnvelope,
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runStrategyAgent).mockResolvedValue({ runId: 250, output: validFlatOutput } as any);
+
+    const caller = campaignRouter.createCaller(buildCtx());
+    await caller.regenerateStrategyForApproval({ campaignId: 42 });
+
+    expect(runStrategyAgent).toHaveBeenCalledTimes(1);
+    expect(createApprovalRequest).toHaveBeenCalledTimes(1);
+    expect(chargeForStrategyRun).toHaveBeenCalledTimes(1);
+    expect(chargeForStrategyRun).toHaveBeenCalledWith(18, 42, expect.objectContaining({ runId: 250 }));
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+  });
+
+  it("regenerateStrategyForApproval charges exactly once and creates one approval for a new valid run", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent, chargeForStrategyRun } = await import("./lib/agents/strategy-agent");
+    const { createApprovalRequest } = await import("./lib/workflow/engine");
+    const { releaseClaimWithResult } = await import("./lib/creative/creative-generation-claim");
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runStrategyAgent).mockResolvedValue({
+      runId: 9001,
+      output: validFlatOutput,
+      promptTokens: 100,
+      completionTokens: 50,
+      actualCostUsdMicro: 0,
+      estimatedCostUsdMicro: 0,
+    } as any);
+
+    const caller = campaignRouter.createCaller(buildCtx());
+    const result = await caller.regenerateStrategyForApproval({ campaignId: 42 });
+
+    expect(result.success).toBe(true);
+    expect(result.strategyRunId).toBe(9001);
+    expect(result.reused).toBe(false);
+    expect(chargeForStrategyRun).toHaveBeenCalledTimes(1);
+    expect(createApprovalRequest).toHaveBeenCalledTimes(1);
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
   });
 });

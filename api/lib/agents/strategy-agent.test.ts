@@ -2,16 +2,44 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { generateObject } from "ai";
 import { agentRuns, creativeGenerationClaims } from "@db/schema";
-import { validateStrategyOutput, StrategyOutput, chargeForStrategyRun, runStrategyAgent, groundProductDefiningFields } from "./strategy-agent";
+import {
+  validateStrategyOutput,
+  StrategyOutput,
+  chargeForStrategyRun,
+  runStrategyAgent,
+  groundProductDefiningFields,
+  materialiseGroundedFields,
+  validateGroundedStrategyOutput,
+  validateStrategyOutputAgainstCampaign,
+  isSuccessfulStrategyOutput,
+  type ValidationDiagnostic,
+} from "./strategy-agent";
+import { buildGroundingContract, type GroundedCreativeBrief } from "../creative/brief-grounding";
 
 vi.mock("../billing/credit-engine", () => ({
   deductCredits: vi.fn(async () => ({ newBalance: 97 })),
   recordAiUsage: vi.fn(async () => undefined),
 }));
 
-vi.mock("ai", () => ({
-  generateObject: vi.fn(),
-}));
+vi.mock("ai", () => {
+  class MockNoObjectGeneratedError extends Error {
+    static isInstance(error: unknown): error is MockNoObjectGeneratedError {
+      return error instanceof MockNoObjectGeneratedError;
+    }
+  }
+
+  class MockTypeValidationError extends Error {
+    static isInstance(error: unknown): error is MockTypeValidationError {
+      return error instanceof MockTypeValidationError;
+    }
+  }
+
+  return {
+    generateObject: vi.fn(),
+    NoObjectGeneratedError: MockNoObjectGeneratedError,
+    TypeValidationError: MockTypeValidationError,
+  };
+});
 
 vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
@@ -37,23 +65,27 @@ vi.mock("../alerts", () => ({
   createAlert: vi.fn(async () => ({ id: 1 })),
 }));
 
-vi.mock("../creative/brief-grounding", () => ({
-  buildGroundedCreativeBrief: vi.fn(() => ({
-    fingerprint: "fp-current",
-    productOrService: "payout platform for restaurants",
-    targetBuyer: "restaurant owners",
-    mainPainPoint: "slow end-of-day cash-outs",
-    preferredCta: "Book a Demo",
-    primaryOutcome: "outcome",
-    targetAudience: "audience",
-    coreMessage: "message",
-    offerDetails: "",
-    excludedOffers: "",
-    referenceStyle: "",
-    contentStyle: "",
-    businessType: "B2B",
-  })),
-}));
+vi.mock("../creative/brief-grounding", async () => {
+  const actual = await vi.importActual("../creative/brief-grounding");
+  return {
+    ...(actual as any),
+    buildGroundedCreativeBrief: vi.fn(() => ({
+      fingerprint: "fp-current",
+      productOrService: "payout platform for restaurants",
+      targetBuyer: "restaurant owners",
+      mainPainPoint: "slow end-of-day cash-outs",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "outcome",
+      targetAudience: "audience",
+      coreMessage: "message",
+      offerDetails: "",
+      excludedOffers: "",
+      referenceStyle: "",
+      contentStyle: "",
+      businessType: "B2B",
+    })),
+  };
+});
 
 function buildOutput(overrides: Partial<StrategyOutput> = {}): StrategyOutput {
   return {
@@ -153,7 +185,8 @@ function buildRun248Output(overrides: Partial<StrategyOutput> = {}): StrategyOut
 
 describe("validateStrategyOutput", () => {
   const currentFingerprint = "fp-current";
-  const baseBrief = {
+  const baseBrief: GroundedCreativeBrief = {
+    fingerprint: "fp-current",
     productOrService: "payout platform for restaurants",
     targetBuyer: "restaurant owners",
     mainPainPoint: "Slow end-of-day cash-outs",
@@ -161,6 +194,9 @@ describe("validateStrategyOutput", () => {
     primaryOutcome: "Increase restaurant sign-ups",
     offerDetails: "",
     excludedOffers: "payroll; employee payouts; credit access; mass disbursements",
+    referenceStyle: "",
+    contentStyle: "",
+    businessType: "B2B",
   };
 
   it("accepts a grounded, complete strategy output", () => {
@@ -560,9 +596,8 @@ describe("validateStrategyOutput", () => {
     expect(result.valid).toBe(true);
   });
 
-  it("does not claim verb-to-noun equivalence that is not implemented", () => {
-    // "verify" is not treated as equivalent to "verification" because the
-    // deterministic stemmer does not perform general verb-to-noun conversion.
+  it("accepts bounded verb-to-noun equivalence for verify/verification", () => {
+    // Phase 2B requires the bounded equivalence group verify/verifies/verified/verifying/verification.
     const briefVerification = {
       ...baseBrief,
       productOrService: "balance verification platform",
@@ -577,11 +612,11 @@ describe("validateStrategyOutput", () => {
       currentFingerprint,
       brief: briefVerification,
     });
-    expect(result.valid).toBe(false);
-    expect(result.reason).toMatch(/verification/i);
+    expect(result.valid).toBe(true);
   });
 
-  it("does not claim administer-to-administration equivalence that is not implemented", () => {
+  it("accepts bounded verb-to-noun equivalence for administer/administration", () => {
+    // Phase 2B requires the bounded equivalence group administer/administration forms.
     const briefAdministration = {
       ...baseBrief,
       productOrService: "merchant-account administration",
@@ -596,8 +631,7 @@ describe("validateStrategyOutput", () => {
       currentFingerprint,
       brief: briefAdministration,
     });
-    expect(result.valid).toBe(false);
-    expect(result.reason).toMatch(/administration/i);
+    expect(result.valid).toBe(true);
   });
 });
 
@@ -2035,12 +2069,32 @@ describe("runStrategyAgent atomic run/claim lifecycle", () => {
     const mock = createMockDb();
     vi.mocked(getDb).mockReturnValue(mock.db as any);
 
-    // Generate output that fails semantic validation by omitting the preferred CTA.
+    // Generate output that fails semantic validation because it contains an excluded offer.
+    const { buildGroundedCreativeBrief } = await import("../creative/brief-grounding");
+    vi.mocked(buildGroundedCreativeBrief).mockReturnValueOnce({
+      fingerprint: "fp-current",
+      productOrService: "payout platform for restaurants",
+      targetBuyer: "restaurant owners",
+      mainPainPoint: "slow end-of-day cash-outs",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "outcome",
+      targetAudience: "audience",
+      coreMessage: "message",
+      offerDetails: "",
+      excludedOffers: "free trial",
+      referenceStyle: "",
+      contentStyle: "",
+      businessType: "B2B",
+    });
     vi.mocked(generateObject).mockResolvedValueOnce({
       object: buildOutput({
-        ctas: [
-          { stage: "awareness", cta: "Learn More", placement: "ad headline" },
-          { stage: "conversion", cta: "Sign Up", placement: "landing page" },
+        funnelStages: [
+          {
+            stage: "awareness",
+            goal: "Reach restaurant owners",
+            tactics: ["Start a free trial campaign"],
+            metrics: ["impressions"],
+          },
         ],
       }),
       usage: { promptTokens: 100, completionTokens: 50 },
@@ -2173,11 +2227,32 @@ describe("runStrategyAgent atomic run/claim lifecycle", () => {
     const mock = createMockDb();
     vi.mocked(getDb).mockReturnValue(mock.db as any);
 
+    // Generate output that fails semantic validation because it contains an excluded offer.
+    const { buildGroundedCreativeBrief } = await import("../creative/brief-grounding");
+    vi.mocked(buildGroundedCreativeBrief).mockReturnValueOnce({
+      fingerprint: "fp-current",
+      productOrService: "payout platform for restaurants",
+      targetBuyer: "restaurant owners",
+      mainPainPoint: "slow end-of-day cash-outs",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "outcome",
+      targetAudience: "audience",
+      coreMessage: "message",
+      offerDetails: "",
+      excludedOffers: "free trial",
+      referenceStyle: "",
+      contentStyle: "",
+      businessType: "B2B",
+    });
     vi.mocked(generateObject).mockResolvedValueOnce({
       object: buildOutput({
-        ctas: [
-          { stage: "awareness", cta: "Learn More", placement: "ad headline" },
-          { stage: "conversion", cta: "Sign Up", placement: "landing page" },
+        funnelStages: [
+          {
+            stage: "awareness",
+            goal: "Reach restaurant owners",
+            tactics: ["Start a free trial campaign"],
+            metrics: ["impressions"],
+          },
         ],
       }),
       usage: { promptTokens: 100, completionTokens: 50 },
@@ -2337,7 +2412,7 @@ describe("runStrategyAgent atomic run/claim lifecycle", () => {
 
     // The returned output is grounded, not the raw generated output.
     expect(result.output.coreMessage).toBe(
-      "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services."
+      "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations, controlled payment-instruction services."
     );
     expect(result.output.coreMessage).not.toBe(rawOutput.coreMessage);
 
@@ -2363,11 +2438,32 @@ describe("runStrategyAgent atomic run/claim lifecycle", () => {
     const mock = createMockDb();
     vi.mocked(getDb).mockReturnValue(mock.db as any);
 
+    // Generate output that fails semantic validation because it contains an excluded offer.
+    const { buildGroundedCreativeBrief } = await import("../creative/brief-grounding");
+    vi.mocked(buildGroundedCreativeBrief).mockReturnValueOnce({
+      fingerprint: "fp-current",
+      productOrService: "payout platform for restaurants",
+      targetBuyer: "restaurant owners",
+      mainPainPoint: "slow end-of-day cash-outs",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "outcome",
+      targetAudience: "audience",
+      coreMessage: "message",
+      offerDetails: "",
+      excludedOffers: "free trial",
+      referenceStyle: "",
+      contentStyle: "",
+      businessType: "B2B",
+    });
     vi.mocked(generateObject).mockResolvedValueOnce({
       object: buildOutput({
-        ctas: [
-          { stage: "awareness", cta: "Learn More", placement: "ad headline" },
-          { stage: "conversion", cta: "Sign Up", placement: "landing page" },
+        funnelStages: [
+          {
+            stage: "awareness",
+            goal: "Reach restaurant owners",
+            tactics: ["Start a free trial campaign"],
+            metrics: ["impressions"],
+          },
         ],
       }),
       usage: { promptTokens: 100, completionTokens: 50 },
@@ -2391,5 +2487,703 @@ describe("runStrategyAgent atomic run/claim lifecycle", () => {
 
     const failedUpdate = mock.updateSets.find((set: any) => set.status === "failed");
     expect(failedUpdate).toBeDefined();
+  });
+});
+
+
+describe("Phase 2B evidence reconciliation", () => {
+  const currentFingerprint = "fp-phase2b";
+
+  function buildPhase2Brief(overrides: Partial<GroundedCreativeBrief> = {}): GroundedCreativeBrief {
+    return {
+      fingerprint: currentFingerprint,
+      productOrService:
+        "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services",
+      targetBuyer: "B2B finance teams and merchant operators",
+      mainPainPoint: "manual balance verification and slow payment instructions",
+      preferredCta: "Book a Demo",
+      primaryOutcome: "Qualified merchant onboarding",
+      targetAudience: "B2B finance teams and merchant operators",
+      coreMessage: "B2B payment orchestration",
+      offerDetails: "",
+      excludedOffers: "",
+      referenceStyle: "",
+      contentStyle: "",
+      businessType: "B2B",
+      ...overrides,
+    };
+  }
+
+  function withFingerprint(output: StrategyOutput): StrategyOutput & { creativeBriefFingerprint: string } {
+    return { ...output, creativeBriefFingerprint: currentFingerprint };
+  }
+
+  function buildPhase2Output(overrides: Partial<StrategyOutput> = {}): StrategyOutput {
+    return {
+      personas: [
+        {
+          name: "B2B finance teams and merchant operators",
+          demographics: "B2B finance teams and merchant operators",
+          painPoints: ["manual balance verification and slow payment instructions"],
+          goals: ["Automate payment operations"],
+          platforms: ["LinkedIn", "Email"],
+        },
+      ],
+      positioning:
+        "B2B payment orchestration with prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
+      valueProposition:
+        "B2B payment orchestration with prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
+      coreMessage:
+        "B2B payment orchestration, prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
+      campaignTheme: "Smarter merchant payments",
+      platformStrategy: [
+        {
+          platform: "LinkedIn",
+          purpose: "Reach B2B finance teams and merchant operators",
+          contentTypes: ["sponsored posts"],
+          postingFrequency: "3x per week",
+        },
+      ],
+      funnelStages: [
+        {
+          stage: "awareness",
+          goal: "Reach B2B finance teams",
+          tactics: ["Explain prefunded merchant-account administration"],
+          metrics: ["impressions"],
+        },
+        {
+          stage: "conversion",
+          goal: "Book qualified demos",
+          tactics: ["Use the preferred CTA"],
+          metrics: ["demo bookings"],
+        },
+      ],
+      offers: [],
+      ctas: [
+        { stage: "awareness", cta: "Book a Demo", placement: "ad headline" },
+        { stage: "conversion", cta: "Book a Demo", placement: "landing page" },
+      ],
+      budgetRecommendation: {
+        total: 5000,
+        allocation: [{ channel: "LinkedIn", amount: 5000, percentage: 100 }],
+      },
+      ...overrides,
+    };
+  }
+
+  describe("isSuccessfulStrategyOutput discriminator", () => {
+    it("accepts a flat completed strategy output with a fingerprint", () => {
+      expect(isSuccessfulStrategyOutput(withFingerprint(buildOutput()))).toBe(true);
+    });
+
+    it("rejects a generated_candidate envelope", () => {
+      expect(
+        isSuccessfulStrategyOutput({
+          evidenceVersion: 1,
+          outcome: "generated_candidate",
+          creativeBriefFingerprint: currentFingerprint,
+          rawOutput: buildOutput(),
+        })
+      ).toBe(false);
+    });
+
+    it("rejects a failed_validation envelope", () => {
+      expect(
+        isSuccessfulStrategyOutput({
+          evidenceVersion: 1,
+          outcome: "failed_validation",
+          creativeBriefFingerprint: currentFingerprint,
+          rawOutput: buildOutput(),
+          groundedOutput: buildOutput(),
+          validationDiagnostics: [{ gate: "product/service" }] as ValidationDiagnostic[],
+        })
+      ).toBe(false);
+    });
+
+    it("rejects a failed_generation envelope", () => {
+      expect(
+        isSuccessfulStrategyOutput({
+          evidenceVersion: 1,
+          outcome: "failed_generation",
+          creativeBriefFingerprint: currentFingerprint,
+          validationDiagnostics: { gate: "generation", reason: "OpenAI error" },
+        })
+      ).toBe(false);
+    });
+
+    it("rejects an unknown-outcome envelope", () => {
+      expect(
+        isSuccessfulStrategyOutput({
+          evidenceVersion: 1,
+          outcome: "unknown",
+          creativeBriefFingerprint: currentFingerprint,
+        })
+      ).toBe(false);
+    });
+
+    it("rejects any object that owns an outcome property, regardless of value or type", () => {
+      const base = { creativeBriefFingerprint: currentFingerprint };
+      expect(isSuccessfulStrategyOutput({ ...base, outcome: "failed_validation" })).toBe(false);
+      expect(isSuccessfulStrategyOutput({ ...base, outcome: 1 })).toBe(false);
+      expect(isSuccessfulStrategyOutput({ ...base, outcome: null })).toBe(false);
+      expect(isSuccessfulStrategyOutput({ ...base, outcome: {} })).toBe(false);
+      expect(isSuccessfulStrategyOutput({ ...base, outcome: undefined })).toBe(false);
+    });
+
+    it("rejects non-objects, null and arrays", () => {
+      expect(isSuccessfulStrategyOutput(null)).toBe(false);
+      expect(isSuccessfulStrategyOutput(undefined)).toBe(false);
+      expect(isSuccessfulStrategyOutput("string")).toBe(false);
+      expect(isSuccessfulStrategyOutput(123)).toBe(false);
+      expect(isSuccessfulStrategyOutput([])).toBe(false);
+      expect(isSuccessfulStrategyOutput([{ creativeBriefFingerprint: currentFingerprint }])).toBe(false);
+    });
+
+    it("rejects a flat output missing fingerprint or required fields", () => {
+      expect(isSuccessfulStrategyOutput({ creativeBriefFingerprint: "" })).toBe(false);
+      expect(isSuccessfulStrategyOutput({ creativeBriefFingerprint: currentFingerprint })).toBe(false);
+      expect(
+        isSuccessfulStrategyOutput({
+          creativeBriefFingerprint: currentFingerprint,
+          coreMessage: "x",
+          positioning: "x",
+          valueProposition: "x",
+          campaignTheme: "x",
+          personas: [],
+          ctas: [{ stage: "a", cta: "b", placement: "c" }],
+          offers: [],
+          budgetRecommendation: {},
+        })
+      ).toBe(false);
+    });
+
+    it("rejects malformed personas, CTAs, offers and budget", () => {
+      const base = withFingerprint(buildOutput());
+      expect(isSuccessfulStrategyOutput({ ...base, personas: [] })).toBe(false);
+      expect(isSuccessfulStrategyOutput({ ...base, personas: [{ name: "x" }] })).toBe(false);
+      expect(isSuccessfulStrategyOutput({ ...base, ctas: [] })).toBe(false);
+      expect(isSuccessfulStrategyOutput({ ...base, ctas: [{ cta: "x" }] })).toBe(false);
+      expect(isSuccessfulStrategyOutput({ ...base, offers: null })).toBe(false);
+      expect(isSuccessfulStrategyOutput({ ...base, budgetRecommendation: null })).toBe(false);
+    });
+
+    it("accepts a valid legacy flat successful output", () => {
+      expect(isSuccessfulStrategyOutput(withFingerprint(buildOutput()))).toBe(true);
+    });
+  });
+
+  describe("validateStrategyOutputAgainstCampaign envelope rejection", () => {
+    const campaign = {
+      productOrService: "payout platform for restaurants",
+      targetBuyer: "restaurant owners",
+      mainPainPoint: "slow end-of-day cash-outs",
+      preferredCta: "Book a Demo",
+      offerDetails: "",
+      excludedOffers: "",
+    };
+
+    it("rejects a generated_candidate envelope even when the fingerprint matches", () => {
+      const result = validateStrategyOutputAgainstCampaign(
+        {
+          evidenceVersion: 1,
+          outcome: "generated_candidate",
+          creativeBriefFingerprint: "fp-current",
+          rawOutput: { ...buildOutput(), creativeBriefFingerprint: "fp-current" },
+        },
+        campaign
+      );
+      expect(result.valid).toBe(false);
+      expect(result.reason).toMatch(/evidence envelope/i);
+    });
+
+    it("rejects a failed_validation envelope", () => {
+      const result = validateStrategyOutputAgainstCampaign(
+        {
+          evidenceVersion: 1,
+          outcome: "failed_validation",
+          creativeBriefFingerprint: "fp-current",
+          rawOutput: buildOutput(),
+          groundedOutput: buildOutput(),
+          validationDiagnostics: [{ gate: "main pain point" }] as ValidationDiagnostic[],
+        },
+        campaign
+      );
+      expect(result.valid).toBe(false);
+      expect(result.reason).toMatch(/evidence envelope/i);
+    });
+
+    it("rejects a failed_generation envelope", () => {
+      const result = validateStrategyOutputAgainstCampaign(
+        {
+          evidenceVersion: 1,
+          outcome: "failed_generation",
+          creativeBriefFingerprint: "fp-current",
+          validationDiagnostics: { gate: "generation", reason: "OpenAI error" },
+        },
+        campaign
+      );
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts a valid flat completed output", () => {
+      const result = validateStrategyOutputAgainstCampaign(
+        { ...buildOutput(), creativeBriefFingerprint: "fp-current" },
+        campaign
+      );
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("materialiseGroundedFields field ownership", () => {
+    it("repairs only coreMessage when product clauses are missing", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const raw = buildOutput({
+        coreMessage: "A payment platform.",
+        positioning: "A payment platform for finance teams.",
+        valueProposition: "A payment platform for finance teams.",
+      });
+      const grounded = materialiseGroundedFields(raw, contract);
+      expect(grounded.coreMessage).toMatch(/B2B payment orchestration/i);
+      expect(grounded.positioning).toBe(raw.positioning);
+      expect(grounded.valueProposition).toBe(raw.valueProposition);
+    });
+
+    it("repairs the matching persona using name and demographics only", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const raw = buildOutput({
+        personas: [
+          {
+            name: "Finance Lead Farouk",
+            demographics: "Finance lead for B2B finance teams and merchant operators",
+            painPoints: ["Some pain"],
+            goals: ["Automate payments"],
+            platforms: ["LinkedIn"],
+          },
+        ],
+      });
+      const grounded = materialiseGroundedFields(raw, contract);
+      expect(grounded.personas[0].name).toBe("Finance Lead Farouk");
+      expect(grounded.personas[0].demographics).toBe(
+        "Finance lead for B2B finance teams and merchant operators"
+      );
+      expect(grounded.personas[0].goals).toEqual(["Automate payments"]);
+      expect(grounded.personas[0].platforms).toEqual(["LinkedIn"]);
+    });
+
+    it("replaces an unrelated persona name with a buyer-derived label", () => {
+      const contract = buildGroundingContract(buildPhase2Brief({ excludedOffers: "free trial" }));
+      const raw = buildOutput({
+        personas: [
+          {
+            name: "Small Business Sam",
+            demographics: "Small business owner",
+            painPoints: ["Some unrelated pain"],
+            goals: ["Sign up for a free trial"],
+            platforms: ["Facebook"],
+          },
+        ],
+      });
+      const grounded = materialiseGroundedFields(raw, contract);
+      expect(grounded.personas[0].name).toBe("B2B Finance Teams And Merchant Operators");
+      expect(grounded.personas[0].demographics).toBe("B2B finance teams and merchant operators");
+      expect(grounded.personas[0].painPoints).toContain("manual balance verification and slow payment instructions");
+      expect(grounded.personas[0].goals).toEqual([]);
+      expect(grounded.personas[0].platforms).toEqual(["Facebook"]);
+    });
+
+    it("adds the main pain point only to the selected persona's painPoints", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const raw = buildOutput({
+        personas: [
+          {
+            name: "B2B finance teams and merchant operators",
+            demographics: "B2B finance teams and merchant operators",
+            painPoints: ["Existing pain"],
+            goals: ["Goal"],
+            platforms: ["LinkedIn"],
+          },
+        ],
+      });
+      const grounded = materialiseGroundedFields(raw, contract);
+      expect(grounded.personas[0].painPoints).toContain("manual balance verification and slow payment instructions");
+      expect(grounded.personas[0].goals).toEqual(["Goal"]);
+    });
+
+    it("is idempotent", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const raw = buildOutput({
+        personas: [
+          {
+            name: "B2B finance teams and merchant operators",
+            demographics: "B2B finance teams and merchant operators",
+            painPoints: ["Existing pain"],
+            goals: ["Goal"],
+            platforms: ["LinkedIn"],
+          },
+        ],
+      });
+      const once = materialiseGroundedFields(raw, contract);
+      const twice = materialiseGroundedFields(once, contract);
+      expect(twice).toEqual(once);
+    });
+
+    it("changes only CTA text and preserves stage/placement", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const raw = buildOutput({
+        ctas: [{ stage: "awareness", cta: "Learn More", placement: "ad headline" }],
+      });
+      const grounded = materialiseGroundedFields(raw, contract);
+      expect(grounded.ctas[0].cta).toBe("Book a Demo");
+      expect(grounded.ctas[0].stage).toBe("awareness");
+      expect(grounded.ctas[0].placement).toBe("ad headline");
+    });
+
+    it("forces offers to [] when no offer is authorised", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const raw = buildOutput({
+        offers: [{ name: "Extra", description: "d", targetStage: "a", value: "v" }],
+      });
+      const grounded = materialiseGroundedFields(raw, contract);
+      expect(grounded.offers).toEqual([]);
+    });
+
+    it("does not mutate the raw output", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const raw = buildOutput({ coreMessage: "A payment platform." });
+      const original = JSON.parse(JSON.stringify(raw));
+      materialiseGroundedFields(raw, contract);
+      expect(raw).toEqual(original);
+    });
+  });
+
+  describe("validateGroundedStrategyOutput field ownership", () => {
+    it("fails buyer grounding when the buyer is only in a persona goal", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const output = buildOutput({
+        personas: [
+          {
+            name: "Person",
+            demographics: "Generic person",
+            painPoints: ["Pain"],
+            goals: ["Help B2B finance teams and merchant operators"],
+            platforms: ["LinkedIn"],
+          },
+        ],
+      });
+      const result = validateGroundedStrategyOutput(withFingerprint(output), currentFingerprint, contract);
+      expect(result.valid).toBe(false);
+      expect(result.diagnostics?.some((d) => d.gate === "target buyer")).toBe(true);
+    });
+
+    it("fails pain-point grounding when the pain point is only in campaignTheme", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const output = buildOutput({
+        campaignTheme: "manual balance verification and slow payment instructions",
+        personas: [
+          {
+            name: "B2B finance teams and merchant operators",
+            demographics: "B2B finance teams and merchant operators",
+            painPoints: ["Some other pain"],
+            goals: ["Goal"],
+            platforms: ["LinkedIn"],
+          },
+        ],
+      });
+      const result = validateGroundedStrategyOutput(withFingerprint(output), currentFingerprint, contract);
+      expect(result.valid).toBe(false);
+      expect(result.diagnostics?.some((d) => d.gate === "main pain point")).toBe(true);
+    });
+
+    it("does not treat make or difficult as required capabilities", () => {
+      const contract = buildGroundingContract(
+        buildPhase2Brief({ mainPainPoint: "make it difficult to reserve funds" })
+      );
+      const output = buildPhase2Output({
+        personas: [
+          {
+            name: "B2B finance teams and merchant operators",
+            demographics: "B2B finance teams and merchant operators",
+            painPoints: ["make it difficult to reserve funds for B2B payments"],
+            goals: ["Goal"],
+            platforms: ["LinkedIn"],
+          },
+        ],
+      });
+      const result = validateGroundedStrategyOutput(withFingerprint(output), currentFingerprint, contract);
+      expect(result.valid).toBe(true);
+    });
+
+    it("accepts reserve/reservation morphology equivalence", () => {
+      const contract = buildGroundingContract(
+        buildPhase2Brief({
+          mainPainPoint: "manual transaction reservations",
+        })
+      );
+      const output = buildPhase2Output({
+        personas: [
+          {
+            name: "B2B finance teams and merchant operators",
+            demographics: "B2B finance teams and merchant operators",
+            painPoints: ["We still reserve transactions manual"],
+            goals: ["Goal"],
+            platforms: ["LinkedIn"],
+          },
+        ],
+      });
+      const result = validateGroundedStrategyOutput(withFingerprint(output), currentFingerprint, contract);
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects an unauthorised offer hidden in a user-facing field", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const output = buildOutput({
+        funnelStages: [
+          {
+            stage: "awareness",
+            goal: "Reach buyers",
+            tactics: ["Start a free trial"],
+            metrics: ["impressions"],
+          },
+        ],
+      });
+      const result = validateGroundedStrategyOutput(withFingerprint(output), currentFingerprint, contract);
+      expect(result.valid).toBe(false);
+      expect(result.diagnostics?.some((d) => d.gate === "unauthorised incentive")).toBe(true);
+    });
+  });
+
+  describe("run 249 regression — grammatical words and bounded equivalence", () => {
+    const run249Brief = buildPhase2Brief({
+      mainPainPoint: "make it difficult to reserve funds for controlled payment instructions",
+    });
+
+    it("does not fail because make or difficult are required capabilities", () => {
+      const contract = buildGroundingContract(run249Brief);
+      const output = buildPhase2Output({
+        personas: [
+          {
+            name: "B2B finance teams and merchant operators",
+            demographics: "B2B finance teams and merchant operators",
+            painPoints: [
+              "make it difficult to reserve funds for controlled payment instructions",
+            ],
+            goals: ["Goal"],
+            platforms: ["LinkedIn"],
+          },
+        ],
+      });
+      const result = validateGroundedStrategyOutput(withFingerprint(output), currentFingerprint, contract);
+      expect(result.valid).toBe(true);
+    });
+
+    it("fails when the genuine capability reserve is missing after materialisation", () => {
+      const contract = buildGroundingContract(run249Brief);
+      const output = buildOutput({
+        personas: [
+          {
+            name: "B2B finance teams and merchant operators",
+            demographics: "B2B finance teams and merchant operators",
+            painPoints: ["make it difficult to manage funds"],
+            goals: ["Goal"],
+            platforms: ["LinkedIn"],
+          },
+        ],
+      });
+      const result = validateGroundedStrategyOutput(withFingerprint(output), currentFingerprint, contract);
+      expect(result.valid).toBe(false);
+      expect(result.diagnostics?.some((d) => d.gate === "main pain point")).toBe(true);
+    });
+  });
+
+  describe("runStrategyAgent persistence ordering", () => {
+    const baseBusiness = {
+      name: "Test Business",
+      industry: "Food & Beverage",
+      location: "Johannesburg",
+      productOrService: "payout platform for restaurants",
+      targetCustomer: "restaurant owners",
+      brandTone: "professional",
+      mainGoal: "increase sign-ups",
+      monthlyBudget: 5000,
+      preferredPlatforms: "Facebook, Instagram",
+      website: "https://example.com",
+      websiteEvidence: {},
+    };
+
+    function createMockDb(overrides: { insertId?: number } = {}) {
+      const { insertId = 9001 } = overrides;
+      const updateSets: any[] = [];
+      function makeUpdateMock() {
+        return vi.fn(() => ({
+          set: vi.fn((setValue: any) => {
+            updateSets.push(setValue);
+            return { where: vi.fn(async () => [{ affectedRows: 1 }] as any) };
+          }),
+        }));
+      }
+      const tx = {
+        insert: vi.fn((table: any) => ({
+          values: vi.fn(async () => {
+            return [{ insertId }] as any;
+          }),
+        })),
+        update: makeUpdateMock(),
+      };
+      const db = {
+        transaction: vi.fn(async (callback: (tx: any) => Promise<any>) => callback(tx)),
+        update: makeUpdateMock(),
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn(async () => []),
+              orderBy: vi.fn(() => ({ limit: vi.fn(async () => []) })),
+            })),
+          })),
+        })),
+      };
+      return { db, tx, updateSets };
+    }
+
+    it("persists a generated_candidate envelope before terminal status", async () => {
+      const { getDb } = await import("../../queries/connection");
+      const { agentRuns } = await import("@db/schema");
+      const mock = createMockDb();
+      vi.mocked(getDb).mockReturnValue(mock.db as any);
+      vi.mocked(generateObject).mockResolvedValueOnce({
+        object: buildOutput(),
+        usage: { promptTokens: 100, completionTokens: 50 },
+      } as any);
+
+      const onRunCreated = vi.fn(async (runId: number, tx: any) => {
+        await tx.update(agentRuns).set({ operationReferenceId: runId }).where({});
+      });
+
+      await runStrategyAgent({
+        userId: 18,
+        campaignId: 42,
+        business: baseBusiness,
+        onRunCreated,
+      });
+
+      const candidateUpdate = mock.updateSets.find(
+        (set: any) => set.output?.outcome === "generated_candidate"
+      );
+      expect(candidateUpdate).toBeDefined();
+      expect(candidateUpdate.output.rawOutput).toBeDefined();
+      expect(candidateUpdate.status).toBeUndefined();
+
+      const completedUpdate = mock.updateSets.find((set: any) => set.status === "completed");
+      expect(completedUpdate).toBeDefined();
+    });
+
+    it("persists raw and grounded output plus diagnostics on semantic failure", async () => {
+      const { getDb } = await import("../../queries/connection");
+      const { agentRuns } = await import("@db/schema");
+      const { buildGroundedCreativeBrief } = await import("../creative/brief-grounding");
+      vi.mocked(buildGroundedCreativeBrief).mockReturnValueOnce({
+        fingerprint: "fp-current",
+        productOrService: "payout platform for restaurants",
+        targetBuyer: "restaurant owners",
+        mainPainPoint: "slow end-of-day cash-outs",
+        preferredCta: "Book a Demo",
+        primaryOutcome: "outcome",
+        targetAudience: "audience",
+        coreMessage: "message",
+        offerDetails: "",
+        excludedOffers: "free trial",
+        referenceStyle: "",
+        contentStyle: "",
+        businessType: "B2B",
+      });
+
+      const mock = createMockDb();
+      vi.mocked(getDb).mockReturnValue(mock.db as any);
+      vi.mocked(generateObject).mockResolvedValueOnce({
+        object: buildOutput({
+          funnelStages: [
+            {
+              stage: "awareness",
+              goal: "Reach restaurant owners",
+              tactics: ["Start a free trial campaign"],
+              metrics: ["impressions"],
+            },
+          ],
+        }),
+        usage: { promptTokens: 100, completionTokens: 50 },
+      } as any);
+
+      const onRunCreated = vi.fn(async (runId: number, tx: any) => {
+        await tx.update(agentRuns).set({ operationReferenceId: runId }).where({});
+      });
+
+      await expect(
+        runStrategyAgent({
+          userId: 18,
+          campaignId: 42,
+          business: baseBusiness,
+          onRunCreated,
+        })
+      ).rejects.toBeInstanceOf(TRPCError);
+
+      const failedUpdate = mock.updateSets.find((set: any) => set.status === "failed");
+      expect(failedUpdate).toBeDefined();
+      expect(failedUpdate.output.outcome).toBe("failed_validation");
+      expect(failedUpdate.output.rawOutput).toBeDefined();
+      expect(failedUpdate.output.groundedOutput).toBeDefined();
+      expect(failedUpdate.output.validationDiagnostics).toBeDefined();
+    });
+
+    it("rejects when the final terminal update fails and does not report success", async () => {
+      const { getDb } = await import("../../queries/connection");
+      const { agentRuns } = await import("@db/schema");
+      const { campaigns } = await import("@db/schema");
+      const mock = createMockDb();
+
+      // Force the first terminal update (status: completed) to throw.
+      let updateCallCount = 0;
+      mock.db.update = vi.fn((table: any) => {
+        return {
+          set: vi.fn((setValue: any) => {
+            updateCallCount += 1;
+            mock.updateSets.push(setValue);
+            if (setValue.status === "completed") {
+              return { where: vi.fn(async () => { throw new Error("terminal write failed"); }) };
+            }
+            return { where: vi.fn(async () => [{ affectedRows: 1 }]) };
+          }),
+        };
+      }) as any;
+
+      vi.mocked(getDb).mockReturnValue(mock.db as any);
+      vi.mocked(generateObject).mockResolvedValueOnce({
+        object: buildOutput(),
+        usage: { promptTokens: 100, completionTokens: 50 },
+      } as any);
+
+      const onRunCreated = vi.fn(async (runId: number, tx: any) => {
+        await tx.update(agentRuns).set({ operationReferenceId: runId }).where({});
+      });
+
+      await expect(
+        runStrategyAgent({
+          userId: 18,
+          campaignId: 42,
+          business: baseBusiness,
+          onRunCreated,
+        })
+      ).rejects.toThrow("terminal write failed");
+
+      // Candidate was persisted while running; terminal completed update was attempted.
+      const candidateUpdate = mock.updateSets.find(
+        (set: any) => set.output?.outcome === "generated_candidate"
+      );
+      expect(candidateUpdate).toBeDefined();
+
+      // No successful terminal update was written and no campaign persistence occurred.
+      const completedUpdate = mock.updateSets.find((set: any) => set.status === "completed");
+      expect(completedUpdate).toBeDefined();
+      const campaignUpdate = mock.updateSets.find((set: any) => set.table === campaigns);
+      expect(campaignUpdate).toBeUndefined();
+    });
   });
 });
