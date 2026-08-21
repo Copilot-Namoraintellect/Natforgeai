@@ -67,8 +67,11 @@ function readLineage(ctx: Record<string, unknown> | null | undefined): StrategyA
  * fingerprint exists and matches the fingerprint of the persisted campaign
  * brief.
  */
-export function getStrategyApprovalStatus(campaign: unknown): StrategyApprovalStatus {
-  const brief = buildGroundedCreativeBrief({ campaign });
+export function getStrategyApprovalStatus(
+  campaign: unknown,
+  business?: unknown
+): StrategyApprovalStatus {
+  const brief = buildGroundedCreativeBrief({ campaign, business });
   const ctx =
     campaign && typeof campaign === "object"
       ? ((campaign as Record<string, unknown>).workflowContext as Record<string, unknown> | null | undefined)
@@ -102,13 +105,13 @@ export function getStrategyApprovalStatus(campaign: unknown): StrategyApprovalSt
 }
 
 /** Returns true when an approved strategy exists and matches the current brief. */
-export function isApprovedStrategyCurrent(campaign: unknown): boolean {
-  return getStrategyApprovalStatus(campaign).isCurrent;
+export function isApprovedStrategyCurrent(campaign: unknown, business?: unknown): boolean {
+  return getStrategyApprovalStatus(campaign, business).isCurrent;
 }
 
 /** Returns true when the latest generated strategy matches the current brief. */
-export function isStrategyGeneratedForCurrentBrief(campaign: unknown): boolean {
-  return getStrategyApprovalStatus(campaign).strategyGeneratedForCurrentBrief;
+export function isStrategyGeneratedForCurrentBrief(campaign: unknown, business?: unknown): boolean {
+  return getStrategyApprovalStatus(campaign, business).strategyGeneratedForCurrentBrief;
 }
 
 /**
@@ -130,9 +133,10 @@ export function buildStrategyApprovalLineage(
  */
 export function isLineageAuthoritative(
   campaign: unknown,
-  input: { strategyRunId?: number | null; approvalRequestId?: number | null }
+  input: { strategyRunId?: number | null; approvalRequestId?: number | null },
+  business?: unknown
 ): boolean {
-  const status = getStrategyApprovalStatus(campaign);
+  const status = getStrategyApprovalStatus(campaign, business);
   const lineage = status.lineage;
   if (!lineage) return false;
   if (lineage.creativeBriefFingerprint !== status.currentFingerprint) return false;
@@ -149,9 +153,10 @@ export function isLineageAuthoritative(
 export async function validateStrategyRunForCampaign(
   campaign: unknown,
   userId: number,
-  existingRun?: { status: string; output: unknown } | null
+  existingRun?: { status: string; output: unknown } | null,
+  business?: unknown
 ): Promise<SemanticStrategyValidationResult> {
-  const status = getStrategyApprovalStatus(campaign);
+  const status = getStrategyApprovalStatus(campaign, business);
   const lineage = status.lineage;
   if (!lineage) {
     return { valid: false, reason: "No strategy approval lineage recorded." };
@@ -183,7 +188,7 @@ export async function validateStrategyRunForCampaign(
     return { valid: false, reason: "Linked strategy run is missing or not completed." };
   }
 
-  return validateStrategyOutputAgainstCampaign(run.output, campaign);
+  return validateStrategyOutputAgainstCampaign(run.output, campaign, business);
 }
 
 /**
@@ -193,9 +198,10 @@ export async function validateStrategyRunForCampaign(
  */
 export async function assertApprovedStrategySemanticallyValid(
   campaign: unknown,
-  userId: number
+  userId: number,
+  business?: unknown
 ): Promise<void> {
-  const status = getStrategyApprovalStatus(campaign);
+  const status = getStrategyApprovalStatus(campaign, business);
   if (!status.isCurrent) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
@@ -204,7 +210,7 @@ export async function assertApprovedStrategySemanticallyValid(
     });
   }
 
-  const semantic = await validateStrategyRunForCampaign(campaign, userId);
+  const semantic = await validateStrategyRunForCampaign(campaign, userId, null, business);
   if (!semantic.valid) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",

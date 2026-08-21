@@ -32,6 +32,7 @@ vi.mock("./lib/creative/brief-grounding", () => ({
 vi.mock("./lib/agents/strategy-agent", () => ({
   runStrategyAgent: vi.fn(),
   chargeForStrategyRun: vi.fn(),
+  validateStrategyReadiness: vi.fn(() => ({ ready: true })),
   isSuccessfulStrategyOutput: vi.fn((output: any) => {
     // Default: only flat successful outputs (fingerprint and no envelope outcome)
     // are treated as reusable strategies.
@@ -1624,6 +1625,69 @@ describe("campaignRouter strategy entry-point lifecycle (Phase 2B integration)",
     expect(onAgentRunComplete).toHaveBeenCalledWith(111);
   });
 
+  it("create does not reuse a completed strategy run grounded with stale fallback channels", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
+    const { onAgentRunComplete } = await import("./lib/workflow/triggers");
+    const { buildGroundedCreativeBrief } = await import("./lib/creative/brief-grounding");
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb({
+      agentRunsRows: [
+        {
+          id: 111,
+          userId: 18,
+          campaignId: 42,
+          agentType: "strategy",
+          status: "completed",
+          output: { ...validFlatOutput, creativeBriefFingerprint: "fp-old-linkedin" },
+        },
+      ],
+      businessOverrides: {
+        onboardingComplete: true,
+        websiteEvidence: { confidence: 0.8 },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runStrategyAgent).mockResolvedValue({ runId: 248, output: validFlatOutput } as any);
+
+    // Simulate the business-profile fallback channels changing after the old
+    // strategy run was produced. The fingerprint changes, so the stale run must
+    // not be reused.
+    vi.mocked(buildGroundedCreativeBrief).mockReturnValue({
+      fingerprint: "fp-new-email",
+      productOrService: "service",
+      targetBuyer: "buyer",
+      mainPainPoint: "pain",
+      preferredCta: "cta",
+      primaryOutcome: "outcome",
+      targetAudience: "audience",
+      coreMessage: "message",
+      offerDetails: "",
+      excludedOffers: "",
+      referenceStyle: "",
+      contentStyle: "",
+      businessType: "B2B",
+    } as any);
+
+    const caller = campaignRouter.createCaller(buildOnboardedCtx());
+    await caller.create({
+      name: "Test",
+      goal: "Grow",
+      businessId: 7,
+      productOrService: "service",
+      targetBuyer: "buyer",
+      mainPainPoint: "pain",
+      platforms: "Email",
+      preferredCta: "Book a Demo",
+    });
+
+    await flushMicrotasks();
+
+    expect(runStrategyAgent).toHaveBeenCalledTimes(1);
+    expect(onAgentRunComplete).not.toHaveBeenCalledWith(111);
+  });
+
   it("regenerateStrategyForApproval does not reuse a failure-envelope completed run", async () => {
     const { getDb } = await import("./queries/connection");
     const { runStrategyAgent, chargeForStrategyRun } = await import("./lib/agents/strategy-agent");
@@ -1683,5 +1747,247 @@ describe("campaignRouter strategy entry-point lifecycle (Phase 2B integration)",
     expect(chargeForStrategyRun).toHaveBeenCalledTimes(1);
     expect(createApprovalRequest).toHaveBeenCalledTimes(1);
     expect(releaseClaimWithResult).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+  });
+});
+
+describe("Phase 4 — pre-generation readiness gate at router entry points", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { validateStrategyReadiness } = await import("./lib/agents/strategy-agent");
+    vi.mocked(validateStrategyReadiness).mockReset().mockReturnValue({ ready: true });
+  });
+
+  const validFlatOutput = {
+    creativeBriefFingerprint: "fp-current",
+    coreMessage: "service",
+    positioning: "service",
+    valueProposition: "service",
+    campaignTheme: "theme",
+    personas: [
+      {
+        name: "Buyer",
+        demographics: "buyer",
+        painPoints: ["pain"],
+        goals: ["goal"],
+        platforms: ["LinkedIn"],
+      },
+    ],
+    ctas: [{ stage: "awareness", cta: "cta", placement: "ad" }],
+    offers: [],
+    funnelStages: [],
+    platformStrategy: [],
+    budgetRecommendation: { total: 0, allocation: [] },
+  };
+
+  const readinessChannelFailure = {
+    ready: false as const,
+    code: "PRECONDITION_FAILED" as const,
+    gate: "authorised_channels",
+    field: "preferredChannels",
+    message: "Select at least one campaign channel before regenerating the strategy.",
+    userMessage:
+      "No campaign channel has been selected. Add at least one channel to the campaign brief before regenerating the strategy.",
+  };
+
+  function flushMicrotasks(): Promise<void> {
+    return new Promise((resolve) => setImmediate(resolve));
+  }
+
+  it("regenerateFromProfile fails fast with PRECONDITION_FAILED when no authorised channel is available", async () => {
+    const { getDb } = await import("./queries/connection");
+    const {
+      runStrategyAgent,
+      chargeForStrategyRun,
+      validateStrategyReadiness,
+    } = await import("./lib/agents/strategy-agent");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { createApprovalRequest } = await import("./lib/workflow/engine");
+    const { acquireCreativeGenerationClaim, releaseClaimWithResult } = await import(
+      "./lib/creative/creative-generation-claim"
+    );
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(validateStrategyReadiness).mockReturnValue(readinessChannelFailure);
+
+    const caller = campaignRouter.createCaller(buildCtx());
+    await expect(caller.regenerateFromProfile({ campaignId: 42 })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: readinessChannelFailure.userMessage,
+    });
+
+    expect(validateStrategyReadiness).toHaveBeenCalled();
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+    expect(runStrategyAgent).not.toHaveBeenCalled();
+    expect(chargeForStrategyRun).not.toHaveBeenCalled();
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(releaseClaimWithResult).not.toHaveBeenCalled();
+    expect(db.state.insertedRows.length).toBe(0);
+    expect(db.state.updatedAgentRuns.length).toBe(0);
+  });
+
+  it("regenerateStrategyForApproval fails fast with PRECONDITION_FAILED when no authorised channel is available", async () => {
+    const { getDb } = await import("./queries/connection");
+    const {
+      runStrategyAgent,
+      chargeForStrategyRun,
+      validateStrategyReadiness,
+    } = await import("./lib/agents/strategy-agent");
+    const { createApprovalRequest } = await import("./lib/workflow/engine");
+    const { acquireCreativeGenerationClaim, releaseClaimWithResult } = await import(
+      "./lib/creative/creative-generation-claim"
+    );
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(validateStrategyReadiness).mockReturnValue(readinessChannelFailure);
+
+    const caller = campaignRouter.createCaller(buildCtx());
+    await expect(caller.regenerateStrategyForApproval({ campaignId: 42 })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: readinessChannelFailure.userMessage,
+    });
+
+    expect(validateStrategyReadiness).toHaveBeenCalled();
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+    expect(runStrategyAgent).not.toHaveBeenCalled();
+    expect(chargeForStrategyRun).not.toHaveBeenCalled();
+    expect(createApprovalRequest).not.toHaveBeenCalled();
+    expect(releaseClaimWithResult).not.toHaveBeenCalled();
+    expect(db.state.updatedAgentRuns.length).toBe(0);
+  });
+
+  it("create returns a structured readiness block and does not auto-start when the brief has no authorised channel", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent, validateStrategyReadiness } = await import("./lib/agents/strategy-agent");
+    const { onAgentRunComplete } = await import("./lib/workflow/triggers");
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb({
+      businessOverrides: {
+        onboardingComplete: true,
+        websiteEvidence: { confidence: 0.8 },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(validateStrategyReadiness).mockReturnValue(readinessChannelFailure);
+
+    const caller = campaignRouter.createCaller(buildOnboardedCtx());
+    const result = await caller.create({
+      name: "Test",
+      goal: "Grow",
+      businessId: 7,
+      productOrService: "service",
+      targetBuyer: "buyer",
+      mainPainPoint: "pain",
+    });
+
+    await flushMicrotasks();
+
+    expect(result.success).toBe(true);
+    expect(result.workflowState).toBe("strategy_pending");
+    expect(result.readiness).toEqual(readinessChannelFailure);
+    expect(validateStrategyReadiness).toHaveBeenCalled();
+    expect(runStrategyAgent).not.toHaveBeenCalled();
+    expect(onAgentRunComplete).not.toHaveBeenCalled();
+  });
+
+  it("create auto-starts strategy when the brief has all required authoritative inputs", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent, validateStrategyReadiness } = await import("./lib/agents/strategy-agent");
+    const { onAgentRunComplete } = await import("./lib/workflow/triggers");
+    const { campaignRouter } = await import("./campaign-router");
+
+    const db = createMockDb({
+      businessOverrides: {
+        onboardingComplete: true,
+        websiteEvidence: { confidence: 0.8 },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runStrategyAgent).mockResolvedValue({ runId: 248, output: validFlatOutput } as any);
+
+    const caller = campaignRouter.createCaller(buildOnboardedCtx());
+    await caller.create({
+      name: "Test",
+      goal: "Grow",
+      businessId: 7,
+      productOrService: "service",
+      targetBuyer: "buyer",
+      mainPainPoint: "pain",
+      platforms: "LinkedIn",
+      preferredCta: "Book a Demo",
+    });
+
+    await flushMicrotasks();
+
+    expect(validateStrategyReadiness).toHaveBeenCalled();
+    expect(runStrategyAgent).toHaveBeenCalledTimes(1);
+    expect(onAgentRunComplete).toHaveBeenCalledWith(248);
+  });
+
+  it("after create returns a readiness block, a later strategy regeneration on the same campaign succeeds once the brief is completed", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runStrategyAgent, validateStrategyReadiness } = await import("./lib/agents/strategy-agent");
+    const { createApprovalRequest } = await import("./lib/workflow/engine");
+    const { acquireCreativeGenerationClaim } = await import("./lib/creative/creative-generation-claim");
+    const { campaignRouter } = await import("./campaign-router");
+
+    let readinessResponse: any = readinessChannelFailure;
+    vi.mocked(validateStrategyReadiness).mockImplementation(() => readinessResponse);
+
+    const createDb = createMockDb({
+      businessOverrides: {
+        onboardingComplete: true,
+        websiteEvidence: { confidence: 0.8 },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(createDb as any);
+
+    const caller = campaignRouter.createCaller(buildOnboardedCtx());
+    const result = await caller.create({
+      name: "Test",
+      goal: "Grow",
+      businessId: 7,
+      productOrService: "service",
+      targetBuyer: "buyer",
+      mainPainPoint: "pain",
+    });
+
+    await flushMicrotasks();
+
+    expect(result.success).toBe(true);
+    expect(result.readiness).toEqual(readinessChannelFailure);
+    expect(runStrategyAgent).not.toHaveBeenCalled();
+
+    // Simulate the user completing the brief: channels and CTA are now present.
+    readinessResponse = { ready: true };
+    vi.mocked(runStrategyAgent).mockResolvedValue({ runId: 248, output: validFlatOutput } as any);
+
+    const retryDb = createMockDb({
+      campaignOverrides: {
+        workflowState: "strategy_pending",
+        platforms: "LinkedIn",
+        preferredCta: "Book a Demo",
+        productOrService: "service",
+        targetBuyer: "buyer",
+        mainPainPoint: "pain",
+      },
+      businessOverrides: {
+        onboardingComplete: true,
+        websiteEvidence: { confidence: 0.8 },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(retryDb as any);
+
+    await caller.regenerateStrategyForApproval({ campaignId: 42 });
+
+    expect(validateStrategyReadiness).toHaveBeenCalled();
+    expect(acquireCreativeGenerationClaim).toHaveBeenCalled();
+    expect(runStrategyAgent).toHaveBeenCalledTimes(1);
+    expect(createApprovalRequest).toHaveBeenCalled();
   });
 });

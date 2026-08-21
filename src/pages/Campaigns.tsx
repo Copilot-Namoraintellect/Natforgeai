@@ -56,6 +56,30 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+interface CreateCampaignSuccessPayload {
+  id: number;
+  workflowState: string;
+  readiness?: { ready: false; userMessage: string } | { ready: true };
+}
+
+/**
+ * Determine whether a successful campaign creation response carries a
+ * pre-generation readiness block that the UI must surface instead of
+ * auto-starting strategy generation.
+ */
+export function getCreateReadinessToast(
+  data: CreateCampaignSuccessPayload
+): { message: string; actionLabel: string; actionPath: string } | null {
+  if (data.readiness && !data.readiness.ready) {
+    return {
+      message: data.readiness.userMessage,
+      actionLabel: "Edit brief",
+      actionPath: `/campaigns?campaignId=${data.id}&editBrief=true`,
+    };
+  }
+  return null;
+}
+
 export default function Campaigns() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -208,7 +232,6 @@ export default function Campaigns() {
       utils.campaign.list.invalidate();
       utils.subscription.myUsage.invalidate();
       setCreateOpen(false);
-      toast.success("Campaign created. NatForgeAI is preparing your strategy.");
       // Reset form
       setFormName("");
       setFormGoal("");
@@ -229,6 +252,23 @@ export default function Campaigns() {
       if (data.id) {
         setHighlightedId(data.id);
         setTimeout(() => setHighlightedId(null), 4000);
+
+        // The server may return a structured readiness block when the brief is
+        // missing required authoritative inputs. In that case the campaign is
+        // created, but strategy generation is intentionally not started. Show a
+        // concise, actionable toast that navigates to the brief editor.
+        const readinessToast = getCreateReadinessToast(data);
+        if (readinessToast) {
+          toast.error(readinessToast.message, {
+            action: {
+              label: readinessToast.actionLabel,
+              onClick: () => navigate(readinessToast.actionPath),
+            },
+          });
+          return;
+        }
+
+        toast.success("Campaign created. NatForgeAI is preparing your strategy.");
         // Route immediately using the workflowState returned by the server.
         // Admins bypass onboarding so they can keep managing the platform.
         if (data.workflowState === "business_onboarding" && user?.role !== "admin") {

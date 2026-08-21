@@ -12,6 +12,7 @@ import {
   chargeForStrategyRun,
   validateStrategyOutputAgainstCampaign,
   isSuccessfulStrategyOutput,
+  validateStrategyReadiness,
   type StrategyAgentRunResult,
 } from "./lib/agents/strategy-agent";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
@@ -102,7 +103,15 @@ export const campaignRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
 
-      const status = getStrategyApprovalStatus(camp);
+      const [business] = camp.businessId
+        ? await db
+            .select()
+            .from(businesses)
+            .where(and(eq(businesses.id, camp.businessId), eq(businesses.userId, ctx.user.id)))
+            .limit(1)
+        : [null];
+
+      const status = getStrategyApprovalStatus(camp, business);
       let isApprovedStrategyCurrent = status.isCurrent;
       let isStale = false;
       let reason: string | undefined;
@@ -112,7 +121,7 @@ export const campaignRouter = createRouter({
       // report the strategy as stale so the UI offers regeneration instead of
       // generation from an unsafe approved strategy.
       if (status.lineage) {
-        const semantic = await validateStrategyRunForCampaign(camp, ctx.user.id);
+        const semantic = await validateStrategyRunForCampaign(camp, ctx.user.id, null, business);
         if (!semantic.valid) {
           isApprovedStrategyCurrent = false;
           isStale = true;
@@ -252,15 +261,39 @@ export const campaignRouter = createRouter({
 
       // Auto-start Strategy Agent for onboarded businesses
       if (workflowState === "strategy_pending" && businessId) {
+        // Pre-generation readiness: load the linked business and validate the
+        // brief before acquiring any workflow resources (claim, run, model call,
+        // credits, approval). A readiness failure is returned to the client so
+        // the UI can guide the user to complete the brief.
+        const [business] = await db
+          .select()
+          .from(businesses)
+          .where(eq(businesses.id, businessId))
+          .limit(1);
+
+        if (business) {
+          const readiness = validateStrategyReadiness(
+            {
+              productOrService: input.productOrService,
+              targetBuyer: input.targetBuyer,
+              mainPainPoint: input.mainPainPoint,
+              platforms: input.platforms,
+              preferredPlatforms: business.preferredPlatforms,
+              preferredCta: input.preferredCta,
+            },
+            campaignId
+          );
+          if (!readiness.ready) {
+            return { id: campaignId, success: true, workflowState, readiness };
+          }
+        }
+
         Promise.resolve().then(async () => {
           try {
-            const [business] = await db
-              .select()
-              .from(businesses)
-              .where(eq(businesses.id, businessId))
-              .limit(1);
-
-            if (!business) return;
+            if (!business) {
+              console.log(`[CampaignCreate] Strategy auto-start skipped: business ${businessId} not found for campaign ${campaignId}`);
+              return;
+            }
 
             // Confidence / evidence gate before auto-starting strategy
             const evidence = (business.websiteEvidence || null) as {
@@ -276,7 +309,7 @@ export const campaignRouter = createRouter({
             // Fingerprint-aware deduplication: reuse a completed strategy run whose
             // brief fingerprint matches the current campaign brief. Historical runs
             // are preserved.
-            const currentFingerprint = getStrategyApprovalStatus({ ...input, id: campaignId }).currentFingerprint;
+            const currentFingerprint = getStrategyApprovalStatus({ ...input, id: campaignId }, business).currentFingerprint;
             const previousRuns = await db
               .select()
               .from(agentRuns)
@@ -650,6 +683,26 @@ export const campaignRouter = createRouter({
         }
         console.log(`[regenerateFromProfile] business loaded | businessId=${business.id} | name=${business.name}`);
 
+        // Pre-generation readiness: fail fast before acquiring the claim or
+        // creating any workflow resources.
+        const readiness = validateStrategyReadiness(
+          {
+            productOrService: campaign.productOrService,
+            targetBuyer: campaign.targetBuyer,
+            mainPainPoint: campaign.mainPainPoint,
+            platforms: campaign.platforms,
+            preferredPlatforms: business.preferredPlatforms,
+            preferredCta: campaign.preferredCta,
+          },
+          campaignId
+        );
+        if (!readiness.ready) {
+          throw new TRPCError({
+            code: readiness.code as any,
+            message: readiness.userMessage,
+          });
+        }
+
         // Authoritative atomic claim: only one regeneration can proceed.
         ownerToken = generateOwnerToken();
         const claimResult = await acquireCreativeGenerationClaim({
@@ -803,7 +856,7 @@ export const campaignRouter = createRouter({
           .where(eq(campaigns.id, campaignId))
           .limit(1);
         if (regeneratedCampaign) {
-          const { currentFingerprint } = getStrategyApprovalStatus(regeneratedCampaign);
+          const { currentFingerprint } = getStrategyApprovalStatus(regeneratedCampaign, business);
           await db
             .update(campaigns)
             .set({
@@ -976,7 +1029,27 @@ export const campaignRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
       }
 
-      const currentFingerprint = getStrategyApprovalStatus(campaign).currentFingerprint;
+      // Pre-generation readiness: fail fast before acquiring the claim or
+      // creating any workflow resources.
+      const readiness = validateStrategyReadiness(
+        {
+          productOrService: campaign.productOrService,
+          targetBuyer: campaign.targetBuyer,
+          mainPainPoint: campaign.mainPainPoint,
+          platforms: campaign.platforms,
+          preferredPlatforms: business.preferredPlatforms,
+          preferredCta: campaign.preferredCta,
+        },
+        campaignId
+      );
+      if (!readiness.ready) {
+        throw new TRPCError({
+          code: readiness.code as any,
+          message: readiness.userMessage,
+        });
+      }
+
+      const currentFingerprint = getStrategyApprovalStatus(campaign, business).currentFingerprint;
 
       // Authoritative atomic claim: only one strategy-regeneration operation at a time.
       const ownerToken = generateOwnerToken();

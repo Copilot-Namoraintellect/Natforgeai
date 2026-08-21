@@ -17,6 +17,7 @@ import {
   clauseCoversText,
   extractRequiredTokens,
   outputContainsToken,
+  safeJoinClauses,
   validateProvenance,
 } from "../creative/brief-grounding";
 import { deductCredits, recordAiUsage } from "../billing/credit-engine";
@@ -128,6 +129,124 @@ export interface StrategyAgentRunResult {
   completionTokens: number;
   actualCostUsdMicro: number;
   estimatedCostUsdMicro: number;
+}
+
+export interface StrategyReadinessInput {
+  productOrService?: string | null;
+  targetBuyer?: string | null;
+  mainPainPoint?: string | null;
+  platforms?: string | null;
+  preferredPlatforms?: string | null;
+  preferredCta?: string | null;
+}
+
+export interface StrategyReadinessFailure {
+  ready: false;
+  code: "PRECONDITION_FAILED";
+  gate: string;
+  field: string;
+  message: string;
+  userMessage: string;
+  action?: { type: "navigate"; path: string; query: Record<string, string> };
+}
+
+export interface StrategyReadinessSuccess {
+  ready: true;
+}
+
+export type StrategyReadinessResult = StrategyReadinessSuccess | StrategyReadinessFailure;
+
+function parseReadinessChannels(platforms?: string | null, preferredPlatforms?: string | null): string[] {
+  const source = (platforms || preferredPlatforms || "").trim();
+  if (!source) return [];
+  const channels = source
+    .split(/[,;\n]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set(channels));
+}
+
+/**
+ * Pre-generation readiness validator.  This runs before any workflow resources
+ * (claim, agent run, model call, credits, approval) are acquired so missing
+ * authoritative inputs fail fast without side effects.
+ */
+export function validateStrategyReadiness(
+  input: StrategyReadinessInput,
+  campaignId?: number
+): StrategyReadinessResult {
+  const product = (input.productOrService || "").trim();
+  const buyer = (input.targetBuyer || "").trim();
+  const pain = (input.mainPainPoint || "").trim();
+  const cta = (input.preferredCta || "").trim();
+  const channels = parseReadinessChannels(input.platforms, input.preferredPlatforms);
+
+  const editAction = campaignId
+    ? { type: "navigate" as const, path: "/campaigns", query: { campaignId: String(campaignId), editBrief: "true" } }
+    : undefined;
+
+  if (!product) {
+    return {
+      ready: false,
+      code: "PRECONDITION_FAILED",
+      gate: "product/service",
+      field: "productOrService",
+      message: "Product or service is required to generate a strategy.",
+      userMessage: "Add a product or service to the campaign brief before regenerating the strategy.",
+      action: editAction,
+    };
+  }
+
+  if (!buyer) {
+    return {
+      ready: false,
+      code: "PRECONDITION_FAILED",
+      gate: "target_buyer",
+      field: "targetBuyer",
+      message: "Target buyer is required to generate a strategy.",
+      userMessage: "Add a target buyer to the campaign brief before regenerating the strategy.",
+      action: editAction,
+    };
+  }
+
+  if (!pain) {
+    return {
+      ready: false,
+      code: "PRECONDITION_FAILED",
+      gate: "main_pain_point",
+      field: "mainPainPoint",
+      message: "Main pain point is required to generate a strategy.",
+      userMessage: "Add a main pain point to the campaign brief before regenerating the strategy.",
+      action: editAction,
+    };
+  }
+
+  if (channels.length === 0) {
+    return {
+      ready: false,
+      code: "PRECONDITION_FAILED",
+      gate: "authorised_channels",
+      field: "preferredChannels",
+      message: "Select at least one campaign channel before regenerating the strategy.",
+      userMessage:
+        "No campaign channel has been selected. Add at least one channel to the campaign brief before regenerating the strategy.",
+      action: editAction,
+    };
+  }
+
+  if (!cta) {
+    return {
+      ready: false,
+      code: "PRECONDITION_FAILED",
+      gate: "preferred_cta",
+      field: "preferredCta",
+      message: "Preferred CTA is required to generate a strategy.",
+      userMessage: "Add a preferred CTA to the campaign brief before regenerating the strategy.",
+      action: editAction,
+    };
+  }
+
+  return { ready: true };
 }
 
 /**
@@ -272,22 +391,18 @@ function buildCanonicalProductStatement(input: {
       .replace(/[^a-z0-9]+/g, " ")
       .trim();
 
-  const productStatement = product.endsWith(".") ? product.slice(0, -1) : product;
-  const coreStatement = coreMessage.endsWith(".") ? coreMessage.slice(0, -1) : coreMessage;
-
-  if (productStatement && coreStatement) {
-    const productNorm = normalize(productStatement);
-    const coreNorm = normalize(coreStatement);
+  if (product && coreMessage) {
+    const productNorm = normalize(product);
+    const coreNorm = normalize(coreMessage);
     // Avoid duplicating a core message whose substance is already covered by
     // the product statement.
     if (coreNorm && (productNorm.includes(coreNorm) || coreNorm.includes(productNorm))) {
-      return productStatement.endsWith(".") ? productStatement : `${productStatement}.`;
+      return safeJoinClauses([product]);
     }
-    return `${productStatement}. ${coreStatement}.`;
+    return safeJoinClauses([product, coreMessage]);
   }
 
-  const statement = productStatement || coreStatement || "";
-  return statement.endsWith(".") ? statement : `${statement}.`;
+  return safeJoinClauses([product || coreMessage]);
 }
 
 /**
@@ -298,10 +413,9 @@ function buildCanonicalPositioningStatement(brief: Pick<GroundedCreativeBrief, "
   const product = (brief.productOrService || "").trim();
   const buyer = (brief.targetBuyer || "").trim();
   if (!product && !buyer) return "";
-  if (!buyer) return product.endsWith(".") ? product : `${product}.`;
-  if (!product) return buyer.endsWith(".") ? buyer : `${buyer}.`;
-  const statement = `${product} for ${buyer}`;
-  return statement.endsWith(".") ? statement : `${statement}.`;
+  if (!buyer) return safeJoinClauses([product]);
+  if (!product) return safeJoinClauses([buyer]);
+  return safeJoinClauses([`${product} for ${buyer}`]);
 }
 
 /**
@@ -316,17 +430,16 @@ function buildCanonicalValueProposition(
   const outcome = (brief.primaryOutcome || "").trim();
 
   if (product && buyer) {
-    const statement = `${product} for ${buyer}`;
-    const productStatement = statement.endsWith(".") ? statement.slice(0, -1) : statement;
+    const productStatement = safeJoinClauses([`${product} for ${buyer}`]);
     if (outcome) {
-      return `${productStatement}. Intended outcome: ${outcome}.`;
+      return safeJoinClauses([productStatement, `Intended outcome: ${outcome}`]);
     }
-    return `${productStatement}.`;
+    return productStatement;
   }
   if (product && outcome) {
-    return `${product.endsWith(".") ? product.slice(0, -1) : product}. Intended outcome: ${outcome}.`;
+    return safeJoinClauses([product, `Intended outcome: ${outcome}`]);
   }
-  return product ? (product.endsWith(".") ? product : `${product}.`) : "";
+  return safeJoinClauses([product]);
 }
 
 function parseAuthorisedOffers(offerDetails: string | undefined): StrategyOutput["offers"] {
@@ -431,13 +544,22 @@ function buildCanonicalCtas(
   rawCtas: StrategyOutput["ctas"]
 ): StrategyOutput["ctas"] {
   const ctaText = contract.preferredCta?.trim() || "Learn More";
+  const channels = contract.authorized.channels.map(capitaliseChannel);
+  // Deterministic placements: authorised channels first, then a neutral fallback.
+  const neutralPlacement = "primary campaign placement";
+  const defaultPlacements = channels.length > 0 ? channels : [neutralPlacement];
+
   if (!rawCtas.length) {
     return [
-      { stage: "awareness", cta: ctaText, placement: "ad headline" },
-      { stage: "conversion", cta: ctaText, placement: "landing page" },
+      { stage: "awareness", cta: ctaText, placement: defaultPlacements[0] || neutralPlacement },
+      { stage: "conversion", cta: ctaText, placement: defaultPlacements[1] || defaultPlacements[0] || neutralPlacement },
     ];
   }
-  return rawCtas.map((cta) => ({ ...cta, cta: ctaText }));
+  return rawCtas.map((cta, index) => ({
+    ...cta,
+    cta: ctaText,
+    placement: defaultPlacements[index] || defaultPlacements[0] || neutralPlacement,
+  }));
 }
 
 function buildCanonicalPlatformStrategy(
@@ -989,9 +1111,10 @@ export function validateStrategyOutput({
  */
 export function validateStrategyOutputAgainstCampaign(
   output: unknown,
-  campaign: unknown
+  campaign: unknown,
+  business?: unknown
 ): StrategyValidationResult {
-  const brief = buildGroundedCreativeBrief({ campaign });
+  const brief = buildGroundedCreativeBrief({ campaign, business });
   const raw = (output || {}) as Record<string, unknown>;
 
   if (typeof raw.outcome === "string") {
@@ -1174,9 +1297,29 @@ export async function runStrategyAgent({
   const fingerprintSource = campaignBrief
     ? ({ ...campaignBrief } as Record<string, unknown>)
     : currentCampaign ?? {};
-  const brief = buildGroundedCreativeBrief({ campaign: fingerprintSource });
+  const brief = buildGroundedCreativeBrief({ campaign: fingerprintSource, business });
   const briefFingerprint = brief.fingerprint;
   const contract = buildGroundingContract(brief);
+
+  // Defence-in-depth readiness check before any workflow resources are committed.
+  // Router entry points should already have validated; this guards direct callers.
+  const readiness = validateStrategyReadiness(
+    {
+      productOrService: brief.productOrService,
+      targetBuyer: brief.targetBuyer,
+      mainPainPoint: brief.mainPainPoint,
+      platforms: brief.platforms,
+      preferredPlatforms: business.preferredPlatforms,
+      preferredCta: brief.preferredCta,
+    },
+    campaignId
+  );
+  if (!readiness.ready) {
+    throw new TRPCError({
+      code: readiness.code as any,
+      message: readiness.userMessage,
+    });
+  }
 
   const runId = await db.transaction(async (tx) => {
     const [insertResult] = await tx.insert(agentRuns).values({

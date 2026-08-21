@@ -32,6 +32,13 @@ export interface CreativeBriefFingerprintInput {
   contentStyle?: string | null;
   /** Authorised channels/platforms supplied by the campaign brief. */
   platforms?: string | null;
+  /**
+   * Channels resolved from the business profile fallback when the campaign
+   * provides no explicit platforms. Participates in the fingerprint so that
+   * strategy output grounded on fallback channels is invalidated when the
+   * fallback changes, while explicit campaign channels always take precedence.
+   */
+  resolvedPlatforms?: string | null;
 }
 
 export type BusinessTypeClassification = "B2B" | "B2C" | "mixed" | "not_specified";
@@ -58,6 +65,7 @@ const FINGERPRINT_FIELDS: (keyof CreativeBriefFingerprintInput)[] = [
   "referenceStyle",
   "contentStyle",
   "platforms",
+  "resolvedPlatforms",
 ];
 
 /**
@@ -87,6 +95,47 @@ function normalizeFingerprintValue(value: unknown): string {
 
 function sanitizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * Safely compose authoritative clauses into one sentence.
+ *
+ * - Trims each clause.
+ * - Strips duplicate terminal punctuation before joining.
+ * - Adds exactly one final punctuation mark.
+ * - Preserves internal punctuation such as abbreviations and colons.
+ */
+export function safeJoinClauses(
+  clauses: string[],
+  options: { separator?: string; finalPunctuation?: string } = {}
+): string {
+  const separator = options.separator ?? " ";
+  const finalPunctuation = options.finalPunctuation ?? ".";
+
+  // Strip trailing whitespace/terminal punctuation from each clause.  Also
+  // remove terminal punctuation that appears before a joining word inside a
+  // single clause (e.g. "services. for small businesses" -> "services for small
+  // businesses").  This prevents malformed joins such as
+  // "services. for small businesses." or "administration..".
+  const cleaned = clauses
+    .map((clause) =>
+      clause
+        .trim()
+        .replace(/[\s.,;:!?]+(?=\s+(for|with|and|or|to|of|in|on|at|by)\b)/gi, " ")
+        .replace(/[\s.,;:!?]+$/, "")
+    )
+    .filter(Boolean);
+
+  if (cleaned.length === 0) return "";
+
+  if (cleaned.length === 1) {
+    const single = cleaned[0].replace(/\s+/g, " ").trim();
+    return `${single}${finalPunctuation}`.replace(/\s+/g, " ");
+  }
+
+  const sentences = cleaned.map((clause) => `${clause}.`);
+  const joined = sentences.join(separator).replace(/\s+/g, " ").trim();
+  return joined.replace(/[.,;:!?]+$/, finalPunctuation);
 }
 
 function pickCampaignBriefInput(campaign: unknown): CreativeBriefFingerprintInput {
@@ -321,10 +370,34 @@ export function buildGroundedCreativeBrief(input: GroundingInput): GroundedCreat
   const contentStyle =
     campaignInput.contentStyle || sanitizeString(business.brandTone) || sanitizeString(business.visualStyle) || "";
   const primaryOutcome = campaignInput.primaryOutcome || "";
-  const platforms = campaignInput.platforms || "";
-  const authorisedChannels = parseAuthorisedChannels(platforms);
 
-  const fingerprint = computeCreativeBriefFingerprint(campaignInput);
+  // Channel authority precedence:
+  // 1. campaign.platforms (explicitly chosen for this campaign)
+  // 2. business.preferredPlatforms (profile default when campaign has none)
+  // 3. none (empty)
+  //
+  // The fingerprint always reflects the actual resolved channels so that a
+  // strategy grounded on fallback channels is invalidated when the fallback
+  // changes. Explicit campaign platforms take precedence and isolate the
+  // fingerprint from unrelated business-profile changes.
+  const platformSource =
+    campaignInput.platforms ||
+    sanitizeString(business.preferredPlatforms) ||
+    "";
+  const platforms = platformSource;
+  const authorisedChannels = parseAuthorisedChannels(platformSource);
+
+  // Only include the business-profile fallback in the fingerprint when the
+  // campaign itself provides no explicit platforms. This preserves precedence
+  // and keeps unrelated business fields from affecting the fingerprint.
+  const resolvedPlatforms = !campaignInput.platforms?.trim()
+    ? sanitizeString(business.preferredPlatforms)
+    : "";
+
+  const fingerprint = computeCreativeBriefFingerprint({
+    ...campaignInput,
+    resolvedPlatforms,
+  });
 
   const websiteTargetCustomers = Array.isArray((business.websiteEvidence as any)?.targetCustomers)
     ? ((business.websiteEvidence as any).targetCustomers as string[]).filter((s): s is string => typeof s === "string")
@@ -353,6 +426,7 @@ export function buildGroundedCreativeBrief(input: GroundingInput): GroundedCreat
     referenceStyle,
     contentStyle,
     platforms,
+    resolvedPlatforms,
     fingerprint,
     businessType,
     authorisedChannels,
@@ -773,10 +847,48 @@ export const SAFE_EXECUTION_TERMS = new Set([
 ]);
 
 /**
- * Programme formats that require explicit authorisation.  These introduce a
- * service, offer or ongoing commitment that must be grounded in the brief.
+ * Multi-word programme formats that require explicit authorisation.
+ * Phrases are checked before single-word terms so ambiguous words such as
+ * "audit" inside "audit trail" are not misclassified.
  */
-export const PROGRAMME_TAXONOMY = [
+export const PROGRAMME_PHRASE_TAXONOMY = [
+  "free trial",
+  "free trials",
+  "free consultation",
+  "free consultations",
+  "free assessment",
+  "free assessments",
+  "free audit",
+  "free audits",
+  "free demo",
+  "free demos",
+  "book an audit",
+  "audit service",
+  "audit services",
+  "consultation service",
+  "consultation services",
+  "assessment service",
+  "assessment services",
+  "newsletter subscription",
+  "newsletter subscriptions",
+  "customer support",
+  "help desk",
+  "helpdesk",
+  "support desk",
+  "account manager",
+  "account management",
+  "loyalty programme",
+  "loyalty program",
+  "loyalty programmes",
+  "loyalty programs",
+];
+
+/**
+ * Single-word programme formats that require explicit authorisation.  These are
+ * checked with word boundaries, but excluded from common non-programme
+ * compound phrases (e.g. "audit trail" is an operational record, not a service).
+ */
+export const PROGRAMME_SINGLE_WORD_TAXONOMY = [
   "webinar",
   "webinars",
   "workshop",
@@ -795,21 +907,12 @@ export const PROGRAMME_TAXONOMY = [
   "demonstrations",
   "trial",
   "trials",
-  "free trial",
-  "free trials",
   "newsletter",
   "newsletters",
-  "loyalty",
   "programme",
   "program",
   "programmes",
   "programs",
-  "customer support",
-  "help desk",
-  "helpdesk",
-  "support desk",
-  "account manager",
-  "account management",
   "e-book",
   "ebook",
   "whitepaper",
@@ -822,6 +925,12 @@ export const PROGRAMME_TAXONOMY = [
   "guarantees",
   "warranty",
   "warranties",
+];
+
+/** Backwards-compatible combined list for authorisation scanning. */
+export const PROGRAMME_TAXONOMY = [
+  ...PROGRAMME_PHRASE_TAXONOMY,
+  ...PROGRAMME_SINGLE_WORD_TAXONOMY,
 ];
 
 /**
@@ -1026,6 +1135,77 @@ function buildComparisonAuthorizations(brief: GroundedCreativeBrief): string[] {
 }
 
 /**
+ * Collect all exact authoritative clauses from the contract.  If a generated
+ * field is one of these clauses verbatim, it is authoritative and should not be
+ * re-classified by the defensive taxonomies.
+ */
+function buildAuthoritativeClauses(contract: GroundingContract): string[] {
+  const clauses = new Set<string>();
+  if (contract.productOrService) clauses.add(contract.productOrService);
+  if (contract.coreMessage) clauses.add(contract.coreMessage);
+  if (contract.targetBuyer) clauses.add(contract.targetBuyer);
+  if (contract.mainPainPoint) clauses.add(contract.mainPainPoint);
+  if (contract.primaryOutcome) clauses.add(contract.primaryOutcome);
+  if (contract.preferredCta) clauses.add(contract.preferredCta);
+  for (const clause of contract.productClauses) clauses.add(clause.text);
+  for (const clause of contract.authorized.features) clauses.add(clause.text);
+  for (const outcome of contract.authorized.outcomes) clauses.add(outcome);
+  for (const channel of contract.authorized.channels) clauses.add(channel);
+  for (const offer of contract.authorized.offers) clauses.add(offer);
+  for (const programme of contract.authorized.programmes) clauses.add(programme);
+  for (const comparison of contract.authorized.comparisons) clauses.add(comparison);
+  return Array.from(clauses).filter(Boolean);
+}
+
+function isExactAuthoritativeClause(text: string, contract: GroundingContract): boolean {
+  const normalizedText = normalizeProvenanceText(text);
+  if (!normalizedText) return false;
+  const clauses = buildAuthoritativeClauses(contract);
+  return clauses.some((clause) => normalizeProvenanceText(clause) === normalizedText);
+}
+
+/**
+ * Detect programme-format phrases with context awareness.
+ *
+ * - Multi-word phrases are checked first.
+ * - Single-word programme terms are checked with word boundaries.
+ * - Ambiguous compounds such as "audit trail" are explicitly excluded.
+ */
+function containsProgramme(
+  text: string,
+  authorizedProgrammes: string[]
+): { found: boolean; programme?: string } {
+  const normalized = normalizeProvenanceText(text);
+  if (!normalized) return { found: false };
+
+  // Multi-word phrases first.
+  for (const phrase of PROGRAMME_PHRASE_TAXONOMY) {
+    if (phraseExists(normalized, phrase)) {
+      if (!authorizedProgrammes.some((p) => isClaimTermAuthorized(text, p))) {
+        return { found: true, programme: phrase };
+      }
+    }
+  }
+
+  // Single-word terms with exclusions.
+  for (const programme of PROGRAMME_SINGLE_WORD_TAXONOMY) {
+    const regex = new RegExp(`\\b${escapeRegex(programme)}\\b`, "i");
+    if (!regex.test(normalized)) continue;
+
+    // Exclude operational compounds that are not programmes.
+    if ((programme === "audit" || programme === "audits") && /\baudit\s+trail(s?)\b/i.test(normalized)) {
+      continue;
+    }
+
+    if (!authorizedProgrammes.some((p) => isClaimTermAuthorized(text, p))) {
+      return { found: true, programme };
+    }
+  }
+
+  return { found: false };
+}
+
+/**
  * Authoritative sources that can explicitly authorise factual claims.  A claim
  * is authorised only if the exact phrase appears in one of these brief fields.
  */
@@ -1110,6 +1290,13 @@ export function validateProvenance(
     // Skip fingerprint and purely numeric fields.
     if (path === "output.creativeBriefFingerprint") continue;
 
+    // Exact authoritative contract clauses are always allowed; do not let
+    // defensive taxonomies flag words inside them (e.g. "audit trails" in the
+    // main pain point).
+    if (isExactAuthoritativeClause(text, contract)) {
+      continue;
+    }
+
     // The preferred CTA is always authorised inside CTA fields.
     if (isPreferredCtaField(path, contract) && contract.preferredCta && phraseExists(text, contract.preferredCta)) {
       continue;
@@ -1138,25 +1325,19 @@ export function validateProvenance(
     }
     if (fieldHasUnauthorized) continue;
 
-    // Unauthorised programmes. Use the same stemming/equivalence check as field
-    // grounding so a singular authorised programme also covers plural output.
-    fieldHasUnauthorized = false;
-    for (const programme of PROGRAMME_TAXONOMY) {
-      if (
-        phraseExists(textToCheck, programme) &&
-        !contract.authorized.programmes.some((p) => isClaimTermAuthorized(textToCheck, p))
-      ) {
-        diagnostics.push({
-          field: path,
-          generatedText: text,
-          classification: "unauthorised_programme",
-          reason: `Unauthorised programme or service format: "${programme}". Programme formats must be explicitly authorised by the brief.`,
-          remediation: "removed",
-        });
-        fieldHasUnauthorized = true;
-      }
+    // Unauthorised programmes. Phrase/context-aware detection prevents words
+    // such as "audit" inside "audit trail" from being misclassified.
+    const programmeCheck = containsProgramme(textToCheck, contract.authorized.programmes);
+    if (programmeCheck.found) {
+      diagnostics.push({
+        field: path,
+        generatedText: text,
+        classification: "unauthorised_programme",
+        reason: `Unauthorised programme or service format: "${programmeCheck.programme}". Programme formats must be explicitly authorised by the brief.`,
+        remediation: "removed",
+      });
+      continue;
     }
-    if (fieldHasUnauthorized) continue;
 
     // Factual claims that require explicit authorisation (security, compliance,
     // cash flow, automation, customer support, etc.).

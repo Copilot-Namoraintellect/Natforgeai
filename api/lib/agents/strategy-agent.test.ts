@@ -13,6 +13,7 @@ import {
   validateGroundedStrategyOutput,
   validateStrategyOutputAgainstCampaign,
   isSuccessfulStrategyOutput,
+  validateStrategyReadiness,
   type ValidationDiagnostic,
 } from "./strategy-agent";
 import { buildGroundingContract, GROUNDING_EQUIVALENCE_GROUPS, type GroundedCreativeBrief } from "../creative/brief-grounding";
@@ -2861,7 +2862,7 @@ describe("Phase 2B evidence reconciliation", () => {
       expect(twice).toEqual(once);
     });
 
-    it("changes only CTA text and preserves stage/placement", () => {
+    it("rebuilds CTA text from the preferred CTA and placements from authorised channels", () => {
       const contract = buildGroundingContract(buildPhase2Brief());
       const raw = buildOutput({
         ctas: [{ stage: "awareness", cta: "Learn More", placement: "ad headline" }],
@@ -2869,7 +2870,21 @@ describe("Phase 2B evidence reconciliation", () => {
       const grounded = materialiseGroundedFields(raw, contract);
       expect(grounded.ctas[0].cta).toBe("Book a Demo");
       expect(grounded.ctas[0].stage).toBe("awareness");
-      expect(grounded.ctas[0].placement).toBe("ad headline");
+      expect(grounded.ctas[0].placement).toBe("LinkedIn");
+    });
+
+    it("discards raw CTA placements that introduce unauthorised channels or programmes", () => {
+      const contract = buildGroundingContract(buildPhase2Brief());
+      const raw = buildOutput({
+        ctas: [
+          { stage: "awareness", cta: "Sign up", placement: "Website landing page" },
+          { stage: "consideration", cta: "Read more", placement: "Email newsletters" },
+          { stage: "conversion", cta: "Buy now", placement: "Email signature" },
+        ],
+      });
+      const grounded = materialiseGroundedFields(raw, contract);
+      expect(grounded.ctas.map((c) => c.placement)).toEqual(["LinkedIn", "Email", "LinkedIn"]);
+      expect(grounded.ctas.every((c) => c.cta === "Book a Demo")).toBe(true);
     });
 
     it("forces offers to [] when no offer is authorised", () => {
@@ -4570,5 +4585,294 @@ describe("Phase 3 closure — deterministic grammar", () => {
     const grounded = materialiseFromBrief({ targetBuyer: "" });
     expect(grounded.personas[0].name).toBe("Target Buyer");
     expect(grounded.personas[0].demographics).toBe("");
+  });
+});
+
+describe("Phase 4 — pre-generation readiness validation", () => {
+  it("returns ready for a complete brief", () => {
+    const result = validateStrategyReadiness({
+      productOrService: "Payout platform",
+      targetBuyer: "Operations managers",
+      mainPainPoint: "Manual payouts",
+      platforms: "LinkedIn, Email",
+      preferredCta: "Book a demo",
+    });
+    expect(result.ready).toBe(true);
+  });
+
+  it("fails fast when product/service is missing", () => {
+    const result = validateStrategyReadiness({
+      targetBuyer: "Operations managers",
+      mainPainPoint: "Manual payouts",
+      platforms: "LinkedIn",
+      preferredCta: "Book a demo",
+    });
+    expect(result.ready).toBe(false);
+    if (!result.ready) {
+      expect(result.code).toBe("PRECONDITION_FAILED");
+      expect(result.gate).toBe("product/service");
+      expect(result.userMessage).toContain("product or service");
+    }
+  });
+
+  it("fails fast when target buyer is missing", () => {
+    const result = validateStrategyReadiness({
+      productOrService: "Payout platform",
+      mainPainPoint: "Manual payouts",
+      platforms: "LinkedIn",
+      preferredCta: "Book a demo",
+    });
+    expect(result.ready).toBe(false);
+    if (!result.ready) expect(result.gate).toBe("target_buyer");
+  });
+
+  it("fails fast when main pain point is missing", () => {
+    const result = validateStrategyReadiness({
+      productOrService: "Payout platform",
+      targetBuyer: "Operations managers",
+      platforms: "LinkedIn",
+      preferredCta: "Book a demo",
+    });
+    expect(result.ready).toBe(false);
+    if (!result.ready) expect(result.gate).toBe("main_pain_point");
+  });
+
+  it("fails fast when no authorised channel is available", () => {
+    const result = validateStrategyReadiness({
+      productOrService: "Payout platform",
+      targetBuyer: "Operations managers",
+      mainPainPoint: "Manual payouts",
+      preferredCta: "Book a demo",
+    });
+    expect(result.ready).toBe(false);
+    if (!result.ready) {
+      expect(result.gate).toBe("authorised_channels");
+      expect(result.field).toBe("preferredChannels");
+      expect(result.message).toBe("Select at least one campaign channel before regenerating the strategy.");
+      expect(result.userMessage).toBe(
+        "No campaign channel has been selected. Add at least one channel to the campaign brief before regenerating the strategy."
+      );
+    }
+  });
+
+  it("falls back to business.preferredPlatforms for channel authority", () => {
+    const result = validateStrategyReadiness({
+      productOrService: "Payout platform",
+      targetBuyer: "Operations managers",
+      mainPainPoint: "Manual payouts",
+      preferredPlatforms: "LinkedIn, Email",
+      preferredCta: "Book a demo",
+    });
+    expect(result.ready).toBe(true);
+  });
+
+  it("fails fast when preferred CTA is missing", () => {
+    const result = validateStrategyReadiness({
+      productOrService: "Payout platform",
+      targetBuyer: "Operations managers",
+      mainPainPoint: "Manual payouts",
+      platforms: "LinkedIn",
+    });
+    expect(result.ready).toBe(false);
+    if (!result.ready) expect(result.gate).toBe("preferred_cta");
+  });
+
+  it("includes an edit-brief action when a campaignId is supplied", () => {
+    const result = validateStrategyReadiness(
+      {
+        productOrService: "Payout platform",
+        targetBuyer: "Operations managers",
+        mainPainPoint: "Manual payouts",
+        platforms: "LinkedIn",
+        preferredCta: "Book a demo",
+      },
+      42
+    );
+    expect(result.ready).toBe(true);
+  });
+});
+
+describe("Phase 4 — run-251 readiness and deterministic-validation regression", () => {
+  const run251Brief: GroundedCreativeBrief = {
+    fingerprint: "fp-run251",
+    productOrService: "B2B payment orchestration with prefunded merchant accounts, balance verification, transaction reservations and controlled payment instructions",
+    targetBuyer: "B2B finance teams and merchant operators",
+    mainPainPoint:
+      "Fragmented manual processes make it difficult to verify prefunded balances, reserve transaction amounts, maintain audit trails and issue controlled payment instructions.",
+    preferredCta: "Book a Demo",
+    primaryOutcome: "Qualified merchant onboarding",
+    offerDetails: "",
+    excludedOffers: "",
+    referenceStyle: "",
+    contentStyle: "professional",
+    platforms: "",
+    authorisedChannels: [],
+    businessType: "B2B",
+  };
+
+  const run251BriefWithChannels: GroundedCreativeBrief = {
+    ...run251Brief,
+    platforms: "LinkedIn, Email",
+    authorisedChannels: ["linkedin", "email"],
+  };
+
+  const run251RawOutput: StrategyOutput = {
+    personas: [
+      {
+        name: "Finance teams",
+        demographics: "B2B finance teams and merchant operators",
+        painPoints: [
+          "Fragmented manual processes make it difficult to verify prefunded balances, reserve transaction amounts, maintain audit trails and issue controlled payment instructions.",
+        ],
+        goals: [
+          "Achieve unparalleled control, security and efficiency",
+          "Improve cash-flow management",
+          "Automate payment instructions",
+        ],
+        platforms: ["LinkedIn", "Email", "Website"],
+      },
+    ],
+    positioning:
+      "Unparalleled B2B payment orchestration with security, compliance and automation for finance teams.",
+    valueProposition:
+      "Our platform gives you unparalleled control, security and efficiency. Improve cash-flow management, automate payment instructions, ensure compliance and reach customers via WhatsApp customer support, webinars, latest offerings and service enhancements.",
+    coreMessage:
+      "Unparalleled control, security and efficiency for B2B payment orchestration.",
+    campaignTheme:
+      "Take control of your payment operations with our latest offerings and service enhancements.",
+    platformStrategy: [
+      {
+        platform: "LinkedIn",
+        purpose: "Share webinars and latest offerings",
+        contentTypes: ["Webinar promotion", "Newsletter"],
+        postingFrequency: "3x per week",
+      },
+      {
+        platform: "Email",
+        purpose: "Send newsletters and free audits",
+        contentTypes: ["Email newsletter", "Free audit"],
+        postingFrequency: "Weekly",
+      },
+      {
+        platform: "Website",
+        purpose: "Capture sign-ups via Website landing page",
+        contentTypes: ["Landing page", "Sign-up form"],
+        postingFrequency: "Always on",
+      },
+    ],
+    funnelStages: [
+      {
+        stage: "awareness",
+        goal: "Drive traffic to Website landing page",
+        tactics: ["Publish webinar announcements on LinkedIn", "Send email newsletters"],
+        metrics: ["impressions"],
+      },
+      {
+        stage: "consideration",
+        goal: "Capture email sign-ups via Website sign-up form",
+        tactics: ["Offer free audit via Email signature"],
+        metrics: ["engagement"],
+      },
+      {
+        stage: "conversion",
+        goal: "Convert via WhatsApp customer support",
+        tactics: ["Use Website landing page CTA"],
+        metrics: ["conversions"],
+      },
+    ],
+    offers: [
+      {
+        name: "Free consultation",
+        description: "Book a free consultation",
+        targetStage: "conversion",
+        value: "Free",
+      },
+    ],
+    ctas: [
+      { stage: "awareness", cta: "Register for webinar", placement: "Website landing page" },
+      { stage: "conversion", cta: "Contact sales", placement: "Email signature" },
+    ],
+    budgetRecommendation: {
+      total: 5000,
+      allocation: [
+        { channel: "LinkedIn", amount: 2000, percentage: 40 },
+        { channel: "Email", amount: 1500, percentage: 30 },
+        { channel: "Website", amount: 1000, percentage: 20 },
+        { channel: "WhatsApp", amount: 500, percentage: 10 },
+      ],
+    },
+  };
+
+  it("readiness fails for run-251 because no authorised channel is available", () => {
+    const result = validateStrategyReadiness({
+      productOrService: run251Brief.productOrService,
+      targetBuyer: run251Brief.targetBuyer,
+      mainPainPoint: run251Brief.mainPainPoint,
+      platforms: run251Brief.platforms,
+      preferredCta: run251Brief.preferredCta,
+    });
+    expect(result.ready).toBe(false);
+    if (!result.ready) expect(result.gate).toBe("authorised_channels");
+  });
+
+  it("deterministically materialises run-251 raw output when channels are supplied", () => {
+    const contract = buildGroundingContract(run251BriefWithChannels);
+    const grounded = materialiseGroundedFields(run251RawOutput, contract);
+
+    // Product/service fields are reconstructed from the brief.
+    expect(grounded.coreMessage).toBe(
+      "B2B payment orchestration with prefunded merchant accounts, balance verification, transaction reservations and controlled payment instructions."
+    );
+    expect(grounded.positioning).toContain("B2B finance teams and merchant operators");
+
+    // Audit trails in the authoritative main pain point is preserved.
+    expect(grounded.personas[0].painPoints).toContain(run251Brief.mainPainPoint);
+
+    // Unsupported claims are removed from all fields.
+    const allText = JSON.stringify(grounded).toLowerCase();
+    expect(allText).not.toContain("unparalleled");
+    expect(allText).not.toContain("security");
+    expect(allText).not.toContain("compliance");
+    expect(allText).not.toContain("cash flow");
+    expect(allText).not.toContain("automate");
+    expect(allText).not.toContain("cash-flow");
+    expect(allText).not.toContain("webinar");
+    expect(allText).not.toContain("newsletter");
+    expect(allText).not.toContain("free audit");
+    expect(allText).not.toContain("free consultation");
+    expect(allText).not.toContain("whatsapp");
+    expect(allText).not.toContain("latest offerings");
+    expect(allText).not.toContain("service enhancements");
+
+    // Only authorised channels survive.
+    expect(grounded.platformStrategy.map((p) => p.platform)).toEqual(["LinkedIn", "Email"]);
+    expect(grounded.personas[0].platforms).toEqual(["LinkedIn", "Email"]);
+    expect(grounded.ctas.map((c) => c.placement)).toEqual(["LinkedIn", "Email"]);
+    expect(grounded.budgetRecommendation.allocation.map((a) => a.channel)).toEqual(["LinkedIn", "Email"]);
+    expect(grounded.budgetRecommendation.total).toBe(5000);
+
+    // No invented offers.
+    expect(grounded.offers).toEqual([]);
+
+    // CTA text is always the preferred CTA.
+    expect(grounded.ctas.every((c) => c.cta === "Book a Demo")).toBe(true);
+  });
+
+  it("validates the materialised run-251 output successfully", () => {
+    const contract = buildGroundingContract(run251BriefWithChannels);
+    const grounded = materialiseGroundedFields(run251RawOutput, contract);
+    const result = validateGroundedStrategyOutput(
+      { ...grounded, creativeBriefFingerprint: contract.fingerprint },
+      contract.fingerprint,
+      contract
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("does not mutate the raw run-251 output", () => {
+    const contract = buildGroundingContract(run251BriefWithChannels);
+    const original = JSON.parse(JSON.stringify(run251RawOutput));
+    materialiseGroundedFields(run251RawOutput, contract);
+    expect(run251RawOutput).toEqual(original);
   });
 });

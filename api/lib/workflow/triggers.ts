@@ -1,5 +1,5 @@
 import { getDb } from "../../queries/connection";
-import { agentRuns, campaigns, approvalRequests, publishingQueue } from "@db/schema";
+import { agentRuns, campaigns, businesses, approvalRequests, publishingQueue } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { transitionCampaignState, createApprovalRequest } from "./engine";
 import { resolveCreativeWorkflowState } from "./progress-logic";
@@ -39,6 +39,14 @@ export async function onAgentRunComplete(runId: number) {
 
   if (!campaign) return;
 
+  const [business] = campaign.businessId
+    ? await db
+        .select()
+        .from(businesses)
+        .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, run.userId)))
+        .limit(1)
+    : [null];
+
   // Check cost control before auto-advancing
   const autoCheck = await canRunAutonomousWorkflow(run.userId, run.campaignId);
   if (!autoCheck.allowed) {
@@ -70,7 +78,7 @@ export async function onAgentRunComplete(runId: number) {
         riskLevel: "low",
       });
 
-      const status = getStrategyApprovalStatus(updatedCampaign);
+      const status = getStrategyApprovalStatus(updatedCampaign, business);
       await db
         .update(campaigns)
         .set({
@@ -271,10 +279,18 @@ export async function onStrategyApproved(
 
   if (!campaign) return;
 
+  const [business] = campaign.businessId
+    ? await db
+        .select()
+        .from(businesses)
+        .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, userId)))
+        .limit(1)
+    : [null];
+
   // Defence in depth: the synchronous approval router already validates, but
   // the async trigger may run after a brief edit. Reject stale strategy
   // approvals before any credits or claims are consumed.
-  const status = getStrategyApprovalStatus(campaign);
+  const status = getStrategyApprovalStatus(campaign, business);
   const lineage = status.lineage;
   const currentFingerprint = status.currentFingerprint;
 
@@ -320,7 +336,7 @@ export async function onStrategyApproved(
   // A fingerprint match is not sufficient: the linked strategy output must still
   // be semantically grounded in the current brief. Pass the already-loaded run
   // to avoid a duplicate database query.
-  const semanticValidation = await validateStrategyRunForCampaign(campaign, userId, run);
+  const semanticValidation = await validateStrategyRunForCampaign(campaign, userId, run, business);
   if (!semanticValidation.valid) {
     console.error(
       `[Workflow] Linked strategy run ${lineage.strategyRunId} failed semantic validation for campaign ${campaignId}: ${semanticValidation.reason}. Refusing to authorise creative generation.`

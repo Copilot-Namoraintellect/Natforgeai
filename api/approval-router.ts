@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { approvalRequests, campaigns, contentPosts, socialIntegrations, agentRuns } from "@db/schema";
+import { approvalRequests, campaigns, businesses, contentPosts, socialIntegrations, agentRuns } from "@db/schema";
 import { eq, and, or, desc, count, inArray, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { onApprovalResolved } from "./lib/workflow/triggers";
@@ -50,7 +50,15 @@ async function validateStrategyApprovalLineage(approval: {
 
   if (!campaign) return;
 
-  const status = getStrategyApprovalStatus(campaign);
+  const [business] = campaign.businessId
+    ? await db
+        .select()
+        .from(businesses)
+        .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, approval.userId)))
+        .limit(1)
+    : [null];
+
+  const status = getStrategyApprovalStatus(campaign, business);
   if (!status.lineage) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
@@ -71,7 +79,7 @@ async function validateStrategyApprovalLineage(approval: {
     !isLineageAuthoritative(campaign, {
       strategyRunId: status.lineage.strategyRunId,
       approvalRequestId: approval.id,
-    })
+    }, business)
   ) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
@@ -101,7 +109,7 @@ async function validateStrategyApprovalLineage(approval: {
     });
   }
 
-  const semanticValidation = await validateStrategyRunForCampaign(campaign, approval.userId, run);
+  const semanticValidation = await validateStrategyRunForCampaign(campaign, approval.userId, run, business);
   if (!semanticValidation.valid) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
