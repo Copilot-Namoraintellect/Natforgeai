@@ -92,6 +92,9 @@ const CAPTION_PACK_PLATFORM_KEYS: Record<string, keyof { linkedinCaption: string
   whatsapp: "whatsappCaption",
 };
 
+export const REGENERATE_FROM_PROFILE_CONFIRMATION =
+  "Regenerate the campaign strategy from the current business profile? The regenerated strategy will be sent to Approval Centre for review. Creative content will only be generated after the strategy is approved.";
+
 // ── Premium Leaflet V2 refinement mode helpers ──
 
 type RefinementMode =
@@ -1492,20 +1495,17 @@ Include:
 
   const regenerateFromProfileMutation = trpc.campaign.regenerateFromProfile.useMutation({
     onSuccess: () => {
-      utils.content.list.invalidate();
-      utils.content.campaignAssets.invalidate({ campaignId: numericCampaignId });
-      utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
+      utils.campaign.get.invalidate({ id: numericCampaignId });
+      utils.campaign.strategyApprovalStatus.invalidate({ id: numericCampaignId });
+      utils.approval.listApprovals.invalidate();
+      utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
+      toast.success("Strategy regenerated for approval. Review it in Approval Centre.");
+    },
+    onError: (err) => {
       utils.campaign.get.invalidate({ id: numericCampaignId });
       utils.campaign.strategyApprovalStatus.invalidate({ id: numericCampaignId });
       utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
-      toast.success("Campaign pack regenerated from the updated business profile.");
-    },
-    onError: (err) => {
-      utils.content.list.invalidate();
-      utils.content.countForCampaign.invalidate({ campaignId: numericCampaignId });
-      utils.campaign.get.invalidate({ id: numericCampaignId });
-      utils.agent.getAgentRuns.invalidate({ campaignId: numericCampaignId });
-      toast.error(err.message || "Failed to regenerate campaign pack");
+      toast.error(err.message || "Failed to regenerate strategy for approval.");
     },
   });
 
@@ -3892,11 +3892,7 @@ Include:
                   variant="outline"
                   disabled={regenerateFromProfileMutation.isPending}
                   onClick={() => {
-                    if (
-                      confirm(
-                        "This will regenerate strategy, leaflet, captions and platform adaptations from the latest business profile. Existing AI-generated assets will be replaced. Continue?"
-                      )
-                    ) {
+                    if (confirm(REGENERATE_FROM_PROFILE_CONFIRMATION)) {
                       regenerateFromProfileMutation.mutate({ campaignId: numericCampaignId });
                     }
                   }}

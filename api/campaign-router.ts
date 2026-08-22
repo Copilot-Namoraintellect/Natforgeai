@@ -2,27 +2,26 @@ import { z } from "zod";
 import { generateObject } from "ai";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { campaigns, businesses, agentRuns, contentPosts, campaignAssets, approvalRequests } from "@db/schema";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { campaigns, businesses, agentRuns, approvalRequests } from "@db/schema";
+import { eq, and, desc } from "drizzle-orm";
 import { checkLimit, incrementCampaignUsage, incrementResultUsage } from "./lib/subscription";
 import { TRPCError } from "@trpc/server";
 import { defaultModel } from "./lib/agents/openai";
 import {
   runStrategyAgent,
   chargeForStrategyRun,
+  reconcileStrategyRunCharge,
   validateStrategyOutputAgainstCampaign,
   isSuccessfulStrategyOutput,
   validateStrategyReadiness,
   type StrategyAgentRunResult,
 } from "./lib/agents/strategy-agent";
-import { runCreativeAgent } from "./lib/agents/creative-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
-import { transitionCampaignState, createApprovalRequest } from "./lib/workflow/engine";
+import { createApprovalRequest } from "./lib/workflow/engine";
 import {
   getStrategyApprovalStatus,
   buildStrategyApprovalLineage,
   validateStrategyRunForCampaign,
-  assertApprovedStrategySemanticallyValid,
 } from "./lib/workflow/strategy-approval";
 import {
   acquireCreativeGenerationClaim,
@@ -31,12 +30,8 @@ import {
   releaseClaimWithResult,
   calculateLeaseExpiresAt,
   createClaimHeartbeatController,
-  type CreativeGenerationClaim,
-  type CreativeGenerationClaimHeartbeatController,
 } from "./lib/creative/creative-generation-claim";
 import { env } from "./lib/env";
-import { refundCredits } from "./lib/billing/credit-engine";
-import { getEstimatedAgentCost } from "./lib/billing/cost-tracker";
 
 function campaignSuggestionSchema() {
   return z.object({
@@ -633,19 +628,116 @@ export const campaignRouter = createRouter({
 
       console.log(`[regenerateFromProfile] route entered | campaignId=${campaignId} | userId=${userId}`);
 
-      let strategyRunId: number | null = null;
-      let creativeRunId: number | null = null;
-      let claim: CreativeGenerationClaim | null = null;
-      let ownerToken: string | null = null;
+      const [campaign] = await db
+        .select()
+        .from(campaigns)
+        .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
+        .limit(1);
+
+      if (!campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
+      if (!campaign.businessId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Campaign is not linked to a business" });
+      }
+
+      const [business] = await db
+        .select()
+        .from(businesses)
+        .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, userId)))
+        .limit(1);
+
+      if (!business) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
+      }
+
+      // Pre-generation readiness: fail fast before acquiring the claim or
+      // creating any workflow resources.
+      const readiness = validateStrategyReadiness(
+        {
+          productOrService: campaign.productOrService,
+          targetBuyer: campaign.targetBuyer,
+          mainPainPoint: campaign.mainPainPoint,
+          platforms: campaign.platforms,
+          preferredPlatforms: business.preferredPlatforms,
+          preferredCta: campaign.preferredCta,
+        },
+        campaignId
+      );
+      if (!readiness.ready) {
+        throw new TRPCError({
+          code: readiness.code as any,
+          message: readiness.userMessage,
+        });
+      }
+
+      const evidence = (business.websiteEvidence || {}) as {
+        businessCategory?: string;
+        productsServices?: string[];
+        targetCustomers?: string[];
+        location?: string;
+      };
+
+      // Update campaign brief from latest business evidence before computing
+      // the fingerprint or running the strategy.
+      await db
+        .update(campaigns)
+        .set({
+          productOrService: business.productOrService || evidence.productsServices?.join(", ") || campaign.productOrService,
+          targetBuyer: business.targetCustomer || evidence.targetCustomers?.join(", ") || campaign.targetBuyer,
+          mainPainPoint: campaign.mainPainPoint,
+          workflowState: "strategy_pending",
+          updatedAt: new Date(),
+        } as any)
+        .where(eq(campaigns.id, campaignId));
+      console.log(`[regenerateFromProfile] campaign brief updated | campaignId=${campaignId}`);
+
+      // Reload campaign so fingerprint/lineage reflect the updated brief.
+      const [updatedCampaign] = await db
+        .select()
+        .from(campaigns)
+        .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
+        .limit(1);
+
+      if (!updatedCampaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found after brief update" });
+      }
+
+      const currentFingerprint = getStrategyApprovalStatus(updatedCampaign, business).currentFingerprint;
+
+      // Authoritative atomic claim: only one profile regeneration at a time.
+      const ownerToken = generateOwnerToken();
+      const claimResult = await acquireCreativeGenerationClaim({
+        userId,
+        campaignId,
+        operationSource: "profile",
+        ownerToken,
+        leaseExpiresAt: calculateLeaseExpiresAt(env.creativeGenerationRunningLeaseSeconds),
+      });
+
+      if (!claimResult.acquired) {
+        const existingRunId = claimResult.existingClaim.operationReferenceId;
+        if (existingRunId) {
+          return {
+            success: true,
+            reused: true,
+            strategyRunId: existingRunId,
+            approvalRequestId: null,
+          };
+        }
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Regeneration is already being prepared for this campaign.",
+        });
+      }
+
+      const claim = claimResult.claim;
       let released = false;
-      let heartbeatController: CreativeGenerationClaimHeartbeatController | undefined;
 
       const releaseClaimOnce = async (status: "completed" | "failed") => {
-        if (released || !claim || !ownerToken) return { released: true } as const;
+        if (released) return { released: true } as const;
         released = true;
-        if (heartbeatController) {
-          await heartbeatController.stop();
-        }
         return releaseClaimWithResult({
           claimId: claim.id,
           ownerToken,
@@ -654,334 +746,258 @@ export const campaignRouter = createRouter({
         });
       };
 
+      // Keep the claim alive during the long-running strategy regeneration.
+      const heartbeatController = createClaimHeartbeatController({
+        claimId: claim.id,
+        ownerToken,
+        leaseSeconds: env.creativeGenerationRunningLeaseSeconds,
+        heartbeatIntervalSeconds: env.creativeGenerationHeartbeatIntervalSeconds,
+      });
+
+      let strategyResult: StrategyAgentRunResult | undefined;
+
       try {
-        // 1. Load campaign
-        const [campaign] = await db
+        // Look for an existing completed strategy run whose stored brief fingerprint
+        // matches the current brief AND whose output is semantically valid for the
+        // current brief. Historical runs are preserved; we reuse only when the
+        // lineage would be identical and the output passes the validation gate.
+        const previousStrategyRuns = await db
           .select()
-          .from(campaigns)
-          .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
-          .limit(1);
+          .from(agentRuns)
+          .where(
+            and(
+              eq(agentRuns.campaignId, campaignId),
+              eq(agentRuns.userId, userId),
+              eq(agentRuns.agentType, "strategy"),
+              eq(agentRuns.status, "completed")
+            )
+          )
+          .orderBy(desc(agentRuns.createdAt));
 
-        if (!campaign) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
-        }
-        console.log(`[regenerateFromProfile] campaign loaded | campaignId=${campaignId} | businessId=${campaign.businessId}`);
-
-        if (!campaign.businessId) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Campaign is not linked to a business" });
-        }
-
-        // 2. Load business
-        const [business] = await db
-          .select()
-          .from(businesses)
-          .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, userId)))
-          .limit(1);
-
-        if (!business) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Business not found" });
-        }
-        console.log(`[regenerateFromProfile] business loaded | businessId=${business.id} | name=${business.name}`);
-
-        // Pre-generation readiness: fail fast before acquiring the claim or
-        // creating any workflow resources.
-        const readiness = validateStrategyReadiness(
-          {
-            productOrService: campaign.productOrService,
-            targetBuyer: campaign.targetBuyer,
-            mainPainPoint: campaign.mainPainPoint,
-            platforms: campaign.platforms,
-            preferredPlatforms: business.preferredPlatforms,
-            preferredCta: campaign.preferredCta,
-          },
-          campaignId
-        );
-        if (!readiness.ready) {
-          throw new TRPCError({
-            code: readiness.code as any,
-            message: readiness.userMessage,
-          });
-        }
-
-        // Authoritative atomic claim: only one regeneration can proceed.
-        ownerToken = generateOwnerToken();
-        const claimResult = await acquireCreativeGenerationClaim({
-          userId,
-          campaignId,
-          operationSource: "profile",
-          ownerToken,
-          leaseExpiresAt: calculateLeaseExpiresAt(env.creativeGenerationRunningLeaseSeconds),
-        });
-
-        if (!claimResult.acquired) {
-          const existingRunId = claimResult.existingClaim.operationReferenceId;
-          if (existingRunId) {
-            return {
-              success: true,
-              reused: true,
-              strategyRunId: existingRunId,
-              creativeRunId: null,
-            };
+        let reusableRun: (typeof previousStrategyRuns)[number] | undefined;
+        for (const run of previousStrategyRuns) {
+          if (!isSuccessfulStrategyOutput(run.output)) {
+            console.log(`[regenerateFromProfile] rejecting run ${run.id}: not a successful strategy output | campaignId=${campaignId}`);
+            continue;
           }
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Regeneration is already being prepared for this campaign.",
-          });
+          if (run.output.creativeBriefFingerprint !== currentFingerprint) continue;
+          const validation = validateStrategyOutputAgainstCampaign(run.output, updatedCampaign);
+          if (validation.valid) {
+            reusableRun = run;
+            console.log(`[regenerateFromProfile] reusing completed strategy run ${run.id} with matching fingerprint and valid grounding | campaignId=${campaignId}`);
+            break;
+          }
+          console.log(`[regenerateFromProfile] rejecting reusable run ${run.id}: ${validation.reason} | campaignId=${campaignId}`);
         }
 
-        claim = claimResult.claim;
-
-        // Keep the claim alive during the long-running regeneration.
-        heartbeatController = createClaimHeartbeatController({
-          claimId: claim.id,
-          ownerToken,
-          leaseSeconds: env.creativeGenerationRunningLeaseSeconds,
-          heartbeatIntervalSeconds: env.creativeGenerationHeartbeatIntervalSeconds,
-        });
-
-        // 3. Parse website evidence
-        const evidence = (business.websiteEvidence || {}) as {
-          businessCategory?: string;
-          productsServices?: string[];
-          targetCustomers?: string[];
-          location?: string;
-        };
-        console.log(`[regenerateFromProfile] websiteEvidence parsed | businessId=${business.id} | category=${evidence.businessCategory || "none"}`);
-
-        // 4. Update campaign brief from latest business evidence
-        await db
-          .update(campaigns)
-          .set({
-            productOrService: business.productOrService || evidence.productsServices?.join(", ") || campaign.productOrService,
-            targetBuyer: business.targetCustomer || evidence.targetCustomers?.join(", ") || campaign.targetBuyer,
-            mainPainPoint: campaign.mainPainPoint,
-            workflowState: "strategy_pending",
-            updatedAt: new Date(),
-          } as any)
-          .where(eq(campaigns.id, campaignId));
-        console.log(`[regenerateFromProfile] campaign brief updated | campaignId=${campaignId}`);
-
-        // 5. Historical agent runs are preserved. Strategy deduplication is now
-        // fingerprint-aware, so a changed brief naturally produces a new run.
-
-        // Snapshot existing AI-generated content so we can delete ONLY the old items after new content is created
-        const oldContentPosts = await db
-          .select({ id: contentPosts.id })
-          .from(contentPosts)
-          .where(
-            and(
-              eq(contentPosts.campaignId, campaignId),
-              eq(contentPosts.userId, userId),
-              eq(contentPosts.aiGenerated, true)
-            )
-          );
-        const oldPostIds = oldContentPosts.map((p) => p.id);
-        console.log(`[regenerateFromProfile] old content posts snapshot | campaignId=${campaignId} | count=${oldPostIds.length}`);
-
-        const oldGeneratedAssets = await db
-          .select({ id: campaignAssets.id })
-          .from(campaignAssets)
-          .where(
-            and(
-              eq(campaignAssets.campaignId, campaignId),
-              eq(campaignAssets.userId, userId),
-              inArray(campaignAssets.assetType, [
-                "caption_pack",
-                "caption_adaptation",
-                "carousel_ad",
-                "ad_copy",
-                "whatsapp_promo",
-                "email_copy",
-                "launch_pack",
-                "hashtag_set",
-                "cta_variant",
-              ])
-            )
-          );
-        const oldAssetIds = oldGeneratedAssets.map((a) => a.id);
-        console.log(`[regenerateFromProfile] old generated assets snapshot | campaignId=${campaignId} | count=${oldAssetIds.length}`);
-
-        // 6. Regenerate strategy
-        console.log(`[regenerateFromProfile] strategy regeneration started | campaignId=${campaignId}`);
-        const strategyResult = await runStrategyAgent({
-          userId,
-          campaignId,
-          business: {
-            name: business.name,
-            industry: business.industry,
-            location: business.location || evidence.location,
-            productOrService: business.productOrService,
-            targetCustomer: business.targetCustomer,
-            brandTone: business.brandTone,
-            mainGoal: business.mainGoal,
-            monthlyBudget: business.monthlyBudget,
-            preferredPlatforms: business.preferredPlatforms,
-            website: business.website,
-            websiteEvidence: business.websiteEvidence,
-          },
-          onRunCreated: async (runId, tx) => {
-            strategyRunId = runId;
-            const attachResult = await attachCreativeGenerationOperationReference({
-              claimId: claim!.id,
-              ownerToken: ownerToken!,
-              operationReferenceId: runId,
-              db: tx,
-            });
-            if (!attachResult.attached) {
-              console.error(`[regenerateFromProfile] claim attachment collision | campaignId=${campaignId} | runId=${runId}`);
-              throw new TRPCError({
-                code: "BAD_REQUEST",
-                message: "Regeneration operation already exists for this strategy run.",
-              });
-            }
-          },
-        });
-        strategyRunId = strategyResult.runId;
-        console.log(`[regenerateFromProfile] strategy regenerated | campaignId=${campaignId} | strategyRunId=${strategyRunId}`);
-
-        // Charge only after the validated strategy run has been produced.
-        await chargeForStrategyRun(userId, campaignId, strategyResult);
-
-        // Advance workflow to strategy_generated and then strategy_approved so creative can run
-        await transitionCampaignState(campaignId, userId, "generate_strategy");
-        console.log(`[regenerateFromProfile] campaign state transitioned to strategy_generated | campaignId=${campaignId}`);
-        await transitionCampaignState(campaignId, userId, "approve_strategy");
-        console.log(`[regenerateFromProfile] campaign state transitioned to strategy_approved | campaignId=${campaignId}`);
-
-        // Record the authorised brief fingerprint and lineage so creative
-        // generation can verify it is grounded in the current brief.
-        const [regeneratedCampaign] = await db
-          .select()
-          .from(campaigns)
-          .where(eq(campaigns.id, campaignId))
-          .limit(1);
-        if (regeneratedCampaign) {
-          const { currentFingerprint } = getStrategyApprovalStatus(regeneratedCampaign, business);
+        let strategyRunId: number;
+        let strategyRunIsReused = false;
+        if (reusableRun) {
+          strategyRunId = reusableRun.id;
+          strategyRunIsReused = true;
+          console.log(`[regenerateFromProfile] reusing completed strategy run ${strategyRunId} with matching fingerprint | campaignId=${campaignId}`);
+        } else {
+          // Clear any approved-strategy fingerprint so the UI and backend treat the
+          // strategy as stale until the new request is approved.
           await db
             .update(campaigns)
             .set({
               workflowContext: {
-                ...(regeneratedCampaign.workflowContext || {}),
-                approvedStrategyFingerprint: currentFingerprint,
-                strategyApprovalLineage: buildStrategyApprovalLineage(
-                  currentFingerprint,
-                  strategyRunId!,
-                  0, // auto-approved via full regeneration, no approval request
-                  "approved"
-                ),
+                ...(updatedCampaign.workflowContext || {}),
+                approvedStrategyFingerprint: null,
               } as any,
             })
             .where(eq(campaigns.id, campaignId));
-        }
 
-        // 7. Move to creatives_generating so the UI shows a loading/progress state
-        await transitionCampaignState(campaignId, userId, "generate_creatives");
-        console.log(`[regenerateFromProfile] campaign state transitioned to creatives_generating | campaignId=${campaignId}`);
-
-        // 8. Validate the freshly approved strategy semantically before creative
-        // generation. This keeps regenerateFromProfile from bypassing the same
-        // semantic gate used by every other creative entry point.
-        if (regeneratedCampaign) {
-          await assertApprovedStrategySemanticallyValid(regeneratedCampaign, userId);
-        }
-
-        // 9. Regenerate creative pack (do NOT delete old drafts yet; we keep them as a fallback)
-        console.log(`[regenerateFromProfile] creative pack generation started | campaignId=${campaignId}`);
-        const creativeResult = await runCreativeAgent({
-          userId,
-          campaignId,
-          deleteExistingDrafts: false,
-          generationOperation: { source: "profile", id: strategyRunId! },
-          claimContext: heartbeatController,
-        });
-        creativeRunId = creativeResult.packRunId;
-        console.log(`[regenerateFromProfile] creative pack generated | campaignId=${campaignId} | creativeRunId=${creativeRunId} | savedPosts=${creativeResult.savedPosts} | savedAssets=${creativeResult.savedAssets}`);
-
-        if (creativeResult.savedPosts === 0) {
-          throw new Error("Creative Agent completed but no posts were saved.");
-        }
-
-        console.log(`[regenerateFromProfile] posts inserted | campaignId=${campaignId} | count=${creativeResult.savedPosts}`);
-        console.log(`[regenerateFromProfile] assets inserted | campaignId=${campaignId} | count=${creativeResult.savedAssets}`);
-
-        // 9. Only now that new content exists, delete the OLD AI-generated content posts
-        if (oldPostIds.length > 0) {
-          await db
-            .delete(contentPosts)
-            .where(
-              and(
-                eq(contentPosts.campaignId, campaignId),
-                eq(contentPosts.userId, userId),
-                inArray(contentPosts.id, oldPostIds)
-              )
-            );
-          console.log(`[regenerateFromProfile] old AI-generated content posts deleted | campaignId=${campaignId} | count=${oldPostIds.length}`);
-        } else {
-          console.log(`[regenerateFromProfile] no old content posts to delete | campaignId=${campaignId}`);
-        }
-
-        // 10. Delete the OLD generated campaign assets
-        if (oldAssetIds.length > 0) {
-          await db
-            .delete(campaignAssets)
-            .where(
-              and(
-                eq(campaignAssets.campaignId, campaignId),
-                eq(campaignAssets.userId, userId),
-                inArray(campaignAssets.id, oldAssetIds)
-              )
-            );
-          console.log(`[regenerateFromProfile] old generated campaign assets deleted | campaignId=${campaignId} | count=${oldAssetIds.length}`);
-        } else {
-          console.log(`[regenerateFromProfile] no old generated assets to delete | campaignId=${campaignId}`);
-        }
-
-        // 11. Advance campaign state now that content is safely created
-        await onAgentRunComplete(creativeRunId);
-        console.log(`[regenerateFromProfile] campaign state updated | campaignId=${campaignId} | creativeRunId=${creativeRunId}`);
-
-        console.log(`[regenerateFromProfile] route completed | campaignId=${campaignId} | strategyRunId=${strategyRunId} | creativeRunId=${creativeRunId}`);
-
-        const releaseResult = await releaseClaimOnce("completed");
-        if (!releaseResult.released) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message:
-              "Regeneration completed, but the operation could not be closed cleanly. Please retry.",
+          strategyResult = await runStrategyAgent({
+            userId,
+            campaignId,
+            business: {
+              name: business.name,
+              industry: business.industry,
+              location: business.location || evidence.location,
+              productOrService: business.productOrService,
+              targetCustomer: business.targetCustomer,
+              brandTone: business.brandTone,
+              mainGoal: business.mainGoal,
+              monthlyBudget: business.monthlyBudget,
+              preferredPlatforms: business.preferredPlatforms,
+              website: business.website,
+              websiteEvidence: business.websiteEvidence,
+            },
+            onRunCreated: async (runId, tx) => {
+              strategyRunId = runId;
+              const attachResult = await attachCreativeGenerationOperationReference({
+                claimId: claim.id,
+                ownerToken,
+                operationReferenceId: runId,
+                db: tx,
+              });
+              if (!attachResult.attached) {
+                console.error(`[regenerateFromProfile] claim attachment collision | campaignId=${campaignId} | runId=${runId}`);
+                throw new TRPCError({
+                  code: "BAD_REQUEST",
+                  message: "Regeneration operation already exists for this strategy run.",
+                });
+              }
+            },
           });
+          strategyRunId = strategyResult.runId;
         }
+
+        // For reused runs the row already exists, so attach it now that the run
+        // ID is known. A completed regeneration claim must never have a null
+        // operationReferenceId.
+        if (strategyRunIsReused) {
+          const attachResult = await attachCreativeGenerationOperationReference({
+            claimId: claim.id,
+            ownerToken,
+            operationReferenceId: strategyRunId,
+          });
+
+          if (!attachResult.attached) {
+            console.error(`[regenerateFromProfile] claim attachment collision | campaignId=${campaignId} | runId=${strategyRunId}`);
+            const releaseResult = await releaseClaimOnce("failed");
+            if (!releaseResult.released) {
+              console.error(`[regenerateFromProfile] failed-release failed after attachment collision | campaignId=${campaignId} | claimId=${claim.id} | releaseError=${releaseResult.error.message}`);
+            }
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Regeneration operation already exists for this strategy run.",
+            });
+          }
+        }
+
+        // Charge on a brand-new strategy run. For a reused completed run, verify
+        // durable billing evidence and reconcile only if the idempotent charge is
+        // missing. This prevents both double-charging and silent free approval.
+        if (!strategyRunIsReused && strategyResult) {
+          await chargeForStrategyRun(userId, campaignId, strategyResult);
+        }
+
+        if (strategyRunIsReused) {
+          await reconcileStrategyRunCharge(userId, campaignId, strategyRunId);
+        }
+
+        // Reconcile pending strategy_review requests.
+        const lineage = buildStrategyApprovalLineage(
+          currentFingerprint,
+          strategyRunId,
+          0, // placeholder until we create/find the request
+          "pending"
+        );
+
+        const existingPendingRequests = await db
+          .select()
+          .from(approvalRequests)
+          .where(
+            and(
+              eq(approvalRequests.campaignId, campaignId),
+              eq(approvalRequests.userId, userId),
+              eq(approvalRequests.approvalType, "strategy_review"),
+              eq(approvalRequests.status, "pending")
+            )
+          )
+          .orderBy(desc(approvalRequests.createdAt));
+
+        let approvalRequestId: number;
+        let matchingRequest: (typeof existingPendingRequests)[number] | undefined;
+        for (const req of existingPendingRequests) {
+          const campaignCtx = (updatedCampaign.workflowContext || {}) as Record<string, unknown>;
+          const existingLineage = campaignCtx.strategyApprovalLineage as Record<string, unknown> | undefined;
+          if (
+            !existingLineage ||
+            existingLineage.creativeBriefFingerprint !== currentFingerprint ||
+            existingLineage.strategyRunId !== strategyRunId ||
+            existingLineage.approvalRequestId !== req.id
+          ) {
+            continue;
+          }
+          const linkedRun = previousStrategyRuns.find((r) => r.id === strategyRunId);
+          if (!linkedRun) continue;
+          const validation = await validateStrategyRunForCampaign(updatedCampaign, userId, linkedRun);
+          if (!validation.valid) {
+            console.log(`[regenerateFromProfile] rejecting reusable pending request ${req.id}: linked run ${strategyRunId} failed semantic validation | campaignId=${campaignId}`);
+            continue;
+          }
+          matchingRequest = req;
+          break;
+        }
+
+        if (matchingRequest) {
+          approvalRequestId = matchingRequest.id;
+          lineage.approvalRequestId = approvalRequestId;
+          console.log(`[regenerateFromProfile] reusing pending strategy_review ${approvalRequestId} with matching lineage | campaignId=${campaignId}`);
+        } else {
+          // Any older pending request is for a different brief/run and must be
+          // preserved as historical evidence, not approved.
+          for (const oldRequest of existingPendingRequests) {
+            await db
+              .update(approvalRequests)
+              .set({
+                status: "rejected",
+                rejectedAt: new Date(),
+                description: `${oldRequest.description || ""}\n\nSuperseded: a new strategy was generated for the current campaign brief.`.trim(),
+              })
+              .where(eq(approvalRequests.id, oldRequest.id));
+            console.log(`[regenerateFromProfile] superseded old pending strategy_review ${oldRequest.id} | campaignId=${campaignId}`);
+          }
+
+          const { id: newApprovalRequestId } = await createApprovalRequest({
+            userId,
+            campaignId,
+            approvalType: "strategy_review",
+            title: `Approve Strategy: ${campaign.name}`,
+            description: strategyRunIsReused
+              ? `The strategy for "${campaign.name}" matches the current campaign brief. Review and approve to continue to creative content generation.`
+              : `The strategy for "${campaign.name}" has been regenerated from the current campaign brief. Review and approve to continue to creative content generation.`,
+            aiRecommendation: "Based on the updated campaign brief and business profile, this strategy aligns with the current goal and target audience.",
+            riskLevel: "low",
+          });
+          approvalRequestId = newApprovalRequestId;
+          lineage.approvalRequestId = approvalRequestId;
+        }
+
+        // Move the campaign back to strategy review and persist the lineage.
+        const currentWorkflowState = updatedCampaign.workflowState;
+        await db
+          .update(campaigns)
+          .set({
+            workflowState: "strategy_generated",
+            workflowContext: {
+              ...(updatedCampaign.workflowContext || {}),
+              strategyFingerprint: currentFingerprint,
+              strategyRunId,
+              strategyApprovalLineage: lineage,
+              approvedStrategyFingerprint: null,
+              lastTransition: {
+                from: currentWorkflowState,
+                to: "strategy_generated",
+                action: "regenerate_from_profile",
+                at: new Date().toISOString(),
+              },
+            } as any,
+            updatedAt: new Date(),
+          })
+          .where(eq(campaigns.id, campaignId));
+
+        await heartbeatController.stop();
+        await releaseClaimOnce("completed");
+
+        console.log(`[regenerateFromProfile] completed | campaignId=${campaignId} | strategyRunId=${strategyRunId} | approvalRequestId=${approvalRequestId} | reused=${strategyRunIsReused}`);
 
         return {
           success: true,
           strategyRunId,
-          creativeRunId,
+          approvalRequestId,
+          reused: strategyRunIsReused,
         };
       } catch (err: any) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         console.error(`[regenerateFromProfile] step failed | campaignId=${campaignId} | userId=${userId} | error="${errorMessage}"`, err);
 
-        // Release the authoritative claim so later regeneration attempts can proceed.
-        // Release failure is logged without ownerToken; preserve the original error.
+        await heartbeatController.stop();
         await releaseClaimOnce("failed");
-
-        // Mark any runs we created as failed so the UI does not show them as completed.
-        // Only touch rows that are still running; runStrategyAgent already persists
-        // failure evidence, so overwriting it would erase raw/grounded output and
-        // diagnostics.
-        if (strategyRunId) {
-          await db
-            .update(agentRuns)
-            .set({ status: "failed", error: errorMessage, completedAt: new Date() })
-            .where(and(eq(agentRuns.id, strategyRunId), eq(agentRuns.status, "running")))
-            .catch((e) => console.error(`[regenerateFromProfile] could not mark strategy run ${strategyRunId} failed:`, e.message));
-        }
-        if (creativeRunId) {
-          await db
-            .update(agentRuns)
-            .set({ status: "failed", error: errorMessage, completedAt: new Date() })
-            .where(and(eq(agentRuns.id, creativeRunId), eq(agentRuns.status, "running")))
-            .catch((e) => console.error(`[regenerateFromProfile] could not mark creative run ${creativeRunId} failed:`, e.message));
-        }
 
         if (err instanceof TRPCError) {
           throw err;
@@ -1083,24 +1099,6 @@ export const campaignRouter = createRouter({
       };
 
       let strategyResult: StrategyAgentRunResult | undefined;
-      let strategyRunCharged = false;
-
-      const refundStrategyCharge = async () => {
-        if (!strategyRunCharged || !strategyResult) return;
-        const amount = getEstimatedAgentCost("strategy");
-        try {
-          await refundCredits({
-            userId,
-            amount,
-            description: "Refund for failed strategy regeneration approval",
-            idempotencyKey: `refund-strategy-run-${strategyResult.runId}`,
-            metadata: { campaignId, runId: strategyResult.runId },
-          });
-          console.log(`[regenerateStrategyForApproval] refunded ${amount} credits for failed approval | campaignId=${campaignId} | runId=${strategyResult.runId}`);
-        } catch (refundErr: any) {
-          console.error(`[regenerateStrategyForApproval] refund failed | campaignId=${campaignId} | runId=${strategyResult.runId} | error="${refundErr.message}"`, refundErr);
-        }
-      };
 
       try {
         // Look for an existing completed strategy run whose stored brief fingerprint
@@ -1226,11 +1224,15 @@ export const campaignRouter = createRouter({
           }
         }
 
-        // Charge exactly 3 credits only after the strategy output has passed
-        // validation and the claim has been bound to the run.
+        // Charge on a brand-new strategy run. For a reused completed run, verify
+        // durable billing evidence and reconcile only if the idempotent charge is
+        // missing. This prevents both double-charging and silent free approval.
         if (!strategyRunIsReused && strategyResult) {
           await chargeForStrategyRun(userId, campaignId, strategyResult);
-          strategyRunCharged = true;
+        }
+
+        if (strategyRunIsReused) {
+          await reconcileStrategyRunCharge(userId, campaignId, strategyRunId);
         }
 
         // Reconcile pending strategy_review requests. Only reuse a pending request
@@ -1351,7 +1353,6 @@ export const campaignRouter = createRouter({
       } catch (err: any) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         console.error(`[regenerateStrategyForApproval] step failed | campaignId=${campaignId} | userId=${userId} | error="${errorMessage}"`, err);
-        await refundStrategyCharge();
         await releaseClaimOnce("failed");
         if (err instanceof TRPCError) {
           throw err;

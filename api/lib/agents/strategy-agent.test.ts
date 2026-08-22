@@ -7,6 +7,7 @@ import {
   StrategyOutput,
   StrategyOutputSchema,
   chargeForStrategyRun,
+  reconcileStrategyRunCharge,
   runStrategyAgent,
   groundProductDefiningFields,
   materialiseGroundedFields,
@@ -1908,6 +1909,128 @@ describe("chargeForStrategyRun", () => {
         campaignId: 42,
         agentType: "strategy",
         creditsDeducted: 3,
+      })
+    );
+  });
+});
+
+describe("reconcileStrategyRunCharge", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeMockDb(
+    chargeRows: any[],
+    refundRows: any[] = []
+  ) {
+    let callCount = 0;
+    return {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(async () => {
+              callCount++;
+              return callCount === 1 ? chargeRows : refundRows;
+            }),
+          })),
+        })),
+      })),
+    };
+  }
+
+  it("returns alreadyCharged without deducting when the idempotent transaction exists and is valid", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { deductCredits } = await import("../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(
+      makeMockDb([
+        {
+          id: 1,
+          idempotencyKey: "strategy-run-999",
+          amount: -3,
+          type: "agent_deduction",
+          userId: 18,
+          metadata: { agentType: "strategy", campaignId: 42, runId: 999 },
+        },
+      ]) as any
+    );
+
+    const result = await reconcileStrategyRunCharge(18, 42, 999);
+
+    expect(result).toEqual({ alreadyCharged: true, chargedNow: false });
+    expect(deductCredits).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the existing charge row is malformed or belongs to another scope", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { deductCredits } = await import("../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(
+      makeMockDb([
+        {
+          id: 1,
+          idempotencyKey: "strategy-run-999",
+          amount: -3,
+          type: "agent_deduction",
+          userId: 99,
+          metadata: { agentType: "strategy", campaignId: 42, runId: 999 },
+        },
+      ]) as any
+    );
+
+    await expect(reconcileStrategyRunCharge(18, 42, 999)).rejects.toBeInstanceOf(TRPCError);
+    expect(deductCredits).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the strategy charge was previously refunded", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { deductCredits } = await import("../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(
+      makeMockDb(
+        [
+          {
+            id: 1,
+            idempotencyKey: "strategy-run-999",
+            amount: -3,
+            type: "agent_deduction",
+            userId: 18,
+            metadata: { agentType: "strategy", campaignId: 42, runId: 999 },
+          },
+        ],
+        [
+          {
+            id: 2,
+            idempotencyKey: "refund-strategy-run-999",
+            amount: 3,
+            type: "refund",
+            userId: 18,
+          },
+        ]
+      ) as any
+    );
+
+    await expect(reconcileStrategyRunCharge(18, 42, 999)).rejects.toBeInstanceOf(TRPCError);
+    expect(deductCredits).not.toHaveBeenCalled();
+  });
+
+  it("deducts exactly once when the idempotent transaction is missing", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { deductCredits } = await import("../billing/credit-engine");
+
+    vi.mocked(getDb).mockReturnValue(makeMockDb([]) as any);
+
+    const result = await reconcileStrategyRunCharge(18, 42, 999);
+
+    expect(result).toEqual({ alreadyCharged: false, chargedNow: true });
+    expect(deductCredits).toHaveBeenCalledTimes(1);
+    expect(deductCredits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 18,
+        amount: 3,
+        type: "agent_deduction",
+        idempotencyKey: "strategy-run-999",
+        metadata: { agentType: "strategy", campaignId: 42, runId: 999 },
       })
     );
   });

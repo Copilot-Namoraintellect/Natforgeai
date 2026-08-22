@@ -15,6 +15,16 @@ vi.mock("./lib/agents/creative-agent", () => ({
 vi.mock("./lib/agents/strategy-agent", () => ({
   runStrategyAgent: vi.fn(),
   chargeForStrategyRun: vi.fn(),
+  validateStrategyReadiness: vi.fn(() => ({ ready: true })),
+  isSuccessfulStrategyOutput: vi.fn((output: any) => {
+    return (
+      typeof output === "object" &&
+      output !== null &&
+      typeof output.creativeBriefFingerprint === "string" &&
+      !("outcome" in output)
+    );
+  }),
+  validateStrategyOutputAgainstCampaign: vi.fn(() => ({ valid: true })),
 }));
 
 vi.mock("./lib/creative/creative-generation-claim", async (importOriginal) => {
@@ -349,17 +359,13 @@ describe("creative generation claim caller integration (DB)", () => {
   });
 
   describe("campaignRouter.regenerateFromProfile", () => {
-    itSafe("acquires a claim and attaches the strategy run id", async () => {
-      const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
+    itSafe("charges once, creates a pending strategy_review approval, and does not run creative generation", async () => {
+      const { runStrategyAgent, chargeForStrategyRun } = await import("./lib/agents/strategy-agent");
       const { runCreativeAgent } = await import("./lib/agents/creative-agent");
-      vi.mocked(runStrategyAgent).mockResolvedValue({ runId: 456, output: {} } as any);
-      vi.mocked(runCreativeAgent).mockResolvedValue({
-        packRunId: 789,
-        savedPosts: 2,
-        savedAssets: 1,
-        pack: null,
-        assets: null,
-        metrics: {},
+      const { createApprovalRequest } = await import("./lib/workflow/engine");
+      vi.mocked(runStrategyAgent).mockResolvedValue({
+        runId: 456,
+        output: { creativeBriefFingerprint: "fp-test" },
       } as any);
 
       const caller = campaignRouter.createCaller(buildCtx(testUserId));
@@ -367,6 +373,24 @@ describe("creative generation claim caller integration (DB)", () => {
 
       expect(result.success).toBe(true);
       expect(result.strategyRunId).toBe(456);
+      expect(result.approvalRequestId).toBeGreaterThan(0);
+      expect(result.reused).toBe(false);
+
+      expect(chargeForStrategyRun).toHaveBeenCalledTimes(1);
+      expect(chargeForStrategyRun).toHaveBeenCalledWith(
+        testUserId,
+        testCampaignId,
+        expect.objectContaining({ runId: 456 })
+      );
+      expect(createApprovalRequest).toHaveBeenCalledTimes(1);
+      expect(createApprovalRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: testUserId,
+          campaignId: testCampaignId,
+          approvalType: "strategy_review",
+        })
+      );
+      expect(runCreativeAgent).not.toHaveBeenCalled();
 
       const claims = await db
         .select()
@@ -376,28 +400,20 @@ describe("creative generation claim caller integration (DB)", () => {
       expect(claims[0]?.operationSource).toBe("profile");
       expect(claims[0]?.operationReferenceId).toBe(456);
       expect(claims[0]?.status).toBe("completed");
-      expect(claims[0]?.leaseExpiresAt).not.toBeNull();
+      expect(claims[0]?.activeClaimKey).toBeNull();
     });
 
-    itSafe("concurrent regeneration rejects the loser before deleting anything", async () => {
+    itSafe("concurrent regeneration rejects the loser without running creative generation", async () => {
       const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
       const { runCreativeAgent } = await import("./lib/agents/creative-agent");
 
       // Slow the winner so the loser reaches acquisition while the active claim exists.
       vi.mocked(runStrategyAgent).mockImplementation(async () => {
         await new Promise((r) => setTimeout(r, 150));
-        return { runId: 456, output: {} } as any;
+        return { runId: 456, output: { creativeBriefFingerprint: "fp-test" } } as any;
       });
-      vi.mocked(runCreativeAgent).mockResolvedValue({
-        packRunId: 789,
-        savedPosts: 2,
-        savedAssets: 1,
-        pack: null,
-        assets: null,
-        metrics: {},
-      } as any);
 
-      // Pre-existing run must survive the loser's path.
+      // Pre-existing creative run must survive the loser's path.
       await db.insert(agentRuns).values({
         userId: testUserId,
         campaignId: testCampaignId,
@@ -417,17 +433,18 @@ describe("creative generation claim caller integration (DB)", () => {
       const loser = a instanceof TRPCError ? a : b;
       expect(winner).not.toBeInstanceOf(TRPCError);
       expect(winner.success).toBe(true);
+      expect(winner.approvalRequestId).toBeGreaterThan(0);
       expect(loser).toBeInstanceOf(TRPCError);
 
-      // Only one strategy generation and one creative generation executed.
+      // Only one strategy generation executed and no creative generation occurred.
       expect(vi.mocked(runStrategyAgent)).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(runCreativeAgent)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(runCreativeAgent)).not.toHaveBeenCalled();
 
       // The loser never reached deletion (the active claim was rejected before any
       // destructive work). The winner legitimately clears old agent runs as part of
       // regeneration; mocked agents do not persist rows, so only call counts matter.
       expect(vi.mocked(runStrategyAgent)).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(runCreativeAgent)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(runCreativeAgent)).not.toHaveBeenCalled();
     });
   });
 

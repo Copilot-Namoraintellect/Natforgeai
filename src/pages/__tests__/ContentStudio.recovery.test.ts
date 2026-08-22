@@ -9,7 +9,9 @@ import {
   selectBestApprovedMessagePack,
   getActiveGenerationRunId,
   isSupersededMessagePack,
+  getStrategyActionDecision,
 } from "../../lib/content-studio/logic";
+import { REGENERATE_FROM_PROFILE_CONFIRMATION } from "../ContentStudio";
 
 describe("campaignNeedsRecoveryDecision", () => {
   const campaign = { id: 28, workflowState: "creatives_generating" };
@@ -359,5 +361,67 @@ describe("approved message pack selection", () => {
 
     const pack = getApprovedMessagePackForDetails(assets, { contentPostId: 100 });
     expect(pack?.headline).toBe(specificPack.headline);
+  });
+});
+
+describe("getStrategyActionDecision after Regenerate from Profile", () => {
+  it("offers strategy regeneration when the approved strategy is stale or missing", () => {
+    const decision = getStrategyActionDecision({ isStale: true, canGenerateContent: false });
+    expect(decision).toEqual({ label: "Regenerate Strategy for Approval", action: "regenerate" });
+  });
+
+  it("offers strategy regeneration when the backend reports the strategy must be regenerated", () => {
+    const decision = getStrategyActionDecision({ canRegenerateStrategy: true, canGenerateContent: false });
+    expect(decision).toEqual({ label: "Regenerate Strategy for Approval", action: "regenerate" });
+  });
+
+  it("does not offer content generation until the strategy is approved", () => {
+    const decision = getStrategyActionDecision({
+      isStale: true,
+      canGenerateContent: false,
+      canRegenerateStrategy: true,
+    });
+    expect(decision.action).not.toBe("generate");
+    expect(decision.label).toBe("Regenerate Strategy for Approval");
+  });
+
+  it("allows generation from approved strategy only when the strategy is current and approved", () => {
+    const decision = getStrategyActionDecision({
+      isStale: false,
+      canGenerateContent: true,
+      canRegenerateStrategy: false,
+    });
+    expect(decision).toEqual({ label: "Generate from Approved Strategy", action: "generate" });
+  });
+});
+
+describe("Regenerate from Profile confirmation wording", () => {
+  it("says the strategy is regenerated from the business profile", () => {
+    expect(REGENERATE_FROM_PROFILE_CONFIRMATION.toLowerCase()).toContain(
+      "regenerate the campaign strategy from the current business profile"
+    );
+  });
+
+  it("mentions Approval Centre / approval review", () => {
+    expect(REGENERATE_FROM_PROFILE_CONFIRMATION.toLowerCase()).toMatch(
+      /approval centre|approval review|review.*approval|approval.*review/
+    );
+  });
+
+  it("states that creative generation occurs only after approval", () => {
+    expect(REGENERATE_FROM_PROFILE_CONFIRMATION.toLowerCase()).toMatch(
+      /creative content will only be generated after the strategy is approved/
+    );
+  });
+
+  it("does not promise immediate regeneration of leaflets, captions, platform adaptations or other creative content", () => {
+    const lower = REGENERATE_FROM_PROFILE_CONFIRMATION.toLowerCase();
+    expect(lower).not.toContain("leaflet");
+    expect(lower).not.toContain("captions");
+    expect(lower).not.toContain("platform adaptations");
+    expect(lower).not.toContain("posts");
+    expect(lower).not.toContain("images");
+    expect(lower).not.toContain("regenerate content");
+    expect(lower).not.toContain("creative assets");
   });
 });

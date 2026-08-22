@@ -7,7 +7,7 @@ import {
 } from "ai";
 import { strategyAgentPrompt } from "./prompts";
 import { getDb } from "../../queries/connection";
-import { agentRuns, campaigns } from "@db/schema";
+import { agentRuns, campaigns, creditTransactions } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import {
   buildGroundedCreativeBrief,
@@ -1171,6 +1171,80 @@ export async function chargeForStrategyRun(
     creditsDeducted: amount,
     metadata: { runId: result.runId },
   });
+}
+
+/**
+ * Reconcile the idempotent -3 credit charge for a reusable completed strategy
+ * run.
+ *
+ * If a valid charge already exists for the exact run/user/campaign, no new
+ * deduction is performed. If the existing row is malformed, belongs to another
+ * scope, or was previously refunded, the function fails closed so the caller
+ * cannot create an approval on top of inconsistent billing.
+ *
+ * If no charge exists, the deduction is recorded exactly once using the durable
+ * idempotency key.
+ */
+export async function reconcileStrategyRunCharge(
+  userId: number,
+  campaignId: number,
+  runId: number
+): Promise<{ alreadyCharged: boolean; chargedNow: boolean }> {
+  const db = getDb();
+  const chargeIdempotencyKey = `strategy-run-${runId}`;
+  const refundIdempotencyKey = `refund-strategy-run-${runId}`;
+  const expectedAmount = -getEstimatedAgentCost("strategy");
+
+  const [existingCharge] = await db
+    .select()
+    .from(creditTransactions)
+    .where(eq(creditTransactions.idempotencyKey, chargeIdempotencyKey))
+    .limit(1);
+
+  if (existingCharge) {
+    const meta = (existingCharge.metadata || {}) as Record<string, unknown>;
+    const isValidCharge =
+      existingCharge.userId === userId &&
+      existingCharge.amount === expectedAmount &&
+      existingCharge.type === "agent_deduction" &&
+      meta.runId === runId &&
+      meta.campaignId === campaignId &&
+      meta.agentType === "strategy";
+
+    if (!isValidCharge) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `Strategy-run ${runId} charge is malformed or belongs to a different user/campaign. Refusing to reconcile billing.`,
+      });
+    }
+
+    const [existingRefund] = await db
+      .select()
+      .from(creditTransactions)
+      .where(eq(creditTransactions.idempotencyKey, refundIdempotencyKey))
+      .limit(1);
+
+    if (existingRefund) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `Strategy-run ${runId} charge was previously refunded. Manual billing reconciliation is required before approval.`,
+      });
+    }
+
+    return { alreadyCharged: true, chargedNow: false };
+  }
+
+  const amount = getEstimatedAgentCost("strategy");
+  await deductCredits({
+    userId,
+    amount,
+    type: "agent_deduction",
+    description: "Strategy generation",
+    idempotencyKey: chargeIdempotencyKey,
+    metadata: { agentType: "strategy", campaignId, runId },
+  });
+
+  return { alreadyCharged: false, chargedNow: true };
 }
 
 function classifyGenerationError(error: unknown): {
