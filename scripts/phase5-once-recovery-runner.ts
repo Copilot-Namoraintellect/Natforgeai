@@ -1,0 +1,281 @@
+/**
+ * Phase 5 one-time recovery runner for campaign 30 / user 22 / approval 36.
+ *
+ * This script is narrowly scoped to recover the partial lifecycle created by the
+ * pre-fix `onStrategyApproved` implementation. It performs only SELECT checks
+ * and a single invocation of the fixed `onStrategyApproved` trigger; it does not
+ * create runs, charges, posts or images directly.
+ *
+ * Run only after commit 10f8824 is deployed and the runtime is stable.
+ */
+
+import { getDb } from "../api/queries/connection";
+import {
+  agentRuns,
+  approvalRequests,
+  campaigns,
+  creativeGenerationClaims,
+  creditTransactions,
+  creditWallets,
+} from "../db/schema";
+import { eq, and, gt, desc } from "drizzle-orm";
+import { onStrategyApproved } from "../api/lib/workflow/triggers";
+import { getStrategyApprovalStatus } from "../api/lib/workflow/strategy-approval";
+
+const RECOVERY_HEAD = "8e91155c95c1da4fb8a76d5fda68f3572b0bad56";
+const CAMPAIGN_ID = 30;
+const USER_ID = 22;
+const APPROVAL_ID = 36;
+const STRATEGY_RUN_ID = 253;
+const EXPECTED_FINGERPRINT = "c935ba1009ed5caf2183360b10bbd4e69c20602db023bd73ec9e9af5e848a319";
+const BASELINE_PREVIOUS_CREATIVE_RUN_ID = 243;
+const MINIMUM_CREDITS = 5;
+const IDEMPOTENCY_KEY = `creative-success:${CAMPAIGN_ID}:approval:${APPROVAL_ID}`;
+
+class RecoveryPreconditionError extends Error {
+  constructor(public readonly detail: string) {
+    super(`Recovery precondition failed: ${detail}`);
+  }
+}
+
+async function verifyDeployedCommit(): Promise<void> {
+  // This runner expects to execute against the fixed commit. The caller is
+  // responsible for ensuring the deployed build matches; we read the local
+  // environment variable as a final guardrail.
+  const deployedHead = process.env.PHASE5_RECOVERY_EXPECTED_HEAD;
+  if (deployedHead && deployedHead !== RECOVERY_HEAD) {
+    throw new RecoveryPreconditionError(
+      `Deployed HEAD mismatch: expected ${RECOVERY_HEAD}, got ${deployedHead}`
+    );
+  }
+}
+
+async function verifyApproval(): Promise<void> {
+  const db = getDb();
+  const [approval] = await db
+    .select()
+    .from(approvalRequests)
+    .where(and(eq(approvalRequests.id, APPROVAL_ID), eq(approvalRequests.userId, USER_ID)))
+    .limit(1);
+
+  if (!approval) {
+    throw new RecoveryPreconditionError(`Approval ${APPROVAL_ID} not found for user ${USER_ID}`);
+  }
+  if (approval.campaignId !== CAMPAIGN_ID) {
+    throw new RecoveryPreconditionError(
+      `Approval ${APPROVAL_ID} campaignId ${approval.campaignId} != ${CAMPAIGN_ID}`
+    );
+  }
+  if (approval.approvalType !== "strategy_review") {
+    throw new RecoveryPreconditionError(
+      `Approval ${APPROVAL_ID} approvalType ${approval.approvalType} != strategy_review`
+    );
+  }
+  if (approval.status !== "approved") {
+    throw new RecoveryPreconditionError(
+      `Approval ${APPROVAL_ID} status ${approval.status} != approved`
+    );
+  }
+}
+
+async function verifyStrategyRunAndFingerprint(): Promise<void> {
+  const db = getDb();
+  const [run] = await db
+    .select()
+    .from(agentRuns)
+    .where(and(eq(agentRuns.id, STRATEGY_RUN_ID), eq(agentRuns.userId, USER_ID)))
+    .limit(1);
+
+  if (!run) {
+    throw new RecoveryPreconditionError(`Strategy run ${STRATEGY_RUN_ID} not found`);
+  }
+  if (run.campaignId !== CAMPAIGN_ID) {
+    throw new RecoveryPreconditionError(
+      `Strategy run ${STRATEGY_RUN_ID} campaignId ${run.campaignId} != ${CAMPAIGN_ID}`
+    );
+  }
+  if (run.status !== "completed") {
+    throw new RecoveryPreconditionError(
+      `Strategy run ${STRATEGY_RUN_ID} status ${run.status} != completed`
+    );
+  }
+
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(and(eq(campaigns.id, CAMPAIGN_ID), eq(campaigns.userId, USER_ID)))
+    .limit(1);
+
+  if (!campaign) {
+    throw new RecoveryPreconditionError(`Campaign ${CAMPAIGN_ID} not found`);
+  }
+
+  const status = getStrategyApprovalStatus(campaign, null);
+  if (status.lineage?.strategyRunId !== STRATEGY_RUN_ID) {
+    throw new RecoveryPreconditionError(
+      `Lineage strategyRunId ${status.lineage?.strategyRunId} != ${STRATEGY_RUN_ID}`
+    );
+  }
+  if (status.lineage?.approvalRequestId !== APPROVAL_ID) {
+    throw new RecoveryPreconditionError(
+      `Lineage approvalRequestId ${status.lineage?.approvalRequestId} != ${APPROVAL_ID}`
+    );
+  }
+  if (status.lineage?.creativeBriefFingerprint !== EXPECTED_FINGERPRINT) {
+    throw new RecoveryPreconditionError(
+      `Lineage creativeBriefFingerprint mismatch: ${status.lineage?.creativeBriefFingerprint}`
+    );
+  }
+  if (status.lineage?.status !== "pending") {
+    throw new RecoveryPreconditionError(
+      `Lineage status ${status.lineage?.status} != pending (already recovered or changed)`
+    );
+  }
+  if (status.approvedStrategyFingerprint !== null) {
+    throw new RecoveryPreconditionError(
+      `approvedStrategyFingerprint is not null: ${status.approvedStrategyFingerprint}`
+    );
+  }
+}
+
+async function verifyNoNewerStrategyRun(): Promise<void> {
+  const db = getDb();
+  const newer = await db
+    .select({ id: agentRuns.id })
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.campaignId, CAMPAIGN_ID),
+        eq(agentRuns.userId, USER_ID),
+        eq(agentRuns.agentType, "strategy"),
+        gt(agentRuns.id, STRATEGY_RUN_ID)
+      )
+    )
+    .limit(1);
+
+  if (newer.length > 0) {
+    throw new RecoveryPreconditionError(
+      `Newer strategy run exists: ${newer[0].id}`
+    );
+  }
+}
+
+async function verifyNoCreativeRunAfterBaseline(): Promise<void> {
+  const db = getDb();
+  const newer = await db
+    .select({ id: agentRuns.id })
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.campaignId, CAMPAIGN_ID),
+        eq(agentRuns.userId, USER_ID),
+        eq(agentRuns.agentType, "creative"),
+        gt(agentRuns.id, BASELINE_PREVIOUS_CREATIVE_RUN_ID)
+      )
+    )
+    .limit(1);
+
+  if (newer.length > 0) {
+    throw new RecoveryPreconditionError(
+      `Creative run after baseline ${BASELINE_PREVIOUS_CREATIVE_RUN_ID} exists: ${newer[0].id}`
+    );
+  }
+}
+
+async function verifyNoExistingCharge(): Promise<void> {
+  const db = getDb();
+  const existing = await db
+    .select({ id: creditTransactions.id })
+    .from(creditTransactions)
+    .where(
+      and(
+        eq(creditTransactions.userId, USER_ID),
+        eq(creditTransactions.type, "agent_deduction"),
+        eq(creditTransactions.idempotencyKey, IDEMPOTENCY_KEY)
+      )
+    )
+    .limit(1);
+
+  if (existing.length > 0) {
+    throw new RecoveryPreconditionError(
+      `Existing creative charge found: ${existing[0].id}`
+    );
+  }
+}
+
+async function verifyWalletCredits(): Promise<void> {
+  const db = getDb();
+  const [wallet] = await db
+    .select({ balance: creditWallets.balance })
+    .from(creditWallets)
+    .where(eq(creditWallets.userId, USER_ID))
+    .limit(1);
+
+  if (!wallet) {
+    throw new RecoveryPreconditionError(`Credit wallet not found for user ${USER_ID}`);
+  }
+  if (wallet.balance < MINIMUM_CREDITS) {
+    throw new RecoveryPreconditionError(
+      `Insufficient credits: balance ${wallet.balance} < ${MINIMUM_CREDITS}`
+    );
+  }
+}
+
+async function verifyNoActiveCreativeClaim(): Promise<void> {
+  const db = getDb();
+  const active = await db
+    .select({ id: creativeGenerationClaims.id })
+    .from(creativeGenerationClaims)
+    .where(
+      and(
+        eq(creativeGenerationClaims.userId, USER_ID),
+        eq(creativeGenerationClaims.campaignId, CAMPAIGN_ID),
+        eq(creativeGenerationClaims.status, "running")
+      )
+    )
+    .limit(1);
+
+  if (active.length > 0) {
+    throw new RecoveryPreconditionError(
+      `Active creative claim exists: ${active[0].id}`
+    );
+  }
+}
+
+async function main() {
+  console.log("[Phase5Recovery] Starting one-time recovery runner");
+  console.log(`[Phase5Recovery] Campaign=${CAMPAIGN_ID} User=${USER_ID} Approval=${APPROVAL_ID}`);
+
+  await verifyDeployedCommit();
+  console.log("[Phase5Recovery] Deployed commit precondition satisfied");
+
+  await verifyApproval();
+  console.log("[Phase5Recovery] Approval 36 precondition satisfied");
+
+  await verifyStrategyRunAndFingerprint();
+  console.log("[Phase5Recovery] Strategy run 253 and lineage preconditions satisfied");
+
+  await verifyNoNewerStrategyRun();
+  console.log("[Phase5Recovery] No newer strategy run");
+
+  await verifyNoCreativeRunAfterBaseline();
+  console.log("[Phase5Recovery] No creative run after baseline 243");
+
+  await verifyNoExistingCharge();
+  console.log("[Phase5Recovery] No existing creative-success charge");
+
+  await verifyWalletCredits();
+  console.log("[Phase5Recovery] Wallet has sufficient credits");
+
+  await verifyNoActiveCreativeClaim();
+  console.log("[Phase5Recovery] No active creative claim");
+
+  console.log("[Phase5Recovery] All preconditions passed. Invoking onStrategyApproved once.");
+  await onStrategyApproved(CAMPAIGN_ID, USER_ID, APPROVAL_ID);
+  console.log("[Phase5Recovery] onStrategyApproved completed");
+}
+
+main().catch((err) => {
+  console.error("[Phase5Recovery] FAILED:", err.message);
+  process.exit(1);
+});
