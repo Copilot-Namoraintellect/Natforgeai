@@ -123,16 +123,54 @@ function getColumnFilter(condition: unknown, columnName: string): unknown | null
   return null;
 }
 
+function getColumnFilters(condition: unknown): Array<{ name: string; value: unknown }> {
+  const chunks = flattenSqlChunks(condition);
+  const filters: Array<{ name: string; value: unknown }> = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (chunk && typeof chunk === "object" && "name" in chunk && typeof chunk.name === "string") {
+      for (let j = i + 1; j < chunks.length; j++) {
+        const candidate = chunks[j];
+        if (
+          candidate &&
+          typeof candidate === "object" &&
+          !("name" in candidate) &&
+          "value" in candidate &&
+          !Array.isArray(candidate.value)
+        ) {
+          filters.push({ name: chunk.name, value: candidate.value });
+          break;
+        }
+      }
+    }
+  }
+  return filters;
+}
+
+function filterRows(rows: unknown[], condition: unknown) {
+  const filters = getColumnFilters(condition);
+  return rows.filter((row) => {
+    const r = row as Record<string, unknown>;
+    return filters.every((f) => r[f.name] === f.value);
+  });
+}
+
 function createWorkflowDbMock({
   initialRun,
   campaign,
   existingAudienceRun,
   agentRunsRows,
+  creativeClaimsRows,
+  creditTransactionsRows,
+  contentPostsRows,
 }: {
   initialRun?: Record<string, unknown>;
   campaign: Record<string, unknown>;
   existingAudienceRun?: Record<string, unknown>;
   agentRunsRows?: Record<string, unknown>[];
+  creativeClaimsRows?: Record<string, unknown>[];
+  creditTransactionsRows?: Record<string, unknown>[];
+  contentPostsRows?: Record<string, unknown>[];
 }) {
   const runs =
     agentRunsRows ??
@@ -143,20 +181,42 @@ function createWorkflowDbMock({
 
   const state = {
     campaign: { ...campaign },
+    agentRuns: runs.map((r) => ({ ...r })),
+    creativeClaims: (creativeClaimsRows ?? []).map((r) => ({ ...r })),
+    creditTransactions: (creditTransactionsRows ?? []).map((r) => ({ ...r })),
+    contentPosts: (contentPostsRows ?? []).map((r) => ({ ...r })),
+    nextId: {
+      agent_runs: 1000,
+      creative_generation_claims: 2000,
+      credit_transactions: 3000,
+      content_posts: 4000,
+    },
     insertCalls: [] as Array<{ table: string; values: unknown }>,
   };
 
-  function filterRows(rows: unknown[], condition: unknown) {
-    let result = rows;
-    const typeFilter = getColumnFilter(condition, "agentType");
-    if (typeFilter !== null) {
-      result = result.filter((r) => (r as any).agentType === typeFilter);
+  const tableStateKey: Record<string, keyof typeof state | ""> = {
+    agent_runs: "agentRuns",
+    campaigns: "",
+    creative_generation_claims: "creativeClaims",
+    credit_transactions: "creditTransactions",
+    content_posts: "contentPosts",
+  };
+
+  function getTableRows(tableName: string | undefined): unknown[] {
+    if (tableName === "campaigns") return [state.campaign];
+    const key = tableName ? tableStateKey[tableName] : undefined;
+    if (key) {
+      return state[key] as unknown[];
     }
-    const idFilter = getColumnFilter(condition, "id");
-    if (idFilter !== null) {
-      result = result.filter((r) => (r as any).id === idFilter);
-    }
-    return result;
+    return [];
+  }
+
+  function getNextId(tableName: string | undefined): number {
+    if (!tableName || !(tableName in state.nextId)) return 9999;
+    const key = tableName as keyof typeof state.nextId;
+    const id = state.nextId[key];
+    state.nextId[key] = id + 1;
+    return id;
   }
 
   const db = {
@@ -164,13 +224,8 @@ function createWorkflowDbMock({
       from: vi.fn((table: unknown) => ({
         where: vi.fn((condition: unknown) => {
           const tableName = getTableName(table);
-          let baseRows: unknown[] = [];
-          if (tableName === "agent_runs") {
-            baseRows = runs;
-          } else if (tableName === "campaigns") {
-            baseRows = [state.campaign];
-          }
-          const filtered = tableName === "agent_runs" ? filterRows(baseRows, condition) : baseRows;
+          const baseRows = getTableRows(tableName);
+          const filtered = tableName === "campaigns" ? baseRows : filterRows(baseRows, condition);
           return {
             orderBy: vi.fn(() => ({
               limit: vi.fn(async () => filtered),
@@ -183,20 +238,41 @@ function createWorkflowDbMock({
     })),
     insert: vi.fn((table: unknown) => ({
       values: vi.fn(async (values: unknown) => {
-        state.insertCalls.push({ table: getTableName(table) || "unknown", values });
-        return [{ insertId: 999 }];
+        const tableName = getTableName(table) || "unknown";
+        state.insertCalls.push({ table: tableName, values });
+        const id = getNextId(tableName);
+        const row = { id, ...(values as Record<string, unknown>) };
+        const key = tableStateKey[tableName];
+        if (key) {
+          (state[key] as unknown[]).push(row);
+        } else if (tableName === "campaigns") {
+          state.campaign = { ...state.campaign, ...row };
+        }
+        return [{ insertId: id }];
       }),
     })),
     update: vi.fn((table: unknown) => ({
       set: vi.fn((payload: any) => ({
-        where: vi.fn(async () => {
+        where: vi.fn(async (condition: unknown) => {
           const tableName = getTableName(table);
           if (tableName === "campaigns") {
             state.campaign = { ...state.campaign, ...payload };
+            return [];
+          }
+          const key = tableStateKey[tableName ?? ""];
+          if (!key) return [];
+          const filters = getColumnFilters(condition);
+          const rows = state[key] as Array<Record<string, unknown>>;
+          const index = rows.findIndex((row) => filters.every((f) => row[f.name] === f.value));
+          if (index !== -1) {
+            rows[index] = { ...rows[index], ...payload };
           }
           return [];
         }),
       })),
+    })),
+    delete: vi.fn(() => ({
+      where: vi.fn(async () => []),
     })),
   };
 
@@ -326,8 +402,32 @@ describe("onAgentRunComplete integration path", () => {
 });
 
 describe("onStrategyApproved", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+
+    const { transitionCampaignState } = await import("./engine");
+    vi.mocked(transitionCampaignState).mockImplementation(async () => "creatives_ready" as any);
+
+    const {
+      acquireCreativeGenerationClaim,
+      releaseClaimWithResult,
+    } = await import("../creative/creative-generation-claim");
+    vi.mocked(acquireCreativeGenerationClaim).mockImplementation(
+      async () =>
+        ({
+          acquired: true,
+          claim: { id: 1001, ownerToken: "test-owner-token" },
+        } as any)
+    );
+    vi.mocked(releaseClaimWithResult).mockImplementation(
+      async () => ({ released: true } as any)
+    );
+
+    const { canRunAutonomousWorkflow } = await import("../billing/cost-control");
+    vi.mocked(canRunAutonomousWorkflow).mockResolvedValue({ allowed: true } as any);
+
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    vi.mocked(runCreativeAgent).mockReset();
   });
 
   it("passes the approval request id as the generation operation identity", async () => {
@@ -435,5 +535,461 @@ describe("onStrategyApproved", () => {
     await onStrategyApproved(29, 42, 556);
 
     expect(runCreativeAgent).not.toHaveBeenCalled();
+  });
+
+  it("recovers the production Phase 5 state and is idempotent on retry", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const {
+      acquireCreativeGenerationClaim,
+      releaseClaimWithResult,
+    } = await import("../creative/creative-generation-claim");
+    const { transitionCampaignState } = await import("./engine");
+    const { onStrategyApproved } = await import("./triggers");
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [
+        {
+          id: 10,
+          userId: 22,
+          campaignId: 30,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+        {
+          id: 243,
+          userId: 22,
+          campaignId: 30,
+          agentType: "creative",
+          status: "completed",
+          output: { creativeBriefFingerprint: "unrelated-old-fingerprint" },
+        },
+        {
+          id: 611,
+          userId: 22,
+          campaignId: 30,
+          agentType: "audience",
+          status: "completed",
+        },
+      ],
+      creativeClaimsRows: [
+        {
+          id: 15,
+          userId: 22,
+          campaignId: 30,
+          operationSource: "approval",
+          operationReferenceId: null,
+          status: "completed",
+          activeClaimKey: null,
+          ownerToken: "old-token",
+        },
+      ],
+      campaign: {
+        id: 30,
+        userId: 22,
+        businessId: null,
+        workflowState: "strategy_generated",
+        workflowContext: {
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "test-fingerprint",
+            strategyRunId: 10,
+            approvalRequestId: 36,
+            status: "pending",
+          },
+        },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const transitions: Record<string, Record<string, string>> = {
+      strategy_generated: { approve_strategy: "strategy_approved" },
+      strategy_approved: { generate_creatives: "creatives_generating" },
+      creatives_generating: { creatives_complete: "creatives_ready" },
+    };
+
+    vi.mocked(transitionCampaignState).mockImplementation(async (_cid, _uid, action) => {
+      const currentState = state.campaign.workflowState as string;
+      const nextState = transitions[currentState]?.[action];
+      if (!nextState) {
+        throw new Error(`Invalid transition: ${action} from ${currentState}`);
+      }
+      state.campaign = { ...state.campaign, workflowState: nextState };
+      return nextState as any;
+    });
+
+    vi.mocked(acquireCreativeGenerationClaim).mockImplementation(async (args: any) => {
+      const id = state.nextId.creative_generation_claims++;
+      const claim = {
+        id,
+        userId: args.userId,
+        campaignId: args.campaignId,
+        operationSource: args.operationSource,
+        operationReferenceId: args.operationReferenceId ?? null,
+        activeClaimKey: `active:${args.userId}:${args.campaignId}:creative`,
+        ownerToken: args.ownerToken || "test-owner-token",
+        status: "running" as const,
+        leaseExpiresAt: args.leaseExpiresAt ?? null,
+        heartbeatAt: null,
+        releasedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      state.creativeClaims.push(claim as any);
+      return { acquired: true, claim };
+    });
+
+    vi.mocked(releaseClaimWithResult).mockImplementation(async ({ claimId, ownerToken, status }: any) => {
+      const claim = state.creativeClaims.find(
+        (c: any) => c.id === claimId && c.ownerToken === ownerToken
+      );
+      if (claim) {
+        (claim as any).status = status;
+        (claim as any).activeClaimKey = null;
+        (claim as any).releasedAt = new Date();
+      }
+      return { released: true };
+    });
+
+    vi.mocked(runCreativeAgent).mockImplementation(async ({ userId, campaignId, generationOperation }: any) => {
+      const approvalId = generationOperation.id;
+      const runId = state.nextId.agent_runs++;
+      state.agentRuns.push({
+        id: runId,
+        userId,
+        campaignId,
+        agentType: "creative",
+        status: "completed",
+        output: { savedPosts: 2 },
+        createdAt: new Date().toISOString(),
+      });
+      state.contentPosts.push({
+        id: state.nextId.content_posts++,
+        userId,
+        campaignId,
+        title: `Post ${runId}`,
+        type: "social_post",
+        status: "draft",
+        metadata: {
+          generationRunId: `pack-${runId}`,
+          creativeBriefFingerprint: (state.campaign.workflowContext as any)?.strategyApprovalLineage?.creativeBriefFingerprint,
+        },
+      });
+      state.creditTransactions.push({
+        id: state.nextId.credit_transactions++,
+        userId,
+        walletId: 1,
+        type: "agent_deduction",
+        amount: -5,
+        balanceAfter: 95,
+        description: "creative agent execution (post-success)",
+        idempotencyKey: `creative-success:${campaignId}:approval:${approvalId}`,
+        metadata: {
+          campaignId,
+          agentRunId: runId,
+          agentType: "creative",
+          generationSource: "approval",
+          generationOperationId: approvalId,
+        },
+      });
+      state.campaign = {
+        ...state.campaign,
+        workflowContext: {
+          ...(state.campaign.workflowContext as any),
+          savedPosts: 2,
+        },
+      };
+      return {
+        packRunId: runId,
+        assetsRunId: null,
+        savedPosts: 2,
+        savedAssets: 1,
+        pack: null,
+        assets: null,
+        metrics: {
+          messageArchitectDurationMs: 0,
+          creativeGenerationDurationMs: 0,
+          qualityRetryDurationMs: 0,
+          fallbackDurationMs: 0,
+          totalDurationMs: 0,
+        },
+      };
+    });
+
+    await onStrategyApproved(30, 22, 36);
+
+    // Approved lineage and fingerprint are persisted first.
+    const ctxAfterFirstCall = state.campaign.workflowContext as any;
+    expect(ctxAfterFirstCall.strategyApprovalLineage.status).toBe("approved");
+    expect(ctxAfterFirstCall.approvedStrategyFingerprint).toBe("test-fingerprint");
+
+    // State transitions happened in the right order.
+    expect(transitionCampaignState).toHaveBeenCalledWith(30, 22, "approve_strategy");
+    expect(transitionCampaignState).toHaveBeenCalledWith(30, 22, "generate_creatives");
+
+    // A new claim correlated to approval 36 was acquired and released as completed.
+    expect(acquireCreativeGenerationClaim).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 22,
+        campaignId: 30,
+        operationSource: "approval",
+        operationReferenceId: 36,
+      })
+    );
+    const newClaims = state.creativeClaims.filter(
+      (c: any) => c.operationSource === "approval" && c.operationReferenceId === 36
+    );
+    expect(newClaims).toHaveLength(1);
+    expect(newClaims[0].status).toBe("completed");
+    expect(newClaims[0].activeClaimKey).toBeNull();
+
+    // One new creative run was produced; the unrelated old run 243 is still present.
+    const newCreativeRuns = state.agentRuns.filter(
+      (r: any) => r.agentType === "creative" && r.status === "completed" && r.id !== 243
+    );
+    expect(newCreativeRuns).toHaveLength(1);
+
+    const charges = state.creditTransactions.filter(
+      (t: any) => t.type === "agent_deduction" && t.amount === -5
+    );
+    expect(charges).toHaveLength(1);
+    expect(charges[0].idempotencyKey).toBe("creative-success:30:approval:36");
+
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed" })
+    );
+
+    // Retry the same approval: it must be a no-op.
+    const runCallsBeforeRetry = vi.mocked(runCreativeAgent).mock.calls.length;
+    const chargeCountBeforeRetry = state.creditTransactions.length;
+    const creativeRunCountBeforeRetry = state.agentRuns.filter(
+      (r: any) => r.agentType === "creative"
+    ).length;
+
+    await onStrategyApproved(30, 22, 36);
+
+    expect(vi.mocked(runCreativeAgent).mock.calls.length).toBe(runCallsBeforeRetry);
+    expect(state.creditTransactions.length).toBe(chargeCountBeforeRetry);
+    expect(
+      state.agentRuns.filter((r: any) => r.agentType === "creative").length
+    ).toBe(creativeRunCountBeforeRetry);
+  });
+
+  it("does not acquire a claim or run creative generation when cost control blocks", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const { acquireCreativeGenerationClaim } = await import("../creative/creative-generation-claim");
+    const { canRunAutonomousWorkflow } = await import("../billing/cost-control");
+    const { onStrategyApproved } = await import("./triggers");
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [
+        {
+          id: 10,
+          userId: 22,
+          campaignId: 30,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+      ],
+      campaign: {
+        id: 30,
+        userId: 22,
+        businessId: null,
+        workflowState: "strategy_generated",
+        workflowContext: {
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "test-fingerprint",
+            strategyRunId: 10,
+            approvalRequestId: 36,
+            status: "pending",
+          },
+        },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(canRunAutonomousWorkflow).mockResolvedValue({ allowed: false, reason: "insufficient credits" });
+
+    await onStrategyApproved(30, 22, 36);
+
+    // Lineage is still persisted before the cost-control gate.
+    const ctx = state.campaign.workflowContext as any;
+    expect(ctx.strategyApprovalLineage.status).toBe("approved");
+    expect(ctx.approvedStrategyFingerprint).toBe("test-fingerprint");
+
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(state.creditTransactions).toHaveLength(0);
+    expect(state.agentRuns.filter((r: any) => r.agentType === "creative")).toHaveLength(0);
+  });
+
+  it("releases the claim as failed when creative generation fails", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const {
+      acquireCreativeGenerationClaim,
+      releaseClaimWithResult,
+    } = await import("../creative/creative-generation-claim");
+    const { transitionCampaignState } = await import("./engine");
+    const { onStrategyApproved } = await import("./triggers");
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [
+        {
+          id: 10,
+          userId: 22,
+          campaignId: 30,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+      ],
+      campaign: {
+        id: 30,
+        userId: 22,
+        businessId: null,
+        workflowState: "strategy_generated",
+        workflowContext: {
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "test-fingerprint",
+            strategyRunId: 10,
+            approvalRequestId: 36,
+            status: "pending",
+          },
+        },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    vi.mocked(acquireCreativeGenerationClaim).mockImplementation(async (args: any) => {
+      const id = state.nextId.creative_generation_claims++;
+      const claim = {
+        id,
+        userId: args.userId,
+        campaignId: args.campaignId,
+        operationSource: args.operationSource,
+        operationReferenceId: args.operationReferenceId ?? null,
+        activeClaimKey: `active:${args.userId}:${args.campaignId}:creative`,
+        ownerToken: args.ownerToken || "test-owner-token",
+        status: "running" as const,
+        leaseExpiresAt: args.leaseExpiresAt ?? null,
+        heartbeatAt: null,
+        releasedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      state.creativeClaims.push(claim as any);
+      return { acquired: true, claim };
+    });
+
+    vi.mocked(releaseClaimWithResult).mockImplementation(async ({ claimId, ownerToken, status }: any) => {
+      const claim = state.creativeClaims.find(
+        (c: any) => c.id === claimId && c.ownerToken === ownerToken
+      );
+      if (claim) {
+        (claim as any).status = status;
+        (claim as any).activeClaimKey = null;
+        (claim as any).releasedAt = new Date();
+      }
+      return { released: true };
+    });
+
+    vi.mocked(runCreativeAgent).mockRejectedValue(new Error("generation failed"));
+
+    const transitions: Record<string, Record<string, string>> = {
+      strategy_generated: { approve_strategy: "strategy_approved" },
+      strategy_approved: { generate_creatives: "creatives_generating" },
+    };
+
+    vi.mocked(transitionCampaignState).mockImplementation(async (_cid, _uid, action) => {
+      const currentState = state.campaign.workflowState as string;
+      const nextState = transitions[currentState]?.[action];
+      if (!nextState) {
+        throw new Error(`Invalid transition: ${action} from ${currentState}`);
+      }
+      state.campaign = { ...state.campaign, workflowState: nextState };
+      return nextState as any;
+    });
+
+    await onStrategyApproved(30, 22, 36);
+
+    expect(acquireCreativeGenerationClaim).toHaveBeenCalledTimes(1);
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+    expect(releaseClaimWithResult).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed" })
+    );
+
+    const claims = state.creativeClaims.filter(
+      (c: any) => c.operationSource === "approval" && c.operationReferenceId === 36
+    );
+    expect(claims).toHaveLength(1);
+    expect(claims[0].status).toBe("failed");
+    expect(claims[0].activeClaimKey).toBeNull();
+
+    expect(state.creditTransactions).toHaveLength(0);
+    expect(state.agentRuns.filter((r: any) => r.agentType === "creative")).toHaveLength(0);
+  });
+
+  it("does not let an unrelated prior creative run block approval-driven generation", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const { onStrategyApproved } = await import("./triggers");
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [
+        {
+          id: 10,
+          userId: 22,
+          campaignId: 30,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+        {
+          id: 243,
+          userId: 22,
+          campaignId: 30,
+          agentType: "creative",
+          status: "completed",
+          output: { creativeBriefFingerprint: "unrelated-old-fingerprint" },
+        },
+      ],
+      campaign: {
+        id: 30,
+        userId: 22,
+        businessId: null,
+        workflowState: "strategy_generated",
+        workflowContext: {
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "test-fingerprint",
+            strategyRunId: 10,
+            approvalRequestId: 36,
+            status: "pending",
+          },
+        },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    vi.mocked(runCreativeAgent).mockResolvedValue({
+      packRunId: 701,
+      savedPosts: 2,
+      savedAssets: 1,
+      pack: null,
+      assets: null,
+      metrics: {},
+    } as any);
+
+    await onStrategyApproved(30, 22, 36);
+
+    expect(runCreativeAgent).toHaveBeenCalledTimes(1);
+    expect(runCreativeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 22,
+        campaignId: 30,
+        generationOperation: { source: "approval", id: 36 },
+      })
+    );
   });
 });

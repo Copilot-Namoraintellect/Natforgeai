@@ -1,5 +1,14 @@
 import { getDb } from "../../queries/connection";
-import { agentRuns, campaigns, businesses, approvalRequests, publishingQueue } from "@db/schema";
+import {
+  agentRuns,
+  campaigns,
+  businesses,
+  approvalRequests,
+  publishingQueue,
+  creditTransactions,
+  contentPosts,
+  creativeGenerationClaims,
+} from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { transitionCampaignState, createApprovalRequest } from "./engine";
 import { resolveCreativeWorkflowState } from "./progress-logic";
@@ -265,13 +274,123 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
   }
 }
 
+async function hasSuccessfulCreativeGenerationForApproval(
+  userId: number,
+  campaignId: number,
+  approvalId: number,
+  currentFingerprint: string
+): Promise<boolean> {
+  const db = getDb();
+
+  // Fast path: a successful creative charge already recorded for this exact approval.
+  const idempotencyKey = `creative-success:${campaignId}:approval:${approvalId}`;
+  const [existingCharge] = await db
+    .select()
+    .from(creditTransactions)
+    .where(
+      and(
+        eq(creditTransactions.userId, userId),
+        eq(creditTransactions.type, "agent_deduction"),
+        eq(creditTransactions.idempotencyKey, idempotencyKey)
+      )
+    )
+    .limit(1);
+
+  if (existingCharge) {
+    return true;
+  }
+
+  // Fallback: a completed creative run whose saved posts reference this fingerprint.
+  const completedRuns = await db
+    .select()
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.userId, userId),
+        eq(agentRuns.campaignId, campaignId),
+        eq(agentRuns.agentType, "creative"),
+        eq(agentRuns.status, "completed")
+      )
+    );
+
+  if (completedRuns.length === 0) {
+    return false;
+  }
+
+  const posts = await db
+    .select()
+    .from(contentPosts)
+    .where(
+      and(
+        eq(contentPosts.userId, userId),
+        eq(contentPosts.campaignId, campaignId)
+      )
+    );
+
+  for (const run of completedRuns) {
+    const runIdTag = `pack-${run.id}`;
+    for (const post of posts) {
+      const metadata = (post.metadata ?? {}) as Record<string, unknown>;
+      if (
+        metadata.generationRunId === runIdTag &&
+        metadata.creativeBriefFingerprint === currentFingerprint
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+async function hasInProgressCreativeGeneration(
+  userId: number,
+  campaignId: number,
+  approvalId: number
+): Promise<boolean> {
+  const db = getDb();
+
+  const runningClaim = await db
+    .select()
+    .from(creativeGenerationClaims)
+    .where(
+      and(
+        eq(creativeGenerationClaims.userId, userId),
+        eq(creativeGenerationClaims.campaignId, campaignId),
+        eq(creativeGenerationClaims.operationSource, "approval"),
+        eq(creativeGenerationClaims.operationReferenceId, approvalId),
+        eq(creativeGenerationClaims.status, "running")
+      )
+    )
+    .limit(1);
+
+  if (runningClaim.length > 0) {
+    return true;
+  }
+
+  const runningRun = await db
+    .select()
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.userId, userId),
+        eq(agentRuns.campaignId, campaignId),
+        eq(agentRuns.agentType, "creative"),
+        eq(agentRuns.status, "running")
+      )
+    )
+    .limit(1);
+
+  return runningRun.length > 0;
+}
+
 export async function onStrategyApproved(
   campaignId: number,
   userId: number,
   approvalId: number
 ) {
   const db = getDb();
-  const [campaign] = await db
+  let [campaign] = await db
     .select()
     .from(campaigns)
     .where(eq(campaigns.id, campaignId))
@@ -344,7 +463,77 @@ export async function onStrategyApproved(
     return;
   }
 
-  // Authoritative atomic claim for the auto-creative step of this approval.
+  // 1. Persist the approved lineage and authorised fingerprint FIRST so the
+  // function becomes idempotent: subsequent calls see an approved lineage and
+  // will not double-spend credits or double-generate content.
+  const needsApprovalPersistence =
+    status.approvedStrategyFingerprint !== currentFingerprint ||
+    lineage.status !== "approved";
+
+  if (needsApprovalPersistence) {
+    await db
+      .update(campaigns)
+      .set({
+        workflowContext: {
+          ...(campaign.workflowContext || {}),
+          approvedStrategyFingerprint: currentFingerprint,
+          strategyApprovalLineage: {
+            ...lineage,
+            status: "approved",
+          },
+        } as any,
+      })
+      .where(eq(campaigns.id, campaignId));
+
+    // Only transition from the state that the approval action is valid for.
+    // If the campaign has already advanced (e.g. a retry after partial failure),
+    // the persisted lineage/fingerprint above is sufficient evidence.
+    if (campaign.workflowState === "strategy_generated") {
+      await transitionCampaignState(campaignId, userId, "approve_strategy");
+    }
+
+    const [reloadedCampaign] = await db
+      .select()
+      .from(campaigns)
+      .where(eq(campaigns.id, campaignId))
+      .limit(1);
+    if (reloadedCampaign) {
+      campaign = reloadedCampaign;
+    }
+  }
+
+  // 2. Idempotent dedup: skip if creative generation has already succeeded for
+  // THIS specific approval. The unique creative-success charge idempotency key is
+  // the authoritative evidence; the content-post fallback covers pre-idempotency
+  // historical runs.
+  const alreadyGenerated = await hasSuccessfulCreativeGenerationForApproval(
+    userId,
+    campaignId,
+    approvalId,
+    currentFingerprint
+  );
+  if (alreadyGenerated) {
+    console.log(`[Workflow] Successful creative generation already recorded for approval ${approvalId}; skipping duplicate`);
+    return;
+  }
+
+  // 3. In-progress dedup: do not start a second concurrent generation for the
+  // same approval.
+  const inProgress = await hasInProgressCreativeGeneration(userId, campaignId, approvalId);
+  if (inProgress) {
+    console.log(`[Workflow] Creative generation already in progress for approval ${approvalId}; skipping duplicate`);
+    return;
+  }
+
+  // 4. Cost control check BEFORE acquiring a claim. A negative result returns
+  // without touching claim state.
+  const autoCheck = await canRunAutonomousWorkflow(userId, campaignId);
+  if (!autoCheck.allowed) {
+    console.log(`[Workflow] Auto-creative blocked for campaign ${campaignId}: ${autoCheck.reason}`);
+    return;
+  }
+
+  // 5. Authoritative atomic claim for the auto-creative step of this approval.
   const ownerToken = generateOwnerToken();
   const claimResult = await acquireCreativeGenerationClaim({
     userId,
@@ -379,62 +568,6 @@ export async function onStrategyApproved(
   };
 
   try {
-    // Advisory dedup: a pre-existing creative run from before the claim table existed.
-    const existingCreative = await db
-      .select()
-      .from(agentRuns)
-      .where(
-        and(
-          eq(agentRuns.campaignId, campaignId),
-          eq(agentRuns.agentType, "creative"),
-          eq(agentRuns.userId, userId)
-        )
-      )
-      .orderBy(desc(agentRuns.createdAt))
-      .limit(1);
-
-    if (existingCreative.length > 0 && ["running", "completed"].includes(existingCreative[0].status)) {
-      console.log(`[Workflow] Skipping duplicate creative run for campaign ${campaignId}. Existing run ${existingCreative[0].id} is ${existingCreative[0].status}.`);
-      const releaseResult = await releaseClaimOnce("completed");
-      if (!releaseResult.released) {
-        throw new Error(`Existing creative run found but the operation claim could not be released for campaign ${campaignId}.`);
-      }
-      return;
-    }
-
-    // Check cost control before auto-triggering
-    const autoCheck = await canRunAutonomousWorkflow(userId, campaignId);
-    if (!autoCheck.allowed) {
-      console.log(`[Workflow] Auto-creative blocked for campaign ${campaignId}: ${autoCheck.reason}`);
-      const releaseResult = await releaseClaimOnce("completed");
-      if (!releaseResult.released) {
-        throw new Error(`Auto-creative blocked but the operation claim could not be released for campaign ${campaignId}.`);
-      }
-      return;
-    }
-
-    // Transition to strategy_approved and record the authorised fingerprint so
-    // later creative generation can prove it matches the current brief.
-    await transitionCampaignState(campaignId, userId, "approve_strategy");
-    const [approvedCampaign] = await db
-      .select()
-      .from(campaigns)
-      .where(eq(campaigns.id, campaignId))
-      .limit(1);
-    await db
-      .update(campaigns)
-      .set({
-        workflowContext: {
-          ...(approvedCampaign?.workflowContext || {}),
-          approvedStrategyFingerprint: currentFingerprint,
-          strategyApprovalLineage: {
-            ...lineage,
-            status: "approved",
-          },
-        } as any,
-      })
-      .where(eq(campaigns.id, campaignId));
-
     // Run Audience Intelligence after strategy approval to refine audience segments
     // before content generation. This is credit-safe: if no permissioned source data
     // exists, the agent returns early without calling the LLM.
