@@ -22,7 +22,6 @@ import { eq, and, gt, desc } from "drizzle-orm";
 import { onStrategyApproved } from "../api/lib/workflow/triggers";
 import { getStrategyApprovalStatus } from "../api/lib/workflow/strategy-approval";
 
-const RECOVERY_HEAD = "8e91155c95c1da4fb8a76d5fda68f3572b0bad56";
 const CAMPAIGN_ID = 30;
 const USER_ID = 22;
 const APPROVAL_ID = 36;
@@ -39,13 +38,14 @@ class RecoveryPreconditionError extends Error {
 }
 
 async function verifyDeployedCommit(): Promise<void> {
-  // This runner expects to execute against the fixed commit. The caller is
-  // responsible for ensuring the deployed build matches; we read the local
-  // environment variable as a final guardrail.
+  // This runner expects the deployment script to pass the exact recovery
+  // commit via PHASE5_RECOVERY_EXPECTED_HEAD. This avoids a chicken-and-egg
+  // problem where hard-coding the commit hash inside this file changes the
+  // commit hash of the file itself.
   const deployedHead = process.env.PHASE5_RECOVERY_EXPECTED_HEAD;
-  if (deployedHead && deployedHead !== RECOVERY_HEAD) {
+  if (!deployedHead || deployedHead.length !== 40) {
     throw new RecoveryPreconditionError(
-      `Deployed HEAD mismatch: expected ${RECOVERY_HEAD}, got ${deployedHead}`
+      "PHASE5_RECOVERY_EXPECTED_HEAD environment variable is missing or not a 40-character commit hash"
     );
   }
 }
