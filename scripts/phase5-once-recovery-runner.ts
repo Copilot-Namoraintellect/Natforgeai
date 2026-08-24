@@ -6,7 +6,8 @@
  * and a single invocation of the fixed `onStrategyApproved` trigger; it does not
  * create runs, charges, posts or images directly.
  *
- * Run only after commit 10f8824 is deployed and the runtime is stable.
+ * Run only after the exact recovery commit recorded in
+ * PHASE5_RECOVERY_EXPECTED_HEAD is deployed and the runtime is stable.
  */
 
 import { getDb } from "../api/queries/connection";
@@ -126,14 +127,14 @@ async function verifyStrategyRunAndFingerprint(): Promise<void> {
       `Lineage creativeBriefFingerprint mismatch: ${status.lineage?.creativeBriefFingerprint}`
     );
   }
-  if (status.lineage?.status !== "pending") {
+  if (status.lineage?.status !== "approved") {
     throw new RecoveryPreconditionError(
-      `Lineage status ${status.lineage?.status} != pending (already recovered or changed)`
+      `Lineage status ${status.lineage?.status} != approved (strategy approval not persisted)`
     );
   }
-  if (status.approvedStrategyFingerprint !== null) {
+  if (status.approvedStrategyFingerprint !== EXPECTED_FINGERPRINT) {
     throw new RecoveryPreconditionError(
-      `approvedStrategyFingerprint is not null: ${status.approvedStrategyFingerprint}`
+      `approvedStrategyFingerprint ${status.approvedStrategyFingerprint} != ${EXPECTED_FINGERPRINT}`
     );
   }
 }

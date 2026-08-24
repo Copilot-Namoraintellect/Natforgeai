@@ -74,6 +74,11 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
 
+  mockOnStrategyApproved.mockReset();
+  mockGetStrategyApprovalStatus.mockReset();
+  selectCallIndex = 0;
+  selectResults = [];
+
   let resolveFn: (code: number) => void;
   exitPromise = new Promise<number>((resolve) => {
     resolveFn = resolve;
@@ -95,8 +100,18 @@ afterEach(() => {
 });
 
 function makeSelectResults(
-  overrides: { postRecoveryCampaign?: unknown; postRecoveryLineageStatus?: string } = {}
+  overrides: {
+    postRecoveryCampaign?: unknown;
+    postRecoveryLineageStatus?: string;
+    preRecoveryLineageStatus?: string;
+    preRecoveryApprovedFingerprint?: string | null;
+  } = {}
 ): unknown[][] {
+  const preRecoveryApprovedFingerprint =
+    overrides.preRecoveryApprovedFingerprint ?? EXPECTED_FINGERPRINT;
+  const preRecoveryLineageStatus =
+    overrides.preRecoveryLineageStatus ?? "approved";
+
   const postRecoveryCampaign = overrides.postRecoveryCampaign ?? {
     id: CAMPAIGN_ID,
     userId: USER_ID,
@@ -136,11 +151,12 @@ function makeSelectResults(
         id: CAMPAIGN_ID,
         userId: USER_ID,
         workflowContext: {
+          approvedStrategyFingerprint: preRecoveryApprovedFingerprint,
           strategyApprovalLineage: {
             strategyRunId: STRATEGY_RUN_ID,
             approvalRequestId: APPROVAL_ID,
             creativeBriefFingerprint: EXPECTED_FINGERPRINT,
-            status: "pending",
+            status: preRecoveryLineageStatus,
           },
         },
       },
@@ -193,9 +209,14 @@ function makeSelectResults(
   ];
 }
 
-function setupSuccessMocks() {
+function setupSuccessMocks(
+  overrides: {
+    preRecoveryLineageStatus?: string;
+    preRecoveryApprovedFingerprint?: string | null;
+  } = {}
+) {
   selectCallIndex = 0;
-  selectResults = makeSelectResults();
+  selectResults = makeSelectResults(overrides);
 
   mockGetStrategyApprovalStatus
     .mockReturnValueOnce({
@@ -203,9 +224,10 @@ function setupSuccessMocks() {
         strategyRunId: STRATEGY_RUN_ID,
         approvalRequestId: APPROVAL_ID,
         creativeBriefFingerprint: EXPECTED_FINGERPRINT,
-        status: "pending",
+        status: overrides.preRecoveryLineageStatus ?? "approved",
       },
-      approvedStrategyFingerprint: null,
+      approvedStrategyFingerprint:
+        overrides.preRecoveryApprovedFingerprint ?? EXPECTED_FINGERPRINT,
     })
     .mockReturnValueOnce({
       lineage: {
@@ -235,10 +257,10 @@ describe("phase5-once-recovery-runner process termination", () => {
     expect(exitCode).toBe(1);
   });
 
-  it("exits 0 on successful recovery", async () => {
+  it("exits 0 on successful recovery when lineage is already approved", async () => {
     vi.stubEnv(
       "PHASE5_RECOVERY_EXPECTED_HEAD",
-      "20048f4e32d063a470f784bdce770aaa7dc84cd0"
+      "db7200c5496280bd34bb6948b161f0dc429a73d0"
     );
     setupSuccessMocks();
 
@@ -253,10 +275,42 @@ describe("phase5-once-recovery-runner process termination", () => {
     expect(exitCode).toBe(0);
   });
 
+  it("exits 1 when lineage is not yet approved", async () => {
+    vi.stubEnv(
+      "PHASE5_RECOVERY_EXPECTED_HEAD",
+      "db7200c5496280bd34bb6948b161f0dc429a73d0"
+    );
+    setupSuccessMocks({
+      preRecoveryLineageStatus: "pending",
+      preRecoveryApprovedFingerprint: null,
+    });
+
+    const exitCode = await importAndAwaitExit();
+
+    expect(mockOnStrategyApproved).not.toHaveBeenCalled();
+    expect(exitCode).toBe(1);
+  });
+
+  it("exits 1 when approvedStrategyFingerprint does not match", async () => {
+    vi.stubEnv(
+      "PHASE5_RECOVERY_EXPECTED_HEAD",
+      "db7200c5496280bd34bb6948b161f0dc429a73d0"
+    );
+    setupSuccessMocks({
+      preRecoveryLineageStatus: "approved",
+      preRecoveryApprovedFingerprint: "bad-fingerprint",
+    });
+
+    const exitCode = await importAndAwaitExit();
+
+    expect(mockOnStrategyApproved).not.toHaveBeenCalled();
+    expect(exitCode).toBe(1);
+  });
+
   it("exits 1 when onStrategyApproved rejects", async () => {
     vi.stubEnv(
       "PHASE5_RECOVERY_EXPECTED_HEAD",
-      "20048f4e32d063a470f784bdce770aaa7dc84cd0"
+      "db7200c5496280bd34bb6948b161f0dc429a73d0"
     );
     setupSuccessMocks();
     mockOnStrategyApproved.mockRejectedValue(new Error("recovery failed"));
@@ -270,27 +324,57 @@ describe("phase5-once-recovery-runner process termination", () => {
   it("exits 1 when onStrategyApproved returns without creating run/charge", async () => {
     vi.stubEnv(
       "PHASE5_RECOVERY_EXPECTED_HEAD",
-      "20048f4e32d063a470f784bdce770aaa7dc84cd0"
+      "db7200c5496280bd34bb6948b161f0dc429a73d0"
     );
     setupSuccessMocks();
-    // Simulate the pre-recovery state persisting after onStrategyApproved returns.
+    // Simulate post-recovery state remaining identical to pre-recovery: no run, no charge.
     selectResults = makeSelectResults({
-      postRecoveryLineageStatus: "pending",
-    });
-    mockGetStrategyApprovalStatus.mockReset();
-    mockGetStrategyApprovalStatus.mockReturnValue({
-      lineage: {
-        strategyRunId: STRATEGY_RUN_ID,
-        approvalRequestId: APPROVAL_ID,
-        creativeBriefFingerprint: EXPECTED_FINGERPRINT,
-        status: "pending",
+      postRecoveryCampaign: {
+        id: CAMPAIGN_ID,
+        userId: USER_ID,
+        workflowState: "strategy_generated",
+        workflowContext: {
+          approvedStrategyFingerprint: EXPECTED_FINGERPRINT,
+          strategyApprovalLineage: {
+            strategyRunId: STRATEGY_RUN_ID,
+            approvalRequestId: APPROVAL_ID,
+            creativeBriefFingerprint: EXPECTED_FINGERPRINT,
+            status: "approved",
+          },
+        },
       },
-      approvedStrategyFingerprint: null,
     });
+    selectResults[9] = []; // no new creative run
+    selectResults[10] = []; // no charge
+    selectResults[11] = []; // no terminal claim
 
     const exitCode = await importAndAwaitExit();
 
     expect(mockOnStrategyApproved).toHaveBeenCalledTimes(1);
+    expect(exitCode).toBe(1);
+  });
+
+  it("exits 1 when invoked a second time because the recovery charge already exists", async () => {
+    vi.stubEnv(
+      "PHASE5_RECOVERY_EXPECTED_HEAD",
+      "db7200c5496280bd34bb6948b161f0dc429a73d0"
+    );
+    setupSuccessMocks();
+    // Inject an existing recovery charge so the no-existing-charge precondition fails.
+    selectResults[5] = [
+      {
+        id: 300,
+        userId: USER_ID,
+        type: "agent_deduction",
+        amount: -5,
+        status: "completed",
+        idempotencyKey: IDEMPOTENCY_KEY,
+      },
+    ];
+
+    const exitCode = await importAndAwaitExit();
+
+    expect(mockOnStrategyApproved).not.toHaveBeenCalled();
     expect(exitCode).toBe(1);
   });
 });

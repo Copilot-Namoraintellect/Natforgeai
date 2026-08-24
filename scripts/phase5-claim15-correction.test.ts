@@ -32,6 +32,10 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
 
+  mockExecute.mockReset().mockResolvedValue([[]]);
+  mockLimit.mockReset().mockResolvedValue([]);
+  mockUpdate.mockReset().mockReturnValue({ set: vi.fn(() => ({ where: mockWhere })) });
+
   let resolveFn: (code: number) => void;
   exitPromise = new Promise<number>((resolve) => {
     resolveFn = resolve;
@@ -56,23 +60,49 @@ async function importAndAwaitExit() {
   return await exitPromise;
 }
 
-describe("phase5-claim15-correction process termination", () => {
-  it("exits 0 and mutates claim 15 even when no reason column exists", async () => {
-    mockExecute.mockResolvedValue([[]]);
-    mockLimit
-      .mockResolvedValueOnce([
-        {
-          id: 15,
-          userId: 22,
-          campaignId: 30,
-          operationSource: "approval",
-          operationReferenceId: 36,
-          status: "completed",
-          activeClaimKey: null,
-        },
-      ])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
+function makeMatchingClaim(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 15,
+    userId: 22,
+    campaignId: 30,
+    operationSource: "approval",
+    operationReferenceId: 36,
+    status: "completed",
+    activeClaimKey: null,
+    ...overrides,
+  };
+}
+
+async function setupAbsentClaim() {
+  mockExecute.mockResolvedValue([[]]);
+  mockLimit.mockResolvedValue([]);
+}
+
+async function setupMatchingClaim(overrides?: Record<string, unknown>) {
+  mockExecute.mockResolvedValue([[]]);
+  mockLimit
+    .mockResolvedValueOnce([makeMatchingClaim(overrides)])
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([]);
+}
+
+describe("phase5-claim15-correction", () => {
+  it("exits 0 and does not mutate when claim 15 is already absent", async () => {
+    await setupAbsentClaim();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const exitCode = await importAndAwaitExit();
+
+    expect(exitCode).toBe(0);
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("CLAIM_15_ALREADY_ABSENT")
+    );
+    logSpy.mockRestore();
+  });
+
+  it("exits 0 and marks the matching orphan claim failed even when no reason column exists", async () => {
+    await setupMatchingClaim();
 
     const exitCode = await importAndAwaitExit();
 
@@ -80,22 +110,9 @@ describe("phase5-claim15-correction process termination", () => {
     expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it("exits 0 on successful correction when schema supports reason", async () => {
+  it("exits 0 and marks the matching orphan claim failed when schema supports a reason column", async () => {
     mockExecute.mockResolvedValue([[{ COLUMN_NAME: "metadata" }]]);
-    mockLimit
-      .mockResolvedValueOnce([
-        {
-          id: 15,
-          userId: 22,
-          campaignId: 30,
-          operationSource: "approval",
-          operationReferenceId: 36,
-          status: "completed",
-          activeClaimKey: null,
-        },
-      ])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
+    await setupMatchingClaim();
 
     const exitCode = await importAndAwaitExit();
 
@@ -103,9 +120,32 @@ describe("phase5-claim15-correction process termination", () => {
     expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it("exits 1 when exact preconditions are not met", async () => {
+  it("exits 1 when claim 15 exists but does not match the expected campaign", async () => {
     mockExecute.mockResolvedValue([[]]);
-    mockLimit.mockResolvedValue([]);
+    await setupMatchingClaim({ campaignId: 999 });
+
+    const exitCode = await importAndAwaitExit();
+
+    expect(exitCode).toBe(1);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("exits 1 when claim 15 exists but is still active", async () => {
+    mockExecute.mockResolvedValue([[]]);
+    await setupMatchingClaim({ status: "running", activeClaimKey: "active:22:30:creative" });
+
+    const exitCode = await importAndAwaitExit();
+
+    expect(exitCode).toBe(1);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("exits 1 when claim 15 exists but a correlated creative charge is already present", async () => {
+    mockExecute.mockResolvedValue([[]]);
+    mockLimit
+      .mockResolvedValueOnce([makeMatchingClaim()])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 300 }]);
 
     const exitCode = await importAndAwaitExit();
 

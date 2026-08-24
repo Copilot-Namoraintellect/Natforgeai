@@ -68,7 +68,10 @@ async function main() {
     .limit(1);
 
   if (!claim) {
-    throw new CorrectionPreconditionError(`Claim ${CLAIM_ID} not found`);
+    console.log(
+      `[Phase5Claim15Correction] CLAIM_15_ALREADY_ABSENT: claim ${CLAIM_ID} does not exist; no historical correction is required.`
+    );
+    return;
   }
 
   // 3. Exact precondition check
