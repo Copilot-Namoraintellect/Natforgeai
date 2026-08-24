@@ -275,7 +275,11 @@ async function main() {
   console.log("[Phase5Recovery] onStrategyApproved completed");
 }
 
-main().catch((err) => {
-  console.error("[Phase5Recovery] FAILED:", err.message);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error("[Phase5Recovery] FAILED:", err.message);
+    process.exit(1);
+  });

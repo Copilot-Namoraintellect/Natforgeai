@@ -161,7 +161,11 @@ async function main() {
   console.log(`[Phase5Claim15Correction] Claim ${CLAIM_ID} marked as failed.`);
 }
 
-main().catch((err) => {
-  console.error("[Phase5Claim15Correction] FAILED:", err.message);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error("[Phase5Claim15Correction] FAILED:", err.message);
+    process.exit(1);
+  });
