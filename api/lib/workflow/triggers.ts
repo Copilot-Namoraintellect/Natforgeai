@@ -21,10 +21,12 @@ import { canRunAutonomousWorkflow } from "../billing/cost-control";
 import { ingestAudienceData } from "../audience/ingest";
 import {
   acquireCreativeGenerationClaim,
+  rearmCreativeGenerationClaim,
   generateOwnerToken,
   releaseClaimWithResult,
   calculateLeaseExpiresAt,
   createClaimHeartbeatController,
+  type CreativeGenerationClaim,
   type CreativeGenerationClaimHeartbeatController,
 } from "../creative/creative-generation-claim";
 import { env } from "../env";
@@ -525,8 +527,8 @@ export async function onStrategyApproved(
     return;
   }
 
-  // 4. Cost control check BEFORE acquiring a claim. A negative result returns
-  // without touching claim state.
+  // 4. Cost control check BEFORE acquiring or re-arming a claim. A negative
+  // result returns without touching claim state.
   const autoCheck = await canRunAutonomousWorkflow(userId, campaignId);
   if (!autoCheck.allowed) {
     console.log(`[Workflow] Auto-creative blocked for campaign ${campaignId}: ${autoCheck.reason}`);
@@ -534,22 +536,52 @@ export async function onStrategyApproved(
   }
 
   // 5. Authoritative atomic claim for the auto-creative step of this approval.
+  //    First try to re-arm a terminal orphan claim so historical evidence is
+  //    preserved.  A terminal claim is only an orphan if no success evidence was
+  //    found above; otherwise we would have already returned.
   const ownerToken = generateOwnerToken();
-  const claimResult = await acquireCreativeGenerationClaim({
+  const leaseExpiresAt = calculateLeaseExpiresAt(env.creativeGenerationRunningLeaseSeconds);
+
+  const rearmResult = await rearmCreativeGenerationClaim({
     userId,
     campaignId,
     operationSource: "approval",
     operationReferenceId: approvalId,
     ownerToken,
-    leaseExpiresAt: calculateLeaseExpiresAt(env.creativeGenerationRunningLeaseSeconds),
+    leaseExpiresAt,
   });
 
-  if (!claimResult.acquired) {
-    console.log(`[Workflow] Skipping duplicate creative run for campaign ${campaignId}. Existing claim ${claimResult.existingClaim.id}.`);
-    return;
-  }
+  let claim: CreativeGenerationClaim;
+  if (rearmResult) {
+    claim = rearmResult.claim;
+    console.log(`[Workflow] Re-armed orphan creative generation claim ${claim.id} for campaign ${campaignId}; proceeding with recovery`);
+  } else {
+    const claimResult = await acquireCreativeGenerationClaim({
+      userId,
+      campaignId,
+      operationSource: "approval",
+      operationReferenceId: approvalId,
+      ownerToken,
+      leaseExpiresAt,
+    });
 
-  const claim = claimResult.claim;
+    if (!claimResult.acquired) {
+      // A concurrent caller may have re-armed the claim between our checks.
+      // Only return an idempotent no-op if there is genuinely running work.
+      const nowInProgress = await hasInProgressCreativeGeneration(userId, campaignId, approvalId);
+      if (nowInProgress) {
+        console.log(`[Workflow] Creative generation already in progress for approval ${approvalId}; skipping duplicate`);
+        return;
+      }
+      // The existing terminal claim is still terminal and could not be re-armed.
+      // This should not happen after the checks above, but we fail closed.
+      throw new Error(
+        `Unable to acquire or re-arm creative generation claim for campaign ${campaignId}: existing claim ${claimResult.existingClaim.id} is terminal with no success evidence`
+      );
+    }
+
+    claim = claimResult.claim;
+  }
   let released = false;
   let heartbeatController: CreativeGenerationClaimHeartbeatController | undefined;
 

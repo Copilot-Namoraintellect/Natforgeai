@@ -18,7 +18,7 @@ import {
   creditTransactions,
   creditWallets,
 } from "../db/schema";
-import { eq, and, gt, desc } from "drizzle-orm";
+import { eq, and, gt, desc, inArray } from "drizzle-orm";
 import { onStrategyApproved } from "../api/lib/workflow/triggers";
 import { getStrategyApprovalStatus } from "../api/lib/workflow/strategy-approval";
 
@@ -242,6 +242,159 @@ async function verifyNoActiveCreativeClaim(): Promise<void> {
   }
 }
 
+async function verifyRecoveryPostconditions(): Promise<void> {
+  const db = getDb();
+
+  // 1. Approved lineage and fingerprint.
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(and(eq(campaigns.id, CAMPAIGN_ID), eq(campaigns.userId, USER_ID)))
+    .limit(1);
+
+  if (!campaign) {
+    throw new RecoveryPreconditionError(`Campaign ${CAMPAIGN_ID} not found after recovery`);
+  }
+
+  const status = getStrategyApprovalStatus(campaign, null);
+  if (status.lineage?.strategyRunId !== STRATEGY_RUN_ID) {
+    throw new RecoveryPreconditionError(
+      `Post-recovery lineage strategyRunId ${status.lineage?.strategyRunId} != ${STRATEGY_RUN_ID}`
+    );
+  }
+  if (status.lineage?.approvalRequestId !== APPROVAL_ID) {
+    throw new RecoveryPreconditionError(
+      `Post-recovery lineage approvalRequestId ${status.lineage?.approvalRequestId} != ${APPROVAL_ID}`
+    );
+  }
+  if (status.lineage?.creativeBriefFingerprint !== EXPECTED_FINGERPRINT) {
+    throw new RecoveryPreconditionError(
+      `Post-recovery lineage creativeBriefFingerprint mismatch: ${status.lineage?.creativeBriefFingerprint}`
+    );
+  }
+  if (status.lineage?.status !== "approved") {
+    throw new RecoveryPreconditionError(
+      `Post-recovery lineage status ${status.lineage?.status} != approved`
+    );
+  }
+  if (status.approvedStrategyFingerprint !== EXPECTED_FINGERPRINT) {
+    throw new RecoveryPreconditionError(
+      `Post-recovery approvedStrategyFingerprint ${status.approvedStrategyFingerprint} != ${EXPECTED_FINGERPRINT}`
+    );
+  }
+
+  // 2. Exactly one approval-correlated creative run, created/completed.
+  const creativeRuns = await db
+    .select()
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.campaignId, CAMPAIGN_ID),
+        eq(agentRuns.userId, USER_ID),
+        eq(agentRuns.agentType, "creative"),
+        gt(agentRuns.id, BASELINE_PREVIOUS_CREATIVE_RUN_ID)
+      )
+    )
+    .orderBy(desc(agentRuns.id));
+
+  if (creativeRuns.length !== 1) {
+    throw new RecoveryPreconditionError(
+      `Expected exactly one new creative run after baseline ${BASELINE_PREVIOUS_CREATIVE_RUN_ID}; found ${creativeRuns.length}`
+    );
+  }
+
+  const creativeRun = creativeRuns[0];
+  if (!["running", "completed"].includes(creativeRun.status)) {
+    throw new RecoveryPreconditionError(
+      `New creative run ${creativeRun.id} has unexpected status: ${creativeRun.status}`
+    );
+  }
+
+  // 3. Exactly one successful -5 agent_deduction with the expected idempotency key.
+  const charges = await db
+    .select()
+    .from(creditTransactions)
+    .where(
+      and(
+        eq(creditTransactions.userId, USER_ID),
+        eq(creditTransactions.type, "agent_deduction"),
+        eq(creditTransactions.idempotencyKey, IDEMPOTENCY_KEY)
+      )
+    );
+
+  const successfulCharges = charges.filter(
+    (c) => c.status === "completed" && c.amount === -5
+  );
+
+  if (successfulCharges.length !== 1) {
+    throw new RecoveryPreconditionError(
+      `Expected exactly one successful -5 agent_deduction; found ${successfulCharges.length}`
+    );
+  }
+
+  // 4. No refund transaction for the idempotency key.
+  const refunds = charges.filter(
+    (c) => c.status === "completed" && c.amount > 0
+  );
+
+  if (refunds.length > 0) {
+    throw new RecoveryPreconditionError(
+      `Found ${refunds.length} refund transaction(s) for idempotency key ${IDEMPOTENCY_KEY}`
+    );
+  }
+
+  // 5. Claim state: one terminal approval-correlated claim.
+  const approvalClaims = await db
+    .select()
+    .from(creativeGenerationClaims)
+    .where(
+      and(
+        eq(creativeGenerationClaims.userId, USER_ID),
+        eq(creativeGenerationClaims.campaignId, CAMPAIGN_ID),
+        eq(creativeGenerationClaims.operationSource, "approval"),
+        eq(creativeGenerationClaims.operationReferenceId, APPROVAL_ID)
+      )
+    );
+
+  const terminalClaims = approvalClaims.filter(
+    (c) => c.status === "completed" && c.activeClaimKey === null
+  );
+  const runningClaims = approvalClaims.filter(
+    (c) => c.status === "running" && c.activeClaimKey !== null
+  );
+
+  if (runningClaims.length > 0) {
+    throw new RecoveryPreconditionError(
+      `Found ${runningClaims.length} still-running approval-correlated claim(s); recovery did not complete`
+    );
+  }
+
+  if (terminalClaims.length !== 1) {
+    throw new RecoveryPreconditionError(
+      `Expected exactly one terminal completed approval-correlated claim; found ${terminalClaims.length}`
+    );
+  }
+
+  // 6. Campaign workflow state should have advanced past strategy approval.
+  const expectedStates = [
+    "creatives_generating",
+    "creatives_complete",
+    "audience_generating",
+    "audience_complete",
+    "schedule_generated",
+    "schedule_approved",
+    "launch_approved",
+    "launched",
+  ];
+  if (!expectedStates.includes(campaign.workflowState)) {
+    throw new RecoveryPreconditionError(
+      `Post-recovery campaign workflowState ${campaign.workflowState} is not in expected advanced states`
+    );
+  }
+
+  console.log("[Phase5Recovery] Post-recovery verification passed");
+}
+
 async function main() {
   console.log("[Phase5Recovery] Starting one-time recovery runner");
   console.log(`[Phase5Recovery] Campaign=${CAMPAIGN_ID} User=${USER_ID} Approval=${APPROVAL_ID}`);
@@ -272,7 +425,17 @@ async function main() {
 
   console.log("[Phase5Recovery] All preconditions passed. Invoking onStrategyApproved once.");
   await onStrategyApproved(CAMPAIGN_ID, USER_ID, APPROVAL_ID);
-  console.log("[Phase5Recovery] onStrategyApproved completed");
+
+  // onStrategyApproved returns a resolved promise even when it short-circuits.
+  // Verify that the lifecycle actually advanced before declaring success.
+  try {
+    await verifyRecoveryPostconditions();
+  } catch (err: any) {
+    console.error("[Phase5Recovery] Post-recovery verification failed:", err.message);
+    throw err;
+  }
+
+  console.log("[Phase5Recovery] onStrategyApproved completed and post-recovery verification passed");
 }
 
 main()

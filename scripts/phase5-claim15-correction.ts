@@ -52,14 +52,12 @@ async function main() {
 
   const db = getDb();
 
-  // 1. Schema support check
+  // 1. Schema support check (informational only)
   const schemaSupportsReason = await verifySchemaSupportsReason();
   if (!schemaSupportsReason) {
     console.log(
-      "[Phase5Claim15Correction] SCHEMA_LIMITATION: creative_generation_claims has no error/reason/metadata/context column. Claim 15 will be preserved unchanged."
+      "[Phase5Claim15Correction] SCHEMA_LIMITATION_FOR_REASON: creative_generation_claims has no error/reason/metadata/context column. Recovery reason will not be persisted, but the guarded status correction still proceeds."
     );
-    console.log("[Phase5Claim15Correction] Exiting without mutation.");
-    return;
   }
 
   // 2. Load claim 15
@@ -144,12 +142,11 @@ async function main() {
     );
   }
 
-  // 6. Mark claim failed with reason using the supported field.
-  // This branch is currently unreachable because the schema has no supported
-  // field, but it is kept so the runner remains correct if a future schema
-  // adds one.
+  // 6. Mark claim failed and clear activeClaimKey so the claim can be safely
+  // re-armed by the fixed onStrategyApproved.  The reason is not persisted
+  // because the current schema has no error/reason/metadata/context column.
   console.log(
-    `[Phase5Claim15Correction] Schema supports reason column. Marking claim ${CLAIM_ID} as failed with reason.`
+    `[Phase5Claim15Correction] Marking claim ${CLAIM_ID} as failed/inactive.`
   );
   await db
     .update(creativeGenerationClaims)

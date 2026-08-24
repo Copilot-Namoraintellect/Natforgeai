@@ -66,6 +66,7 @@ vi.mock("../creative/creative-generation-claim", () => ({
     acquired: true,
     claim: { id: 1001, ownerToken: "test-owner-token" },
   })),
+  rearmCreativeGenerationClaim: vi.fn(async () => null),
   releaseClaimSafely: vi.fn(),
   releaseClaimWithResult: vi.fn(async () => ({ released: true })),
   calculateLeaseExpiresAt: vi.fn(() => new Date(Date.now() + 300_000)),
@@ -410,6 +411,7 @@ describe("onStrategyApproved", () => {
 
     const {
       acquireCreativeGenerationClaim,
+      rearmCreativeGenerationClaim,
       releaseClaimWithResult,
     } = await import("../creative/creative-generation-claim");
     vi.mocked(acquireCreativeGenerationClaim).mockImplementation(
@@ -419,6 +421,7 @@ describe("onStrategyApproved", () => {
           claim: { id: 1001, ownerToken: "test-owner-token" },
         } as any)
     );
+    vi.mocked(rearmCreativeGenerationClaim).mockImplementation(async () => null);
     vi.mocked(releaseClaimWithResult).mockImplementation(
       async () => ({ released: true } as any)
     );
@@ -542,6 +545,7 @@ describe("onStrategyApproved", () => {
     const { runCreativeAgent } = await import("../agents/creative-agent");
     const {
       acquireCreativeGenerationClaim,
+      rearmCreativeGenerationClaim,
       releaseClaimWithResult,
     } = await import("../creative/creative-generation-claim");
     const { transitionCampaignState } = await import("./engine");
@@ -579,7 +583,7 @@ describe("onStrategyApproved", () => {
           userId: 22,
           campaignId: 30,
           operationSource: "approval",
-          operationReferenceId: null,
+          operationReferenceId: 36,
           status: "completed",
           activeClaimKey: null,
           ownerToken: "old-token",
@@ -649,6 +653,23 @@ describe("onStrategyApproved", () => {
         (claim as any).releasedAt = new Date();
       }
       return { released: true };
+    });
+
+    vi.mocked(rearmCreativeGenerationClaim).mockImplementation(async (args: any) => {
+      const terminalClaim = state.creativeClaims.find(
+        (c: any) =>
+          c.userId === args.userId &&
+          c.campaignId === args.campaignId &&
+          c.operationSource === args.operationSource &&
+          c.operationReferenceId === args.operationReferenceId &&
+          ["completed", "failed"].includes(c.status)
+      );
+      if (!terminalClaim) return null;
+      (terminalClaim as any).status = "running";
+      (terminalClaim as any).ownerToken = args.ownerToken;
+      (terminalClaim as any).activeClaimKey = `active:${args.userId}:${args.campaignId}:creative`;
+      (terminalClaim as any).leaseExpiresAt = args.leaseExpiresAt ?? null;
+      return { rearmed: true, claim: terminalClaim as any };
     });
 
     vi.mocked(runCreativeAgent).mockImplementation(async ({ userId, campaignId, generationOperation }: any) => {
@@ -727,8 +748,8 @@ describe("onStrategyApproved", () => {
     expect(transitionCampaignState).toHaveBeenCalledWith(30, 22, "approve_strategy");
     expect(transitionCampaignState).toHaveBeenCalledWith(30, 22, "generate_creatives");
 
-    // A new claim correlated to approval 36 was acquired and released as completed.
-    expect(acquireCreativeGenerationClaim).toHaveBeenCalledWith(
+    // The existing orphan claim 15 was re-armed, not replaced by a new claim.
+    expect(rearmCreativeGenerationClaim).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 22,
         campaignId: 30,
@@ -736,10 +757,12 @@ describe("onStrategyApproved", () => {
         operationReferenceId: 36,
       })
     );
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
     const newClaims = state.creativeClaims.filter(
       (c: any) => c.operationSource === "approval" && c.operationReferenceId === 36
     );
     expect(newClaims).toHaveLength(1);
+    expect(newClaims[0].id).toBe(15);
     expect(newClaims[0].status).toBe("completed");
     expect(newClaims[0].activeClaimKey).toBeNull();
 
@@ -991,5 +1014,154 @@ describe("onStrategyApproved", () => {
         generationOperation: { source: "approval", id: 36 },
       })
     );
+  });
+
+  it("skips generation when a running claim exists for the same approval", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const { acquireCreativeGenerationClaim } = await import(
+      "../creative/creative-generation-claim"
+    );
+    const { onStrategyApproved } = await import("./triggers");
+
+    const { db } = createWorkflowDbMock({
+      agentRunsRows: [
+        {
+          id: 10,
+          userId: 22,
+          campaignId: 30,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+      ],
+      creativeClaimsRows: [
+        {
+          id: 15,
+          userId: 22,
+          campaignId: 30,
+          operationSource: "approval",
+          operationReferenceId: 36,
+          status: "running",
+          activeClaimKey: "active:22:30:creative",
+          ownerToken: "running-token",
+        },
+      ],
+      campaign: {
+        id: 30,
+        userId: 22,
+        businessId: null,
+        workflowState: "strategy_generated",
+        workflowContext: {
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "test-fingerprint",
+            strategyRunId: 10,
+            approvalRequestId: 36,
+            status: "pending",
+          },
+        },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onStrategyApproved(30, 22, 36);
+
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+  });
+
+  it("remains a no-op when successful creative generation already exists", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const {
+      rearmCreativeGenerationClaim,
+      acquireCreativeGenerationClaim,
+    } = await import("../creative/creative-generation-claim");
+    const { onStrategyApproved } = await import("./triggers");
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [
+        {
+          id: 10,
+          userId: 22,
+          campaignId: 30,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+        {
+          id: 244,
+          userId: 22,
+          campaignId: 30,
+          agentType: "creative",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+      ],
+      creativeClaimsRows: [
+        {
+          id: 15,
+          userId: 22,
+          campaignId: 30,
+          operationSource: "approval",
+          operationReferenceId: 36,
+          status: "completed",
+          activeClaimKey: null,
+          ownerToken: "old-token",
+        },
+      ],
+      creditTransactionsRows: [
+        {
+          id: 300,
+          userId: 22,
+          type: "agent_deduction",
+          amount: -5,
+          status: "completed",
+          idempotencyKey: "creative-success:30:approval:36",
+        },
+      ],
+      contentPostsRows: [
+        {
+          id: 500,
+          userId: 22,
+          campaignId: 30,
+          title: "Post 244",
+          type: "social_post",
+          status: "draft",
+          metadata: {
+            generationRunId: "pack-244",
+            creativeBriefFingerprint: "test-fingerprint",
+          },
+        },
+      ],
+      campaign: {
+        id: 30,
+        userId: 22,
+        businessId: null,
+        workflowState: "strategy_generated",
+        workflowContext: {
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "test-fingerprint",
+            strategyRunId: 10,
+            approvalRequestId: 36,
+            status: "approved",
+          },
+          approvedStrategyFingerprint: "test-fingerprint",
+        },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onStrategyApproved(30, 22, 36);
+
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(rearmCreativeGenerationClaim).not.toHaveBeenCalled();
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+
+    const claims = state.creativeClaims.filter(
+      (c: any) => c.operationSource === "approval" && c.operationReferenceId === 36
+    );
+    expect(claims).toHaveLength(1);
+    expect(claims[0].status).toBe("completed");
   });
 });

@@ -15,6 +15,7 @@ import {
   assertCreativeGenerationClaimOwnership,
   createClaimHeartbeatController,
   calculateLeaseExpiresAt,
+  rearmCreativeGenerationClaim,
   type AcquireCreativeGenerationClaimResult,
   type CreativeGenerationClaimAcquisition,
   type CreativeGenerationClaimCollision,
@@ -736,6 +737,171 @@ describe("creative generation claim primitive (DB)", () => {
         .where(eq(creativeGenerationClaims.userId, userId));
     }
   );
+
+  describe("rearmCreativeGenerationClaim", () => {
+  async function acquireAndRelease(
+    status: "completed" | "failed",
+    overrides: Partial<Parameters<typeof acquireCreativeGenerationClaim>[0]> = {}
+  ): Promise<CreativeGenerationClaim> {
+    const claim = requireAcquiredClaim(
+      await acquireCreativeGenerationClaim({
+        userId: testUserId,
+        campaignId: testCampaignId,
+        operationSource: "approval",
+        operationReferenceId: 3003,
+        ownerToken: makeOwnerToken(),
+        leaseExpiresAt: calculateLeaseExpiresAt(300),
+        ...overrides,
+      })
+    );
+    createdClaimIds.push(claim.id);
+    await releaseCreativeGenerationClaim({
+      claimId: claim.id,
+      ownerToken: claim.ownerToken,
+      status,
+    });
+    return claim;
+  }
+
+  it("rejects invalid userId", async () => {
+    await expect(
+      rearmCreativeGenerationClaim({
+        userId: 0,
+        campaignId: 1,
+        operationSource: "approval",
+        operationReferenceId: 1,
+        ownerToken: makeOwnerToken(),
+        leaseExpiresAt: calculateLeaseExpiresAt(300),
+      })
+    ).rejects.toThrow(/Invalid userId/);
+  });
+
+  it("rejects invalid operationSource", async () => {
+    await expect(
+      rearmCreativeGenerationClaim({
+        userId: 1,
+        campaignId: 1,
+        operationSource: "invalid" as any,
+        operationReferenceId: 1,
+        ownerToken: makeOwnerToken(),
+        leaseExpiresAt: calculateLeaseExpiresAt(300),
+      })
+    ).rejects.toThrow(/Invalid operationSource/);
+  });
+
+  itSafe("re-arms a completed claim to running", async () => {
+    const claim = await acquireAndRelease("completed");
+    const newOwner = makeOwnerToken();
+    const lease = calculateLeaseExpiresAt(300);
+
+    const result = await rearmCreativeGenerationClaim({
+      userId: testUserId,
+      campaignId: testCampaignId,
+      operationSource: "approval",
+      operationReferenceId: 3003,
+      ownerToken: newOwner,
+      leaseExpiresAt: lease,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.rearmed).toBe(true);
+    expect(result!.claim.id).toBe(claim.id);
+    expect(result!.claim.status).toBe("running");
+    expect(result!.claim.ownerToken).toBe(newOwner);
+    expect(result!.claim.activeClaimKey).toBe(
+      buildActiveCreativeClaimKey(testUserId, testCampaignId)
+    );
+
+    const active = await getActiveCreativeGenerationClaim({
+      userId: testUserId,
+      campaignId: testCampaignId,
+    });
+    expect(active?.id).toBe(claim.id);
+  });
+
+  itSafe("re-arms a failed claim to running", async () => {
+    const claim = await acquireAndRelease("failed");
+
+    const result = await rearmCreativeGenerationClaim({
+      userId: testUserId,
+      campaignId: testCampaignId,
+      operationSource: "approval",
+      operationReferenceId: 3003,
+      ownerToken: makeOwnerToken(),
+      leaseExpiresAt: calculateLeaseExpiresAt(300),
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.claim.id).toBe(claim.id);
+    expect(result!.claim.status).toBe("running");
+  });
+
+  itSafe("returns null when no terminal claim matches the reference", async () => {
+    await acquireAndRelease("completed");
+
+    const result = await rearmCreativeGenerationClaim({
+      userId: testUserId,
+      campaignId: testCampaignId,
+      operationSource: "approval",
+      operationReferenceId: 9999,
+      ownerToken: makeOwnerToken(),
+      leaseExpiresAt: calculateLeaseExpiresAt(300),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  itSafe("returns null when the claim is already running", async () => {
+    const claim = requireAcquiredClaim(
+      await acquireCreativeGenerationClaim({
+        userId: testUserId,
+        campaignId: testCampaignId,
+        operationSource: "approval",
+        operationReferenceId: 3003,
+        ownerToken: makeOwnerToken(),
+        leaseExpiresAt: calculateLeaseExpiresAt(300),
+      })
+    );
+    createdClaimIds.push(claim.id);
+
+    const result = await rearmCreativeGenerationClaim({
+      userId: testUserId,
+      campaignId: testCampaignId,
+      operationSource: "approval",
+      operationReferenceId: 3003,
+      ownerToken: makeOwnerToken(),
+      leaseExpiresAt: calculateLeaseExpiresAt(300),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  itSafe("only one concurrent rearm wins for the same reference", async () => {
+    const claim = await acquireAndRelease("completed");
+
+    const attempts = Array.from({ length: 5 }, () =>
+      rearmCreativeGenerationClaim({
+        userId: testUserId,
+        campaignId: testCampaignId,
+        operationSource: "approval",
+        operationReferenceId: 3003,
+        ownerToken: makeOwnerToken(),
+        leaseExpiresAt: calculateLeaseExpiresAt(300),
+      })
+    );
+
+    const results = await Promise.all(attempts);
+    const winners = results.filter((r) => r !== null && r.rearmed);
+    expect(winners.length).toBe(1);
+    expect(winners[0]!.claim.id).toBe(claim.id);
+
+    const active = await getActiveCreativeGenerationClaim({
+      userId: testUserId,
+      campaignId: testCampaignId,
+    });
+    expect(active?.id).toBe(claim.id);
+  });
+});
 });
 
 describe("creative generation claim database safety guard", () => {

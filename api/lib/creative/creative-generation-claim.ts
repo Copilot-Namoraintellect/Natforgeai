@@ -1,6 +1,6 @@
 import { randomBytes } from "crypto";
 import { TRPCError } from "@trpc/server";
-import { eq, and, or, lt, gte, isNull, isNotNull, sql, SQL } from "drizzle-orm";
+import { eq, and, or, inArray, lt, gte, isNull, isNotNull, sql, SQL } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
 import { creativeGenerationClaims } from "@db/schema";
 import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
@@ -222,6 +222,97 @@ export async function acquireCreativeGenerationClaim({
         "Creative generation claim collision detected but the existing claim could not be located",
     });
   }
+}
+
+export interface RearmCreativeGenerationClaimSuccess {
+  rearmed: true;
+  claim: CreativeGenerationClaim;
+}
+
+/**
+ * Atomically re-arms an existing terminal claim (completed or failed) for the
+ * same operation reference.  This lets a recovery retry proceed without
+ * deleting historical evidence or violating the unique operation-reference
+ * index.  Only one concurrent caller succeeds; others see the now-running claim
+ * via hasInProgressCreativeGeneration and return an idempotent no-op.
+ */
+export async function rearmCreativeGenerationClaim({
+  userId,
+  campaignId,
+  operationSource,
+  operationReferenceId,
+  ownerToken,
+  leaseExpiresAt,
+}: {
+  userId: number;
+  campaignId: number;
+  operationSource: CreativeGenerationOperationSource;
+  operationReferenceId: number;
+  ownerToken: string;
+  leaseExpiresAt: Date | SQL;
+}): Promise<RearmCreativeGenerationClaimSuccess | null> {
+  assertValidId(userId, "userId");
+  assertValidId(campaignId, "campaignId");
+  assertValidSource(operationSource);
+  assertValidId(operationReferenceId, "operationReferenceId");
+  assertValidOwnerToken(ownerToken);
+
+  if (
+    leaseExpiresAt !== undefined &&
+    leaseExpiresAt !== null &&
+    !(leaseExpiresAt instanceof SQL) &&
+    (!(leaseExpiresAt instanceof Date) || Number.isNaN(leaseExpiresAt.getTime()))
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid leaseExpiresAt: expected Date or SQL",
+    });
+  }
+
+  const activeClaimKey = buildActiveCreativeClaimKey(userId, campaignId);
+  const db = getDb();
+
+  const result = await db
+    .update(creativeGenerationClaims)
+    .set({
+      status: "running",
+      ownerToken,
+      activeClaimKey,
+      leaseExpiresAt: leaseExpiresAt ?? null,
+    })
+    .where(
+      and(
+        eq(creativeGenerationClaims.userId, userId),
+        eq(creativeGenerationClaims.campaignId, campaignId),
+        eq(creativeGenerationClaims.operationSource, operationSource),
+        eq(creativeGenerationClaims.operationReferenceId, operationReferenceId),
+        inArray(creativeGenerationClaims.status, ["completed", "failed"])
+      )
+    );
+
+  const affectedRows = getAffectedRows(result);
+  if (affectedRows === 0) {
+    return null;
+  }
+
+  const [claim] = await db
+    .select()
+    .from(creativeGenerationClaims)
+    .where(
+      and(
+        eq(creativeGenerationClaims.userId, userId),
+        eq(creativeGenerationClaims.campaignId, campaignId),
+        eq(creativeGenerationClaims.operationSource, operationSource),
+        eq(creativeGenerationClaims.operationReferenceId, operationReferenceId)
+      )
+    )
+    .limit(1);
+
+  if (!claim) {
+    return null;
+  }
+
+  return { rearmed: true, claim };
 }
 
 export interface AttachCreativeGenerationOperationReferenceSuccess {

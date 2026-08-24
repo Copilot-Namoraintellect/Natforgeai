@@ -57,13 +57,27 @@ async function importAndAwaitExit() {
 }
 
 describe("phase5-claim15-correction process termination", () => {
-  it("exits 0 on SCHEMA_LIMITATION and does not mutate claim 15", async () => {
+  it("exits 0 and mutates claim 15 even when no reason column exists", async () => {
     mockExecute.mockResolvedValue([[]]);
+    mockLimit
+      .mockResolvedValueOnce([
+        {
+          id: 15,
+          userId: 22,
+          campaignId: 30,
+          operationSource: "approval",
+          operationReferenceId: 36,
+          status: "completed",
+          activeClaimKey: null,
+        },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
 
     const exitCode = await importAndAwaitExit();
 
     expect(exitCode).toBe(0);
-    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("exits 0 on successful correction when schema supports reason", async () => {
@@ -86,14 +100,16 @@ describe("phase5-claim15-correction process termination", () => {
     const exitCode = await importAndAwaitExit();
 
     expect(exitCode).toBe(0);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it("exits 1 when preconditions fail", async () => {
-    mockExecute.mockResolvedValue([[{ COLUMN_NAME: "metadata" }]]);
+  it("exits 1 when exact preconditions are not met", async () => {
+    mockExecute.mockResolvedValue([[]]);
     mockLimit.mockResolvedValue([]);
 
     const exitCode = await importAndAwaitExit();
 
     expect(exitCode).toBe(1);
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });

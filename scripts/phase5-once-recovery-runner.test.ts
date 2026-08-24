@@ -6,12 +6,37 @@ const APPROVAL_ID = 36;
 const STRATEGY_RUN_ID = 253;
 const EXPECTED_FINGERPRINT =
   "c935ba1009ed5caf2183360b10bbd4e69c20602db023bd73ec9e9af5e848a319";
+const IDEMPOTENCY_KEY = `creative-success:${CAMPAIGN_ID}:approval:${APPROVAL_ID}`;
 
 const mockOnStrategyApproved = vi.fn();
 const mockGetStrategyApprovalStatus = vi.fn();
 
-const mockLimit = vi.fn();
-const mockWhere = vi.fn(() => ({ limit: mockLimit }));
+let selectCallIndex = 0;
+let selectResults: unknown[][] = [];
+
+function nextSelectResult(): unknown[] {
+  const result = selectResults[selectCallIndex];
+  if (result === undefined) {
+    throw new Error(`selectResults index ${selectCallIndex} is undefined`);
+  }
+  selectCallIndex++;
+  return result;
+}
+
+function makeQueryResult(result: unknown[]) {
+  return {
+    limit: vi.fn(() => Promise.resolve(result)),
+    orderBy: vi.fn(() => ({
+      limit: vi.fn(() => Promise.resolve(result)),
+      then: (resolve: (value: unknown[]) => unknown) =>
+        Promise.resolve(result).then(resolve),
+    })),
+    then: (resolve: (value: unknown[]) => unknown) =>
+      Promise.resolve(result).then(resolve),
+  };
+}
+
+const mockWhere = vi.fn(() => makeQueryResult(nextSelectResult()));
 const mockFrom = vi.fn(() => ({ where: mockWhere }));
 const mockSelect = vi.fn(() => ({ from: mockFrom }));
 
@@ -69,9 +94,26 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function setupSuccessMocks() {
-  let limitCallIndex = 0;
-  const limitResults = [
+function makeSelectResults(
+  overrides: { postRecoveryCampaign?: unknown; postRecoveryLineageStatus?: string } = {}
+): unknown[][] {
+  const postRecoveryCampaign = overrides.postRecoveryCampaign ?? {
+    id: CAMPAIGN_ID,
+    userId: USER_ID,
+    workflowState: "creatives_complete",
+    workflowContext: {
+      approvedStrategyFingerprint: EXPECTED_FINGERPRINT,
+      strategyApprovalLineage: {
+        strategyRunId: STRATEGY_RUN_ID,
+        approvalRequestId: APPROVAL_ID,
+        creativeBriefFingerprint: EXPECTED_FINGERPRINT,
+        status: overrides.postRecoveryLineageStatus ?? "approved",
+      },
+    },
+  };
+
+  return [
+    // 1. approval
     [
       {
         id: APPROVAL_ID,
@@ -80,6 +122,7 @@ function setupSuccessMocks() {
         status: "approved",
       },
     ],
+    // 2. strategy run
     [
       {
         id: STRATEGY_RUN_ID,
@@ -87,34 +130,92 @@ function setupSuccessMocks() {
         status: "completed",
       },
     ],
+    // 3. campaign (pre-recovery)
     [
       {
         id: CAMPAIGN_ID,
         userId: USER_ID,
-        workflowContext: {},
+        workflowContext: {
+          strategyApprovalLineage: {
+            strategyRunId: STRATEGY_RUN_ID,
+            approvalRequestId: APPROVAL_ID,
+            creativeBriefFingerprint: EXPECTED_FINGERPRINT,
+            status: "pending",
+          },
+        },
       },
     ],
+    // 4. no newer strategy run
     [],
+    // 5. no creative run after baseline
     [],
+    // 6. no existing charge
     [],
+    // 7. wallet
     [{ balance: 10 }],
+    // 8. no active creative claim
     [],
+    // 9. campaign (post-recovery)
+    [postRecoveryCampaign],
+    // 10. one new creative run
+    [
+      {
+        id: 244,
+        campaignId: CAMPAIGN_ID,
+        userId: USER_ID,
+        agentType: "creative",
+        status: "completed",
+      },
+    ],
+    // 11. one successful -5 charge
+    [
+      {
+        id: 300,
+        userId: USER_ID,
+        type: "agent_deduction",
+        amount: -5,
+        status: "completed",
+        idempotencyKey: IDEMPOTENCY_KEY,
+      },
+    ],
+    // 12. one terminal completed claim
+    [
+      {
+        id: 16,
+        userId: USER_ID,
+        campaignId: CAMPAIGN_ID,
+        operationSource: "approval",
+        operationReferenceId: APPROVAL_ID,
+        status: "completed",
+        activeClaimKey: null,
+      },
+    ],
   ];
-  mockLimit.mockImplementation(() => {
-    const result = limitResults[limitCallIndex] ?? [];
-    limitCallIndex++;
-    return Promise.resolve(result);
-  });
+}
 
-  mockGetStrategyApprovalStatus.mockReturnValue({
-    lineage: {
-      strategyRunId: STRATEGY_RUN_ID,
-      approvalRequestId: APPROVAL_ID,
-      creativeBriefFingerprint: EXPECTED_FINGERPRINT,
-      status: "pending",
-    },
-    approvedStrategyFingerprint: null,
-  });
+function setupSuccessMocks() {
+  selectCallIndex = 0;
+  selectResults = makeSelectResults();
+
+  mockGetStrategyApprovalStatus
+    .mockReturnValueOnce({
+      lineage: {
+        strategyRunId: STRATEGY_RUN_ID,
+        approvalRequestId: APPROVAL_ID,
+        creativeBriefFingerprint: EXPECTED_FINGERPRINT,
+        status: "pending",
+      },
+      approvedStrategyFingerprint: null,
+    })
+    .mockReturnValueOnce({
+      lineage: {
+        strategyRunId: STRATEGY_RUN_ID,
+        approvalRequestId: APPROVAL_ID,
+        creativeBriefFingerprint: EXPECTED_FINGERPRINT,
+        status: "approved",
+      },
+      approvedStrategyFingerprint: EXPECTED_FINGERPRINT,
+    });
 
   mockOnStrategyApproved.mockResolvedValue(undefined);
 }
@@ -137,7 +238,7 @@ describe("phase5-once-recovery-runner process termination", () => {
   it("exits 0 on successful recovery", async () => {
     vi.stubEnv(
       "PHASE5_RECOVERY_EXPECTED_HEAD",
-      "03e1060129623e04800430302789d20acfd21101"
+      "20048f4e32d063a470f784bdce770aaa7dc84cd0"
     );
     setupSuccessMocks();
 
@@ -155,10 +256,37 @@ describe("phase5-once-recovery-runner process termination", () => {
   it("exits 1 when onStrategyApproved rejects", async () => {
     vi.stubEnv(
       "PHASE5_RECOVERY_EXPECTED_HEAD",
-      "03e1060129623e04800430302789d20acfd21101"
+      "20048f4e32d063a470f784bdce770aaa7dc84cd0"
     );
     setupSuccessMocks();
     mockOnStrategyApproved.mockRejectedValue(new Error("recovery failed"));
+
+    const exitCode = await importAndAwaitExit();
+
+    expect(mockOnStrategyApproved).toHaveBeenCalledTimes(1);
+    expect(exitCode).toBe(1);
+  });
+
+  it("exits 1 when onStrategyApproved returns without creating run/charge", async () => {
+    vi.stubEnv(
+      "PHASE5_RECOVERY_EXPECTED_HEAD",
+      "20048f4e32d063a470f784bdce770aaa7dc84cd0"
+    );
+    setupSuccessMocks();
+    // Simulate the pre-recovery state persisting after onStrategyApproved returns.
+    selectResults = makeSelectResults({
+      postRecoveryLineageStatus: "pending",
+    });
+    mockGetStrategyApprovalStatus.mockReset();
+    mockGetStrategyApprovalStatus.mockReturnValue({
+      lineage: {
+        strategyRunId: STRATEGY_RUN_ID,
+        approvalRequestId: APPROVAL_ID,
+        creativeBriefFingerprint: EXPECTED_FINGERPRINT,
+        status: "pending",
+      },
+      approvedStrategyFingerprint: null,
+    });
 
     const exitCode = await importAndAwaitExit();
 
