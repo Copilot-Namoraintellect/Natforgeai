@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { buildLegacyShadowContextProjection } from "../integration/legacy-shadow-context";
+import * as observerModule from "../../contracts/observe-quality-authority";
+import * as loggerModule from "../../../logger";
 
 describe("buildLegacyShadowContextProjection", () => {
   const base = {
@@ -102,5 +104,68 @@ describe("buildLegacyShadowContextProjection", () => {
     expect(projection.campaignStrategy.strategyHashSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(projection.businessDna.businessName).not.toContain("shadow-observation");
     expect(projection.businessDna.evidenceHashSha256).not.toContain("shadow-observation-only");
+  });
+
+  describe("quality authority observation side effects", () => {
+    let originalMode: string | undefined;
+    let observeSpy: ReturnType<typeof vi.spyOn>;
+    let logInfoSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      originalMode = process.env.QUALITY_AUTHORITY_MODE;
+      observeSpy = vi.spyOn(observerModule, "observeIfEnabled");
+      logInfoSpy = vi.spyOn(loggerModule, "logInfo").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      if (originalMode === undefined) {
+        delete process.env.QUALITY_AUTHORITY_MODE;
+      } else {
+        process.env.QUALITY_AUTHORITY_MODE = originalMode;
+      }
+      observeSpy.mockRestore();
+      logInfoSpy.mockRestore();
+    });
+
+    it("calls the observer exactly once in observe mode", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      buildLegacyShadowContextProjection(base);
+
+      expect(observeSpy).toHaveBeenCalledTimes(1);
+      const call = observeSpy.mock.calls[0];
+      expect(call[0]).toBe("legacy shadow context observation");
+      expect(call[1]).toMatchObject({
+        campaignId: 30,
+        legacySelectedCta: "Learn More",
+      });
+    });
+
+    it("observer returns null in off mode and emits no quality-authority logs", () => {
+      delete process.env.QUALITY_AUTHORITY_MODE;
+      buildLegacyShadowContextProjection(base);
+
+      expect(observeSpy).toHaveBeenCalledTimes(1);
+      expect(observeSpy.mock.results[0].value).toBeNull();
+      expect(logInfoSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not change the returned CTA or projection when observation logs", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const projection = buildLegacyShadowContextProjection(base);
+
+      expect(projection.campaignStrategy.ctaPolicy.mode).toBe("exact");
+      expect((projection.campaignStrategy.ctaPolicy as { mode: "exact"; requiredCta: string }).requiredCta).toBe("Learn More");
+      expect(logInfoSpy).toHaveBeenCalled();
+    });
+
+    it("returns the same projection whether or not observation is enabled", () => {
+      delete process.env.QUALITY_AUTHORITY_MODE;
+      const offProjection = buildLegacyShadowContextProjection(base);
+
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const observeProjection = buildLegacyShadowContextProjection(base);
+
+      expect(observeProjection).toEqual(offProjection);
+    });
   });
 });

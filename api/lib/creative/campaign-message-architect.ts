@@ -47,6 +47,11 @@ import {
   computeCreativeBriefFingerprint,
   isApprovedMessagePackCompatible,
 } from "./brief-grounding";
+import {
+  extractApprovedStrategyLineage,
+  observeIfEnabled,
+  resolveExpectedApprovedStrategyFingerprint,
+} from "./contracts/observe-quality-authority";
 
 // ─── Public types ───
 
@@ -1119,6 +1124,29 @@ async function buildApprovedMessagePackLegacy(
   let prompt = basePrompt;
   let retryQualityIssues: string[] = [];
   const groundedFactsUsed = buildGroundedFacts(ctx);
+
+  // Slice 1 observation: compare legacy-selected CTA with the new CreativeContract authority.
+  // This block must not change the returned pack or any persisted state.
+  {
+    const workflowContext = (campaign?.workflowContext || {}) as Record<string, unknown>;
+    const lineage = extractApprovedStrategyLineage(workflowContext, campaignId, userId);
+    observeIfEnabled("campaign message architect observation", {
+      campaignId,
+      userId,
+      businessId: Number.isFinite(Number(business?.id || campaign.businessId))
+        ? Number(business?.id || campaign.businessId)
+        : 0,
+      lineage,
+      expectedApprovedStrategyFingerprint: resolveExpectedApprovedStrategyFingerprint(workflowContext),
+      funnelStage: ctx.funnelStage || normalizeFunnelStage(ctx.campaignObjective),
+      campaignInputCta: ctx.preferredCta || null,
+      offerActionCta: null,
+      targetAudience: ctx.targetCustomer || "",
+      offer: ctx.offerDetails || null,
+      businessCapabilities: ctx.websiteEvidence?.productsServices || [],
+      legacySelectedCta: groundedFactsUsed.selectedStageCta || "",
+    });
+  }
 
   while (attempt < maxAttempts) {
     attempt++;

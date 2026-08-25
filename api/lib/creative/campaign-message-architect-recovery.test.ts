@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { TRPCError } from "@trpc/server";
+import * as observerModule from "./contracts/observe-quality-authority";
 
 vi.mock("../agents/runner", () => ({
   runAgent: vi.fn(),
@@ -302,5 +303,156 @@ describe("Campaign Message Architect recovery", () => {
     } as any;
 
     await expect(saveApprovedMessagePack(7, 30, invalidFallback)).rejects.toBeInstanceOf(TRPCError);
+  });
+});
+
+describe("Campaign Message Architect quality authority observation side effects", () => {
+  let originalMode: string | undefined;
+  let observeSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    originalMode = process.env.QUALITY_AUTHORITY_MODE;
+    observeSpy = vi.spyOn(observerModule, "observeIfEnabled");
+    vi.clearAllMocks();
+    vi.mocked(getDb).mockReturnValue(createMockDb() as any);
+  });
+
+  afterEach(() => {
+    if (originalMode === undefined) {
+      delete process.env.QUALITY_AUTHORITY_MODE;
+    } else {
+      process.env.QUALITY_AUTHORITY_MODE = originalMode;
+    }
+    observeSpy.mockRestore();
+  });
+
+  it("produces identical message packs and DB side effects in off and observe modes", async () => {
+    const genericOutput = {
+      headline: "Streamlined Financial Solutions for Small Businesses",
+      subheadline: "Transform your business with comprehensive solutions.",
+      benefitBullets: [
+        "Grow and succeed with confidence.",
+        "Comprehensive solutions for your business.",
+        "Transform your business operations.",
+      ],
+      cta: "Learn More",
+      footerContact: {
+        phone: null,
+        whatsapp: null,
+        email: null,
+        website: null,
+        location: "South Africa",
+      },
+      proofPoints: [],
+      platformCaptions: [
+        {
+          platform: "Instagram",
+          caption: "Transform your business with streamlined financial solutions.",
+          cta: "Learn More",
+          hashtags: ["#business"],
+        },
+      ],
+    };
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce({ runId: 601, output: genericOutput } as any)
+      .mockResolvedValueOnce({ runId: 602, output: genericOutput } as any);
+
+    delete process.env.QUALITY_AUTHORITY_MODE;
+    const offResult = await buildApprovedMessagePack({
+      userId: 7,
+      campaignId: 30,
+      skipBilling: true,
+      maxAttempts: 2,
+    });
+
+    process.env.QUALITY_AUTHORITY_MODE = "observe";
+    const observeResult = await buildApprovedMessagePack({
+      userId: 7,
+      campaignId: 30,
+      skipBilling: true,
+      maxAttempts: 2,
+    });
+
+    expect(observeResult.cta).toBe(offResult.cta);
+    expect(observeResult.headline).toBe(offResult.headline);
+    expect(observeResult.messagePackSource).toBe(offResult.messagePackSource);
+    expect(runAgent).toHaveBeenCalledTimes(4);
+  });
+
+  it("calls the observer exactly once in observe mode", async () => {
+    process.env.QUALITY_AUTHORITY_MODE = "observe";
+
+    const genericOutput = {
+      headline: "Streamlined Financial Solutions for Small Businesses",
+      subheadline: "Transform your business with comprehensive solutions.",
+      benefitBullets: [
+        "Grow and succeed with confidence.",
+        "Comprehensive solutions for your business.",
+        "Transform your business operations.",
+      ],
+      cta: "Learn More",
+      footerContact: {
+        phone: null,
+        whatsapp: null,
+        email: null,
+        website: null,
+        location: "South Africa",
+      },
+      proofPoints: [],
+      platformCaptions: [],
+    };
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce({ runId: 603, output: genericOutput } as any)
+      .mockResolvedValueOnce({ runId: 604, output: genericOutput } as any);
+
+    await buildApprovedMessagePack({
+      userId: 7,
+      campaignId: 30,
+      skipBilling: true,
+      maxAttempts: 2,
+    });
+
+    expect(observeSpy).toHaveBeenCalledTimes(1);
+    expect(observeSpy.mock.calls[0][0]).toBe("campaign message architect observation");
+  });
+
+  it("returns null from the observer in off mode", async () => {
+    delete process.env.QUALITY_AUTHORITY_MODE;
+
+    const genericOutput = {
+      headline: "Streamlined Financial Solutions for Small Businesses",
+      subheadline: "Transform your business with comprehensive solutions.",
+      benefitBullets: [
+        "Grow and succeed with confidence.",
+        "Comprehensive solutions for your business.",
+        "Transform your business operations.",
+      ],
+      cta: "Learn More",
+      footerContact: {
+        phone: null,
+        whatsapp: null,
+        email: null,
+        website: null,
+        location: "South Africa",
+      },
+      proofPoints: [],
+      platformCaptions: [],
+    };
+
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce({ runId: 605, output: genericOutput } as any)
+      .mockResolvedValueOnce({ runId: 606, output: genericOutput } as any);
+
+    await buildApprovedMessagePack({
+      userId: 7,
+      campaignId: 30,
+      skipBilling: true,
+      maxAttempts: 2,
+    });
+
+    expect(observeSpy).toHaveBeenCalledTimes(1);
+    expect(observeSpy.mock.results[0].value).toBeNull();
   });
 });

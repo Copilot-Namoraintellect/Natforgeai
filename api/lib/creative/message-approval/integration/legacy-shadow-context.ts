@@ -4,7 +4,12 @@ import type {
   CampaignStrategySnapshot,
   ShadowEvaluationResult,
 } from "../contracts";
-import { selectStageCta } from "../../cta-utils";
+import { normalizeFunnelStage, selectStageCta } from "../../cta-utils";
+import {
+  extractApprovedStrategyLineage,
+  observeIfEnabled,
+  resolveExpectedApprovedStrategyFingerprint,
+} from "../../contracts/observe-quality-authority";
 
 export interface LegacyValidationContextInput {
   readonly businessName?: string;
@@ -149,6 +154,29 @@ export function buildLegacyShadowContextProjection(
   const requiredCta = text(
     selectStageCta(text(ctx.preferredCta) || text(campaign.preferredCta) || text(campaign.ctaStrategy), text(ctx.funnelStage) || text(ctx.campaignObjective) || text(campaign.primaryOutcome) || text(campaign.goal))
   );
+  const campaignId = Number.isFinite(Number(campaign.id)) ? Number(campaign.id) : input.campaignId;
+
+  // Slice 1 observation: compare legacy-selected CTA with the new CreativeContract authority.
+  // This block must not change the returned projection or any persisted state.
+  {
+    const workflowContext = (campaign?.workflowContext || {}) as Record<string, unknown>;
+    const userId = Number.isFinite(Number(campaign?.userId)) ? Number(campaign.userId) : 0;
+    const lineage = extractApprovedStrategyLineage(workflowContext, campaignId, userId);
+    observeIfEnabled("legacy shadow context observation", {
+      campaignId,
+      userId,
+      businessId: businessDna.businessId,
+      lineage,
+      expectedApprovedStrategyFingerprint: resolveExpectedApprovedStrategyFingerprint(workflowContext),
+      funnelStage: normalizeFunnelStage(ctx.funnelStage || campaign.primaryOutcome || campaign.goal),
+      campaignInputCta: text(ctx.preferredCta) || text(campaign.preferredCta) || text(campaign.ctaStrategy) || null,
+      offerActionCta: null,
+      targetAudience: text(ctx.targetCustomer) || text(campaign.targetBuyer),
+      offer: text(campaign.offerDetails),
+      businessCapabilities: businessDna.productsAndServices,
+      legacySelectedCta: requiredCta,
+    });
+  }
 
   const strategyProjection = {
     campaignId: Number.isFinite(Number(campaign.id)) ? Number(campaign.id) : input.campaignId,

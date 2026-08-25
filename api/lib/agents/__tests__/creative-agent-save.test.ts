@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TRPCError } from "@trpc/server";
+import * as observerModule from "../../creative/contracts/observe-quality-authority";
 
 vi.mock("../runner", () => ({
   runAgent: vi.fn(),
@@ -722,5 +723,105 @@ describe("runCreativeAgent generation-operation identity", () => {
     ).rejects.toBeInstanceOf(TRPCError);
 
     expect(deductCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe("runCreativeAgent quality authority observation side effects", () => {
+  let originalMode: string | undefined;
+  let observeSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    originalMode = process.env.QUALITY_AUTHORITY_MODE;
+    observeSpy = vi.spyOn(observerModule, "observeIfEnabled");
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (originalMode === undefined) {
+      delete process.env.QUALITY_AUTHORITY_MODE;
+    } else {
+      process.env.QUALITY_AUTHORITY_MODE = originalMode;
+    }
+    observeSpy.mockRestore();
+  });
+
+  it("produces identical output and side effects in off and observe modes", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    const db = createMockDb({ insertShouldFail: false });
+    vi.mocked(getDb).mockReturnValue(db as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
+    vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 1000));
+
+    delete process.env.QUALITY_AUTHORITY_MODE;
+    const offResult = await runCreativeAgent({
+      userId: 18,
+      campaignId: 28,
+      generationOperation: testGenerationOperation,
+    });
+    const offInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length;
+    const offDeductCount = (deductCredits as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    process.env.QUALITY_AUTHORITY_MODE = "observe";
+    const observeResult = await runCreativeAgent({
+      userId: 18,
+      campaignId: 28,
+      generationOperation: testGenerationOperation,
+    });
+    const observeInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length - offInsertCount;
+    const observeDeductCount = (deductCredits as ReturnType<typeof vi.fn>).mock.calls.length - offDeductCount;
+
+    expect(observeResult.savedPosts).toBe(offResult.savedPosts);
+    expect(observeResult.pack.socialPosts[0].cta).toBe(offResult.pack.socialPosts[0].cta);
+    expect(observeDeductCount).toBe(offDeductCount);
+    expect(observeInsertCount).toBe(offInsertCount > 0 ? offInsertCount : 0);
+  });
+
+  it("calls the observer exactly once in observe mode", async () => {
+    process.env.QUALITY_AUTHORITY_MODE = "observe";
+
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
+    vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 1001));
+
+    await runCreativeAgent({
+      userId: 18,
+      campaignId: 28,
+      generationOperation: testGenerationOperation,
+    });
+
+    expect(observeSpy).toHaveBeenCalledTimes(1);
+    expect(observeSpy.mock.calls[0][0]).toBe("creative agent observation");
+  });
+
+  it("returns null from the observer in off mode", async () => {
+    delete process.env.QUALITY_AUTHORITY_MODE;
+
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+
+    vi.mocked(getDb).mockReturnValue(createMockDb({ insertShouldFail: false }) as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
+    vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 1002));
+
+    await runCreativeAgent({
+      userId: 18,
+      campaignId: 28,
+      generationOperation: testGenerationOperation,
+    });
+
+    expect(observeSpy).toHaveBeenCalledTimes(1);
+    expect(observeSpy.mock.results[0].value).toBeNull();
   });
 });

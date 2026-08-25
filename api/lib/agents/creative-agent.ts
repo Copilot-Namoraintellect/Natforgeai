@@ -17,9 +17,17 @@ import {
   type CampaignMessagePack,
   type ValidationContext,
 } from "../creative/campaign-message-architect";
-import { ctaMatchesSelectedStage } from "../creative/cta-utils";
-import { normalizeCtaText } from "../creative/cta-utils";
+import {
+  ctaMatchesSelectedStage,
+  normalizeCtaText,
+  normalizeFunnelStage,
+} from "../creative/cta-utils";
 import { buildGroundedCreativeBrief } from "../creative/brief-grounding";
+import {
+  extractApprovedStrategyLineage,
+  observeIfEnabled,
+  resolveExpectedApprovedStrategyFingerprint,
+} from "../creative/contracts/observe-quality-authority";
 
 // Valid content_posts.type enum values from db/schema.ts
 const CONTENT_POST_TYPES = new Set([
@@ -1031,6 +1039,30 @@ export async function runCreativeAgent({
     timing.messageArchitectDurationMs = Date.now() - architectStartedAt;
     if (approvedMessagePack.messagePackSource === "fallback_deterministic") {
       timing.fallbackDurationMs += timing.messageArchitectDurationMs;
+    }
+
+    // Slice 1 observation: compare legacy-selected CTA with the new CreativeContract authority.
+    // This block must not change the returned pack or any persisted state.
+    if (approvedMessagePack) {
+      const workflowContext = (campaign?.workflowContext || {}) as Record<string, unknown>;
+      const lineage = extractApprovedStrategyLineage(workflowContext, campaignId, userId);
+      observeIfEnabled("creative agent observation", {
+        campaignId,
+        userId,
+        businessId: Number.isFinite(Number(campaign.businessId))
+          ? Number(campaign.businessId)
+          : 0,
+        lineage,
+        expectedApprovedStrategyFingerprint: resolveExpectedApprovedStrategyFingerprint(workflowContext),
+        funnelStage: normalizeFunnelStage(brief.primaryOutcome),
+        campaignInputCta:
+          (brief.preferredCta || ctaStrategy || approvedMessagePack.cta) || null,
+        offerActionCta: null,
+        targetAudience: brief.targetBuyer || campaign.targetAudience || "",
+        offer: brief.offerDetails || null,
+        businessCapabilities: businessEvidence?.productsServices || [],
+        legacySelectedCta: approvedMessagePack.cta || "",
+      });
     }
 
     await assertOwnershipCheckpoint("message_architect");
