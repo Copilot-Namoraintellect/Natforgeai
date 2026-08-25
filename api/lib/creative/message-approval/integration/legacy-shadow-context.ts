@@ -166,6 +166,7 @@ export function buildLegacyShadowContextProjection(
       campaignId,
       userId,
       businessId: businessDna.businessId,
+      businessName: businessDna.businessName,
       lineage,
       expectedApprovedStrategyFingerprint: resolveExpectedApprovedStrategyFingerprint(workflowContext),
       funnelStage: normalizeFunnelStage(ctx.funnelStage || campaign.primaryOutcome || campaign.goal),
@@ -175,6 +176,19 @@ export function buildLegacyShadowContextProjection(
       offer: text(campaign.offerDetails),
       businessCapabilities: businessDna.productsAndServices,
       legacySelectedCta: requiredCta,
+      proposedContent: {
+        headline: text(campaign.name) || businessDna.primaryOffering,
+        primaryText: text(campaign.goal) || text(campaign.primaryOutcome) || businessDna.primaryOffering,
+        benefits: businessDna.capabilities.slice(0, 3),
+        cta: requiredCta,
+        funnelStage: normalizeFunnelStage(ctx.funnelStage || campaign.primaryOutcome || campaign.goal),
+        targetAudience: text(ctx.targetCustomer) || text(campaign.targetBuyer),
+        offer: text(campaign.offerDetails) || null,
+        businessName: businessDna.businessName,
+        protectedFields: {
+          businessName: businessDna.businessName,
+        },
+      },
     });
   }
 

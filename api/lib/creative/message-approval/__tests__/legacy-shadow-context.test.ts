@@ -167,5 +167,15 @@ describe("buildLegacyShadowContextProjection", () => {
 
       expect(observeProjection).toEqual(offProjection);
     });
+
+    it("does not add provider calls, database writes, or change the returned CTA in observe mode", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const projection = buildLegacyShadowContextProjection(base);
+
+      expect(projection.campaignStrategy.ctaPolicy.mode).toBe("exact");
+      expect((projection.campaignStrategy.ctaPolicy as { mode: "exact"; requiredCta: string }).requiredCta).toBe("Learn More");
+      expect(observeSpy).toHaveBeenCalledTimes(1);
+      expect(observeSpy.mock.results[0].value).not.toBeNull();
+    });
   });
 });

@@ -5,7 +5,10 @@ import {
   resolveExpectedApprovedStrategyFingerprint,
   type QualityAuthorityObservationInput,
 } from "./observe-quality-authority";
+import { compileApprovedCreativeContract } from "./creative-contract";
+import { type ProposedCreativeContent } from "../compliance/content-compliance";
 import * as creativeContract from "./creative-contract";
+import * as contentCompliance from "../compliance/content-compliance";
 import * as logger from "../../logger";
 
 const baseInput: QualityAuthorityObservationInput = {
@@ -135,5 +138,222 @@ describe("observe-quality-authority", () => {
       strategyApprovalLineage: { creativeBriefFingerprint: "fp-lineage" },
     });
     expect(fp).toBe("fp-lineage");
+  });
+
+  describe("Slice 2 content compliance observation", () => {
+    const compliantProposed: ProposedCreativeContent = {
+      headline: "Streamline B2B Payment Orchestration",
+      primaryText:
+        "Zuto Hub provides prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
+      benefits: [
+        "Verify available prefunded balances before payment instructions are issued",
+        "Reserve transaction amounts with traceable administration",
+        "Issue controlled payment instructions from a central account",
+      ],
+      cta: "Request a Consultation",
+      funnelStage: "consideration",
+      targetAudience: "B2B finance teams and merchant operators",
+      offer: "Book a guided walkthrough",
+      businessName: "Zuto Hub",
+      protectedFields: {
+        businessName: "Zuto Hub",
+      },
+    };
+
+    it("returns compliance diagnostics when proposed content is supplied", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("test", {
+        ...baseInput,
+        businessName: "Zuto Hub",
+        businessCapabilities: [
+          "B2B payment orchestration",
+          "prefunded merchant-account administration",
+          "balance verification",
+          "transaction reservations",
+          "controlled payment-instruction services",
+        ],
+        targetAudience: "B2B finance teams and merchant operators",
+        offer: "Book a guided walkthrough",
+        proposedContent: compliantProposed,
+      });
+      expect(result).not.toBeNull();
+      expect(result!.compliancePassed).toBe(true);
+      expect(result!.complianceEvaluatorVersion).toContain("slice2");
+      expect(result!.evidenceSetFingerprint).toBeTruthy();
+      expect(result!.evidenceItemCount).toBeGreaterThan(0);
+      expect(result!.distinctGroundedBenefitCount).toBeGreaterThanOrEqual(3);
+      expect(result!.failedRuleIds).toEqual([]);
+      expect(result!.audienceConsistencyStatus).toBe("consistent");
+    });
+
+    it("reports a CTA mismatch through compliance diagnostics", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("test", {
+        ...baseInput,
+        proposedContent: {
+          ...compliantProposed,
+          cta: "Learn More",
+        },
+      });
+      expect(result).not.toBeNull();
+      expect(result!.compliancePassed).toBe(false);
+      expect(result!.failedRuleIds).toContain("CTA_LOCKED");
+      expect(result!.enforceWouldAccept).toBe(false);
+    });
+
+    it("leaves compliance fields null when no proposed content is supplied", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("test", baseInput);
+      expect(result).not.toBeNull();
+      expect(result!.compliancePassed).toBeNull();
+      expect(result!.complianceEvaluatorVersion).toBeNull();
+      expect(result!.evidenceSetFingerprint).toBeNull();
+      expect(result!.evidenceItemCount).toBeNull();
+      expect(result!.failedRuleIds).toEqual([]);
+    });
+
+    it("reports unsupported claim violations in observation diagnostics", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("test", {
+        ...baseInput,
+        businessCapabilities: ["balance verification"],
+        proposedContent: {
+          ...compliantProposed,
+          benefits: ["Guaranteed fraud prevention for every transaction"],
+        },
+      });
+      expect(result).not.toBeNull();
+      expect(result!.compliancePassed).toBe(false);
+      expect(result!.unsupportedClaimCodes).toContain("UNSUPPORTED_CLAIM_PRESENT");
+      expect(result!.failedRuleIds).toContain("CLAIM_GROUNDING");
+    });
+
+    it("does not log prompts, credentials, contact details or raw business secrets", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const logSpy = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
+      observeIfEnabled("test", {
+        ...baseInput,
+        businessCapabilities: [
+          "B2B payment orchestration",
+          "prefunded merchant-account administration",
+          "balance verification",
+        ],
+        targetAudience: "B2B finance teams and merchant operators",
+        offer: "Book a guided walkthrough",
+        requiredContactDetails: ["support@zutohub.example"],
+        proposedContent: compliantProposed,
+      });
+      expect(logSpy).toHaveBeenCalled();
+      const payload = JSON.stringify(logSpy.mock.calls[0][1]);
+      const forbidden = [
+        "password",
+        "secret",
+        "api_key",
+        "apikey",
+        "credential",
+        "token",
+        "-----BEGIN",
+        "support@zutohub.example",
+        "B2B payment orchestration",
+        "prefunded merchant-account administration",
+      ];
+      for (const term of forbidden) {
+        expect(payload.toLowerCase()).not.toContain(term.toLowerCase());
+      }
+    });
+
+    it("does not change campaign workflow state", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const workflowContext = { status: "active" };
+      observeIfEnabled("test", {
+        ...baseInput,
+        proposedContent: compliantProposed,
+      });
+      expect(workflowContext.status).toBe("active");
+    });
+
+    it("catches compliance evaluation errors without throwing", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      vi.spyOn(contentCompliance, "evaluateContentCompliance").mockImplementation(() => {
+        throw new Error("compliance boom");
+      });
+      const logSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+      const result = observeIfEnabled("test", {
+        ...baseInput,
+        proposedContent: compliantProposed,
+      });
+      expect(result).not.toBeNull();
+      expect(result!.compliancePassed).toBeNull();
+      expect(result!.diagnostics.some((d) => d.includes("Content compliance evaluation failed"))).toBe(true);
+      expect(logSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("approved strategy timestamp authority", () => {
+    it("preserves a persisted approvedAt through lineage extraction", () => {
+      const lineage = extractApprovedStrategyLineage(
+        {
+          strategyApprovalLineage: {
+            strategyRunId: 253,
+            approvalRequestId: 36,
+            approvedAt: "2026-07-01T08:00:00.000Z",
+            status: "approved",
+            creativeBriefFingerprint: "fp-253",
+          },
+          approvedStrategyFingerprint: "fp-253",
+        },
+        30,
+        22
+      );
+      expect(lineage).not.toBeNull();
+      expect(lineage!.approvedAt).toBe("2026-07-01T08:00:00.000Z");
+    });
+
+    it("returns null lineage when approvedAt is missing", () => {
+      const lineage = extractApprovedStrategyLineage(
+        {
+          strategyApprovalLineage: {
+            strategyRunId: 253,
+            approvalRequestId: 36,
+            status: "approved",
+            creativeBriefFingerprint: "fp-253",
+          },
+          approvedStrategyFingerprint: "fp-253",
+        },
+        30,
+        22
+      );
+      expect(lineage).toBeNull();
+    });
+
+    const baseApprovedAtInput = {
+      campaignId: 30,
+      userId: 22,
+      businessId: 42,
+      businessName: "Zuto Hub",
+      strategyRunId: 253,
+      approvalRequestId: 36,
+      approvedAt: "2026-07-01T08:00:00.000Z",
+      approvedStrategyFingerprint: "fp-253",
+      funnelStage: "consideration" as const,
+      targetAudience: "operations managers",
+      offer: "Book a guided walkthrough",
+      businessCapabilities: ["B2B payment orchestration"],
+    };
+
+    it("changes the contract fingerprint when approvedAt changes", () => {
+      const a = compileApprovedCreativeContract(baseApprovedAtInput);
+      const b = compileApprovedCreativeContract({
+        ...baseApprovedAtInput,
+        approvedAt: "2026-07-02T08:00:00.000Z",
+      });
+      expect(a.contractFingerprint).not.toBe(b.contractFingerprint);
+    });
+
+    it("produces identical fingerprints for identical approved contracts across repeated compilation", () => {
+      const a = compileApprovedCreativeContract(baseApprovedAtInput);
+      const b = compileApprovedCreativeContract(baseApprovedAtInput);
+      expect(a.contractFingerprint).toBe(b.contractFingerprint);
+    });
   });
 });

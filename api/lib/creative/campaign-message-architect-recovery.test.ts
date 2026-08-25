@@ -358,6 +358,9 @@ describe("Campaign Message Architect quality authority observation side effects"
       .mockResolvedValueOnce({ runId: 601, output: genericOutput } as any)
       .mockResolvedValueOnce({ runId: 602, output: genericOutput } as any);
 
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as unknown as ReturnType<typeof getDb>);
+
     delete process.env.QUALITY_AUTHORITY_MODE;
     const offResult = await buildApprovedMessagePack({
       userId: 7,
@@ -365,6 +368,8 @@ describe("Campaign Message Architect quality authority observation side effects"
       skipBilling: true,
       maxAttempts: 2,
     });
+    const offInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length;
+    const offUpdateCount = (db.update as ReturnType<typeof vi.fn>).mock.calls.length;
 
     process.env.QUALITY_AUTHORITY_MODE = "observe";
     const observeResult = await buildApprovedMessagePack({
@@ -373,11 +378,17 @@ describe("Campaign Message Architect quality authority observation side effects"
       skipBilling: true,
       maxAttempts: 2,
     });
+    const observeInsertDelta =
+      (db.insert as ReturnType<typeof vi.fn>).mock.calls.length - offInsertCount;
+    const observeUpdateDelta =
+      (db.update as ReturnType<typeof vi.fn>).mock.calls.length - offUpdateCount;
 
     expect(observeResult.cta).toBe(offResult.cta);
     expect(observeResult.headline).toBe(offResult.headline);
     expect(observeResult.messagePackSource).toBe(offResult.messagePackSource);
     expect(runAgent).toHaveBeenCalledTimes(4);
+    expect(observeInsertDelta).toBe(offInsertCount);
+    expect(observeUpdateDelta).toBe(offUpdateCount);
   });
 
   it("calls the observer exactly once in observe mode", async () => {

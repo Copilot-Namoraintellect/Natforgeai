@@ -1046,12 +1046,14 @@ export async function runCreativeAgent({
     if (approvedMessagePack) {
       const workflowContext = (campaign?.workflowContext || {}) as Record<string, unknown>;
       const lineage = extractApprovedStrategyLineage(workflowContext, campaignId, userId);
+      const businessName = String(business?.name ?? "");
       observeIfEnabled("creative agent observation", {
         campaignId,
         userId,
         businessId: Number.isFinite(Number(campaign.businessId))
           ? Number(campaign.businessId)
           : 0,
+        businessName,
         lineage,
         expectedApprovedStrategyFingerprint: resolveExpectedApprovedStrategyFingerprint(workflowContext),
         funnelStage: normalizeFunnelStage(brief.primaryOutcome),
@@ -1062,6 +1064,19 @@ export async function runCreativeAgent({
         offer: brief.offerDetails || null,
         businessCapabilities: businessEvidence?.productsServices || [],
         legacySelectedCta: approvedMessagePack.cta || "",
+        proposedContent: {
+          headline: approvedMessagePack.headline,
+          primaryText: approvedMessagePack.subheadline || approvedMessagePack.headline,
+          benefits: approvedMessagePack.benefitBullets?.slice(0, 5) || [],
+          cta: approvedMessagePack.cta || "Learn More",
+          funnelStage: normalizeFunnelStage(brief.primaryOutcome),
+          targetAudience: brief.targetBuyer || campaign.targetAudience || "",
+          offer: brief.offerDetails || null,
+          businessName,
+          protectedFields: {
+            businessName,
+          },
+        },
       });
     }
 

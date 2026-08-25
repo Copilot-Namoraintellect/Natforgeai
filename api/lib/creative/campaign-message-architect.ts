@@ -1136,6 +1136,7 @@ async function buildApprovedMessagePackLegacy(
       businessId: Number.isFinite(Number(business?.id || campaign.businessId))
         ? Number(business?.id || campaign.businessId)
         : 0,
+      businessName: ctx.businessName,
       lineage,
       expectedApprovedStrategyFingerprint: resolveExpectedApprovedStrategyFingerprint(workflowContext),
       funnelStage: ctx.funnelStage || normalizeFunnelStage(ctx.campaignObjective),
@@ -1145,6 +1146,19 @@ async function buildApprovedMessagePackLegacy(
       offer: ctx.offerDetails || null,
       businessCapabilities: ctx.websiteEvidence?.productsServices || [],
       legacySelectedCta: groundedFactsUsed.selectedStageCta || "",
+      proposedContent: {
+        headline: ctx.campaignName || ctx.productOrService,
+        primaryText: ctx.productOrService,
+        benefits: ctx.websiteEvidence?.productsServices?.slice(0, 3) || [ctx.productOrService].filter(Boolean),
+        cta: groundedFactsUsed.selectedStageCta || "Learn More",
+        funnelStage: ctx.funnelStage || normalizeFunnelStage(ctx.campaignObjective),
+        targetAudience: ctx.targetCustomer || "",
+        offer: ctx.offerDetails || null,
+        businessName: ctx.businessName,
+        protectedFields: {
+          businessName: ctx.businessName,
+        },
+      },
     });
   }
 

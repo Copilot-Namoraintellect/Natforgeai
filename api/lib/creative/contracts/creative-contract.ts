@@ -8,6 +8,11 @@
  * - computes a deterministic contract fingerprint;
  * - reads QUALITY_AUTHORITY_MODE and guards against enforce mode.
  *
+ * Slice 2 scope:
+ * - replaces the Slice 1 grounded-benefit placeholder with deterministic evidence-backed benefits;
+ * - adds evidence IDs and validation status to grounded benefit evidence;
+ * - does not change CTA authority, contract lifecycle or observation guards.
+ *
  * This module does not call providers, write to the database, or change legacy behaviour.
  */
 
@@ -18,6 +23,9 @@ import {
   isGenericFallbackCta,
   type CtaAuthoritySource,
 } from "./cta-authority";
+import {
+  buildGroundedBenefitsFromCapabilities,
+} from "./grounded-evidence";
 import { normalizeCtaText, type FunnelStage } from "../cta-utils";
 
 export type QualityAuthorityMode = "off" | "observe" | "enforce";
@@ -106,12 +114,14 @@ export interface OfferAuthority {
   text: string | null;
   source: string;
   locked: boolean;
+  required: boolean;
 }
 
 export interface GroundedBenefitEvidence {
   text: string;
   evidenceIds: string[];
   origin: string;
+  validationStatus: "grounded" | "partially_grounded" | "ungrounded" | "ambiguous";
 }
 
 export interface CreativeContractBase {
@@ -120,6 +130,7 @@ export interface CreativeContractBase {
   campaignId: number;
   userId: number;
   businessId: number;
+  businessName: string;
   funnelStage: FunnelStage;
   approvedStrategyFingerprint: string;
   cta: CtaAuthority;
@@ -155,6 +166,7 @@ export interface ApprovedStrategyInput {
   campaignId: number;
   userId: number;
   businessId: number;
+  businessName?: string | null;
   strategyRunId: number;
   approvalRequestId: number;
   approvedAt: string;
@@ -167,6 +179,7 @@ export interface ApprovedStrategyInput {
   aiDelegated?: boolean;
   targetAudience: string;
   offer: string | null;
+  offerRequired?: boolean;
   businessCapabilities: readonly string[];
   requiredBenefitCount?: number;
   brandConstraints?: readonly string[];
@@ -179,6 +192,7 @@ export interface StrategyLineageInput {
   campaignId: number;
   userId: number;
   businessId: number;
+  businessName?: string | null;
   funnelStage: FunnelStage;
   approvedStrategyFingerprint?: string | null;
   stageCtas?: Partial<Record<FunnelStage, string | null | undefined>>;
@@ -188,6 +202,7 @@ export interface StrategyLineageInput {
   aiDelegated?: boolean;
   targetAudience: string;
   offer: string | null;
+  offerRequired?: boolean;
   businessCapabilities: readonly string[];
   requiredBenefitCount?: number;
   brandConstraints?: readonly string[];
@@ -212,6 +227,8 @@ export interface ObservationDiagnostics {
   approvalRequestId: number | null;
   contractVersion: number;
   contractFingerprint: string;
+  evidenceSetFingerprint: string | null;
+  evidenceItemCount: number | null;
   legacySelectedCta: string;
   contractAuthoritativeCta: string;
   ctaAuthoritySource: CtaAuthoritySource;
@@ -219,6 +236,20 @@ export interface ObservationDiagnostics {
   mismatchClassification: MismatchClassification;
   enforceWouldAccept: boolean;
   enforceWouldRejectReason: string | null;
+  // Slice 2 compliance observation fields (null when no proposed content was supplied).
+  compliancePassed: boolean | null;
+  complianceEvaluatorVersion: string | null;
+  groundedClaimCount: number | null;
+  partiallyGroundedClaimCount: number | null;
+  ungroundedClaimCount: number | null;
+  groundedBenefitCount: number | null;
+  distinctGroundedBenefitCount: number | null;
+  requiredBenefitCount: number | null;
+  failedRuleIds: string[];
+  warningRuleIds: string[];
+  unsupportedClaimCodes: string[];
+  offerViolationCodes: string[];
+  audienceConsistencyStatus: "consistent" | "conflict" | "not_evaluated" | null;
   diagnostics: string[];
 }
 
@@ -246,25 +277,24 @@ function inferOfferActionCta(offer: string | null): string | null {
 }
 
 function buildGroundedBenefitEvidence(
+  contractFingerprint: string,
   capabilities: string[],
   requiredCount: number
 ): GroundedBenefitEvidence[] {
-  const evidence = capabilities
-    .filter((cap) => cap.length > 0)
-    .map((cap, index) => ({
-      text: `Use ${cap.toLowerCase()} to reduce manual work and improve reliability.`,
-      evidenceIds: [`evidence-${index}`],
-      origin: cap,
-    }));
-  while (evidence.length < requiredCount) {
-    const index = evidence.length;
-    evidence.push({
-      text: `Benefit placeholder ${index + 1} — must be replaced with approved evidence in Slice 2.`,
-      evidenceIds: [],
-      origin: "slice1-placeholder",
-    });
-  }
-  return evidence.slice(0, Math.max(requiredCount, 3));
+  // Build deterministic evidence-backed benefits directly from approved
+  // capabilities so every benefit is traceable.
+  const { benefits } = buildGroundedBenefitsFromCapabilities(
+    capabilities,
+    requiredCount,
+    contractFingerprint
+  );
+
+  return benefits.map((benefit) => ({
+    text: benefit.text,
+    evidenceIds: benefit.evidenceIds,
+    origin: benefit.originatingCapabilities[0] ?? "approved_evidence",
+    validationStatus: benefit.validationStatus,
+  }));
 }
 
 /**
@@ -299,6 +329,7 @@ export function computeContractFingerprint(contract: CreativeContractBase): stri
     campaignId: contract.campaignId,
     userId: contract.userId,
     businessId: contract.businessId,
+    businessName: contract.businessName,
     funnelStage: contract.funnelStage,
     approvedStrategyFingerprint: contract.approvedStrategyFingerprint,
     approvedAt: (contract as any).approvedAt ?? null,
@@ -318,6 +349,7 @@ export function computeContractFingerprint(contract: CreativeContractBase): stri
       text: normalizeCtaText(b.text),
       evidenceIds: b.evidenceIds.slice().sort(),
       origin: b.origin,
+      validationStatus: b.validationStatus,
     })),
     minimumBenefitCount: contract.minimumBenefitCount,
     brandConstraints: contract.brandConstraints.slice().sort(),
@@ -327,7 +359,7 @@ export function computeContractFingerprint(contract: CreativeContractBase): stri
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
-function isApprovedLineageAuthoritative(
+export function isApprovedLineageAuthoritative(
   lineage: ApprovedStrategyLineage | null,
   campaignId: number,
   userId: number,
@@ -371,10 +403,6 @@ function compileContractBase(
 
   const capabilities = unique(toStringArray(input.businessCapabilities));
   const requiredBenefitCount = input.requiredBenefitCount ?? 3;
-  const groundedBenefitEvidence = buildGroundedBenefitEvidence(
-    capabilities,
-    requiredBenefitCount
-  );
 
   const approvedStrategyFingerprint =
     safeText(input.approvedStrategyFingerprint ?? input.lineage?.approvedStrategyFingerprint) || "";
@@ -385,6 +413,7 @@ function compileContractBase(
     campaignId: input.campaignId,
     userId: input.userId,
     businessId: input.businessId,
+    businessName: safeText(input.businessName),
     funnelStage: input.funnelStage,
     approvedStrategyFingerprint,
     cta,
@@ -392,15 +421,24 @@ function compileContractBase(
       text: offer,
       source: offer ? "approved_strategy" : "none",
       locked: true,
+      required: input.offerRequired ?? false,
     },
     targetAudience: safeText(input.targetAudience),
     groundedClaims: capabilities,
-    groundedBenefitEvidence,
+    groundedBenefitEvidence: [], // filled below after fingerprinting inputs are known
     minimumBenefitCount: requiredBenefitCount,
     brandConstraints: unique(toStringArray(input.brandConstraints)),
     requiredContactDetails: unique(toStringArray(input.requiredContactDetails)),
     prohibitedClaims: unique(toStringArray(input.prohibitedClaims)),
   };
+
+  // Build evidence-backed benefits after the base exists so the evidence-set
+  // fingerprint can depend on stable contract fields.
+  base.groundedBenefitEvidence = buildGroundedBenefitEvidence(
+    base.contractFingerprint,
+    capabilities,
+    requiredBenefitCount
+  );
   base.contractFingerprint = computeContractFingerprint(base);
   return base;
 }
@@ -505,6 +543,7 @@ export function observeCreativeContract(input: {
   aiDelegated?: boolean;
   targetAudience: string;
   offer: string | null;
+  offerRequired?: boolean;
   businessCapabilities: readonly string[];
   legacySelectedCta: string;
   requiredBenefitCount?: number;
@@ -561,6 +600,7 @@ export function observeCreativeContract(input: {
           aiDelegated: input.aiDelegated,
           targetAudience: input.targetAudience,
           offer: input.offer,
+          offerRequired: input.offerRequired,
           businessCapabilities: input.businessCapabilities,
           requiredBenefitCount: input.requiredBenefitCount,
           brandConstraints: input.brandConstraints,
@@ -580,6 +620,7 @@ export function observeCreativeContract(input: {
           aiDelegated: input.aiDelegated,
           targetAudience: input.targetAudience,
           offer: input.offer,
+          offerRequired: input.offerRequired,
           businessCapabilities: input.businessCapabilities,
           requiredBenefitCount: input.requiredBenefitCount,
           brandConstraints: input.brandConstraints,
@@ -603,6 +644,8 @@ export function observeCreativeContract(input: {
       approvalRequestId: contract.approvalRequestId,
       contractVersion: contract.contractVersion,
       contractFingerprint: contract.contractFingerprint,
+      evidenceSetFingerprint: null,
+      evidenceItemCount: null,
       legacySelectedCta: input.legacySelectedCta,
       contractAuthoritativeCta: contract.cta.text,
       ctaAuthoritySource: contract.cta.source,
@@ -614,6 +657,20 @@ export function observeCreativeContract(input: {
       enforceWouldRejectReason: enforceWouldAccept
         ? null
         : mismatch.reason ?? `Contract not authoritative: ${fingerprintCheck.reason}`,
+      // Slice 2 fields populated by observeIfEnabled when compliance runs.
+      compliancePassed: null,
+      complianceEvaluatorVersion: null,
+      groundedClaimCount: null,
+      partiallyGroundedClaimCount: null,
+      ungroundedClaimCount: null,
+      groundedBenefitCount: null,
+      distinctGroundedBenefitCount: null,
+      requiredBenefitCount: null,
+      failedRuleIds: [],
+      warningRuleIds: [],
+      unsupportedClaimCodes: [],
+      offerViolationCodes: [],
+      audienceConsistencyStatus: null,
       diagnostics,
     };
   } catch (err) {
@@ -625,6 +682,8 @@ export function observeCreativeContract(input: {
       approvalRequestId: input.lineage?.approvalRequestId ?? null,
       contractVersion: 0,
       contractFingerprint: "",
+      evidenceSetFingerprint: null,
+      evidenceItemCount: null,
       legacySelectedCta: input.legacySelectedCta,
       contractAuthoritativeCta: "",
       ctaAuthoritySource: "none",
@@ -632,6 +691,19 @@ export function observeCreativeContract(input: {
       mismatchClassification: "invalid_approved_cta",
       enforceWouldAccept: false,
       enforceWouldRejectReason: `Observation failed: ${reason}`,
+      compliancePassed: null,
+      complianceEvaluatorVersion: null,
+      groundedClaimCount: null,
+      partiallyGroundedClaimCount: null,
+      ungroundedClaimCount: null,
+      groundedBenefitCount: null,
+      distinctGroundedBenefitCount: null,
+      requiredBenefitCount: null,
+      failedRuleIds: [],
+      warningRuleIds: [],
+      unsupportedClaimCodes: [],
+      offerViolationCodes: [],
+      audienceConsistencyStatus: null,
       diagnostics: [`Observation error: ${reason}`],
     };
   }

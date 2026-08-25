@@ -764,7 +764,9 @@ describe("runCreativeAgent quality authority observation side effects", () => {
       generationOperation: testGenerationOperation,
     });
     const offInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length;
+    const offUpdateCount = (db.update as ReturnType<typeof vi.fn>).mock.calls.length;
     const offDeductCount = (deductCredits as ReturnType<typeof vi.fn>).mock.calls.length;
+    const offRunAgentCount = (runAgent as ReturnType<typeof vi.fn>).mock.calls.length;
 
     process.env.QUALITY_AUTHORITY_MODE = "observe";
     const observeResult = await runCreativeAgent({
@@ -773,12 +775,16 @@ describe("runCreativeAgent quality authority observation side effects", () => {
       generationOperation: testGenerationOperation,
     });
     const observeInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length - offInsertCount;
+    const observeUpdateCount = (db.update as ReturnType<typeof vi.fn>).mock.calls.length - offUpdateCount;
     const observeDeductCount = (deductCredits as ReturnType<typeof vi.fn>).mock.calls.length - offDeductCount;
+    const observeRunAgentCount = (runAgent as ReturnType<typeof vi.fn>).mock.calls.length - offRunAgentCount;
 
     expect(observeResult.savedPosts).toBe(offResult.savedPosts);
     expect(observeResult.pack.socialPosts[0].cta).toBe(offResult.pack.socialPosts[0].cta);
     expect(observeDeductCount).toBe(offDeductCount);
     expect(observeInsertCount).toBe(offInsertCount > 0 ? offInsertCount : 0);
+    expect(observeUpdateCount).toBe(offUpdateCount);
+    expect(observeRunAgentCount).toBe(offRunAgentCount);
   });
 
   it("calls the observer exactly once in observe mode", async () => {
