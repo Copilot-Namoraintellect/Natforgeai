@@ -42,6 +42,7 @@ import {
   type CreativeGenerationClaimHeartbeatController,
 } from "./lib/creative/creative-generation-claim";
 import { env } from "./lib/env";
+import { InMemoryWorkflowOperationRegistry } from "./lib/workflow/workflow-operation";
 
 export const agentRouter = createRouter({
   runStrategyAgent: aiActionQuery
@@ -496,6 +497,7 @@ export const agentRouter = createRouter({
           // If transition fails (wrong current state), continue anyway and let the agent run
         }
 
+        const workflowRegistry = new InMemoryWorkflowOperationRegistry();
         let result: Awaited<ReturnType<typeof runCreativeAgent>> | undefined;
         try {
           result = await runCreativeAgent({
@@ -503,6 +505,7 @@ export const agentRouter = createRouter({
             campaignId: input.campaignId,
             generationOperation: { source: "agent", id: operationRowId },
             claimContext: heartbeatController,
+            registry: workflowRegistry,
           });
         } catch (err: any) {
           await db

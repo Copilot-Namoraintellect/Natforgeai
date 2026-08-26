@@ -35,6 +35,7 @@ import {
   buildStrategyApprovalLineage,
   validateStrategyRunForCampaign,
 } from "./strategy-approval";
+import { InMemoryWorkflowOperationRegistry } from "./workflow-operation";
 
 export async function onAgentRunComplete(runId: number) {
   const db = getDb();
@@ -643,6 +644,8 @@ export async function onStrategyApproved(
       heartbeatIntervalSeconds: env.creativeGenerationHeartbeatIntervalSeconds,
     });
 
+    const workflowRegistry = new InMemoryWorkflowOperationRegistry();
+
     // Auto-trigger creative agent
     try {
       const result = await runCreativeAgent({
@@ -650,6 +653,7 @@ export async function onStrategyApproved(
         campaignId,
         generationOperation: { source: "approval", id: approvalId },
         claimContext: heartbeatController,
+        registry: workflowRegistry,
       });
       await onAgentRunComplete(result.packRunId);
       const releaseResult = await releaseClaimOnce("completed");

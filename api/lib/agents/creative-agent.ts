@@ -28,6 +28,11 @@ import {
   observeIfEnabled,
   resolveExpectedApprovedStrategyFingerprint,
 } from "../creative/contracts/observe-quality-authority";
+import {
+  InMemoryWorkflowOperationRegistry,
+  type WorkflowOperationSource,
+  type WorkflowOperationType,
+} from "../workflow/workflow-operation";
 
 // Valid content_posts.type enum values from db/schema.ts
 const CONTENT_POST_TYPES = new Set([
@@ -890,15 +895,30 @@ export async function runCreativeAgent({
   deleteExistingDrafts = true,
   generationOperation,
   claimContext,
+  registry: inputRegistry,
+  operationType: inputOperationType,
 }: {
   userId: number;
   campaignId: number;
   deleteExistingDrafts?: boolean;
   generationOperation: CreativeGenerationOperation;
   claimContext?: CreativeGenerationClaimHeartbeatController;
+  registry?: InMemoryWorkflowOperationRegistry;
+  operationType?: WorkflowOperationType;
 }) {
   validateCreativeGenerationOperation(generationOperation);
   const db = getDb();
+
+  const workflowOperationSource: WorkflowOperationSource =
+    generationOperation.source === "approval"
+      ? "approval"
+      : generationOperation.source === "agent"
+      ? "manual"
+      : generationOperation.source === "profile"
+      ? "automatic"
+      : "automatic";
+  const workflowOperationType: WorkflowOperationType = inputOperationType ?? "creative_generation";
+  const workflowRegistry = inputRegistry ?? new InMemoryWorkflowOperationRegistry();
   const totalStartedAt = Date.now();
   const timing = {
     messageArchitectDurationMs: 0,
@@ -1012,6 +1032,11 @@ export async function runCreativeAgent({
 
   // Step 0: Build / reuse approved campaign message pack
   let approvedMessagePack: CampaignMessagePack | null = null;
+  let messagePackAttemptOrdinal = 0;
+  const nextMessagePackOrdinal = () => {
+    messagePackAttemptOrdinal += 1;
+    return messagePackAttemptOrdinal;
+  };
   const architectStartedAt = Date.now();
   try {
     approvedMessagePack = await ensureApprovedMessagePack({
@@ -1019,6 +1044,11 @@ export async function runCreativeAgent({
       campaignId,
       skipBilling: true,
       maxAttempts: 2,
+      registry: workflowRegistry,
+      operationType: workflowOperationType,
+      operationSource: workflowOperationSource,
+      operationReferenceId: generationOperation.id,
+      attemptOrdinal: nextMessagePackOrdinal(),
     });
 
     if (!approvedMessagePack.validation.passed) {
@@ -1064,6 +1094,12 @@ export async function runCreativeAgent({
         offer: brief.offerDetails || null,
         businessCapabilities: businessEvidence?.productsServices || [],
         legacySelectedCta: approvedMessagePack.cta || "",
+        operationType: workflowOperationType,
+        operationSource: workflowOperationSource,
+        operationReferenceId: generationOperation.id,
+        attemptType: "creative_generation",
+        attemptOrdinal: 1,
+        registry: workflowRegistry,
         proposedContent: {
           headline: approvedMessagePack.headline,
           primaryText: approvedMessagePack.subheadline || approvedMessagePack.headline,
@@ -1362,6 +1398,11 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         maxAttempts: 2,
         forceRebuild: true,
         qualityIssues: combinedIssues,
+        registry: workflowRegistry,
+        operationType: workflowOperationType,
+        operationSource: workflowOperationSource,
+        operationReferenceId: generationOperation.id,
+        attemptOrdinal: nextMessagePackOrdinal(),
       });
 
       logInfo("[CreativeAgent] recovery pack evaluated", {

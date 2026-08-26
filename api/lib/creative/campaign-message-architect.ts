@@ -52,6 +52,11 @@ import {
   observeIfEnabled,
   resolveExpectedApprovedStrategyFingerprint,
 } from "./contracts/observe-quality-authority";
+import {
+  InMemoryWorkflowOperationRegistry,
+  type WorkflowOperationType,
+  type WorkflowOperationSource,
+} from "../workflow/workflow-operation";
 
 // ─── Public types ───
 
@@ -940,6 +945,19 @@ export interface BuildApprovedMessagePackOptions {
   onLegacyContextLoaded?: (context: LegacyLoadedShadowContextInput) => void;
   resolvedAuthority?: ResolvedArchitectAuthority;
   privacyMode?: "standard" | "safe";
+  /**
+   * Injected workflow-operation registry for cross-point observation.  When
+   * omitted, a fresh in-memory registry is created for this orchestration scope.
+   */
+  registry?: InMemoryWorkflowOperationRegistry;
+  /**
+   * Slice 3 workflow identity metadata propagated from the orchestration boundary.
+   */
+  operationType?: WorkflowOperationType | null;
+  operationSource?: WorkflowOperationSource | null;
+  operationReferenceId?: string | number | null;
+  claimId?: number | null;
+  attemptOrdinal?: number | null;
 }
 
 function isSafeLoggingMode(mode: BuildApprovedMessagePackOptions["privacyMode"]): boolean {
@@ -1130,6 +1148,7 @@ async function buildApprovedMessagePackLegacy(
   {
     const workflowContext = (campaign?.workflowContext || {}) as Record<string, unknown>;
     const lineage = extractApprovedStrategyLineage(workflowContext, campaignId, userId);
+    const scopeRegistry = opts.registry ?? opts.resolvedAuthority?.registry ?? null;
     observeIfEnabled("campaign message architect observation", {
       campaignId,
       userId,
@@ -1146,6 +1165,13 @@ async function buildApprovedMessagePackLegacy(
       offer: ctx.offerDetails || null,
       businessCapabilities: ctx.websiteEvidence?.productsServices || [],
       legacySelectedCta: groundedFactsUsed.selectedStageCta || "",
+      operationType: opts.operationType ?? null,
+      operationSource: opts.operationSource ?? null,
+      operationReferenceId: opts.operationReferenceId ?? null,
+      claimId: opts.claimId ?? null,
+      attemptType: "message_pack",
+      attemptOrdinal: opts.attemptOrdinal ?? null,
+      registry: scopeRegistry,
       proposedContent: {
         headline: ctx.campaignName || ctx.productOrService,
         primaryText: ctx.productOrService,
@@ -1611,6 +1637,7 @@ export interface RefineMessagePackOptions {
   onLegacyContextLoaded?: (context: LegacyLoadedShadowContextInput) => void;
   resolvedAuthority?: ResolvedArchitectAuthority;
   privacyMode?: "standard" | "safe";
+  registry?: InMemoryWorkflowOperationRegistry;
 }
 
 /**
@@ -2287,6 +2314,7 @@ async function refineApprovedMessagePackLegacy(
 async function ensureApprovedMessagePackLegacy(
   opts: BuildApprovedMessagePackOptions
 ): Promise<CampaignMessagePack> {
+  const registry = opts.registry ?? new InMemoryWorkflowOperationRegistry();
   const db = getDb();
   const [campaign] = await db
     .select()
@@ -2360,6 +2388,7 @@ async function ensureApprovedMessagePackLegacy(
       maxAttempts: opts.maxAttempts,
       onLegacyContextLoaded: opts.onLegacyContextLoaded,
       resolvedAuthority: opts.resolvedAuthority,
+      registry,
     });
 
     const enrichedRefined = enrichMessagePackMetadata(refined);
@@ -2376,6 +2405,7 @@ async function ensureApprovedMessagePackLegacy(
 
   const pack = await buildApprovedMessagePackLegacy({
     ...opts,
+    registry,
     onLegacyContextLoaded: opts.onLegacyContextLoaded,
     resolvedAuthority: opts.resolvedAuthority,
   });
@@ -2447,13 +2477,18 @@ interface ResolvedArchitectAuthority {
   readonly selection: CanarySelectionResult;
   readonly loadedContext: LegacyLoadedShadowContextInput | null;
   readonly contextLock: MessageApprovalContextLock | null;
+  readonly registry: InMemoryWorkflowOperationRegistry | null;
   readonly diagnostics: {
     readonly stageCode: string;
     readonly reason: string;
   };
 }
 
-async function resolveArchitectAuthority(campaignId: number, userId: number): Promise<ResolvedArchitectAuthority> {
+async function resolveArchitectAuthority(
+  campaignId: number,
+  userId: number,
+  injectedRegistry?: InMemoryWorkflowOperationRegistry
+): Promise<ResolvedArchitectAuthority> {
   const db = getDb();
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
   const businessId = campaign?.businessId ? Number(campaign.businessId) : null;
@@ -2483,6 +2518,7 @@ async function resolveArchitectAuthority(campaignId: number, userId: number): Pr
       selection,
       loadedContext: null,
       contextLock: null,
+      registry: null,
       diagnostics: {
         stageCode: "legacy_authority",
         reason: selection.reason,
@@ -2490,11 +2526,13 @@ async function resolveArchitectAuthority(campaignId: number, userId: number): Pr
     });
   }
 
+  const registry = injectedRegistry ?? new InMemoryWorkflowOperationRegistry();
   const loadedContext = await loadContextInput(campaignId);
   const contextLock = buildMessageApprovalContextLock({
     mode,
     campaignId,
     loadedContext,
+    registry,
   });
 
   return Object.freeze({
@@ -2504,6 +2542,7 @@ async function resolveArchitectAuthority(campaignId: number, userId: number): Pr
     selection,
     loadedContext,
     contextLock,
+    registry,
     diagnostics: {
       stageCode: mode === "shadow" ? "shadow_context_lock_ready" : "canary_context_lock_ready",
       reason: selection.reason,
@@ -2929,19 +2968,21 @@ async function runCanaryMessageApprovalFlow(input: {
 export async function buildApprovedMessagePack(
   opts: BuildApprovedMessagePackOptions
 ): Promise<CampaignMessagePack> {
-  const authority = await resolveArchitectAuthority(opts.campaignId, opts.userId);
+  const registry = opts.registry ?? new InMemoryWorkflowOperationRegistry();
+  const authority = await resolveArchitectAuthority(opts.campaignId, opts.userId, registry);
   if (authority.mode === "canary" && authority.canarySelected) {
-    return runCanaryMessageApprovalFlow({ kind: "build", ensureOptions: { ...opts, resolvedAuthority: authority }, authority });
+    return runCanaryMessageApprovalFlow({ kind: "build", ensureOptions: { ...opts, registry, resolvedAuthority: authority }, authority });
   }
 
-  const pack = await buildApprovedMessagePackLegacy({ ...opts, resolvedAuthority: authority });
-  return observeMessageApprovalV2Shadow(pack, { ...opts, resolvedAuthority: authority }, "build_pack", authority);
+  const pack = await buildApprovedMessagePackLegacy({ ...opts, registry, resolvedAuthority: authority });
+  return observeMessageApprovalV2Shadow(pack, { ...opts, registry, resolvedAuthority: authority }, "build_pack", authority);
 }
 
 export async function refineApprovedMessagePack(
   opts: RefineMessagePackOptions
 ): Promise<CampaignMessagePack> {
-  const authority = await resolveArchitectAuthority(opts.campaignId, opts.userId);
+  const registry = opts.registry ?? new InMemoryWorkflowOperationRegistry();
+  const authority = await resolveArchitectAuthority(opts.campaignId, opts.userId, registry);
   if (authority.mode === "canary" && authority.canarySelected) {
     return runCanaryMessageApprovalFlow({
       kind: "refine",
@@ -2950,14 +2991,15 @@ export async function refineApprovedMessagePack(
         campaignId: opts.campaignId,
         skipBilling: opts.skipBilling,
         maxAttempts: opts.maxAttempts,
+        registry,
         resolvedAuthority: authority,
       },
-      refineOptions: { ...opts, resolvedAuthority: authority },
+      refineOptions: { ...opts, registry, resolvedAuthority: authority },
       authority,
     });
   }
 
-  const refined = await refineApprovedMessagePackLegacy({ ...opts, resolvedAuthority: authority });
+  const refined = await refineApprovedMessagePackLegacy({ ...opts, registry, resolvedAuthority: authority });
   return observeMessageApprovalV2Shadow(
     refined,
     {
@@ -2965,6 +3007,7 @@ export async function refineApprovedMessagePack(
       campaignId: opts.campaignId,
       skipBilling: opts.skipBilling,
       maxAttempts: opts.maxAttempts,
+      registry,
       resolvedAuthority: authority,
     },
     "refine_pack",
@@ -2975,9 +3018,10 @@ export async function refineApprovedMessagePack(
 export async function ensureApprovedMessagePack(
   opts: BuildApprovedMessagePackOptions
 ): Promise<CampaignMessagePack> {
-  const authority = await resolveArchitectAuthority(opts.campaignId, opts.userId);
+  const registry = opts.registry ?? new InMemoryWorkflowOperationRegistry();
+  const authority = await resolveArchitectAuthority(opts.campaignId, opts.userId, registry);
   if (authority.mode === "canary" && authority.canarySelected) {
-    return runCanaryMessageApprovalFlow({ kind: "ensure", ensureOptions: { ...opts, resolvedAuthority: authority }, authority });
+    return runCanaryMessageApprovalFlow({ kind: "ensure", ensureOptions: { ...opts, registry, resolvedAuthority: authority }, authority });
   }
-  return ensureApprovedMessagePackLegacy({ ...opts, resolvedAuthority: authority });
+  return ensureApprovedMessagePackLegacy({ ...opts, registry, resolvedAuthority: authority });
 }

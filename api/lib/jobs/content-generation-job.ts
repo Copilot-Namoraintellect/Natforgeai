@@ -13,6 +13,7 @@ import {
 } from "../creative/creative-generation-claim";
 import { env } from "../env";
 import { assertApprovedStrategySemanticallyValid } from "../workflow/strategy-approval";
+import { InMemoryWorkflowOperationRegistry } from "../workflow/workflow-operation";
 
 export interface ContentGenerationJobInput {
   jobId: number;
@@ -179,6 +180,8 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
       });
     }
 
+    const workflowRegistry = new InMemoryWorkflowOperationRegistry();
+
     const [existingPostCountResult] = await db
       .select({ value: count() })
       .from(contentPosts)
@@ -257,6 +260,7 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
           skipBilling: true,
           maxAttempts: 2,
           forceRebuild: true,
+          registry: workflowRegistry,
         });
         if (freshPack.validation.passed) {
           await saveApprovedMessagePack(input.userId, input.campaignId, freshPack);
@@ -276,6 +280,7 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
       campaignId: input.campaignId,
       generationOperation: { source: "job", id: input.jobId },
       claimContext: heartbeatController,
+      registry: workflowRegistry,
     });
 
     if (creativeResult.savedPosts > 0 && campaign.workflowState !== "creatives_ready") {

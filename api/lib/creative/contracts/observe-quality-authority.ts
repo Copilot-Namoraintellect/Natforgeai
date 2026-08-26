@@ -30,6 +30,14 @@ import {
 } from "../compliance/content-compliance";
 import { compileGroundedEvidence } from "./grounded-evidence";
 import { type FunnelStage } from "../cta-utils";
+import {
+  buildWorkflowCorrelationContext,
+  InMemoryWorkflowOperationRegistry,
+  type WorkflowOperationType,
+  type WorkflowOperationSource,
+  type WorkflowAttemptType,
+  type WorkflowOperationStatus,
+} from "../../workflow/workflow-operation";
 
 export interface QualityAuthorityObservationInput {
   campaignId: number;
@@ -54,6 +62,18 @@ export interface QualityAuthorityObservationInput {
   brandConstraints?: readonly string[];
   requiredContactDetails?: readonly string[];
   prohibitedClaims?: readonly string[];
+  // Slice 3 workflow identity overrides.  When omitted, the observer infers
+  // operationType=creative_generation and operationSource from the lineage.
+  operationType?: WorkflowOperationType | null;
+  operationSource?: WorkflowOperationSource | null;
+  operationReferenceId?: string | number | null;
+  claimId?: number | null;
+  attemptType?: WorkflowAttemptType | null;
+  attemptOrdinal?: number | null;
+  parentAttemptId?: string | null;
+  providerRunId?: string | null;
+  internalRunId?: number | null;
+  registry?: InMemoryWorkflowOperationRegistry | null;
 }
 
 /**
@@ -212,6 +232,177 @@ function runContentCompliance(
   }
 }
 
+function normaliseReferenceId(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function safeWorkflowStatus(
+  registry: InMemoryWorkflowOperationRegistry,
+  workflowOperationId: string
+): WorkflowOperationStatus | null {
+  return registry.findOperation(workflowOperationId)?.status ?? null;
+}
+
+/**
+ * Register an in-memory workflow operation and optional attempt for the current
+ * observation.  This is purely diagnostic: no database rows are written and no
+ * workflow state is mutated.
+ *
+ * The observer intentionally does NOT finalize the top-level operation.
+ * Terminal-state ownership belongs to explicit orchestration-boundary code
+ * (see `finalizeWorkflowOperation`).
+ */
+const TERMINAL_WORKFLOW_STATUSES: Set<WorkflowOperationStatus> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+function registerWorkflowObservation(
+  input: QualityAuthorityObservationInput,
+  observation: ObservationDiagnostics
+): {
+  observation: ObservationDiagnostics;
+  registry: InMemoryWorkflowOperationRegistry | null;
+} {
+  if (!input.registry) {
+    // No injected registry means we cannot safely correlate attempts across
+    // observation points.  Fail open: continue other diagnostics but do not
+    // pretend cross-point correlation occurred.
+    const enriched: ObservationDiagnostics = {
+      ...observation,
+      workflowOperationId: null,
+      workflowIdempotencyKey: null,
+      operationType: null,
+      operationSource: null,
+      operationReferenceId: null,
+      operationStatus: null,
+      attemptCount: null,
+      attemptTypeCounts: null,
+      completedAttemptCount: null,
+      failedAttemptCount: null,
+      activeAttemptCount: null,
+      terminalAttemptCount: null,
+      correlationValid: null,
+      correlationFailureCodes: ["WORKFLOW_OBSERVATION_SKIPPED_NO_REGISTRY"],
+      duplicateClassification: "none",
+      diagnostics: [
+        ...observation.diagnostics,
+        "Workflow observation skipped: no scoped registry was injected.",
+      ],
+    };
+    return { observation: enriched, registry: null };
+  }
+
+  const operationType = input.operationType ?? "creative_generation";
+  const operationSource = input.operationSource ?? "automatic";
+  const operationReferenceId =
+    normaliseReferenceId(input.operationReferenceId) ||
+    normaliseReferenceId(input.lineage?.approvalRequestId) ||
+    normaliseReferenceId(input.campaignId);
+
+  const identityInput = {
+    operationType,
+    operationSource,
+    operationReferenceId,
+    campaignId: input.campaignId,
+    userId: input.userId,
+    businessId: input.businessId,
+    contractFingerprint:
+      input.lineage?.approvedStrategyFingerprint ?? observation.contractFingerprint,
+    strategyRunId: input.lineage?.strategyRunId ?? null,
+    approvalRequestId: input.lineage?.approvalRequestId ?? null,
+    claimId: input.claimId ?? null,
+    approvedAt: input.lineage?.approvedAt ?? null,
+  };
+
+  const context = buildWorkflowCorrelationContext(identityInput);
+  const registry = input.registry;
+  const opResult = registry.registerOperation(identityInput);
+  const isReplay = opResult.duplicateClassification === "idempotent_replay";
+
+  let duplicateClassification = opResult.duplicateClassification;
+
+  // On an idempotent replay the operation may already be terminal.  Do not
+  // re-transition; do not register new attempts under a terminal operation.
+  const operation = registry.findOperation(context.workflowOperationId);
+  const canMutate = operation && !TERMINAL_WORKFLOW_STATUSES.has(operation.status);
+
+  if (canMutate) {
+    registry.transitionOperation(context.workflowOperationId, "running");
+  }
+
+  if (input.attemptType && canMutate) {
+    const explicitOrdinal = input.attemptOrdinal;
+    const hasExplicitOrdinal =
+      typeof explicitOrdinal === "number" && Number.isInteger(explicitOrdinal) && explicitOrdinal > 0;
+
+    const attemptResult = hasExplicitOrdinal
+      ? registry.registerAttemptReplay({
+          workflowOperationId: context.workflowOperationId,
+          attemptType: input.attemptType,
+          ordinal: explicitOrdinal,
+          parentAttemptId: input.parentAttemptId ?? null,
+          providerRunId: input.providerRunId ?? null,
+          internalRunId: input.internalRunId ?? null,
+        })
+      : registry.allocateNewAttempt({
+          workflowOperationId: context.workflowOperationId,
+          attemptType: input.attemptType,
+          parentAttemptId: input.parentAttemptId ?? null,
+          providerRunId: input.providerRunId ?? null,
+          internalRunId: input.internalRunId ?? null,
+        });
+
+    const isAttemptReplay = attemptResult.duplicateClassification === "idempotent_replay";
+    if (!isAttemptReplay) {
+      registry.transitionAttempt(attemptResult.attempt.workflowAttemptId, "running");
+      registry.transitionAttempt(attemptResult.attempt.workflowAttemptId, "completed");
+    }
+    duplicateClassification = attemptResult.duplicateClassification;
+  }
+
+  // The observer never transitions the operation to a terminal state.
+  // It stays `running` until orchestration code calls finalizeWorkflowOperation.
+
+  const attempts = registry.listAttempts(context.workflowOperationId);
+  const attemptTypeCounts: Partial<Record<WorkflowAttemptType, number>> = {};
+  for (const attempt of attempts) {
+    attemptTypeCounts[attempt.attemptType] = (attemptTypeCounts[attempt.attemptType] ?? 0) + 1;
+  }
+
+  const completedAttemptCount = attempts.filter((a) => a.status === "completed").length;
+  const failedAttemptCount = attempts.filter((a) => a.status === "failed").length;
+  const activeAttemptCount = attempts.filter((a) => a.status === "running" || a.status === "created").length;
+  const terminalAttemptCount = attempts.filter(
+    (a) => a.status === "completed" || a.status === "failed" || a.status === "cancelled"
+  ).length;
+
+  const correlationValidation = registry.validateCorrelation(context);
+
+  const enriched: ObservationDiagnostics = {
+    ...observation,
+    workflowOperationId: context.workflowOperationId,
+    workflowIdempotencyKey: context.idempotencyKey,
+    operationType: context.operationType,
+    operationSource: context.operationSource,
+    operationReferenceId: context.operationReferenceId,
+    operationStatus: safeWorkflowStatus(registry, context.workflowOperationId),
+    attemptCount: attempts.length,
+    attemptTypeCounts,
+    completedAttemptCount,
+    failedAttemptCount,
+    activeAttemptCount,
+    terminalAttemptCount,
+    correlationValid: correlationValidation.valid,
+    correlationFailureCodes: correlationValidation.failureCodes,
+    duplicateClassification: isReplay ? opResult.duplicateClassification : duplicateClassification,
+  };
+
+  return { observation: enriched, registry };
+}
+
 /**
  * Run observation only when QUALITY_AUTHORITY_MODE=observe.
  * Always returns null in off or enforce modes, and never throws.
@@ -283,18 +474,33 @@ export function observeIfEnabled(
         ? runContentCompliance(input, observation, contract)
         : { ...observation, ...emptyComplianceDiagnostics() };
 
+    let finalised: ObservationDiagnostics;
+    try {
+      const { observation: enriched } = registerWorkflowObservation(input, augmented);
+      finalised = enriched;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      finalised = {
+        ...augmented,
+        diagnostics: [...augmented.diagnostics, `Workflow observation registration failed: ${reason}`],
+      };
+    }
+
     logInfo(`[QualityAuthority] ${label}`, {
-      campaignId: augmented.campaignId,
-      contractFingerprint: augmented.contractFingerprint,
-      legacySelectedCta: augmented.legacySelectedCta,
-      contractAuthoritativeCta: augmented.contractAuthoritativeCta,
-      mismatchClassification: augmented.mismatchClassification,
-      enforceWouldAccept: augmented.enforceWouldAccept,
-      compliancePassed: augmented.compliancePassed,
-      failedRuleIds: augmented.failedRuleIds,
+      campaignId: finalised.campaignId,
+      contractFingerprint: finalised.contractFingerprint,
+      legacySelectedCta: finalised.legacySelectedCta,
+      contractAuthoritativeCta: finalised.contractAuthoritativeCta,
+      mismatchClassification: finalised.mismatchClassification,
+      enforceWouldAccept: finalised.enforceWouldAccept,
+      compliancePassed: finalised.compliancePassed,
+      failedRuleIds: finalised.failedRuleIds,
+      workflowOperationId: finalised.workflowOperationId,
+      operationStatus: finalised.operationStatus,
+      attemptCount: finalised.attemptCount,
     });
 
-    return augmented;
+    return finalised;
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     logWarn(`[QualityAuthority] observation failed in ${label}`, {

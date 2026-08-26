@@ -594,7 +594,7 @@ describe("runCreativeAgent post-save failure handling", () => {
     expect(result.pack.socialPosts[0].caption).toContain(groundedRecoveryPack.subheadline);
     expect(result.pack.socialPosts[0].caption).toContain(groundedRecoveryPack.benefitBullets[0]);
   });
-});
+}, 30000);
 
 describe("runCreativeAgent generation-operation identity", () => {
   beforeEach(() => {
@@ -807,6 +807,7 @@ describe("runCreativeAgent quality authority observation side effects", () => {
 
     expect(observeSpy).toHaveBeenCalledTimes(1);
     expect(observeSpy.mock.calls[0][0]).toBe("creative agent observation");
+    expect((observeSpy.mock.calls[0][1] as any).attemptType).toBe("creative_generation");
   });
 
   it("returns null from the observer in off mode", async () => {

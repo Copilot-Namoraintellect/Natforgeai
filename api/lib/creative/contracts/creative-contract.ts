@@ -27,6 +27,13 @@ import {
   buildGroundedBenefitsFromCapabilities,
 } from "./grounded-evidence";
 import { normalizeCtaText, type FunnelStage } from "../cta-utils";
+import {
+  type WorkflowOperationType,
+  type WorkflowOperationSource,
+  type WorkflowOperationStatus,
+  type WorkflowAttemptType,
+  type DuplicateClassification,
+} from "../../workflow/workflow-operation";
 
 export type QualityAuthorityMode = "off" | "observe" | "enforce";
 
@@ -250,6 +257,22 @@ export interface ObservationDiagnostics {
   unsupportedClaimCodes: string[];
   offerViolationCodes: string[];
   audienceConsistencyStatus: "consistent" | "conflict" | "not_evaluated" | null;
+  // Slice 3 workflow operation identity (null when workflow observation is disabled).
+  workflowOperationId: string | null;
+  workflowIdempotencyKey: string | null;
+  operationType: WorkflowOperationType | null;
+  operationSource: WorkflowOperationSource | null;
+  operationReferenceId: string | null;
+  operationStatus: WorkflowOperationStatus | null;
+  attemptCount: number | null;
+  attemptTypeCounts: Partial<Record<WorkflowAttemptType, number>> | null;
+  completedAttemptCount: number | null;
+  failedAttemptCount: number | null;
+  activeAttemptCount: number | null;
+  terminalAttemptCount: number | null;
+  correlationValid: boolean | null;
+  correlationFailureCodes: string[];
+  duplicateClassification: DuplicateClassification | null;
   diagnostics: string[];
 }
 
@@ -671,6 +694,21 @@ export function observeCreativeContract(input: {
       unsupportedClaimCodes: [],
       offerViolationCodes: [],
       audienceConsistencyStatus: null,
+      workflowOperationId: null,
+      workflowIdempotencyKey: null,
+      operationType: null,
+      operationSource: null,
+      operationReferenceId: null,
+      operationStatus: null,
+      attemptCount: null,
+      attemptTypeCounts: null,
+      completedAttemptCount: null,
+      failedAttemptCount: null,
+      activeAttemptCount: null,
+      terminalAttemptCount: null,
+      correlationValid: null,
+      correlationFailureCodes: [],
+      duplicateClassification: null,
       diagnostics,
     };
   } catch (err) {
@@ -704,6 +742,21 @@ export function observeCreativeContract(input: {
       unsupportedClaimCodes: [],
       offerViolationCodes: [],
       audienceConsistencyStatus: null,
+      workflowOperationId: null,
+      workflowIdempotencyKey: null,
+      operationType: null,
+      operationSource: null,
+      operationReferenceId: null,
+      operationStatus: null,
+      attemptCount: null,
+      attemptTypeCounts: null,
+      completedAttemptCount: null,
+      failedAttemptCount: null,
+      activeAttemptCount: null,
+      terminalAttemptCount: null,
+      correlationValid: null,
+      correlationFailureCodes: [],
+      duplicateClassification: null,
       diagnostics: [`Observation error: ${reason}`],
     };
   }

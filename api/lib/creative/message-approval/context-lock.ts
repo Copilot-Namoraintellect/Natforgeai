@@ -4,18 +4,23 @@ import {
   buildLegacyShadowContextProjection,
   type LegacyLoadedShadowContextInput,
 } from "./integration/legacy-shadow-context";
+import type { InMemoryWorkflowOperationRegistry } from "../../workflow/workflow-operation";
 
 export interface BuildMessageApprovalContextLockInput {
   readonly mode: "shadow" | "canary";
   readonly campaignId: number;
   readonly loadedContext: LegacyLoadedShadowContextInput;
   readonly traceNonce?: string;
+  readonly registry?: InMemoryWorkflowOperationRegistry;
 }
 
 export function buildMessageApprovalContextLock(
   input: BuildMessageApprovalContextLockInput
 ): MessageApprovalContextLock {
-  const projection = buildLegacyShadowContextProjection(input.loadedContext);
+  const projection = buildLegacyShadowContextProjection({
+    ...input.loadedContext,
+    registry: input.registry ?? input.loadedContext.registry ?? null,
+  });
   const nonceSuffix = input.traceNonce ? `-${input.traceNonce}` : "";
   return Object.freeze({
     contextLockId: `ctx-${input.campaignId}-${Date.now()}${nonceSuffix}`,

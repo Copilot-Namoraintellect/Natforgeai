@@ -10,6 +10,7 @@ import {
   observeIfEnabled,
   resolveExpectedApprovedStrategyFingerprint,
 } from "../../contracts/observe-quality-authority";
+import { InMemoryWorkflowOperationRegistry } from "../../../workflow/workflow-operation";
 
 export interface LegacyValidationContextInput {
   readonly businessName?: string;
@@ -27,6 +28,11 @@ export interface LegacyLoadedShadowContextInput {
   readonly business?: any;
   readonly campaign?: any;
   readonly validationContext?: LegacyValidationContextInput;
+  /**
+   * Injected workflow-operation registry for cross-point observation.  When
+   * omitted, observe mode will safely skip cross-point correlation.
+   */
+  readonly registry?: InMemoryWorkflowOperationRegistry | null;
 }
 
 export interface LegacyShadowContextProjection {
@@ -176,6 +182,8 @@ export function buildLegacyShadowContextProjection(
       offer: text(campaign.offerDetails),
       businessCapabilities: businessDna.productsAndServices,
       legacySelectedCta: requiredCta,
+      attemptType: "message_pack",
+      registry: input.registry ?? null,
       proposedContent: {
         headline: text(campaign.name) || businessDna.primaryOffering,
         primaryText: text(campaign.goal) || text(campaign.primaryOutcome) || businessDna.primaryOffering,

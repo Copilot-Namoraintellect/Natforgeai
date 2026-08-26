@@ -137,6 +137,7 @@ describe("buildLegacyShadowContextProjection", () => {
       expect(call[1]).toMatchObject({
         campaignId: 30,
         legacySelectedCta: "Learn More",
+        attemptType: "message_pack",
       });
     });
 

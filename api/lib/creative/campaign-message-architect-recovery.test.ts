@@ -427,6 +427,7 @@ describe("Campaign Message Architect quality authority observation side effects"
 
     expect(observeSpy).toHaveBeenCalledTimes(1);
     expect(observeSpy.mock.calls[0][0]).toBe("campaign message architect observation");
+    expect((observeSpy.mock.calls[0][1] as any).attemptType).toBe("message_pack");
   });
 
   it("returns null from the observer in off mode", async () => {

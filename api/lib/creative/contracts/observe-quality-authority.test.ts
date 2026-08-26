@@ -7,6 +7,7 @@ import {
 } from "./observe-quality-authority";
 import { compileApprovedCreativeContract } from "./creative-contract";
 import { type ProposedCreativeContent } from "../compliance/content-compliance";
+import { InMemoryWorkflowOperationRegistry } from "../../workflow/workflow-operation";
 import * as creativeContract from "./creative-contract";
 import * as contentCompliance from "../compliance/content-compliance";
 import * as logger from "../../logger";
@@ -354,6 +355,133 @@ describe("observe-quality-authority", () => {
       const a = compileApprovedCreativeContract(baseApprovedAtInput);
       const b = compileApprovedCreativeContract(baseApprovedAtInput);
       expect(a.contractFingerprint).toBe(b.contractFingerprint);
+    });
+  });
+
+  describe("Slice 3 workflow operation observation", () => {
+    it("populates workflowOperationId and keeps operation running in observe mode", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("test", {
+        ...baseInput,
+        attemptType: "message_pack",
+        attemptOrdinal: 1,
+        registry: new InMemoryWorkflowOperationRegistry(),
+      });
+      expect(result).not.toBeNull();
+      expect(result!.workflowOperationId).toBeTruthy();
+      expect(result!.operationType).toBe("creative_generation");
+      expect(result!.operationSource).toBe("automatic");
+      expect(result!.operationStatus).toBe("running");
+      expect(result!.attemptCount).toBe(1);
+      expect(result!.attemptTypeCounts).toEqual({ message_pack: 1 });
+      expect(result!.completedAttemptCount).toBe(1);
+      expect(result!.failedAttemptCount).toBe(0);
+      expect(result!.activeAttemptCount).toBe(0);
+      expect(result!.terminalAttemptCount).toBe(1);
+      expect(result!.correlationValid).toBe(true);
+      expect(result!.duplicateClassification).toBe("none");
+    });
+
+    it("uses caller-supplied operation type and source", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("test", {
+        ...baseInput,
+        operationType: "creative_recovery",
+        operationSource: "recovery",
+        operationReferenceId: 17,
+        claimId: 17,
+        attemptType: "creative_generation",
+        attemptOrdinal: 1,
+        registry: new InMemoryWorkflowOperationRegistry(),
+      });
+      expect(result!.operationType).toBe("creative_recovery");
+      expect(result!.operationSource).toBe("recovery");
+      expect(result!.operationReferenceId).toBe("17");
+    });
+
+    it("classifies a shared registry rerun of the same logical attempt as idempotent replay", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const registry = new InMemoryWorkflowOperationRegistry();
+      const a = observeIfEnabled("replay-a", {
+        ...baseInput,
+        attemptType: "message_pack",
+        attemptOrdinal: 1,
+        registry,
+      });
+      const b = observeIfEnabled("replay-b", {
+        ...baseInput,
+        attemptType: "message_pack",
+        attemptOrdinal: 1,
+        registry,
+      });
+      expect(a!.workflowOperationId).toBe(b!.workflowOperationId);
+      expect(b!.duplicateClassification).toBe("idempotent_replay");
+      expect(b!.attemptCount).toBe(1);
+    });
+
+    it("observer never finalizes operation based on enforceWouldAccept", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("test", {
+        ...baseInput,
+        legacySelectedCta: "Request a Consultation",
+        attemptType: "creative_generation",
+        attemptOrdinal: 1,
+        registry: new InMemoryWorkflowOperationRegistry(),
+      });
+      expect(result!.operationStatus).toBe("running");
+      expect(result!.enforceWouldAccept).toBe(true);
+    });
+
+    it("fails safely when no registry is injected and does not pretend correlation", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("test", {
+        ...baseInput,
+        attemptType: "creative_generation",
+      });
+      expect(result).not.toBeNull();
+      expect(result!.workflowOperationId).toBeNull();
+      expect(result!.operationStatus).toBeNull();
+      expect(result!.correlationFailureCodes).toContain("WORKFLOW_OBSERVATION_SKIPPED_NO_REGISTRY");
+    });
+
+    it("correlates message-pack and creative-generation attempts under one operation when registry is shared", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const registry = new InMemoryWorkflowOperationRegistry();
+
+      const messagePack = observeIfEnabled("msg", {
+        ...baseInput,
+        attemptType: "message_pack",
+        attemptOrdinal: 1,
+        registry,
+      });
+
+      const creativeGen = observeIfEnabled("creative", {
+        ...baseInput,
+        attemptType: "creative_generation",
+        attemptOrdinal: 1,
+        registry,
+      });
+
+      expect(messagePack!.workflowOperationId).toBe(creativeGen!.workflowOperationId);
+      const attempts = registry.listAttempts(messagePack!.workflowOperationId!);
+      expect(attempts).toHaveLength(2);
+      expect(attempts.map((a) => a.attemptType)).toContain("message_pack");
+      expect(attempts.map((a) => a.attemptType)).toContain("creative_generation");
+    });
+
+    it("does not fail legacy output when workflow registration fails", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      vi.spyOn(InMemoryWorkflowOperationRegistry.prototype, "registerOperation").mockImplementation(() => {
+        throw new Error("registry boom");
+      });
+      const result = observeIfEnabled("test", {
+        ...baseInput,
+        attemptType: "creative_generation",
+        registry: new InMemoryWorkflowOperationRegistry(),
+      });
+      expect(result).not.toBeNull();
+      expect(result!.diagnostics.some((d) => d.includes("Workflow observation registration failed"))).toBe(true);
+      expect(result!.workflowOperationId).toBeNull();
     });
   });
 });
