@@ -58,6 +58,8 @@ function makeContract(overrides: Partial<ApprovedCreativeContract> = {}): Approv
       "controlled payment-instruction services",
     ],
     groundedBenefitEvidence: [],
+    approvedEvidence: [],
+    authorityEvidenceIds: [],
     minimumBenefitCount: 3,
     brandConstraints: [],
     requiredContactDetails: [],
@@ -67,7 +69,6 @@ function makeContract(overrides: Partial<ApprovedCreativeContract> = {}): Approv
 }
 
 describe("grounded-evidence", () => {
-  describe("evidence identity", () => {
     it("equivalent normalized evidence produces the same evidence ID", () => {
       const id1 = computeEvidenceIdentity({
         evidenceType: "business_capability",
@@ -608,4 +609,3 @@ describe("grounded-evidence", () => {
       expect(result.invented).toBe(false);
     });
   });
-});

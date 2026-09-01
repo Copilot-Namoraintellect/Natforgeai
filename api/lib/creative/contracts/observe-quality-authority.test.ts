@@ -484,4 +484,112 @@ describe("observe-quality-authority", () => {
       expect(result!.workflowOperationId).toBeNull();
     });
   });
+
+  describe("Slice 4 premium direction and candidate observation", () => {
+    const compliantProposed: ProposedCreativeContent = {
+      headline: "Streamline B2B Payment Orchestration",
+      primaryText:
+        "Zuto Hub provides prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
+      benefits: [
+        "Verify available prefunded balances before payment instructions are issued",
+        "Reserve transaction amounts with traceable administration",
+        "Issue controlled payment instructions from a central account",
+      ],
+      cta: "Request a Consultation",
+      funnelStage: "consideration",
+      targetAudience: "B2B finance teams and merchant operators",
+      offer: "Book a guided walkthrough",
+      businessName: "Zuto Hub",
+      protectedFields: {
+        businessName: "Zuto Hub",
+      },
+    };
+
+    const observeInput: QualityAuthorityObservationInput = {
+      ...baseInput,
+      businessName: "Zuto Hub",
+      businessCapabilities: [
+        "B2B payment orchestration",
+        "prefunded merchant-account administration",
+        "balance verification",
+        "transaction reservations",
+        "controlled payment-instruction services",
+      ],
+      targetAudience: "B2B finance teams and merchant operators",
+      offer: "Book a guided walkthrough",
+      proposedContent: compliantProposed,
+      registry: new InMemoryWorkflowOperationRegistry(),
+      attemptType: "creative_generation",
+      attemptOrdinal: 1,
+    };
+
+    it("compiles three direction plans in observe mode", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("slice4", observeInput);
+      expect(result).not.toBeNull();
+      expect(result!.plannedDirectionCount).toBe(3);
+      expect(result!.availableDirectionCount).toBeGreaterThanOrEqual(1);
+      expect(result!.directionPlanFingerprint).toBeTruthy();
+      expect(result!.rubricVersion).toBeTruthy();
+      expect(result!.selectorVersion).toBeTruthy();
+    });
+
+    it("evaluates the legacy candidate against available direction plans", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("slice4", observeInput);
+      expect(result).not.toBeNull();
+      expect(result!.candidateEvaluationCount).toBeGreaterThanOrEqual(1);
+      expect(result!.candidateEvaluationCount).toBeLessThanOrEqual(3);
+      expect(result!.eligibleCandidateCount).not.toBeNull();
+      expect(result!.hardRejectedCandidateCount).not.toBeNull();
+    });
+
+    it("keeps the operation running and does not finalize it", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("slice4", observeInput);
+      expect(result!.operationStatus).toBe("running");
+      expect(result!.qualityAuthorityWouldAccept).not.toBeNull();
+    });
+
+    it("hard-rejects the Campaign 30 'Learn More' candidate and selects none", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const result = observeIfEnabled("slice4", {
+        ...observeInput,
+        legacySelectedCta: "Learn More",
+        proposedContent: {
+          ...compliantProposed,
+          cta: "Learn More",
+        },
+      });
+      expect(result).not.toBeNull();
+      expect(result!.campaignId).toBe(30);
+      expect(result!.contractAuthoritativeCta).toBe("Request a Consultation");
+      expect(result!.legacySelectedCta).toBe("Learn More");
+      expect(result!.compliancePassed).toBe(false);
+      expect(result!.failedRuleIds).toContain("CTA_LOCKED");
+      expect(result!.hardCompliancePassed).toBe(false);
+      expect(result!.preRenderReadinessStatus).toBe("hard_compliance_failed");
+      expect(result!.premiumAcceptanceStatus).toBe("hard_compliance_failed");
+      expect(result!.finalPremiumScore).toBeNull();
+      expect(result!.selectionStatus).toBe("no_qualifying_candidate");
+      expect(result!.selectedCandidateId).toBeNull();
+      expect(result!.recommendedForRenderCandidateId).toBeNull();
+      expect(result!.qualityAuthorityWouldAccept).toBe(false);
+      expect(result!.operationStatus).toBe("running");
+      const attempts = observeInput.registry!.listAttempts(result!.workflowOperationId!);
+      expect(attempts.filter((attempt) => ["candidate_generation", "billing", "final_persistence", "publishing"].includes(attempt.attemptType))).toEqual([]);
+    });
+
+    it("does not register billing, final-persistence or publishing attempts", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const registry = new InMemoryWorkflowOperationRegistry();
+      const result = observeIfEnabled("slice4", { ...observeInput, registry });
+      expect(result).not.toBeNull();
+      const attempts = registry.listAttempts(result!.workflowOperationId!);
+      const forbiddenTypes = ["billing", "final_persistence", "publishing"];
+      for (const attempt of attempts) {
+        expect(forbiddenTypes).not.toContain(attempt.attemptType);
+      }
+    });
+  });
 });

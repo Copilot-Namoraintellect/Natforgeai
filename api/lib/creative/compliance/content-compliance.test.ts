@@ -36,6 +36,8 @@ function makeContract(overrides: Partial<ApprovedCreativeContract> = {}): Approv
       "controlled payment-instruction services",
     ],
     groundedBenefitEvidence: [],
+      approvedEvidence: [],
+      authorityEvidenceIds: [],
     minimumBenefitCount: 3,
     brandConstraints: [],
     requiredContactDetails: [],

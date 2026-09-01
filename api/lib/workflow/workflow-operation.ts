@@ -44,7 +44,10 @@ export type WorkflowAttemptType =
   | "render"
   | "final_persistence"
   | "billing"
-  | "publishing";
+  | "publishing"
+  | "direction_planning"
+  | "candidate_evaluation"
+  | "candidate_selection";
 
 export type WorkflowAttemptStatus =
   | "created"

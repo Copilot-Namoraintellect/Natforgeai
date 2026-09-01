@@ -131,6 +131,14 @@ export interface GroundedBenefitEvidence {
   validationStatus: "grounded" | "partially_grounded" | "ungrounded" | "ambiguous";
 }
 
+export type ApprovedEvidenceClassification = "authority" | "benefit" | "proof";
+
+export interface ApprovedCreativeEvidence {
+  evidenceId: string;
+  classification: ApprovedEvidenceClassification;
+  sourceRef: string;
+}
+
 export interface CreativeContractBase {
   contractVersion: number;
   contractFingerprint: string;
@@ -145,6 +153,8 @@ export interface CreativeContractBase {
   targetAudience: string;
   groundedClaims: string[];
   groundedBenefitEvidence: GroundedBenefitEvidence[];
+  approvedEvidence: ApprovedCreativeEvidence[];
+  authorityEvidenceIds: string[];
   minimumBenefitCount: number;
   brandConstraints: string[];
   requiredContactDetails: string[];
@@ -274,6 +284,31 @@ export interface ObservationDiagnostics {
   correlationFailureCodes: string[];
   duplicateClassification: DuplicateClassification | null;
   diagnostics: string[];
+  // Slice 4 premium direction / candidate quality observation fields.
+  directionPlanFingerprint: string | null;
+  plannedDirectionCount: number | null;
+  availableDirectionCount: number | null;
+  unavailableDirectionCodes: string[];
+  candidateEvaluationCount: number | null;
+  eligibleCandidateCount: number | null;
+  hardRejectedCandidateCount: number | null;
+  thresholdRejectedCandidateCount: number | null;
+  renderPendingCandidateCount: number | null;
+  selectedCandidateId: string | null;
+  selectedDirectionKey: string | null;
+  selectedCandidateScore: number | null;
+  selectionStatus: string | null;
+  selectionReasonCodes: string[];
+  rubricVersion: string | null;
+  selectorVersion: string | null;
+  qualityAuthorityWouldAccept: boolean | null;
+  // Slice 4 quality-state separation diagnostics.
+  hardCompliancePassed: boolean | null;
+  preRenderReadinessStatus: string | null;
+  preRenderReadinessScore: number | null;
+  premiumAcceptanceStatus: string | null;
+  finalPremiumScore: number | null;
+  recommendedForRenderCandidateId: string | null;
 }
 
 function safeText(value: unknown): string {
@@ -347,6 +382,22 @@ function sortKeys(value: unknown): unknown {
 }
 
 export function computeContractFingerprint(contract: CreativeContractBase): string {
+  const approvedEvidence = Array.from(
+    new Map(
+      contract.approvedEvidence.map((evidence) => [
+        `${evidence.evidenceId}\u0000${evidence.classification}\u0000${evidence.sourceRef}`,
+        {
+          evidenceId: evidence.evidenceId,
+          classification: evidence.classification,
+          sourceRef: evidence.sourceRef,
+        },
+      ])
+    ).values()
+  ).sort((a, b) =>
+    `${a.evidenceId}\u0000${a.classification}\u0000${a.sourceRef}`.localeCompare(
+      `${b.evidenceId}\u0000${b.classification}\u0000${b.sourceRef}`
+    )
+  );
   const canonical = canonicalizeForFingerprint({
     contractVersion: contract.contractVersion,
     campaignId: contract.campaignId,
@@ -374,6 +425,8 @@ export function computeContractFingerprint(contract: CreativeContractBase): stri
       origin: b.origin,
       validationStatus: b.validationStatus,
     })),
+    approvedEvidence,
+    authorityEvidenceIds: unique(contract.authorityEvidenceIds).sort(),
     minimumBenefitCount: contract.minimumBenefitCount,
     brandConstraints: contract.brandConstraints.slice().sort(),
     requiredContactDetails: contract.requiredContactDetails.slice().sort(),
@@ -449,6 +502,8 @@ function compileContractBase(
     targetAudience: safeText(input.targetAudience),
     groundedClaims: capabilities,
     groundedBenefitEvidence: [], // filled below after fingerprinting inputs are known
+    approvedEvidence: [],
+    authorityEvidenceIds: [],
     minimumBenefitCount: requiredBenefitCount,
     brandConstraints: unique(toStringArray(input.brandConstraints)),
     requiredContactDetails: unique(toStringArray(input.requiredContactDetails)),
@@ -710,6 +765,29 @@ export function observeCreativeContract(input: {
       correlationFailureCodes: [],
       duplicateClassification: null,
       diagnostics,
+      directionPlanFingerprint: null,
+      plannedDirectionCount: null,
+      availableDirectionCount: null,
+      unavailableDirectionCodes: [],
+      candidateEvaluationCount: null,
+      eligibleCandidateCount: null,
+      hardRejectedCandidateCount: null,
+      thresholdRejectedCandidateCount: null,
+      renderPendingCandidateCount: null,
+      selectedCandidateId: null,
+      selectedDirectionKey: null,
+      selectedCandidateScore: null,
+      selectionStatus: null,
+      selectionReasonCodes: [],
+      rubricVersion: null,
+      selectorVersion: null,
+      qualityAuthorityWouldAccept: null,
+      hardCompliancePassed: null,
+      preRenderReadinessStatus: null,
+      preRenderReadinessScore: null,
+      premiumAcceptanceStatus: null,
+      finalPremiumScore: null,
+      recommendedForRenderCandidateId: null,
     };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -758,6 +836,29 @@ export function observeCreativeContract(input: {
       correlationFailureCodes: [],
       duplicateClassification: null,
       diagnostics: [`Observation error: ${reason}`],
+      directionPlanFingerprint: null,
+      plannedDirectionCount: null,
+      availableDirectionCount: null,
+      unavailableDirectionCodes: [],
+      candidateEvaluationCount: null,
+      eligibleCandidateCount: null,
+      hardRejectedCandidateCount: null,
+      thresholdRejectedCandidateCount: null,
+      renderPendingCandidateCount: null,
+      selectedCandidateId: null,
+      selectedDirectionKey: null,
+      selectedCandidateScore: null,
+      selectionStatus: null,
+      selectionReasonCodes: [],
+      rubricVersion: null,
+      selectorVersion: null,
+      qualityAuthorityWouldAccept: null,
+      hardCompliancePassed: null,
+      preRenderReadinessStatus: null,
+      preRenderReadinessScore: null,
+      premiumAcceptanceStatus: null,
+      finalPremiumScore: null,
+      recommendedForRenderCandidateId: null,
     };
   }
 }

@@ -38,6 +38,15 @@ import {
   type WorkflowAttemptType,
   type WorkflowOperationStatus,
 } from "../../workflow/workflow-operation";
+import { compileDirectionPlans } from "../quality/creative-direction-planner";
+import {
+  selectPremiumCandidate,
+  buildCandidateContentFingerprint,
+  buildCandidateId,
+  SELECTOR_VERSION,
+  type CandidateSpecification,
+} from "../quality/candidate-selection";
+import { RUBRIC_VERSION } from "../quality/premium-rubric";
 
 export interface QualityAuthorityObservationInput {
   campaignId: number;
@@ -58,6 +67,7 @@ export interface QualityAuthorityObservationInput {
   businessCapabilities: readonly string[];
   legacySelectedCta: string;
   proposedContent?: ProposedCreativeContent | null;
+  candidateEntries?: CandidateSpecification[];
   requiredBenefitCount?: number;
   brandConstraints?: readonly string[];
   requiredContactDetails?: readonly string[];
@@ -228,6 +238,103 @@ function runContentCompliance(
       ...observation,
       ...emptyComplianceDiagnostics(),
       diagnostics: [...observation.diagnostics, `Content compliance evaluation failed: ${reason}`],
+    };
+  }
+}
+
+function runSlice4QualityObservation(
+  input: QualityAuthorityObservationInput,
+  contract: CreativeContract | null,
+  observation: ObservationDiagnostics
+): ObservationDiagnostics {
+  // Slice 4 only runs for approved contracts with a known workflow identity.
+  if (!contract || contract.kind !== "approved") {
+    return observation;
+  }
+  if (!observation.workflowOperationId) {
+    return observation;
+  }
+
+  try {
+    const directionPlans = compileDirectionPlans({
+      workflowOperationId: observation.workflowOperationId,
+      contract,
+    });
+
+    let candidateEntries: CandidateSpecification[] = [];
+    if (input.candidateEntries && input.candidateEntries.length > 0) {
+      candidateEntries = input.candidateEntries;
+    } else if (input.proposedContent) {
+      // Evaluate the single legacy candidate against each available direction
+      // plan without fabricating additional rendered outputs.
+      let ordinal = 0;
+      for (const direction of directionPlans.directions) {
+        if (!direction.available) continue;
+        ordinal++;
+        const contentFingerprint = buildCandidateContentFingerprint(input.proposedContent);
+        const candidateId = buildCandidateId({
+          workflowOperationId: observation.workflowOperationId,
+          contractFingerprint: contract.contractFingerprint,
+          directionFingerprint: direction.directionFingerprint,
+          candidateOrdinal: ordinal,
+          contentFingerprint,
+        });
+        candidateEntries.push({
+          candidateId,
+          candidateOrdinal: ordinal,
+          candidate: input.proposedContent,
+          directionKey: direction.directionKey,
+        });
+      }
+    }
+
+    const selection = selectPremiumCandidate({
+      workflowOperationId: observation.workflowOperationId,
+      contract,
+      candidateEntries,
+    });
+
+    // Pick the evaluation that backs the diagnostic fields. Prefer the final
+    // selected candidate; fall back to the recommended-for-render candidate.
+    const primaryEvaluation =
+      selection.selectedEvaluation ??
+      selection.candidateEvaluations.find(
+        (e) => e.candidateId === selection.recommendedForRenderCandidateId
+      ) ??
+      selection.candidateEvaluations[0] ??
+      null;
+
+    return {
+      ...observation,
+      directionPlanFingerprint: selection.directionPlanFingerprint,
+      plannedDirectionCount: selection.plannedDirectionCount,
+      availableDirectionCount: selection.availableDirectionCount,
+      unavailableDirectionCodes: selection.unavailableDirectionCodes,
+      candidateEvaluationCount: selection.observedCandidateCount,
+      eligibleCandidateCount: selection.eligibleCandidateCount,
+      hardRejectedCandidateCount: selection.hardRejectedCandidateCount,
+      thresholdRejectedCandidateCount: selection.thresholdRejectedCandidateCount,
+      renderPendingCandidateCount: selection.renderPendingCandidateCount,
+      selectedCandidateId: selection.selectedCandidateId,
+      selectedDirectionKey: selection.selectedDirectionKey,
+      selectedCandidateScore: selection.selectedCandidateScore,
+      selectionStatus: selection.selectionStatus,
+      selectionReasonCodes: selection.selectionReasonCodes,
+      rubricVersion: primaryEvaluation?.rubricVersion ?? RUBRIC_VERSION,
+      selectorVersion: SELECTOR_VERSION,
+      qualityAuthorityWouldAccept: selection.selectionStatus === "selected",
+      recommendedForRenderCandidateId: selection.recommendedForRenderCandidateId,
+      hardCompliancePassed: primaryEvaluation?.hardCompliancePassed ?? null,
+      preRenderReadinessStatus: primaryEvaluation?.preRenderReadinessStatus ?? null,
+      preRenderReadinessScore: primaryEvaluation?.preRenderReadinessScore ?? null,
+      premiumAcceptanceStatus: primaryEvaluation?.premiumAcceptanceStatus ?? null,
+      finalPremiumScore: primaryEvaluation?.finalPremiumScore ?? null,
+    };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return {
+      ...observation,
+      diagnostics: [...observation.diagnostics, `Slice 4 quality observation failed: ${reason}`],
     };
   }
 }
@@ -477,7 +584,7 @@ export function observeIfEnabled(
     let finalised: ObservationDiagnostics;
     try {
       const { observation: enriched } = registerWorkflowObservation(input, augmented);
-      finalised = enriched;
+      finalised = runSlice4QualityObservation(input, contract, enriched);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       finalised = {

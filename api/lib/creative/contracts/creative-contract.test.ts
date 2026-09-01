@@ -165,6 +165,22 @@ describe("compileApprovedCreativeContract", () => {
     expect(contract.cta.text).toBe("Request a Consultation");
     expect(contract.cta.source).toBe("strategy_stage");
   });
+
+  it("fails closed on caller-supplied authority evidence fields", () => {
+    const contract = compileApprovedCreativeContract({
+      ...baseApprovedInput,
+      approvedEvidence: [
+        {
+          evidenceId: "invented-authority",
+          classification: "authority",
+          sourceRef: "invented-source",
+        },
+      ],
+      authorityEvidenceIds: ["invented-authority"],
+    } as ApprovedStrategyInput & Record<string, unknown>);
+    expect(contract.approvedEvidence).toEqual([]);
+    expect(contract.authorityEvidenceIds).toEqual([]);
+  });
 });
 
 describe("computeContractFingerprint", () => {
@@ -172,6 +188,25 @@ describe("computeContractFingerprint", () => {
     const a = compileApprovedCreativeContract(baseApprovedInput);
     const b = compileApprovedCreativeContract(baseApprovedInput);
     expect(a.contractFingerprint).toBe(b.contractFingerprint);
+  });
+
+  it("normalizes reordered and duplicate authority evidence in the fingerprint", () => {
+    const base = compileApprovedCreativeContract(baseApprovedInput);
+    const authority = {
+      evidenceId: "authority-record",
+      classification: "authority" as const,
+      sourceRef: "test:authority-record",
+    };
+    const a = { ...base, approvedEvidence: [authority, authority], authorityEvidenceIds: ["authority-record", "authority-record"] };
+    const b = { ...base, approvedEvidence: [authority], authorityEvidenceIds: ["authority-record"] };
+    expect(computeContractFingerprint(a)).toBe(computeContractFingerprint(b));
+  });
+
+  it("changes the fingerprint when approved authority evidence changes", () => {
+    const base = compileApprovedCreativeContract(baseApprovedInput);
+    const a = { ...base, approvedEvidence: [{ evidenceId: "authority-a", classification: "authority" as const, sourceRef: "test:a" }], authorityEvidenceIds: ["authority-a"] };
+    const b = { ...base, approvedEvidence: [{ evidenceId: "authority-b", classification: "authority" as const, sourceRef: "test:b" }], authorityEvidenceIds: ["authority-b"] };
+    expect(computeContractFingerprint(a)).not.toBe(computeContractFingerprint(b));
   });
 
   it("is independent of object key order", () => {
