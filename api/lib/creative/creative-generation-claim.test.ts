@@ -194,6 +194,34 @@ describe("acquireCreativeGenerationClaim missing-table handling", () => {
   });
 });
 
+describe("rearmCreativeGenerationClaim input validation", () => {
+  it("rejects invalid userId", async () => {
+    await expect(
+      rearmCreativeGenerationClaim({
+        userId: 0,
+        campaignId: 1,
+        operationSource: "approval",
+        operationReferenceId: 1,
+        ownerToken: makeOwnerToken(),
+        leaseExpiresAt: calculateLeaseExpiresAt(300),
+      })
+    ).rejects.toThrow(/Invalid userId/);
+  });
+
+  it("rejects invalid operationSource", async () => {
+    await expect(
+      rearmCreativeGenerationClaim({
+        userId: 1,
+        campaignId: 1,
+        operationSource: "invalid" as any,
+        operationReferenceId: 1,
+        ownerToken: makeOwnerToken(),
+        leaseExpiresAt: calculateLeaseExpiresAt(300),
+      })
+    ).rejects.toThrow(/Invalid operationSource/);
+  });
+});
+
 describe("creative generation claim primitive (DB)", () => {
   const testUserId = 99000001;
   const testCampaignId = 88000001;
@@ -762,32 +790,6 @@ describe("creative generation claim primitive (DB)", () => {
     });
     return claim;
   }
-
-  it("rejects invalid userId", async () => {
-    await expect(
-      rearmCreativeGenerationClaim({
-        userId: 0,
-        campaignId: 1,
-        operationSource: "approval",
-        operationReferenceId: 1,
-        ownerToken: makeOwnerToken(),
-        leaseExpiresAt: calculateLeaseExpiresAt(300),
-      })
-    ).rejects.toThrow(/Invalid userId/);
-  });
-
-  it("rejects invalid operationSource", async () => {
-    await expect(
-      rearmCreativeGenerationClaim({
-        userId: 1,
-        campaignId: 1,
-        operationSource: "invalid" as any,
-        operationReferenceId: 1,
-        ownerToken: makeOwnerToken(),
-        leaseExpiresAt: calculateLeaseExpiresAt(300),
-      })
-    ).rejects.toThrow(/Invalid operationSource/);
-  });
 
   itSafe("re-arms a completed claim to running", async () => {
     const claim = await acquireAndRelease("completed");
