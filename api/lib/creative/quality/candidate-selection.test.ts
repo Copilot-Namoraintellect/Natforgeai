@@ -24,6 +24,7 @@ import {
 import { type ProposedCreativeContent } from "../compliance/content-compliance";
 import { compileDirectionPlans } from "./creative-direction-planner";
 import type { RenderedCreativeEvidence } from "./premium-rubric";
+import { createTrustedRenderedCreativeEvidence } from "./rendered-creative-test-fixtures";
 
 const workflowOperationId = "op-30-22-253";
 
@@ -84,17 +85,6 @@ const wrongCtaCandidate: ProposedCreativeContent = {
   cta: "Learn More",
 };
 
-function makeRenderedEvidence(): RenderedCreativeEvidence {
-  return {
-    source: "render_evaluator",
-    renderedAssetFingerprint: "render-fp-test",
-    evaluatorVersion: "test-v1",
-    layoutAndVisualHierarchyScore: 85,
-    legibilityAndAccessibilityScore: 88,
-    reasonCodes: ["LAYOUT_OPTIMIZED", "LEGIBILITY_VERIFIED"],
-  };
-}
-
 function spec(
   candidate: ProposedCreativeContent,
   directionKey: "authority_led" | "benefit_led" | "proof_led",
@@ -120,9 +110,9 @@ function spec(
   };
 }
 
-function renderEvidenceMap(entries: CandidateSpecification[]) {
+async function renderEvidenceMap(entries: CandidateSpecification[]) {
   return Object.fromEntries(
-    entries.map((entry) => [entry.candidateId, makeRenderedEvidence()])
+    await Promise.all(entries.map(async (entry) => [entry.candidateId, await createTrustedRenderedCreativeEvidence()] as const))
   ) as Record<string, RenderedCreativeEvidence>;
 }
 
@@ -328,7 +318,7 @@ describe("candidate-selection identity", () => {
 });
 
 describe("candidate-selection ranking", () => {
-  it("selects the highest eligible candidate", () => {
+  it("selects the highest eligible candidate", async () => {
     const contract = makeContract();
     const weak: ProposedCreativeContent = {
       ...compliantCandidate,
@@ -345,14 +335,14 @@ describe("candidate-selection ranking", () => {
       workflowOperationId,
       contract,
       candidateEntries: entries,
-      renderedEvidenceByCandidateId: renderEvidenceMap(entries),
+      renderedEvidenceByCandidateId: await renderEvidenceMap(entries),
     });
     expect(result.selectionStatus).toBe("selected");
     expect(result.eligibleCandidateCount).toBe(2);
     expect(result.selectedCandidateScore).toBeGreaterThanOrEqual(80);
   });
 
-  it("excludes a hard-failing high-score candidate", () => {
+  it("excludes a hard-failing high-score candidate", async () => {
     const contract = makeContract();
     const entries = [
       spec(wrongCtaCandidate, "benefit_led", 1),
@@ -362,7 +352,7 @@ describe("candidate-selection ranking", () => {
       workflowOperationId,
       contract,
       candidateEntries: entries,
-      renderedEvidenceByCandidateId: renderEvidenceMap(entries),
+      renderedEvidenceByCandidateId: await renderEvidenceMap(entries),
     });
     expect(result.selectionStatus).toBe("selected");
     expect(result.hardRejectedCandidateCount).toBe(1);
@@ -371,14 +361,14 @@ describe("candidate-selection ranking", () => {
     );
   });
 
-  it("selects one independently qualifying candidate", () => {
+  it("selects one independently qualifying candidate", async () => {
     const contract = makeContract();
     const entries = [spec(compliantCandidate, "benefit_led", 1)];
     const result = selectPremiumCandidate({
       workflowOperationId,
       contract,
       candidateEntries: entries,
-      renderedEvidenceByCandidateId: renderEvidenceMap(entries),
+      renderedEvidenceByCandidateId: await renderEvidenceMap(entries),
     });
     expect(result.selectionStatus).toBe("selected");
     expect(result.observedCandidateCount).toBe(1);
@@ -395,7 +385,7 @@ describe("candidate-selection ranking", () => {
     expect(result.selectedCandidateId).toBeNull();
   });
 
-  it("resolves ties by strategic alignment", () => {
+  it("resolves ties by strategic alignment", async () => {
     const contract = makeContract();
     // Two nearly identical compliant candidates. They tie on everything except
     // strategic alignment if one has a slightly less aligned audience.
@@ -415,13 +405,13 @@ describe("candidate-selection ranking", () => {
       workflowOperationId,
       contract,
       candidateEntries: entries,
-      renderedEvidenceByCandidateId: renderEvidenceMap(entries),
+      renderedEvidenceByCandidateId: await renderEvidenceMap(entries),
     });
     expect(result.selectionStatus).toBe("selected");
     expect(result.selectedDirectionKey).toBe("benefit_led");
   });
 
-  it("resolves remaining ties by CTA score", () => {
+  it("resolves remaining ties by CTA score", async () => {
     const contract = makeContract();
     // Two identical compliant candidates except CTA length; shorter CTA scores higher.
     const longCta: ProposedCreativeContent = {
@@ -440,12 +430,12 @@ describe("candidate-selection ranking", () => {
       workflowOperationId,
       contract,
       candidateEntries: entries,
-      renderedEvidenceByCandidateId: renderEvidenceMap(entries),
+      renderedEvidenceByCandidateId: await renderEvidenceMap(entries),
     });
     expect(result.selectionStatus).toBe("selected");
   });
 
-  it("resolves remaining ties by grounded persuasive strength", () => {
+  it("resolves remaining ties by grounded persuasive strength", async () => {
     const contract = makeContract();
     // Reduce grounded evidence for one candidate by replacing benefits with less traceable wording.
     const weaker: ProposedCreativeContent = {
@@ -464,12 +454,12 @@ describe("candidate-selection ranking", () => {
       workflowOperationId,
       contract,
       candidateEntries: entries,
-      renderedEvidenceByCandidateId: renderEvidenceMap(entries),
+      renderedEvidenceByCandidateId: await renderEvidenceMap(entries),
     });
     expect(result.selectionStatus).toBe("selected");
   });
 
-  it("resolves remaining ties by lower candidate ordinal", () => {
+  it("resolves remaining ties by lower candidate ordinal", async () => {
     const contract = makeContract();
     // Two truly identical candidates would be ambiguous unless ordinal differs.
     const a = spec(compliantCandidate, "benefit_led", 1);
@@ -480,13 +470,13 @@ describe("candidate-selection ranking", () => {
       workflowOperationId,
       contract,
       candidateEntries: entries,
-      renderedEvidenceByCandidateId: renderEvidenceMap(entries),
+      renderedEvidenceByCandidateId: await renderEvidenceMap(entries),
     });
     expect(result.selectionStatus).toBe("selected");
     expect(result.selectedCandidateId).toBe(a.candidateId);
   });
 
-  it("rejects a fully unresolved tie", () => {
+  it("rejects a fully unresolved tie", async () => {
     const contract = makeContract();
     // Same candidate content with the same ordinal is impossible because
     // candidateId includes ordinal. Use two different ordinals with the same
@@ -498,7 +488,7 @@ describe("candidate-selection ranking", () => {
       workflowOperationId,
       contract,
       candidateEntries: entries,
-      renderedEvidenceByCandidateId: renderEvidenceMap(entries),
+      renderedEvidenceByCandidateId: await renderEvidenceMap(entries),
     });
     expect(result.selectionStatus).toBe("selected");
 
@@ -512,7 +502,7 @@ describe("candidate-selection ranking", () => {
     expect(ambiguous.selectionStatus).toBe("ambiguous_tie_rejected");
   });
 
-  it("arrival order does not affect selection", () => {
+  it("arrival order does not affect selection", async () => {
     const contract = makeContract();
     const a = spec(compliantCandidate, "benefit_led", 1);
     const weak: ProposedCreativeContent = {
@@ -528,13 +518,13 @@ describe("candidate-selection ranking", () => {
       workflowOperationId,
       contract,
       candidateEntries: forwardEntries,
-      renderedEvidenceByCandidateId: renderEvidenceMap(forwardEntries),
+      renderedEvidenceByCandidateId: await renderEvidenceMap(forwardEntries),
     });
     const backward = selectPremiumCandidate({
       workflowOperationId,
       contract,
       candidateEntries: backwardEntries,
-      renderedEvidenceByCandidateId: renderEvidenceMap(backwardEntries),
+      renderedEvidenceByCandidateId: await renderEvidenceMap(backwardEntries),
     });
     expect(forward.selectionStatus).toBe("selected");
     expect(backward.selectionStatus).toBe("selected");

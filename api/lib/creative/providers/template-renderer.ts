@@ -6,6 +6,8 @@
  * template renderer controls the final composed layout.
  */
 
+import type { RenderedQualityObservationScope } from "../contracts/rendered-quality-observation-scope";
+
 export type TemplateFormat = "leaflet" | "social_square" | "social_story" | "social_reel";
 export type TemplateOutputFormat = "png" | "jpg" | "pdf";
 
@@ -68,6 +70,12 @@ export interface TemplateRendererRequest {
   backgroundImageUrl?: string;
   /** Hint that this is a retry attempt (provider-specific). */
   isRetry?: boolean;
+  /**
+   * Internal-only request capability. Never send, serialize, or persist this
+   * value; it is an opaque, request-owned in-process object. External callers
+   * cannot forge it.
+   */
+  qualityObservationScope?: RenderedQualityObservationScope;
 }
 
 export interface TemplateRendererResult {

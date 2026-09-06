@@ -26,6 +26,13 @@ export interface ImageResult {
   creditsCharged?: number;
   usingFallback?: boolean;
   fallbackMessage?: string;
+  /**
+   * Internal Slice 5E diagnostic. "render_evaluation_not_supported" when the
+   * hybrid pipeline produced the asset (no V2 evaluator evidence is possible);
+   * "observed" when passive rendered-quality observation ran; "not_requested"
+   * otherwise. Never changes the external response schema.
+   */
+  renderEvaluationStatus?: string;
 }
 
 export interface VideoResult {

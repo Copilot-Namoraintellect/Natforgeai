@@ -11,6 +11,12 @@ import type { TemplateRendererProvider, TemplateRendererRequest, TemplateRendere
 import type { PremiumLeafletV2Brief, PremiumV2LayoutDensity } from "./types";
 import type { BrandAssetResolution } from "../brand-asset-resolver";
 import { validatePremiumV2Quality } from "./quality";
+import * as renderedCreativeEvaluator from "../quality/rendered-creative-evaluator";
+import type { RenderedCreativeEvaluation } from "../quality/rendered-creative-evaluator";
+import {
+  registerRenderedQualityEvidence,
+  type RenderedQualityObservationRegistration,
+} from "../contracts/rendered-quality-observation-scope";
 
 const WIDTH = 1080;
 const HEIGHT = 1350;
@@ -634,13 +640,33 @@ export class PremiumV2Renderer implements TemplateRendererProvider {
 
     try {
       const { buffer, metrics } = await renderV2FromBrief(brief);
+      let renderEvaluation: RenderedCreativeEvaluation;
+      let qualityObservationRegistration: RenderedQualityObservationRegistration | undefined;
+      try {
+        renderEvaluation = await renderedCreativeEvaluator.evaluateTrustedRenderedCreative({
+          renderedBytes: buffer,
+          layoutMetrics: metrics,
+        });
+        if (renderEvaluation.accepted) {
+          qualityObservationRegistration = registerRenderedQualityEvidence(
+            req.qualityObservationScope,
+            renderEvaluation.evidence
+          );
+        }
+      } catch {
+        renderEvaluation = {
+          accepted: false,
+          evidence: null,
+          reasonCodes: ["RENDER_EVALUATOR_INTERNAL_ERROR"],
+        };
+      }
       return {
         success: true,
         imageBase64: buffer.toString("base64"),
         extension: "png",
         providerJobId: `premium-v2-${Date.now()}`,
         costUsd: 0,
-        metadata: { v2LayoutMetrics: metrics },
+        metadata: { v2LayoutMetrics: metrics, renderEvaluation, qualityObservationRegistration },
       };
     } catch (err: any) {
       return {

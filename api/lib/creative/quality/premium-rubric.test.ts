@@ -25,6 +25,10 @@ import {
 import { evaluateContentCompliance, type ProposedCreativeContent } from "../compliance/content-compliance";
 import { compileApprovedCreativeContract } from "../contracts/creative-contract";
 import { compileDirectionPlans } from "./creative-direction-planner";
+import {
+  createRenderLayoutMetrics,
+  createTrustedRenderedCreativeEvidence,
+} from "./rendered-creative-test-fixtures";
 
 const workflowOperationId = "op-30-22-253";
 
@@ -74,41 +78,25 @@ const baseCandidate: ProposedCreativeContent = {
   requiredContactDetails: ["support@zutohub.example"],
 };
 
-function makeRenderedEvidence(
-  layoutScore: number = 85,
-  legibilityScore: number = 88
-): RenderedCreativeEvidence {
-  return {
-    source: "render_evaluator",
-    renderedAssetFingerprint: "render-fp-test-85-88",
-    evaluatorVersion: "test-v1",
-    layoutAndVisualHierarchyScore: layoutScore,
-    legibilityAndAccessibilityScore: legibilityScore,
-    reasonCodes: ["LAYOUT_OPTIMIZED", "LEGIBILITY_VERIFIED"],
-  };
-}
-
 function makeDirectionPlan(contract = makeContract()) {
   return compileDirectionPlans({ workflowOperationId, contract });
 }
 
 function evaluate(
   candidate: ProposedCreativeContent,
-  contract = makeContract(),
-  layoutScore: number = 85,
-  legibilityScore: number = 88
+  contract = makeContract()
 ) {
   const compliance = evaluateContentCompliance({ contract, proposed: candidate });
   const plans = makeDirectionPlan(contract);
   const directionPlan = plans.directions.find((d) => d.directionKey === "benefit_led")!;
-  return evaluatePremiumCandidate({
+  return createTrustedRenderedCreativeEvidence().then((renderedEvidence) => evaluatePremiumCandidate({
     candidateId: "cand-1",
     candidate,
     directionPlan,
     contract,
     complianceResult: compliance,
-    renderedEvidence: makeRenderedEvidence(layoutScore, legibilityScore),
-  });
+    renderedEvidence,
+  }));
 }
 
 describe("premium-rubric", () => {
@@ -118,8 +106,8 @@ describe("premium-rubric", () => {
     expect(total).toBe(1);
   });
 
-  it("overall calculation is deterministic and matches the weighted sum", () => {
-    const result = evaluate(baseCandidate);
+  it("overall calculation is deterministic and matches the weighted sum", async () => {
+    const result = await evaluate(baseCandidate);
     const expected = result.dimensionResults.reduce(
       (sum, d) => sum + (d.score ?? 0) * d.weight,
       0
@@ -127,14 +115,14 @@ describe("premium-rubric", () => {
     expect(result.overallScore).toBeCloseTo(Math.round(expected * 100) / 100, 10);
   });
 
-  it("overall rounding at threshold is deterministic", () => {
-    const result = evaluate(baseCandidate);
+  it("overall rounding at threshold is deterministic", async () => {
+    const result = await evaluate(baseCandidate);
     expect(result.overallScore).toBeGreaterThanOrEqual(80);
     expect(result.passed).toBe(true);
     expect(result.eligibilityStatus).toBe("eligible");
   });
 
-  it("overall below 80 is rejected", () => {
+  it("overall below 80 is rejected", async () => {
     // Construct a hard-compliant candidate whose structured pre-render score falls
     // below the 80 overall threshold. The audience mismatch lowers strategic
     // alignment, the long weak CTA lowers CTA prominence, and a thin layout plan
@@ -198,7 +186,12 @@ describe("premium-rubric", () => {
       directionPlan: tampered,
       contract,
       complianceResult: compliance,
-      renderedEvidence: makeRenderedEvidence(70, 72), // Low scores to fall below 80 overall
+      renderedEvidence: await createTrustedRenderedCreativeEvidence(
+        createRenderLayoutMetrics({
+          ctaBoundingBox: { x: 100, y: 150, w: 550, h: 300 },
+          usedContentHeight: 50,
+        })
+      ),
     });
 
     expect(result.hardCompliancePassed).toBe(true);
@@ -206,8 +199,8 @@ describe("premium-rubric", () => {
     expect(result.eligibilityStatus).not.toBe("eligible");
   });
 
-  it("overall above threshold passes when all dimensions meet their floors", () => {
-    const result = evaluate(baseCandidate);
+  it("overall above threshold passes when all dimensions meet their floors", async () => {
+    const result = await evaluate(baseCandidate);
     expect(result.hardCompliancePassed).toBe(true);
     expect(result.overallScore).toBeGreaterThanOrEqual(80);
     for (const dim of result.dimensionResults) {
@@ -216,12 +209,12 @@ describe("premium-rubric", () => {
     expect(result.eligibilityStatus).toBe("eligible");
   });
 
-  it("fails when CTA dimension is below 75 even if overall is high", () => {
+  it("fails when CTA dimension is below 75 even if overall is high", async () => {
     const candidate: ProposedCreativeContent = {
       ...baseCandidate,
       cta: "Learn More",
     };
-    const result = evaluate(candidate);
+    const result = await evaluate(candidate);
     expect(result.hardCompliancePassed).toBe(false);
     const ctaDim = result.dimensionResults.find(
       (d) => d.dimensionId === "cta_prominence_and_action_clarity"
@@ -231,7 +224,7 @@ describe("premium-rubric", () => {
     expect(result.eligibilityStatus).toBe("hard_compliance_failed");
   });
 
-  it("fails when strategic alignment is below 75 even if overall is high", () => {
+  it("fails when strategic alignment is below 75 even if overall is high", async () => {
     // "finance teams" is B2B-compatible with the contract audience so hard
     // compliance passes, but the audience phrase does not contain the approved
     // audience words, reducing strategic alignment below its 75 floor.
@@ -239,7 +232,7 @@ describe("premium-rubric", () => {
       ...baseCandidate,
       targetAudience: "finance teams",
     };
-    const result = evaluate(candidate);
+    const result = await evaluate(candidate);
     expect(result.hardCompliancePassed).toBe(true);
     const strategic = result.dimensionResults.find(
       (d) => d.dimensionId === "strategic_alignment"
@@ -249,7 +242,7 @@ describe("premium-rubric", () => {
     expect(result.eligibilityStatus).toBe("below_dimension_minimum");
   });
 
-  it("dimension floors cannot be compensated by other dimensions", () => {
+  it("dimension floors cannot be compensated by other dimensions", async () => {
     // Make layout dimension fail its 70 floor by using rendered evidence with
     // a low layout score while keeping all other dimensions high.
     const contract = makeContract();
@@ -267,7 +260,12 @@ describe("premium-rubric", () => {
       directionPlan: tampered,
       contract,
       complianceResult: compliance,
-      renderedEvidence: makeRenderedEvidence(65, 88), // Low layout score, high legibility
+      renderedEvidence: await createTrustedRenderedCreativeEvidence(
+        createRenderLayoutMetrics({
+          ctaBoundingBox: { x: 100, y: 150, w: 550, h: 300 },
+          usedContentHeight: 50,
+        })
+      ),
     });
     const layout = result.dimensionResults.find(
       (d) => d.dimensionId === "layout_and_visual_hierarchy"
@@ -278,8 +276,8 @@ describe("premium-rubric", () => {
     expect(result.eligibilityStatus).toBe("below_dimension_minimum");
   });
 
-  it("every scored dimension has structured reason codes", () => {
-    const result = evaluate(baseCandidate);
+  it("every scored dimension has structured reason codes", async () => {
+    const result = await evaluate(baseCandidate);
     for (const dim of result.dimensionResults) {
       expect(dim.reasonCodes.length).toBeGreaterThan(0);
       expect(dim.evaluationStatus).toBeTruthy();
@@ -359,8 +357,8 @@ describe("premium-rubric", () => {
     expect(result.dimensionResults.some((d) => d.evaluationStatus === "render_required")).toBe(true);
   });
 
-  it("rubric version is stable and reported", () => {
-    const result = evaluate(baseCandidate);
+  it("rubric version is stable and reported", async () => {
+    const result = await evaluate(baseCandidate);
     expect(result.rubricVersion).toBe(RUBRIC_VERSION);
   });
 

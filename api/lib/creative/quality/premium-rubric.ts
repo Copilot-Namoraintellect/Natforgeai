@@ -18,16 +18,22 @@ import type { ApprovedCreativeContract } from "../contracts/creative-contract";
 import type { ProposedCreativeContent } from "../compliance/content-compliance";
 import type { ContentComplianceResult } from "../compliance/content-compliance";
 import type { CreativeDirectionPlan } from "./creative-direction-planner";
+import { isTrustedRenderedCreativeEvidence } from "./rendered-creative-evaluator";
 
 export const RUBRIC_VERSION = "slice4.premium-rubric.v1";
 
 export interface RenderedCreativeEvidence {
   source: "render_evaluator";
   renderedAssetFingerprint: string;
+  /** SHA-256 calculated from the decoded render buffer by the internal evaluator. */
+  renderedBytesSha256: string;
+  verification: "trusted_render_bytes_v1";
   evaluatorVersion: string;
+  metricsBindingFingerprint: string;
   layoutAndVisualHierarchyScore: number;
   legibilityAndAccessibilityScore: number;
   reasonCodes: string[];
+  evidenceRefs: string[];
 }
 
 export interface RubricDimensionResult {
@@ -154,7 +160,7 @@ function isTrustedRenderedEvidence(
   evidence: RenderedCreativeEvidence | null | undefined
 ): evidence is RenderedCreativeEvidence {
   if (!evidence) return false;
-  return evidence.source === "render_evaluator";
+  return isTrustedRenderedCreativeEvidence(evidence);
 }
 
 function isCandidateSchemaValid(candidate: ProposedCreativeContent): boolean {

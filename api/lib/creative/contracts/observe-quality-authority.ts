@@ -47,6 +47,11 @@ import {
   type CandidateSpecification,
 } from "../quality/candidate-selection";
 import { RUBRIC_VERSION } from "../quality/premium-rubric";
+import {
+  InMemoryRenderedEvidenceRegistry,
+  type RenderedEvidenceIdentity,
+} from "../quality/rendered-evidence-registry";
+import { isTrustedRenderedCreativeEvidence } from "../quality/rendered-creative-evaluator";
 
 export interface QualityAuthorityObservationInput {
   campaignId: number;
@@ -84,6 +89,19 @@ export interface QualityAuthorityObservationInput {
   providerRunId?: string | null;
   internalRunId?: number | null;
   registry?: InMemoryWorkflowOperationRegistry | null;
+}
+
+export interface RenderedCandidateEvidenceEntry {
+  candidateId: string;
+  renderedAssetFingerprint: string;
+  /** Diagnostic-only input; it is never selected directly. */
+  evidence?: unknown;
+}
+
+export interface RenderedQualityAuthorityObservationInput
+  extends QualityAuthorityObservationInput {
+  renderedEvidenceRegistry: InMemoryRenderedEvidenceRegistry;
+  renderedCandidateEvidenceEntries?: readonly RenderedCandidateEvidenceEntry[];
 }
 
 /**
@@ -245,7 +263,9 @@ function runContentCompliance(
 function runSlice4QualityObservation(
   input: QualityAuthorityObservationInput,
   contract: CreativeContract | null,
-  observation: ObservationDiagnostics
+  observation: ObservationDiagnostics,
+  renderedEvidenceRegistry?: InMemoryRenderedEvidenceRegistry | null,
+  renderedCandidateEvidenceEntries?: readonly RenderedCandidateEvidenceEntry[]
 ): ObservationDiagnostics {
   // Slice 4 only runs for approved contracts with a known workflow identity.
   if (!contract || contract.kind !== "approved") {
@@ -288,10 +308,41 @@ function runSlice4QualityObservation(
       }
     }
 
+    const evidenceByCandidateId: Record<string, import("../quality/premium-rubric").RenderedCreativeEvidence> = {};
+    let renderEvidenceObservationStatus: ObservationDiagnostics["renderEvidenceObservationStatus"] = "not_requested";
+    if (renderedEvidenceRegistry) {
+      const assetFingerprintByCandidateId = new Map(
+        (renderedCandidateEvidenceEntries ?? []).map((entry) => [
+          entry.candidateId,
+          entry.renderedAssetFingerprint,
+        ])
+      );
+      for (const candidate of candidateEntries) {
+        const renderedAssetFingerprint = assetFingerprintByCandidateId.get(candidate.candidateId);
+        if (!renderedAssetFingerprint) continue;
+        const identity: RenderedEvidenceIdentity = {
+          workflowOperationId: observation.workflowOperationId,
+          contractFingerprint: contract.contractFingerprint,
+          candidateId: candidate.candidateId,
+          renderedAssetFingerprint,
+        };
+        const evidence = renderedEvidenceRegistry.find(identity);
+        if (evidence) evidenceByCandidateId[candidate.candidateId] = evidence;
+      }
+      renderEvidenceObservationStatus = Object.keys(evidenceByCandidateId).length > 0
+        ? "evaluated"
+        : (renderedCandidateEvidenceEntries ?? []).some(
+            (entry) => entry.evidence !== undefined && !isTrustedRenderedCreativeEvidence(entry.evidence)
+          )
+          ? "untrusted_evidence"
+          : "missing_evidence";
+    }
+
     const selection = selectPremiumCandidate({
       workflowOperationId: observation.workflowOperationId,
       contract,
       candidateEntries,
+      renderedEvidenceByCandidateId: evidenceByCandidateId,
     });
 
     // Pick the evaluation that backs the diagnostic fields. Prefer the final
@@ -306,6 +357,7 @@ function runSlice4QualityObservation(
 
     return {
       ...observation,
+      contractFingerprint: contract.contractFingerprint,
       directionPlanFingerprint: selection.directionPlanFingerprint,
       plannedDirectionCount: selection.plannedDirectionCount,
       availableDirectionCount: selection.availableDirectionCount,
@@ -329,6 +381,10 @@ function runSlice4QualityObservation(
       preRenderReadinessScore: primaryEvaluation?.preRenderReadinessScore ?? null,
       premiumAcceptanceStatus: primaryEvaluation?.premiumAcceptanceStatus ?? null,
       finalPremiumScore: primaryEvaluation?.finalPremiumScore ?? null,
+      renderEvidenceObservationStatus,
+      trustedRenderedEvidenceCount: renderedEvidenceRegistry
+        ? Object.keys(evidenceByCandidateId).length
+        : null,
     };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -616,5 +672,75 @@ export function observeIfEnabled(
       error: reason,
     });
     return null;
+  }
+}
+
+/**
+ * Observes final rendered quality from a caller-owned in-memory registry.
+ * This never creates providers, writes state, or finalizes workflow operations.
+ */
+export function observeRenderedQualityIfEnabled(
+  label: string,
+  input: RenderedQualityAuthorityObservationInput
+): ObservationDiagnostics | null {
+  const result = observeIfEnabled(label, input);
+  if (!result) return null;
+
+  // Re-run only the quality selection with registry-bound evidence. The shared
+  // observer already established the approved contract and workflow identity.
+  const expectedFingerprint =
+    input.expectedApprovedStrategyFingerprint ??
+    input.lineage?.approvedStrategyFingerprint ??
+    null;
+  const authority = isApprovedLineageAuthoritative(
+    input.lineage,
+    input.campaignId,
+    input.userId,
+    expectedFingerprint
+  );
+  if (!authority.authoritative || !input.lineage) {
+    return { ...result, renderEvidenceObservationStatus: "identity_mismatch", trustedRenderedEvidenceCount: 0 };
+  }
+
+  try {
+    const contract = compileApprovedCreativeContract({
+      campaignId: input.lineage.campaignId,
+      userId: input.lineage.userId,
+      businessId: input.businessId,
+      businessName: input.businessName ?? null,
+      strategyRunId: input.lineage.strategyRunId,
+      approvalRequestId: input.lineage.approvalRequestId,
+      approvedAt: input.lineage.approvedAt,
+      approvedStrategyFingerprint: input.lineage.approvedStrategyFingerprint,
+      funnelStage: input.funnelStage,
+      stageCtas: input.stageCtas,
+      campaignWideCta: input.campaignWideCta,
+      campaignInputCta: input.campaignInputCta,
+      offerActionCta: input.offerActionCta,
+      aiDelegated: input.aiDelegated,
+      targetAudience: input.targetAudience,
+      offer: input.offer,
+      offerRequired: input.offerRequired,
+      businessCapabilities: input.businessCapabilities,
+      requiredBenefitCount: input.requiredBenefitCount,
+      brandConstraints: input.brandConstraints,
+      requiredContactDetails: input.requiredContactDetails,
+      prohibitedClaims: input.prohibitedClaims,
+    });
+    return runSlice4QualityObservation(
+      input,
+      contract,
+      result,
+      input.renderedEvidenceRegistry,
+      input.renderedCandidateEvidenceEntries
+    );
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return {
+      ...result,
+      renderEvidenceObservationStatus: "identity_mismatch",
+      trustedRenderedEvidenceCount: 0,
+      diagnostics: [...result.diagnostics, `Rendered quality observation failed: ${reason}`],
+    };
   }
 }

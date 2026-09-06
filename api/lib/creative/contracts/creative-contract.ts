@@ -309,6 +309,9 @@ export interface ObservationDiagnostics {
   premiumAcceptanceStatus: string | null;
   finalPremiumScore: number | null;
   recommendedForRenderCandidateId: string | null;
+  // Slice 5 rendered-evidence observation fields.
+  renderEvidenceObservationStatus: "not_requested" | "missing_registry" | "missing_evidence" | "untrusted_evidence" | "identity_mismatch" | "conflicting_evidence" | "evaluated" | null;
+  trustedRenderedEvidenceCount: number | null;
 }
 
 function safeText(value: unknown): string {
@@ -788,6 +791,8 @@ export function observeCreativeContract(input: {
       premiumAcceptanceStatus: null,
       finalPremiumScore: null,
       recommendedForRenderCandidateId: null,
+      renderEvidenceObservationStatus: "not_requested",
+      trustedRenderedEvidenceCount: null,
     };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -859,6 +864,8 @@ export function observeCreativeContract(input: {
       premiumAcceptanceStatus: null,
       finalPremiumScore: null,
       recommendedForRenderCandidateId: null,
+      renderEvidenceObservationStatus: "not_requested",
+      trustedRenderedEvidenceCount: null,
     };
   }
 }

@@ -18,7 +18,60 @@ import {
   getBestTemplateForCampaign,
 } from "./lib/creative/template-catalogue";
 import { isOpenAiLeafletConfigured } from "./lib/creative/registry";
+import { getQualityAuthorityMode } from "./lib/creative/contracts/creative-contract";
+import type { RenderedQualityObservationAuthority } from "./lib/creative/contracts/rendered-quality-observation-scope";
+import {
+  InMemoryWorkflowOperationRegistry,
+} from "./lib/workflow/workflow-operation";
 import { TRPCError } from "@trpc/server";
+
+/**
+ * Router-owned Slice 5E workflow authority for a user-initiated premium leaflet
+ * render. Constructed only when QUALITY_AUTHORITY_MODE=observe; any failure
+ * falls back to null so the legacy request behavior is preserved. The service,
+ * renderer, scope and observer never create registry or operation authority.
+ */
+async function buildImageRenderWorkflowObservation(
+  userId: number,
+  contentPostId: number
+): Promise<RenderedQualityObservationAuthority | null> {
+  if (getQualityAuthorityMode().effectiveMode !== "observe") return null;
+  try {
+    const db = getDb();
+    const [post] = await db
+      .select({ campaignId: contentPosts.campaignId })
+      .from(contentPosts)
+      .where(and(eq(contentPosts.id, contentPostId), eq(contentPosts.userId, userId)))
+      .limit(1);
+    // Unknown post: the service will fail the request authoritatively; no
+    // orphan operation is created here.
+    if (!post) return null;
+    // A one-off post without a campaign has no approved campaign lineage, so
+    // Slice 5 observation has no authoritative campaign identity to bind.
+    // Fail closed: no registry, no operation — and never substitute an
+    // invented sentinel (0, post id, user id) for campaign identity.
+    if (post.campaignId == null) return null;
+    const identity = {
+      operationType: "creative_generation" as const,
+      operationSource: "manual" as const,
+      operationReferenceId: String(contentPostId),
+      campaignId: post.campaignId,
+      userId,
+    };
+    const registry = new InMemoryWorkflowOperationRegistry();
+    const registration = registry.registerOperation(identity);
+    registry.transitionOperation(registration.operation.workflowOperationId, "running");
+    return {
+      registry,
+      workflowOperationId: registration.operation.workflowOperationId,
+    };
+  } catch (err: any) {
+    console.error(
+      `[image.generatePremiumLeaflet] workflow observation setup failed; continuing without observation | userId=${userId} | contentPostId=${contentPostId} | error="${err?.message ?? String(err)}"`
+    );
+    return null;
+  }
+}
 
 const ALL_TEMPLATE_IDS = [
   "service_business_promo",
@@ -298,6 +351,10 @@ export const imageRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const workflowObservation = await buildImageRenderWorkflowObservation(
+        ctx.user.id,
+        input.contentPostId
+      );
       const result = await generatePremiumLeaflet({
         userId: ctx.user.id,
         contentPostId: input.contentPostId,
@@ -311,6 +368,7 @@ export const imageRouter = createRouter({
         allowNoLogo: input.allowNoLogo,
         regenerate: input.regenerate,
         forceRegenerate: input.forceRegenerate,
+        workflowObservation,
       });
 
       if (result.status === "failed") {

@@ -3,6 +3,7 @@ import {
   observeIfEnabled,
   extractApprovedStrategyLineage,
   resolveExpectedApprovedStrategyFingerprint,
+  observeRenderedQualityIfEnabled,
   type QualityAuthorityObservationInput,
 } from "./observe-quality-authority";
 import { compileApprovedCreativeContract } from "./creative-contract";
@@ -11,6 +12,8 @@ import { InMemoryWorkflowOperationRegistry } from "../../workflow/workflow-opera
 import * as creativeContract from "./creative-contract";
 import * as contentCompliance from "../compliance/content-compliance";
 import * as logger from "../../logger";
+import { InMemoryRenderedEvidenceRegistry } from "../quality/rendered-evidence-registry";
+import { createTrustedRenderedCreativeEvidence } from "../quality/rendered-creative-test-fixtures";
 
 const baseInput: QualityAuthorityObservationInput = {
   campaignId: 30,
@@ -590,6 +593,90 @@ describe("observe-quality-authority", () => {
       for (const attempt of attempts) {
         expect(forbiddenTypes).not.toContain(attempt.attemptType);
       }
+    });
+  });
+
+  describe("Slice 5 rendered quality observation", () => {
+    const renderedInput: QualityAuthorityObservationInput = {
+      ...baseInput,
+      businessName: "Zuto Hub",
+      businessCapabilities: [
+        "B2B payment orchestration",
+        "prefunded merchant-account administration",
+        "balance verification",
+        "transaction reservations",
+        "controlled payment-instruction services",
+      ],
+      targetAudience: "B2B finance teams and merchant operators",
+      proposedContent: {
+        headline: "Streamline B2B Payment Orchestration",
+        primaryText: "Zuto Hub provides prefunded merchant-account administration, balance verification, transaction reservations and controlled payment-instruction services.",
+        benefits: ["Verify available prefunded balances before payment instructions are issued", "Reserve transaction amounts with traceable administration", "Issue controlled payment instructions from a central account"],
+        cta: "Request a Consultation",
+        funnelStage: "consideration",
+        targetAudience: "B2B finance teams and merchant operators",
+        offer: "Book a guided walkthrough",
+        businessName: "Zuto Hub",
+        protectedFields: { businessName: "Zuto Hub" },
+      },
+      registry: new InMemoryWorkflowOperationRegistry(),
+    };
+
+    it("fails closed when rendered evidence is missing or copied", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const evidenceRegistry = new InMemoryRenderedEvidenceRegistry();
+      const missing = observeRenderedQualityIfEnabled("slice5", { ...renderedInput, renderedEvidenceRegistry: evidenceRegistry });
+      expect(missing!.renderEvidenceObservationStatus).toBe("missing_evidence");
+      expect(missing!.selectionStatus).toBe("render_evaluation_required");
+
+      const untrusted = observeRenderedQualityIfEnabled("slice5", {
+        ...renderedInput,
+        renderedEvidenceRegistry: evidenceRegistry,
+        renderedCandidateEvidenceEntries: [{ candidateId: "unknown", renderedAssetFingerprint: "unknown", evidence: {} }],
+      });
+      expect(untrusted!.renderEvidenceObservationStatus).toBe("untrusted_evidence");
+      expect(untrusted!.selectedCandidateId).toBeNull();
+    });
+
+    it("selects only registry-bound trusted rendered evidence and does not finalize", async () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const workflowRegistry = new InMemoryWorkflowOperationRegistry();
+      const evidenceRegistry = new InMemoryRenderedEvidenceRegistry();
+      const initial = observeIfEnabled("slice5", { ...renderedInput, registry: workflowRegistry });
+      const candidateId = initial!.recommendedForRenderCandidateId!;
+      const evidence = await createTrustedRenderedCreativeEvidence();
+      evidenceRegistry.register({
+        workflowOperationId: initial!.workflowOperationId!,
+        contractFingerprint: initial!.contractFingerprint,
+        candidateId,
+        renderedAssetFingerprint: evidence.renderedAssetFingerprint,
+      }, evidence);
+
+      const result = observeRenderedQualityIfEnabled("slice5", {
+        ...renderedInput,
+        registry: workflowRegistry,
+        renderedEvidenceRegistry: evidenceRegistry,
+        renderedCandidateEvidenceEntries: [{ candidateId, renderedAssetFingerprint: evidence.renderedAssetFingerprint }],
+      });
+      expect(result!.renderEvidenceObservationStatus).toBe("evaluated");
+      expect(result!.trustedRenderedEvidenceCount).toBe(1);
+      expect(result!.selectedCandidateId).toBe(candidateId);
+      expect(result!.operationStatus).toBe("running");
+    });
+
+    it("keeps Campaign 30 CTA vetoed and does not finalize", () => {
+      process.env.QUALITY_AUTHORITY_MODE = "observe";
+      const workflowRegistry = new InMemoryWorkflowOperationRegistry();
+      const result = observeRenderedQualityIfEnabled("slice5", {
+        ...renderedInput,
+        legacySelectedCta: "Learn More",
+        proposedContent: { ...renderedInput.proposedContent!, cta: "Learn More" },
+        registry: workflowRegistry,
+        renderedEvidenceRegistry: new InMemoryRenderedEvidenceRegistry(),
+      });
+      expect(result!.hardCompliancePassed).toBe(false);
+      expect(result!.selectedCandidateId).toBeNull();
+      expect(result!.operationStatus).toBe("running");
     });
   });
 });

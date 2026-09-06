@@ -68,6 +68,14 @@ import {
   getPremiumTemplateStatus,
   type PremiumTemplateId,
 } from "./template-catalogue";
+import { normalizeFunnelStage } from "./cta-utils";
+import {
+  createRenderedQualityObservationScope,
+  observeRenderedQualityScope,
+  type RenderedQualityObservationAuthority,
+} from "./contracts/rendered-quality-observation-scope";
+import { InMemoryRenderedEvidenceRegistry } from "./quality/rendered-evidence-registry";
+import { extractApprovedStrategyLineage, resolveExpectedApprovedStrategyFingerprint } from "./contracts/observe-quality-authority";
 
 function newGenerationRunId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -115,6 +123,68 @@ function getAuthoritativeBusinessName(business: any): string {
   if (fromRecord) return fromRecord;
   const fromDisplay = typeof business?.displayName === "string" ? business.displayName.trim() : "";
   return fromDisplay || "Your Business";
+}
+
+function buildPremiumV2QualityObservationInput(input: {
+  userId: number;
+  post: any;
+  campaign: any;
+  business: any;
+  headline: string;
+  subheadline: string;
+  offer: string;
+  cta: string;
+  services: string[];
+  workflowObservation?: RenderedQualityObservationAuthority | null;
+}) {
+  const { userId, post, campaign, business, headline, subheadline, offer, cta, services, workflowObservation } = input;
+  const workflowContext = (campaign.workflowContext || {}) as Record<string, unknown>;
+  const businessCapabilities = [
+    ...(Array.isArray(business.websiteEvidence?.productsServices) ? business.websiteEvidence.productsServices : []),
+    business.productOrService,
+    campaign.productOrService,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  return {
+    campaignId: Number(campaign.id ?? post.campaignId ?? 0),
+    userId,
+    businessId: Number(business.id ?? campaign.businessId ?? 0),
+    businessName: getAuthoritativeBusinessName(business),
+    lineage: extractApprovedStrategyLineage(workflowContext, Number(campaign.id ?? post.campaignId ?? 0), userId),
+    expectedApprovedStrategyFingerprint: resolveExpectedApprovedStrategyFingerprint(workflowContext),
+    funnelStage: normalizeFunnelStage(campaign.primaryOutcome || campaign.goal),
+    // The campaign CTA is authority input, not a renderer preference: a
+    // different final CTA is rejected by the existing hard compliance gate.
+    campaignWideCta: campaign.preferredCta || null,
+    campaignInputCta: campaign.preferredCta || null,
+    targetAudience: campaign.targetAudience || campaign.targetBuyer || business.targetCustomer || "",
+    offer: offer || campaign.offerDetails || null,
+    offerRequired: !!campaign.offerDetails,
+    businessCapabilities,
+    legacySelectedCta: cta,
+    proposedContent: {
+      headline,
+      primaryText: [subheadline, offer].filter(Boolean).join(" ") || headline,
+      benefits: services,
+      cta,
+      funnelStage: normalizeFunnelStage(campaign.primaryOutcome || campaign.goal),
+      targetAudience: campaign.targetAudience || campaign.targetBuyer || business.targetCustomer || "",
+      offer: offer || campaign.offerDetails || null,
+      businessName: getAuthoritativeBusinessName(business),
+      protectedFields: { businessName: getAuthoritativeBusinessName(business) },
+    },
+    operationType: "creative_generation" as const,
+    operationSource: "automatic" as const,
+    operationReferenceId: post.id,
+    attemptType: "render" as const,
+    // Slice 5B authority is supplied by the existing request orchestration
+    // owner, never manufactured. When absent, the scope fails closed.
+    registry: workflowObservation?.registry ?? null,
+    workflowOperationId: workflowObservation?.workflowOperationId ?? null,
+    renderedEvidenceRegistry: workflowObservation
+      ? new InMemoryRenderedEvidenceRegistry()
+      : null,
+  };
 }
 
 
@@ -601,6 +671,7 @@ export async function generatePremiumLeaflet({
   allowNoLogo = false,
   regenerate = false,
   forceRegenerate = false,
+  workflowObservation = null,
 }: {
   userId: number;
   contentPostId: number;
@@ -614,6 +685,12 @@ export async function generatePremiumLeaflet({
   allowNoLogo?: boolean;
   regenerate?: boolean;
   forceRegenerate?: boolean;
+  /**
+   * Internal-only Slice 5B authority, owned by the existing request
+   * orchestration owner. Never supplied by external/API callers. When absent,
+   * rendered-quality observation stays inactive and rendering is unchanged.
+   */
+  workflowObservation?: RenderedQualityObservationAuthority | null;
 }): Promise<ImageResult> {
   const { post, campaign, business } = await loadPostCampaignBusiness({ userId, contentPostId });
   const db = getDb();
@@ -1239,6 +1316,29 @@ export async function generatePremiumLeaflet({
       ...(isV2Provider && v2Brief ? { v2Brief } : {}),
     };
 
+    // The hybrid pipeline produces real bytes but no real V2 layout metrics, so
+    // trusted rendered evidence is impossible; the scope is not created for it
+    // and the pipeline reports render_evaluation_not_supported below.
+    const isHybridV2 = isV2Provider && env.enableHybridLeafletPipeline;
+    const qualityObservationScope = isV2Provider && !isHybridV2
+      ? createRenderedQualityObservationScope(
+          buildPremiumV2QualityObservationInput({
+            userId,
+            post,
+            campaign,
+            business,
+            headline,
+            subheadline,
+            offer,
+            cta,
+            services,
+            workflowObservation,
+          })
+        )
+      : null;
+    if (qualityObservationScope) renderReq.qualityObservationScope = qualityObservationScope;
+    let renderEvaluationStatus: string | undefined;
+
     let renderResult: TemplateRendererResult;
     let buffer: Buffer;
     let aiQualityResult: LeafletQualityResult | undefined;
@@ -1339,6 +1439,11 @@ export async function generatePremiumLeaflet({
           refinementInstruction,
           allowNoLogo,
         });
+        // The hybrid pipeline never invokes the V2 renderer/evaluator. The
+        // placeholder metrics below are legacy metadata only and must never
+        // reach the rendered-quality evaluator; observation is explicitly
+        // reported as unsupported instead of silently bypassed.
+        renderEvaluationStatus = "render_evaluation_not_supported";
         templateRenderer = { name: "premium-v2-hybrid", configured: true, render: async () => ({ success: false, error: "" }) };
         buffer = hybridResult.buffer;
         renderResult = {
@@ -1441,6 +1546,22 @@ export async function generatePremiumLeaflet({
         }
       }
       }
+    }
+
+    if (isV2Provider && qualityObservationScope) {
+      // Observation boundary: a failure here must never change the legacy
+      // render outcome, trigger a rerender, or repeat billing/persistence.
+      try {
+        observeRenderedQualityScope(qualityObservationScope);
+        renderEvaluationStatus = "observed";
+      } catch (observationErr: any) {
+        console.error(
+          `[PremiumLeaflet] Rendered-quality observation failed; legacy result preserved | userId=${userId} | contentPostId=${contentPostId} | error="${observationErr?.message ?? String(observationErr)}"`
+        );
+        renderEvaluationStatus = "observation_failed_legacy_preserved";
+      }
+    } else if (isV2Provider && !renderEvaluationStatus) {
+      renderEvaluationStatus = "not_requested";
     }
 
     const storagePrefix = {
@@ -1577,7 +1698,10 @@ export async function generatePremiumLeaflet({
         isDraft: false,
         templateId: selectedTemplate,
         versions: imageVersions,
-        renderRequest: renderReq,
+        renderRequest: (() => {
+          const { qualityObservationScope: _qualityObservationScope, ...persistedRenderRequest } = renderReq;
+          return persistedRenderRequest;
+        })(),
         generationRunId,
         iterationNumber,
         assetType: "leaflet",
@@ -1688,6 +1812,7 @@ export async function generatePremiumLeaflet({
       isDraft: false,
       usingFallback: !!fallbackMeta,
       fallbackMessage,
+      renderEvaluationStatus,
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
