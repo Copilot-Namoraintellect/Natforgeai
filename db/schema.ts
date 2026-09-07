@@ -591,6 +591,30 @@ export const creativeGenerationClaims = mysqlTable(
 export type CreativeGenerationClaim = typeof creativeGenerationClaims.$inferSelect;
 export type InsertCreativeGenerationClaim = typeof creativeGenerationClaims.$inferInsert;
 
+export const imageRenderClaims = mysqlTable(
+  "image_render_claims",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    contentPostId: bigint("contentPostId", { mode: "number", unsigned: true }).notNull(),
+    activeClaimKey: varchar("activeClaimKey", { length: 191 }),
+    ownerToken: varchar("ownerToken", { length: 64 }).notNull(),
+    status: mysqlEnum("status", ["running", "completed", "failed"])
+      .default("running")
+      .notNull(),
+    leaseExpiresAt: timestamp("leaseExpiresAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    activeClaimKeyUnique: uniqueIndex("irc_active_claim_key_idx").on(table.activeClaimKey),
+    userPostIdx: index("irc_user_post_idx").on(table.userId, table.contentPostId),
+  })
+);
+
+export type ImageRenderClaim = typeof imageRenderClaims.$inferSelect;
+export type InsertImageRenderClaim = typeof imageRenderClaims.$inferInsert;
+
 // ─── Approval Requests ───
 export const approvalRequests = mysqlTable("approval_requests", {
   id: serial("id").primaryKey(),
