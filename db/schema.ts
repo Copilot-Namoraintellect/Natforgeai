@@ -603,11 +603,19 @@ export const imageRenderClaims = mysqlTable(
       .default("running")
       .notNull(),
     leaseExpiresAt: timestamp("leaseExpiresAt").notNull(),
+    requestAttemptKey: varchar("requestAttemptKey", { length: 64 }),
+    intentFingerprint: varchar("intentFingerprint", { length: 64 }),
+    deductionKey: varchar("deductionKey", { length: 191 }),
+    deductionRecorded: boolean("deductionRecorded").default(false).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
   },
   (table) => ({
     activeClaimKeyUnique: uniqueIndex("irc_active_claim_key_idx").on(table.activeClaimKey),
+    requestAttemptKeyUnique: uniqueIndex("irc_request_attempt_key_idx").on(
+      table.requestAttemptKey
+    ),
+    deductionKeyIdx: index("irc_deduction_key_idx").on(table.deductionKey),
     userPostIdx: index("irc_user_post_idx").on(table.userId, table.contentPostId),
   })
 );
