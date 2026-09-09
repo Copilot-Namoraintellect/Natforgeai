@@ -682,16 +682,20 @@ describe("deriveImageRenderAttemptIdentity", () => {
       refinementInstruction: "super secret refinement text 123",
       creativeGuidance: "confidential guidance text 456",
     });
-    for (const key of [
+    const keys = [
       identity.requestAttemptKey,
       identity.intentFingerprint,
       identity.deductionKey,
-    ]) {
+      buildImageRenderRefundKey(identity.requestAttemptKey),
+    ];
+    for (const key of keys) {
       expect(key).not.toContain("super secret refinement text 123");
       expect(key).not.toContain("confidential guidance text 456");
       expect(key.toLowerCase()).not.toContain("secret");
       expect(key.toLowerCase()).not.toContain("confidential");
     }
+    // Both text fields are present only as inner SHA-256 digests.
+    expect(identity.intentFingerprint).toMatch(HEX64);
   });
 
   it("is independent of input field order and trims optional text", () => {
@@ -758,6 +762,117 @@ describe("deriveImageRenderAttemptIdentity", () => {
   it("rejects non-positive userId or contentPostId", () => {
     expect(() => deriveAttempt(0)).toThrow(/Invalid userId/);
     expect(() => deriveAttempt(7, 0)).toThrow(/Invalid contentPostId/);
+  });
+});
+
+// ─── B2A correction: complete the dormant intent identity ───
+//
+// brandColors, creativeType and allowNoLogo materially change the paid render
+// and therefore belong in intentFingerprint. requestAttemptKey must stay
+// invariant under any intent change.
+
+describe("deriveImageRenderAttemptIdentity material intent completion (B2A)", () => {
+  it("changes intentFingerprint for each of the three corrected fields", () => {
+    const base = deriveAttempt();
+    const variants: IntentOverrides[] = [
+      { brandColors: ["#0047AB"] },
+      { creativeType: "poster" },
+      { allowNoLogo: true },
+    ];
+    for (const variant of variants) {
+      const derived = deriveAttempt(7, 13, "attempt-token-1", variant);
+      expect(derived.intentFingerprint).not.toBe(base.intentFingerprint);
+      expect(derived.requestAttemptKey).toBe(base.requestAttemptKey);
+      expect(derived.deductionKey).toBe(base.deductionKey);
+    }
+  });
+
+  it("treats brand colour order as material (positional renderer semantics)", () => {
+    const forward = deriveAttempt(7, 13, "tok", {
+      brandColors: ["#FF0000", "#00FF00", "#0000FF"],
+    });
+    const reversed = deriveAttempt(7, 13, "tok", {
+      brandColors: ["#0000FF", "#00FF00", "#FF0000"],
+    });
+    expect(forward.intentFingerprint).not.toBe(reversed.intentFingerprint);
+    // Order is preserved: the same ordered list normalizes to itself.
+    expect(forward.intentFingerprint).toBe(
+      deriveAttempt(7, 13, "tok", {
+        brandColors: ["#FF0000", "#00FF00", "#0000FF"],
+      }).intentFingerprint
+    );
+  });
+
+  it("normalizes brand colour case and whitespace deterministically", () => {
+    const messy = deriveAttempt(7, 13, "tok", {
+      brandColors: ["  #ff0000 ", "#Ff0000", "#ff0000"],
+    });
+    const clean = deriveAttempt(7, 13, "tok", {
+      brandColors: ["#FF0000", "#FF0000", "#FF0000"],
+    });
+    expect(messy.intentFingerprint).toBe(clean.intentFingerprint);
+  });
+
+  it("drops empty and non-string brand colour entries", () => {
+    const withEmpties = deriveAttempt(7, 13, "tok", {
+      brandColors: ["", "   ", "#FF0000", null as unknown as string],
+    });
+    const clean = deriveAttempt(7, 13, "tok", { brandColors: ["#FF0000"] });
+    expect(withEmpties.intentFingerprint).toBe(clean.intentFingerprint);
+  });
+
+  it("applies deterministic defaults equal to explicit default values", () => {
+    const omitted = deriveAttempt(7, 13, "tok");
+    const explicit = deriveAttempt(7, 13, "tok", {
+      brandColors: [],
+      creativeType: "leaflet",
+      allowNoLogo: false,
+    });
+    expect(omitted.intentFingerprint).toBe(explicit.intentFingerprint);
+    // creativeType whitespace-normalizes to the router default.
+    const padded = deriveAttempt(7, 13, "tok", { creativeType: "  leaflet  " });
+    expect(padded.intentFingerprint).toBe(omitted.intentFingerprint);
+  });
+
+  it("never places raw brand colour values in any derived key", () => {
+    const identity = deriveAttempt(7, 13, "tok-raw", {
+      brandColors: ["#0047AB", "#FFD700"],
+    });
+    for (const key of [
+      identity.requestAttemptKey,
+      identity.intentFingerprint,
+      identity.deductionKey,
+    ]) {
+      expect(key).not.toContain("#0047AB");
+      expect(key).not.toContain("#FFD700");
+      expect(key).not.toContain("0047AB");
+    }
+  });
+
+  it("keeps billing key derivation unchanged by the correction", () => {
+    const identity = deriveAttempt(7, 13, "tok", {
+      brandColors: ["#FF0000"],
+      creativeType: "poster",
+      allowNoLogo: true,
+    });
+    expect(identity.deductionKey).toBe(
+      buildImageRenderDeductionKey(identity.requestAttemptKey)
+    );
+    expect(identity.deductionKey).toBe(`img-deduction:${identity.requestAttemptKey}`);
+    expect(buildImageRenderRefundKey(identity.requestAttemptKey)).toBe(
+      `img-refund:${identity.requestAttemptKey}`
+    );
+    expect(identity.deductionKey.length).toBeLessThanOrEqual(191);
+  });
+
+  it("keeps requestAttemptKey invariant when corrected intent fields change", () => {
+    const base = deriveAttempt();
+    const changed = deriveAttempt(7, 13, "attempt-token-1", {
+      brandColors: ["#FF0000", "#00FF00"],
+      creativeType: "event_announcement",
+      allowNoLogo: true,
+    });
+    expect(changed.requestAttemptKey).toBe(base.requestAttemptKey);
   });
 });
 

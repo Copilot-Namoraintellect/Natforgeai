@@ -348,6 +348,14 @@ export const imageRouter = createRouter({
         allowNoLogo: z.boolean().optional(),
         regenerate: z.boolean().default(false),
         forceRegenerate: z.boolean().default(false),
+        // Dormant B2A client adoption: accepted and validated only. It is not
+        // forwarded to the creative service, persisted, logged, or returned;
+        // it will only be consumed when B2B claim activation is separately
+        // authorized.
+        clientAttemptId: z
+          .string()
+          .regex(/^[A-Za-z0-9_-]{1,64}$/)
+          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {

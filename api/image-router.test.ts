@@ -289,3 +289,116 @@ describe("imageRouter.generatePremiumLeaflet Slice 5E router ownership", () => {
     expect(buildCandidateId({ ...base, workflowOperationId: operationId })).toBe(candidateId);
   });
 });
+
+describe("imageRouter.generatePremiumLeaflet B2A clientAttemptId ingress (dormant)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.QUALITY_AUTHORITY_MODE = "off";
+    mockPostLookup([{ campaignId: 28 }]);
+  });
+
+  const UUID_TOKEN = "9b2fcee2-7d1a-4c5b-9e3f-2a8c6d4b1e70";
+  const OPAQUE_TOKEN = "a".repeat(64);
+
+  it("omitted token remains accepted with the unchanged legacy response", async () => {
+    const result = await imageRouter.createCaller(buildCtx()).generatePremiumLeaflet(CALLER_INPUT);
+    expect(result).toEqual({
+      success: true,
+      imageUrl: "https://example.com/leaflet.png",
+      provider: "premium-v2",
+      jobId: "premium-job-1",
+      creditsCharged: 20,
+      qualityTier: "premium",
+      qualityLabel: "Premium Marketing Leaflet",
+      isDraft: false,
+    });
+    expect(serviceCalls()).toHaveLength(1);
+  });
+
+  it("accepts a valid UUID token", async () => {
+    const result = await imageRouter
+      .createCaller(buildCtx())
+      .generatePremiumLeaflet({ ...CALLER_INPUT, clientAttemptId: UUID_TOKEN });
+    expect(result.success).toBe(true);
+    expect(serviceCalls()).toHaveLength(1);
+  });
+
+  it("accepts a bounded opaque token at the 64-character limit", async () => {
+    const result = await imageRouter
+      .createCaller(buildCtx())
+      .generatePremiumLeaflet({ ...CALLER_INPUT, clientAttemptId: OPAQUE_TOKEN });
+    expect(result.success).toBe(true);
+    expect(serviceCalls()).toHaveLength(1);
+  });
+
+  it("rejects an empty token", async () => {
+    await expect(
+      imageRouter.createCaller(buildCtx()).generatePremiumLeaflet({ ...CALLER_INPUT, clientAttemptId: "" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(serviceCalls()).toHaveLength(0);
+  });
+
+  it("rejects whitespace, slash, colon and other invalid characters", async () => {
+    for (const bad of ["has space", "has/slash", "has:colon", "has+punct", "has.dot"]) {
+      await expect(
+        imageRouter.createCaller(buildCtx()).generatePremiumLeaflet({ ...CALLER_INPUT, clientAttemptId: bad })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+    expect(serviceCalls()).toHaveLength(0);
+  });
+
+  it("rejects the exact ASCII-range hazard characters: [ \\ ] ^ backtick", async () => {
+    for (const bad of ["[", "\\", "]", "^", "`"]) {
+      await expect(
+        imageRouter.createCaller(buildCtx()).generatePremiumLeaflet({ ...CALLER_INPUT, clientAttemptId: bad })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+    expect(serviceCalls()).toHaveLength(0);
+  });
+
+  it("rejects a token longer than 64 characters", async () => {
+    await expect(
+      imageRouter
+        .createCaller(buildCtx())
+        .generatePremiumLeaflet({ ...CALLER_INPUT, clientAttemptId: "b".repeat(65) })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(serviceCalls()).toHaveLength(0);
+  });
+
+  it("never forwards the token to the service, mints no server token, and leaves the external response unchanged", async () => {
+    const result = await imageRouter
+      .createCaller(buildCtx())
+      .generatePremiumLeaflet({ ...CALLER_INPUT, clientAttemptId: UUID_TOKEN });
+
+    const args = serviceCalls();
+    expect(args).toHaveLength(1);
+    // The service receives exactly its previous argument shape: no token key,
+    // and the token value appears nowhere in the arguments.
+    expect("clientAttemptId" in args[0]).toBe(false);
+    expect(JSON.stringify(args[0])).not.toContain(UUID_TOKEN);
+    // No server-minted token is added to the external response.
+    expect(result).toEqual({
+      success: true,
+      imageUrl: "https://example.com/leaflet.png",
+      provider: "premium-v2",
+      jobId: "premium-job-1",
+      creditsCharged: 20,
+      qualityTier: "premium",
+      qualityLabel: "Premium Marketing Leaflet",
+      isDraft: false,
+    });
+    expect(Object.keys(result)).not.toContain("clientAttemptId");
+    expect(JSON.stringify(result)).not.toContain(UUID_TOKEN);
+  });
+
+  it("keeps not-found lineage behavior unchanged when a token is present", async () => {
+    mockPostLookup([]);
+    const result = await imageRouter
+      .createCaller(buildCtx())
+      .generatePremiumLeaflet({ ...CALLER_INPUT, clientAttemptId: UUID_TOKEN });
+    // Legacy fail-closed observation: service still runs, response unchanged.
+    expect(result.success).toBe(true);
+    expect(serviceCalls()).toHaveLength(1);
+    expect(serviceCalls()[0].workflowObservation ?? null).toBeNull();
+  });
+});

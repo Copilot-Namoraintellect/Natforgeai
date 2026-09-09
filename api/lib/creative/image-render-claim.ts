@@ -145,6 +145,20 @@ function normalizeOptionalText(value: string | null | undefined): string {
   return (value ?? "").trim();
 }
 
+// The render path treats brand colour order as positional semantics
+// (brandColors[0] → primary, [1] → secondary, [2] → accent in the template
+// renderers), so order is preserved here. Colour semantics are
+// case-insensitive (hex parsing in every consumer; brand-palette normalises
+// hex to uppercase), so values are trimmed, uppercased and de-duplicated of
+// empties. Raw values are only ever present inside this fingerprint
+// computation — never persisted or logged.
+function normalizeBrandColors(value: string[] | null | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim().toUpperCase() : ""))
+    .filter((entry) => entry.length > 0);
+}
+
 export interface ImageRenderAttemptIdentityInput {
   clientAttemptId: string;
   regenerate?: boolean;
@@ -154,6 +168,9 @@ export interface ImageRenderAttemptIdentityInput {
   strongerBrandFit?: boolean;
   provider?: string | null;
   templateId?: string | null;
+  brandColors?: string[] | null;
+  creativeType?: string | null;
+  allowNoLogo?: boolean;
 }
 
 export interface ImageRenderAttemptIdentity {
@@ -166,6 +183,10 @@ export interface ImageRenderAttemptIdentity {
  * Derives the full dormant attempt identity for one logical user action.
  * requestAttemptKey intentionally excludes intent so that intent reuse with
  * the same token is detectable as a collision instead of a new attempt.
+ * intentFingerprint covers all ten material render inputs (regenerate,
+ * forceRegenerate, refinementInstruction, creativeGuidance, strongerBrandFit,
+ * provider, templateId, brandColors, creativeType, allowNoLogo); raw text and
+ * raw colour values are reduced to digests before canonicalization.
  */
 export function deriveImageRenderAttemptIdentity({
   userId,
@@ -203,6 +224,9 @@ export function deriveImageRenderAttemptIdentity({
       strongerBrandFit: attempt.strongerBrandFit === true,
       provider: normalizeOptionalText(attempt.provider) || "v2",
       templateId: normalizeOptionalText(attempt.templateId) || "auto",
+      brandColors: normalizeBrandColors(attempt.brandColors),
+      creativeType: normalizeOptionalText(attempt.creativeType) || "leaflet",
+      allowNoLogo: attempt.allowNoLogo === true,
     })
   );
 

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -70,6 +70,11 @@ import type { GalleryTemplate } from "@/components/content/PremiumTemplateGaller
 import { toast } from "sonner";
 import { formatContentGenerationError } from "@/lib/content-generation-errors";
 import { getStrategyActionDecision } from "@/lib/content-studio/logic";
+import {
+  ImageRenderAttemptController,
+  classifyImageRenderAttemptError,
+  computeClientAttemptStorageKey,
+} from "@/lib/image-render-client-attempt";
 
 const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
 const ENABLE_BASIC_DRAFT_VIDEO = import.meta.env.VITE_ENABLE_BASIC_DRAFT_VIDEO === "true";
@@ -1242,6 +1247,52 @@ Include:
     },
   });
 
+  // ─── B2A: dormant client-attempt token lifecycle (premium image actions) ───
+  // The authoritative user identity comes from the same auth.me source as
+  // useAuth; no sentinel identity is ever invented for the token key scope.
+  const { data: premiumAttemptAuthUser } = trpc.auth.me.useQuery(undefined, {
+    retry: false,
+    staleTime: 1000 * 60 * 5,
+  });
+  const premiumAttemptControllerRef = useRef<ImageRenderAttemptController | null>(null);
+  if (premiumAttemptControllerRef.current === null) {
+    premiumAttemptControllerRef.current = new ImageRenderAttemptController();
+  }
+  function premiumAttemptStorageKeyFor(variables: {
+    contentPostId: number;
+    regenerate?: boolean;
+    forceRegenerate?: boolean;
+    refinementInstruction?: string;
+    creativeGuidance?: string;
+    strongerBrandFit?: boolean;
+    provider?: "internal" | "external" | "ai" | "v2";
+    templateId?: string;
+    brandColors?: string[];
+    creativeType?: "leaflet" | "poster" | "service_menu" | "offer_advert" | "event_announcement";
+    allowNoLogo?: boolean;
+  }): string | null {
+    const userId = premiumAttemptAuthUser?.id;
+    if (typeof userId !== "number" || !Number.isFinite(userId) || userId <= 0) {
+      return null;
+    }
+    return computeClientAttemptStorageKey({
+      userId,
+      contentPostId: variables.contentPostId,
+      intent: {
+        regenerate: variables.regenerate ?? false,
+        forceRegenerate: variables.forceRegenerate ?? false,
+        refinementInstruction: variables.refinementInstruction,
+        creativeGuidance: variables.creativeGuidance,
+        strongerBrandFit: variables.strongerBrandFit ?? false,
+        provider: variables.provider,
+        templateId: variables.templateId,
+        brandColors: variables.brandColors,
+        creativeType: variables.creativeType,
+        allowNoLogo: variables.allowNoLogo ?? false,
+      },
+    });
+  }
+
   const generatePremiumLeafletMutation = trpc.image.generatePremiumLeaflet.useMutation({
     onMutate: (variables) => {
       startAction(variables.contentPostId, "premium");
@@ -1254,6 +1305,9 @@ Include:
     },
     onSuccess: async (data, variables) => {
       stopAction(variables.contentPostId, "premium");
+      // Confirmed success: retire the attempt token and clear the guard.
+      const attemptKey = premiumAttemptStorageKeyFor(variables);
+      if (attemptKey) premiumAttemptControllerRef.current?.succeed(attemptKey);
       const costText = (data.creditsCharged ?? internalCost) === 0 ? "no charge" : `${data.creditsCharged ?? internalCost} credits`;
       toast.success(`Premium Marketing Leaflet generated (${costText}). Review the leaflet and caption pack, then approve or regenerate.`);
       // Await the critical queries so the Campaign Pack can pick up the new leaflet/imageUrl immediately.
@@ -1267,6 +1321,18 @@ Include:
     },
     onError: (err, variables) => {
       stopAction(variables.contentPostId, "premium");
+      // Token lifecycle: definitive pre-work rejections retire the token;
+      // anything ambiguous (5xx, PAYMENT_REQUIRED, content-policy, transport
+      // failures, unrecognized errors) retains it for an unchanged-intent
+      // retry. "Not charged" is never inferred from a message substring.
+      const attemptKey = premiumAttemptStorageKeyFor(variables);
+      if (attemptKey && typeof variables.clientAttemptId === "string" && variables.clientAttemptId) {
+        if (classifyImageRenderAttemptError(err) === "definitive") {
+          premiumAttemptControllerRef.current?.failDefinitive(attemptKey);
+        } else {
+          premiumAttemptControllerRef.current?.failAmbiguous(attemptKey, variables.clientAttemptId);
+        }
+      }
       const message = err.message || "";
       const code = (err as { data?: { code?: string } } | undefined)?.data?.code;
       const prefix = message ? `${message} ` : "";
@@ -1838,41 +1904,64 @@ Include:
         allowNoLogo,
       });
 
-    const generatePremiumAi = (strongerBrandFit = false) =>
+    // Single guarded submission path for every paid premium-image action.
+    // The synchronous in-flight guard (controller Map, not React state)
+    // ensures same-tick duplicate clicks submit once with one token. This is
+    // only accidental-duplicate protection — server-side uniqueness remains a
+    // B2B requirement.
+    const submitPremiumAttempt = (
+      provider: "ai" | "internal" | "external",
+      strongerBrandFit = false
+    ) => {
+      const userId = premiumAttemptAuthUser?.id;
+      if (typeof userId !== "number" || !Number.isFinite(userId) || userId <= 0) {
+        // No authoritative identity available yet — never weaken the key
+        // scope with a sentinel; skip submission instead.
+        return;
+      }
+      const trimmedRefinement = refinementInstruction.trim();
+      const trimmedGuidance = creativeGuidance.trim();
+      const templateId = imageTemplateId === "auto" ? undefined : imageTemplateId;
+      const began = premiumAttemptControllerRef.current?.beginAttempt({
+        userId,
+        contentPostId: content.id,
+        intent: {
+          regenerate: false,
+          forceRegenerate: !!trimmedRefinement || strongerBrandFit,
+          refinementInstruction: trimmedRefinement || undefined,
+          creativeGuidance: trimmedGuidance || undefined,
+          strongerBrandFit,
+          provider,
+          templateId,
+          brandColors: undefined,
+          creativeType: undefined,
+          allowNoLogo,
+        },
+      });
+      if (!began || began.status !== "ready") {
+        return;
+      }
       generatePremiumLeafletMutation.mutate({
         contentPostId: content.id,
-        templateId: imageTemplateId === "auto" ? undefined : imageTemplateId,
-        provider: "ai",
+        templateId,
+        provider,
         strongerBrandFit,
-        creativeGuidance: creativeGuidance.trim() || undefined,
-        refinementInstruction: refinementInstruction.trim() || undefined,
+        creativeGuidance: trimmedGuidance || undefined,
+        refinementInstruction: trimmedRefinement || undefined,
         allowNoLogo,
-        forceRegenerate: !!refinementInstruction.trim() || strongerBrandFit,
+        forceRegenerate: !!trimmedRefinement || strongerBrandFit,
+        clientAttemptId: began.token,
       });
+    };
+
+    const generatePremiumAi = (strongerBrandFit = false) =>
+      submitPremiumAttempt("ai", strongerBrandFit);
 
     const generatePremiumInternal = (strongerBrandFit = false) =>
-      generatePremiumLeafletMutation.mutate({
-        contentPostId: content.id,
-        templateId: imageTemplateId === "auto" ? undefined : imageTemplateId,
-        provider: "internal",
-        strongerBrandFit,
-        creativeGuidance: creativeGuidance.trim() || undefined,
-        refinementInstruction: refinementInstruction.trim() || undefined,
-        allowNoLogo,
-        forceRegenerate: !!refinementInstruction.trim() || strongerBrandFit,
-      });
+      submitPremiumAttempt("internal", strongerBrandFit);
 
     const generatePremiumExternal = (strongerBrandFit = false) =>
-      generatePremiumLeafletMutation.mutate({
-        contentPostId: content.id,
-        templateId: imageTemplateId === "auto" ? undefined : imageTemplateId,
-        provider: "external",
-        strongerBrandFit,
-        creativeGuidance: creativeGuidance.trim() || undefined,
-        refinementInstruction: refinementInstruction.trim() || undefined,
-        allowNoLogo,
-        forceRegenerate: !!refinementInstruction.trim() || strongerBrandFit,
-      });
+      submitPremiumAttempt("external", strongerBrandFit);
 
     const handleImproveLeaflet = () => {
       if (openAiLeafletStatus?.configured) {
