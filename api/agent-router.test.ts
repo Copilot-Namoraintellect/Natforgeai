@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { attachCreativeGenerationOperationReference, acquireCreativeGenerationClaim, releaseClaimWithResult } from "./lib/creative/creative-generation-claim";
+import { getDb } from "./queries/connection";
+import { runCreativeAgent } from "./lib/agents/creative-agent";
+import { agentRouter } from "./agent-router";
 
 vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
@@ -195,10 +198,6 @@ describe("agentRouter.runCreativeAgent", () => {
   });
 
   it("creates an outer operation row, passes source=agent, and completes it on success", async () => {
-    const { getDb } = await import("./queries/connection");
-    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
-    const { agentRouter } = await import("./agent-router");
-
     const db = createMockDb();
     vi.mocked(getDb).mockReturnValue(db as any);
     vi.mocked(runCreativeAgent).mockResolvedValue({
