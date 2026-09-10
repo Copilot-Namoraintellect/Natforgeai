@@ -607,6 +607,18 @@ export const imageRenderClaims = mysqlTable(
     intentFingerprint: varchar("intentFingerprint", { length: 64 }),
     deductionKey: varchar("deductionKey", { length: 191 }),
     deductionRecorded: boolean("deductionRecorded").default(false).notNull(),
+    // B2B-2A: durable result linkage + replay snapshot. All nullable so legacy
+    // rows remain valid and never appear replayable. No foreign key, matching
+    // repository convention; ownership is enforced in query predicates.
+    generatedImageId: bigint("generatedImageId", { mode: "number", unsigned: true }),
+    resultImageUrl: text("resultImageUrl"),
+    resultProvider: varchar("resultProvider", { length: 50 }),
+    resultProviderJobId: varchar("resultProviderJobId", { length: 255 }),
+    resultCreditsCharged: int("resultCreditsCharged"),
+    resultQualityTier: varchar("resultQualityTier", { length: 50 }),
+    resultQualityLabel: text("resultQualityLabel"),
+    resultIsDraft: boolean("resultIsDraft"),
+    completedAt: timestamp("completedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
   },
@@ -617,6 +629,7 @@ export const imageRenderClaims = mysqlTable(
     ),
     deductionKeyIdx: index("irc_deduction_key_idx").on(table.deductionKey),
     userPostIdx: index("irc_user_post_idx").on(table.userId, table.contentPostId),
+    generatedImageIdUnique: uniqueIndex("irc_generated_image_idx").on(table.generatedImageId),
   })
 );
 

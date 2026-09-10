@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import { TRPCError } from "@trpc/server";
 import { eq, and, isNotNull, isNull, SQL } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
-import { imageRenderClaims } from "@db/schema";
+import { imageRenderClaims, generatedImages } from "@db/schema";
 import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
 
 export const IMAGE_RENDER_OPERATION_KIND = "premium_image" as const;
@@ -248,9 +248,9 @@ export function buildImageRenderRefundKey(requestAttemptKey: string): string {
 }
 
 async function findClaimByActiveKey(
-  activeClaimKey: string
+  activeClaimKey: string,
+  db: ImageRenderClaimDbExecutor = getDb()
 ): Promise<ImageRenderClaim | null> {
-  const db = getDb();
   const [claim] = await db
     .select()
     .from(imageRenderClaims)
@@ -259,8 +259,10 @@ async function findClaimByActiveKey(
   return claim ?? null;
 }
 
-async function findClaimById(claimId: number): Promise<ImageRenderClaim | null> {
-  const db = getDb();
+async function findClaimById(
+  claimId: number,
+  db: ImageRenderClaimDbExecutor = getDb()
+): Promise<ImageRenderClaim | null> {
   const [claim] = await db
     .select()
     .from(imageRenderClaims)
@@ -387,6 +389,11 @@ export async function completeImageRenderClaim({
   return transitionImageRenderClaim({ claimId, ownerToken, status: "completed" });
 }
 
+// NOTE: status-only completion never records a durable result link, so a
+// completed claim produced this way has nothing replayable attached. Dormant
+// compatibility only — production activation must complete claims with
+// completeImageRenderClaimWithResult so the exact result can be replayed.
+
 export async function failImageRenderClaim({
   claimId,
   ownerToken,
@@ -489,9 +496,9 @@ export interface ImageRenderAttemptLookup {
 }
 
 async function findClaimByRequestAttemptKey(
-  requestAttemptKey: string
+  requestAttemptKey: string,
+  db: ImageRenderClaimDbExecutor = getDb()
 ): Promise<ImageRenderClaim | null> {
-  const db = getDb();
   const [claim] = await db
     .select()
     .from(imageRenderClaims)
@@ -743,4 +750,456 @@ export async function markImageRenderDeductionRecorded({
   }
 
   return { recorded: true };
+}
+
+// ─── Dormant durable result linkage + replay snapshot (B2B-2A) ───
+//
+// completeImageRenderClaimWithResult atomically links exactly one generated
+// image to a running, owner- and identity-scoped claim and stores the
+// immutable replay snapshot of the logical external response. Claim
+// completion without this primitive leaves no replayable result and must
+// fail closed on replay. The primitives below never render, persist bytes,
+// update content_posts, insert generated_images, bill, record usage, or
+// touch the filesystem — asset existence is verified later by service
+// integration (B2B-2B/B2B-3). Unexpected database errors are surfaced as a
+// generic internal error (consistent with the other primitives in this
+// module, which throw instead of returning claim_subsystem_unavailable; the
+// coordinator maps thrown failures to claim_subsystem_unavailable).
+
+export interface ImageRenderResultSnapshotInput {
+  generatedImageId: number;
+  imageUrl: string;
+  provider: string;
+  providerJobId?: string | null;
+  creditsCharged: number;
+  qualityTier: string;
+  qualityLabel: string;
+  isDraft: boolean;
+  completedAt: Date;
+}
+
+type ImageRenderClaimDb = ReturnType<typeof getDb>;
+
+/**
+ * Internal server-side transaction boundary for the B2B-2A result-linkage
+ * primitives. The default getDb() client and a Drizzle transaction callback
+ * client (MySql2Transaction extends the database type) both satisfy this
+ * shape. Exported only so the future B2B-3 service transaction can pass its
+ * `tx` client through; router/frontend code must never use it, and neither
+ * primitive opens a transaction itself.
+ */
+export interface ImageRenderClaimDbExecutor {
+  select: ImageRenderClaimDb["select"];
+  update: ImageRenderClaimDb["update"];
+}
+
+function resolveImageRenderClaimDb(
+  executor?: ImageRenderClaimDbExecutor
+): ImageRenderClaimDbExecutor {
+  return executor ?? getDb();
+}
+
+function assertValidSha256HexValue(
+  value: unknown,
+  name: string
+): asserts value is string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Invalid ${name}: expected 64-character lowercase SHA-256 hex`,
+    });
+  }
+}
+
+function assertValidResultSnapshotInput(snapshot: ImageRenderResultSnapshotInput): void {
+  assertValidId(snapshot.generatedImageId, "generatedImageId");
+  // Bounds are validation-only guards; the schema stores url and qualityLabel
+  // as text so nothing is ever silently truncated.
+  if (
+    typeof snapshot.imageUrl !== "string" ||
+    snapshot.imageUrl.trim().length === 0 ||
+    snapshot.imageUrl.length > 2048
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid imageUrl: must be a non-empty string of at most 2048 characters",
+    });
+  }
+  if (
+    typeof snapshot.provider !== "string" ||
+    snapshot.provider.trim().length === 0 ||
+    snapshot.provider.length > 50
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid provider: must be a non-empty string of at most 50 characters",
+    });
+  }
+  if (
+    snapshot.providerJobId != null &&
+    (typeof snapshot.providerJobId !== "string" ||
+      snapshot.providerJobId.length === 0 ||
+      snapshot.providerJobId.length > 255)
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Invalid providerJobId: must be null or a non-empty string of at most 255 characters",
+    });
+  }
+  if (
+    typeof snapshot.creditsCharged !== "number" ||
+    !Number.isInteger(snapshot.creditsCharged) ||
+    snapshot.creditsCharged < 0 ||
+    snapshot.creditsCharged > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid creditsCharged: must be a non-negative integer",
+    });
+  }
+  if (
+    typeof snapshot.qualityTier !== "string" ||
+    snapshot.qualityTier.trim().length === 0 ||
+    snapshot.qualityTier.length > 50
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid qualityTier: must be a non-empty string of at most 50 characters",
+    });
+  }
+  if (
+    typeof snapshot.qualityLabel !== "string" ||
+    snapshot.qualityLabel.trim().length === 0 ||
+    snapshot.qualityLabel.length > 2048
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid qualityLabel: must be a non-empty string of at most 2048 characters",
+    });
+  }
+  if (typeof snapshot.isDraft !== "boolean") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid isDraft: must be a boolean",
+    });
+  }
+  if (!(snapshot.completedAt instanceof Date) || Number.isNaN(snapshot.completedAt.getTime())) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid completedAt: expected a valid Date",
+    });
+  }
+}
+
+function storedSnapshotMatches(
+  claim: ImageRenderClaim,
+  result: ImageRenderResultSnapshotInput
+): boolean {
+  return (
+    claim.generatedImageId === result.generatedImageId &&
+    claim.resultImageUrl === result.imageUrl &&
+    claim.resultProvider === result.provider &&
+    (claim.resultProviderJobId ?? null) === (result.providerJobId ?? null) &&
+    claim.resultCreditsCharged === result.creditsCharged &&
+    claim.resultQualityTier === result.qualityTier &&
+    claim.resultQualityLabel === result.qualityLabel &&
+    claim.resultIsDraft === result.isDraft &&
+    claim.completedAt instanceof Date &&
+    !Number.isNaN(claim.completedAt.getTime()) &&
+    claim.completedAt.getTime() === result.completedAt.getTime()
+  );
+}
+
+export type CompleteImageRenderClaimWithResultReason =
+  | "already_completed_with_same_result"
+  | "result_already_attached"
+  | "identity_mismatch"
+  | "not_found_or_unauthorized";
+
+export type CompleteImageRenderClaimWithResultResult =
+  | { completed: true; claim: ImageRenderClaim }
+  | { completed: false; reason: CompleteImageRenderClaimWithResultReason };
+
+/**
+ * Atomically links one durable result to a running claim and completes it.
+ *
+ * One guarded UPDATE performs the snapshot write, the generatedImageId link,
+ * status=completed and the active-key release. Exactly one durable result per
+ * claim is enforced by the CAS predicate (generatedImageId IS NULL) plus the
+ * unique irc_generated_image_idx index; an attached result is never
+ * overwritten. On a zero-row CAS the claim is reread at most once to
+ * classify; the UPDATE is never retried in a loop.
+ */
+export async function completeImageRenderClaimWithResult({
+  claimId,
+  ownerToken,
+  userId,
+  contentPostId,
+  requestAttemptKey,
+  intentFingerprint,
+  deductionKey,
+  result,
+  executor,
+}: {
+  claimId: number;
+  ownerToken: string;
+  userId: number;
+  contentPostId: number;
+  requestAttemptKey: string;
+  intentFingerprint: string;
+  deductionKey: string;
+  result: ImageRenderResultSnapshotInput;
+  executor?: ImageRenderClaimDbExecutor;
+}): Promise<CompleteImageRenderClaimWithResultResult> {
+  assertValidId(claimId, "claimId");
+  assertValidId(userId, "userId");
+  assertValidId(contentPostId, "contentPostId");
+  assertValidOwnerToken(ownerToken);
+  assertValidSha256HexValue(requestAttemptKey, "requestAttemptKey");
+  assertValidSha256HexValue(intentFingerprint, "intentFingerprint");
+  if (
+    typeof deductionKey !== "string" ||
+    deductionKey.length === 0 ||
+    deductionKey.length > 191
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid deductionKey: expected 1-191 characters",
+    });
+  }
+  // The deduction key must be the deterministic derivative of the guarded
+  // attempt key — never an independent caller-invented value.
+  if (deductionKey !== buildImageRenderDeductionKey(requestAttemptKey)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid deductionKey: does not match the derived attempt identity",
+    });
+  }
+  assertValidResultSnapshotInput(result);
+
+  const db = resolveImageRenderClaimDb(executor);
+  let updateResult: unknown;
+  try {
+    updateResult = await db
+      .update(imageRenderClaims)
+      .set({
+        generatedImageId: result.generatedImageId,
+        resultImageUrl: result.imageUrl,
+        resultProvider: result.provider,
+        resultProviderJobId: result.providerJobId ?? null,
+        resultCreditsCharged: result.creditsCharged,
+        resultQualityTier: result.qualityTier,
+        resultQualityLabel: result.qualityLabel,
+        resultIsDraft: result.isDraft,
+        completedAt: result.completedAt,
+        status: "completed",
+        activeClaimKey: null,
+      })
+      .where(
+        and(
+          eq(imageRenderClaims.id, claimId),
+          eq(imageRenderClaims.userId, userId),
+          eq(imageRenderClaims.contentPostId, contentPostId),
+          eq(imageRenderClaims.ownerToken, ownerToken),
+          eq(imageRenderClaims.requestAttemptKey, requestAttemptKey),
+          eq(imageRenderClaims.intentFingerprint, intentFingerprint),
+          eq(imageRenderClaims.deductionKey, deductionKey),
+          eq(imageRenderClaims.status, "running"),
+          isNotNull(imageRenderClaims.activeClaimKey),
+          isNull(imageRenderClaims.generatedImageId)
+        )
+      );
+  } catch (err: unknown) {
+    if (isMySqlDuplicateKeyError(err)) {
+      // irc_generated_image_idx: this image is already linked to a claim.
+      return { completed: false, reason: "result_already_attached" };
+    }
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Image render claim completion failed",
+    });
+  }
+
+  if (getAffectedRows(updateResult) === 1) {
+    const claim = await findClaimById(claimId, db);
+    if (!claim) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Image render claim completed but could not be read back",
+      });
+    }
+    return { completed: true, claim };
+  }
+
+  // Zero rows affected: exactly one deterministic reread to classify, through
+  // the same executor. Never retry the UPDATE; never overwrite an attached
+  // result; a NULL or mismatched persisted deductionKey is an identity
+  // failure, never idempotent success.
+  const persisted = await findClaimById(claimId, db);
+  if (!persisted || persisted.ownerToken !== ownerToken) {
+    return { completed: false, reason: "not_found_or_unauthorized" };
+  }
+  if (
+    persisted.userId !== userId ||
+    persisted.contentPostId !== contentPostId ||
+    persisted.requestAttemptKey !== requestAttemptKey ||
+    persisted.intentFingerprint !== intentFingerprint ||
+    persisted.deductionKey !== deductionKey
+  ) {
+    return { completed: false, reason: "identity_mismatch" };
+  }
+  if (persisted.status === "completed") {
+    if (persisted.generatedImageId === null) {
+      // Legacy status-only completion carries no durable result: fail closed.
+      return { completed: false, reason: "not_found_or_unauthorized" };
+    }
+    // A stored snapshot that is missing or partial never counts as the same
+    // result (storedSnapshotMatches requires every field): fail closed.
+    if (storedSnapshotMatches(persisted, result)) {
+      return { completed: false, reason: "already_completed_with_same_result" };
+    }
+    return { completed: false, reason: "result_already_attached" };
+  }
+  return { completed: false, reason: "not_found_or_unauthorized" };
+}
+
+export interface ImageRenderReplayResult {
+  generatedImageId: number;
+  imageUrl: string;
+  provider: string;
+  providerJobId: string | null;
+  creditsCharged: number;
+  qualityTier: string;
+  qualityLabel: string;
+  isDraft: boolean;
+  completedAt: Date;
+}
+
+export type GetCompletedImageRenderResultReason =
+  | "intent_conflict"
+  | "completed_without_result"
+  | "linked_result_missing_or_mismatched"
+  | "not_completed_or_not_found";
+
+export type GetCompletedImageRenderResultResult =
+  | { replayable: true; result: ImageRenderReplayResult }
+  | { replayable: false; reason: GetCompletedImageRenderResultReason };
+
+/**
+ * Resolves the durable result for a completed attempt for exact replay.
+ *
+ * Read-only and identity-scoped: the claim is located by requestAttemptKey
+ * and verified against authoritative userId/contentPostId and the intent
+ * fingerprint. The linked generated_images row must exist with the exact id
+ * and matching ownership. Latest-image ordering, content_posts.metadata and
+ * URL inference are never used. The replayable projection exposes only the
+ * safe logical result fields plus generatedImageId (needed internally for
+ * later asset verification); no ownerToken, active key, attempt key,
+ * fingerprint, deduction key, deduction flag, raw client token or raw intent
+ * is returned. This primitive verifies database rows only — it never checks
+ * the filesystem, reads bytes, or fetches the stored URL.
+ */
+export async function getCompletedImageRenderResult({
+  userId,
+  contentPostId,
+  requestAttemptKey,
+  intentFingerprint,
+  executor,
+}: {
+  userId: number;
+  contentPostId: number;
+  requestAttemptKey: string;
+  intentFingerprint: string;
+  executor?: ImageRenderClaimDbExecutor;
+}): Promise<GetCompletedImageRenderResultResult> {
+  assertValidId(userId, "userId");
+  assertValidId(contentPostId, "contentPostId");
+  assertValidSha256HexValue(requestAttemptKey, "requestAttemptKey");
+  assertValidSha256HexValue(intentFingerprint, "intentFingerprint");
+
+  const db = resolveImageRenderClaimDb(executor);
+  let claim: ImageRenderClaim | null;
+  try {
+    claim = await findClaimByRequestAttemptKey(requestAttemptKey, db);
+  } catch {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Image render result lookup failed",
+    });
+  }
+
+  if (
+    !claim ||
+    claim.userId !== userId ||
+    claim.contentPostId !== contentPostId
+  ) {
+    return { replayable: false, reason: "not_completed_or_not_found" };
+  }
+  if (claim.intentFingerprint !== intentFingerprint) {
+    return { replayable: false, reason: "intent_conflict" };
+  }
+  if (claim.status !== "completed") {
+    return { replayable: false, reason: "not_completed_or_not_found" };
+  }
+  if (
+    claim.generatedImageId === null ||
+    typeof claim.resultImageUrl !== "string" ||
+    claim.resultImageUrl.length === 0 ||
+    typeof claim.resultProvider !== "string" ||
+    claim.resultProvider.length === 0 ||
+    claim.resultCreditsCharged === null ||
+    typeof claim.resultQualityTier !== "string" ||
+    claim.resultQualityTier.length === 0 ||
+    typeof claim.resultQualityLabel !== "string" ||
+    claim.resultQualityLabel.length === 0 ||
+    typeof claim.resultIsDraft !== "boolean" ||
+    !(claim.completedAt instanceof Date) ||
+    Number.isNaN(claim.completedAt.getTime())
+  ) {
+    // Completed claim without a complete durable snapshot: fail closed.
+    return { replayable: false, reason: "completed_without_result" };
+  }
+
+  let imageRow: typeof generatedImages.$inferSelect | null;
+  try {
+    const [row] = await db
+      .select()
+      .from(generatedImages)
+      .where(
+        and(
+          eq(generatedImages.id, claim.generatedImageId),
+          eq(generatedImages.userId, userId),
+          eq(generatedImages.contentPostId, contentPostId),
+          eq(generatedImages.status, "completed"),
+          eq(generatedImages.url, claim.resultImageUrl)
+        )
+      )
+      .limit(1);
+    imageRow = row ?? null;
+  } catch {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Image render result lookup failed",
+    });
+  }
+
+  if (!imageRow) {
+    return { replayable: false, reason: "linked_result_missing_or_mismatched" };
+  }
+
+  return {
+    replayable: true,
+    result: {
+      generatedImageId: claim.generatedImageId,
+      imageUrl: claim.resultImageUrl,
+      provider: claim.resultProvider,
+      providerJobId: claim.resultProviderJobId ?? null,
+      creditsCharged: claim.resultCreditsCharged,
+      qualityTier: claim.resultQualityTier,
+      qualityLabel: claim.resultQualityLabel,
+      isDraft: claim.resultIsDraft,
+      completedAt: claim.completedAt,
+    },
+  };
 }

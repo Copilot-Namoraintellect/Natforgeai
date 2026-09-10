@@ -11,12 +11,26 @@ import {
   lookupImageRenderAttempt,
   rearmFailedImageRenderClaim,
   markImageRenderDeductionRecorded,
+  completeImageRenderClaimWithResult,
+  getCompletedImageRenderResult,
   IMAGE_RENDER_OPERATION_KIND,
   type AcquireImageRenderClaimResult,
   type TransitionImageRenderClaimResult,
   type ImageRenderAttemptIdentityInput,
   type ImageRenderClaim,
+  type ImageRenderResultSnapshotInput,
+  type ImageRenderClaimDbExecutor,
 } from "./image-render-claim";
+import { imageRenderClaims, generatedImages } from "@db/schema";
+
+const TABLE_TAGS = new Map<unknown, string>([
+  [imageRenderClaims, "image_render_claims"],
+  [generatedImages, "generated_images"],
+]);
+
+function tableTag(table: unknown): string {
+  return TABLE_TAGS.get(table) ?? "unknown";
+}
 
 const mockGetDb = vi.hoisted(() => vi.fn());
 
@@ -105,37 +119,62 @@ function createFakeDb() {
   const state: FakeDbState = { rows: [], failNextInsertWithDuplicate: false };
   let nextId = 1;
 
-  const valuesImpl = vi.fn(async (values: Record<string, unknown>) => {
-    if (state.failNextInsertWithDuplicate) {
-      state.failNextInsertWithDuplicate = false;
-      throw duplicateKeyError();
+  const valuesImpl = vi.fn(
+    async (values: Record<string, unknown>, tag: string) => {
+      if (state.failNextInsertWithDuplicate) {
+        state.failNextInsertWithDuplicate = false;
+        throw duplicateKeyError();
+      }
+      const activeKey = (values.activeClaimKey ?? null) as string | null;
+      if (
+        activeKey !== null &&
+        state.rows.some((row) => row.activeClaimKey === activeKey)
+      ) {
+        throw duplicateKeyError();
+      }
+      const generatedImageId = (values.generatedImageId ?? null) as number | null;
+      if (
+        generatedImageId !== null &&
+        state.rows.some((row) => row.generatedImageId === generatedImageId)
+      ) {
+        throw duplicateKeyError();
+      }
+      const now = new Date();
+      const row = {
+        id: nextId,
+        createdAt: now,
+        updatedAt: now,
+        ...values,
+        __table: tag,
+      };
+      nextId += 1;
+      state.rows.push(row);
+      return [{ insertId: row.id }];
     }
-    const activeKey = (values.activeClaimKey ?? null) as string | null;
-    if (
-      activeKey !== null &&
-      state.rows.some((row) => row.activeClaimKey === activeKey)
-    ) {
-      throw duplicateKeyError();
-    }
-    const now = new Date();
-    const row = { id: nextId, createdAt: now, updatedAt: now, ...values };
-    nextId += 1;
-    state.rows.push(row);
-    return [{ insertId: row.id }];
-  });
+  );
 
   const db = {
     select: vi.fn(() => ({
-      from: vi.fn(() => ({
+      from: vi.fn((table: unknown) => ({
         where: vi.fn((cond: unknown) => ({
           limit: vi.fn(async (n: number) =>
-            state.rows.filter((row) => matchesCondition(cond, row)).slice(0, n)
+            state.rows
+              .filter(
+                (row) =>
+                  row.__table === undefined || row.__table === tableTag(table)
+              )
+              .filter((row) => matchesCondition(cond, row))
+              .slice(0, n)
           ),
         })),
       })),
     })),
-    insert: vi.fn(() => ({ values: valuesImpl })),
-    update: vi.fn(() => ({
+    insert: vi.fn((table: unknown) => ({
+      values: vi.fn((values: Record<string, unknown>) =>
+        valuesImpl(values, tableTag(table))
+      ),
+    })),
+    update: vi.fn((table: unknown) => ({
       set: vi.fn((patch: Record<string, unknown>) => ({
         where: vi.fn(async (cond: unknown) => {
           let affectedRows = 0;
@@ -146,6 +185,17 @@ function createFakeDb() {
                 nextActiveKey !== null &&
                 state.rows.some(
                   (other) => other !== row && other.activeClaimKey === nextActiveKey
+                )
+              ) {
+                throw duplicateKeyError();
+              }
+              const nextGeneratedImageId = (patch.generatedImageId ??
+                null) as number | null;
+              if (
+                nextGeneratedImageId !== null &&
+                state.rows.some(
+                  (other) =>
+                    other !== row && other.generatedImageId === nextGeneratedImageId
                 )
               ) {
                 throw duplicateKeyError();
@@ -1503,5 +1553,1313 @@ describe("markImageRenderDeductionRecorded", () => {
       })
     ).rejects.toThrow(/Invalid deductionKey/);
     expect(state.rows[0].deductionRecorded).toBe(false);
+  });
+});
+
+
+// ─── B2B-2A: dormant durable result linkage + replay snapshot ───
+
+const RESULT_COMPLETED_AT = new Date("2026-06-01T00:00:00.000Z");
+
+function makeResult(
+  overrides: Partial<ImageRenderResultSnapshotInput> = {}
+): ImageRenderResultSnapshotInput {
+  return {
+    generatedImageId: 5000,
+    imageUrl: "/generated/images/7/premium-leaflet-v2_asset.png",
+    provider: "v2",
+    providerJobId: "premium-v2-123",
+    creditsCharged: 12,
+    qualityTier: "premium",
+    qualityLabel: "Premium Marketing Leaflet",
+    isDraft: false,
+    completedAt: RESULT_COMPLETED_AT,
+    ...overrides,
+  };
+}
+
+describe("completeImageRenderClaimWithResult", () => {
+  let state: FakeDbState;
+  let updateSpy: ReturnType<typeof vi.fn>;
+  let selectSpy: ReturnType<typeof vi.fn>;
+
+  function seedRunningClaim(overrides: Record<string, unknown> = {}) {
+    const now = new Date("2026-05-01T00:00:00.000Z");
+    const identity = deriveAttempt();
+    const row: Record<string, unknown> = {
+      id: state.rows.length + 1,
+      userId: 7,
+      contentPostId: 13,
+      activeClaimKey: "active:7:post:13:image",
+      ownerToken: makeOwnerToken(1),
+      status: "running",
+      leaseExpiresAt: FUTURE_LEASE,
+      createdAt: now,
+      updatedAt: now,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      deductionRecorded: false,
+      generatedImageId: null,
+      resultImageUrl: null,
+      resultProvider: null,
+      resultProviderJobId: null,
+      resultCreditsCharged: null,
+      resultQualityTier: null,
+      resultQualityLabel: null,
+      resultIsDraft: null,
+      completedAt: null,
+      ...overrides,
+    };
+    state.rows.push(row);
+    return { row, identity };
+  }
+
+  function completionParams(identity: ReturnType<typeof deriveAttempt>) {
+    return {
+      claimId: 1,
+      ownerToken: makeOwnerToken(1),
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      result: makeResult(),
+    };
+  }
+
+  beforeEach(() => {
+    const fake = createFakeDb();
+    state = fake.state;
+    updateSpy = fake.db.update;
+    selectSpy = fake.db.select;
+    mockGetDb.mockReturnValue(fake.db);
+  });
+
+  it("successfully completes a running claim with one atomic snapshot+link+completion", async () => {
+    const { identity } = seedRunningClaim();
+
+    const result = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+
+    expect(result.completed).toBe(true);
+    if (!result.completed) throw new Error("expected completion");
+    expect(result.claim.status).toBe("completed");
+    expect(result.claim.activeClaimKey).toBeNull();
+    expect(result.claim.generatedImageId).toBe(5000);
+    expect(result.claim.resultImageUrl).toBe(makeResult().imageUrl);
+    expect(result.claim.resultProvider).toBe("v2");
+    expect(result.claim.resultProviderJobId).toBe("premium-v2-123");
+    expect(result.claim.resultCreditsCharged).toBe(12);
+    expect(result.claim.resultQualityTier).toBe("premium");
+    expect(result.claim.resultQualityLabel).toBe("Premium Marketing Leaflet");
+    expect(result.claim.resultIsDraft).toBe(false);
+    expect(result.claim.completedAt).toEqual(RESULT_COMPLETED_AT);
+
+    const stored = state.rows[0];
+    expect(stored.status).toBe("completed");
+    expect(stored.activeClaimKey).toBeNull();
+    expect(stored.generatedImageId).toBe(5000);
+    // Exactly one UPDATE performed the snapshot, link, completion and
+    // active-key clearing; the only SELECT is the success read-back.
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(selectSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves deductionRecorded while completing with result", async () => {
+    const { identity } = seedRunningClaim({ deductionRecorded: true });
+
+    const result = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+
+    expect(result.completed).toBe(true);
+    expect(state.rows[0].deductionRecorded).toBe(true);
+  });
+
+  it("classifies a repeated same-result completion as deterministic and non-mutating", async () => {
+    const { identity } = seedRunningClaim();
+    const params = completionParams(identity);
+
+    const first = await completeImageRenderClaimWithResult(params);
+    expect(first.completed).toBe(true);
+    const afterFirst = { ...state.rows[0] };
+
+    const second = await completeImageRenderClaimWithResult(params);
+    expect(second).toEqual({
+      completed: false,
+      reason: "already_completed_with_same_result",
+    });
+    expect(state.rows[0]).toEqual(afterFirst);
+  });
+
+  it("never overwrites an attached result with a different generatedImageId", async () => {
+    const { identity } = seedRunningClaim();
+    const first = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+    expect(first.completed).toBe(true);
+    const afterFirst = { ...state.rows[0] };
+
+    const conflicting = await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      result: makeResult({ generatedImageId: 5001 }),
+    });
+
+    expect(conflicting).toEqual({
+      completed: false,
+      reason: "result_already_attached",
+    });
+    expect(state.rows[0]).toEqual(afterFirst);
+    expect(state.rows[0].generatedImageId).toBe(5000);
+  });
+
+  it("rejects a changed snapshot with the same generatedImageId as idempotent", async () => {
+    const { identity } = seedRunningClaim();
+    const first = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+    expect(first.completed).toBe(true);
+
+    const changedSnapshot = await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      result: makeResult({ creditsCharged: 99 }),
+    });
+
+    expect(changedSnapshot).toEqual({
+      completed: false,
+      reason: "result_already_attached",
+    });
+    expect(state.rows[0].resultCreditsCharged).toBe(12);
+  });
+
+  it("rejects a wrong owner with not_found_or_unauthorized", async () => {
+    const { identity } = seedRunningClaim();
+    const result = await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      ownerToken: makeOwnerToken(999),
+    });
+    expect(result).toEqual({
+      completed: false,
+      reason: "not_found_or_unauthorized",
+    });
+    expect(state.rows[0].status).toBe("running");
+  });
+
+  it("rejects a wrong user with identity_mismatch", async () => {
+    const { identity } = seedRunningClaim();
+    const result = await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      userId: 8,
+    });
+    expect(result).toEqual({ completed: false, reason: "identity_mismatch" });
+    expect(state.rows[0].status).toBe("running");
+  });
+
+  it("rejects a wrong content post with identity_mismatch", async () => {
+    const { identity } = seedRunningClaim();
+    const result = await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      contentPostId: 14,
+    });
+    expect(result).toEqual({ completed: false, reason: "identity_mismatch" });
+    expect(state.rows[0].status).toBe("running");
+  });
+
+  it("rejects a wrong requestAttemptKey with identity_mismatch", async () => {
+    const { identity } = seedRunningClaim();
+    const other = deriveAttempt(7, 13, "attempt-token-2");
+    const result = await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      requestAttemptKey: other.requestAttemptKey,
+      deductionKey: other.deductionKey,
+    });
+    expect(result).toEqual({ completed: false, reason: "identity_mismatch" });
+    expect(state.rows[0].status).toBe("running");
+  });
+
+  it("rejects an intentFingerprint mismatch with identity_mismatch", async () => {
+    const { identity } = seedRunningClaim();
+    const other = deriveAttempt(7, 13, "attempt-token-1", { regenerate: true });
+    const result = await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      intentFingerprint: other.intentFingerprint,
+    });
+    expect(result).toEqual({ completed: false, reason: "identity_mismatch" });
+    expect(state.rows[0].status).toBe("running");
+  });
+
+  it("rejects a failed claim without mutation", async () => {
+    const { identity } = seedRunningClaim({ status: "failed", activeClaimKey: null });
+    const result = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+    expect(result).toEqual({
+      completed: false,
+      reason: "not_found_or_unauthorized",
+    });
+    expect(state.rows[0].status).toBe("failed");
+    expect(state.rows[0].generatedImageId).toBeNull();
+  });
+
+  it("fails closed on an already-completed legacy claim without a link", async () => {
+    const { identity } = seedRunningClaim({
+      status: "completed",
+      activeClaimKey: null,
+    });
+    const result = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+    expect(result).toEqual({
+      completed: false,
+      reason: "not_found_or_unauthorized",
+    });
+    expect(state.rows[0].generatedImageId).toBeNull();
+  });
+
+  it("fails closed on a partial stored snapshot instead of accepting idempotency", async () => {
+    const { identity } = seedRunningClaim();
+    const first = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+    expect(first.completed).toBe(true);
+
+    // Corrupt the stored snapshot (partial/null replay field).
+    state.rows[0].resultQualityLabel = null;
+
+    const repeated = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+    expect(repeated).toEqual({
+      completed: false,
+      reason: "result_already_attached",
+    });
+    expect(state.rows[0].resultQualityLabel).toBeNull();
+  });
+
+  it("maps the unique image-link collision to result_already_attached", async () => {
+    const first = seedRunningClaim({ id: 1 });
+    const second = seedRunningClaim({
+      id: 2,
+      activeClaimKey: "active:7:post:14:image",
+      contentPostId: 14,
+    });
+    const firstParams = completionParams(first.identity);
+    const secondParams = {
+      ...completionParams(second.identity),
+      claimId: 2,
+      contentPostId: 14,
+      deductionKey: second.identity.deductionKey,
+    };
+
+    const firstResult = await completeImageRenderClaimWithResult(firstParams);
+    expect(firstResult.completed).toBe(true);
+
+    const secondResult = await completeImageRenderClaimWithResult(secondParams);
+    expect(secondResult).toEqual({
+      completed: false,
+      reason: "result_already_attached",
+    });
+    expect(state.rows[1].status).toBe("running");
+  });
+
+  it("does not leak raw database error text on a subsystem exception", async () => {
+    seedRunningClaim();
+    mockGetDb.mockReturnValue({
+      update: vi.fn(() => {
+        throw new Error("raw db exploded: connection reset by peer");
+      }),
+    });
+
+    await expect(
+      completeImageRenderClaimWithResult(completionParams(deriveAttempt()))
+    ).rejects.toThrow(/Image render claim completion failed/);
+    await expect(
+      completeImageRenderClaimWithResult(completionParams(deriveAttempt()))
+    ).rejects.not.toThrow(/raw db exploded/);
+  });
+
+  it("performs at most one reread and never retries the UPDATE after a zero-row CAS", async () => {
+    const { identity } = seedRunningClaim();
+    const before = { ...state.rows[0] };
+
+    // Zero-row CAS (wrong owner) followed by exactly one classification reread.
+    const result = await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      ownerToken: makeOwnerToken(999),
+    });
+
+    expect(result).toEqual({
+      completed: false,
+      reason: "not_found_or_unauthorized",
+    });
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(selectSpy).toHaveBeenCalledTimes(1);
+    expect(state.rows[0]).toEqual(before);
+  });
+
+  it("rejects malformed snapshot inputs before touching the database", async () => {
+    const { identity } = seedRunningClaim();
+    const params = completionParams(identity);
+
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ generatedImageId: 0 }),
+      })
+    ).rejects.toThrow(/Invalid generatedImageId/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ imageUrl: "" }),
+      })
+    ).rejects.toThrow(/Invalid imageUrl/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ imageUrl: "x".repeat(2049) }),
+      })
+    ).rejects.toThrow(/Invalid imageUrl/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ provider: "" }),
+      })
+    ).rejects.toThrow(/Invalid provider/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ providerJobId: "" }),
+      })
+    ).rejects.toThrow(/Invalid providerJobId/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ creditsCharged: -1 }),
+      })
+    ).rejects.toThrow(/Invalid creditsCharged/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ creditsCharged: 1.5 }),
+      })
+    ).rejects.toThrow(/Invalid creditsCharged/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ qualityTier: "" }),
+      })
+    ).rejects.toThrow(/Invalid qualityTier/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ qualityLabel: "" }),
+      })
+    ).rejects.toThrow(/Invalid qualityLabel/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ isDraft: "yes" as unknown as boolean }),
+      })
+    ).rejects.toThrow(/Invalid isDraft/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...params,
+        result: makeResult({ completedAt: new Date("not-a-date") }),
+      })
+    ).rejects.toThrow(/Invalid completedAt/);
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(state.rows[0].status).toBe("running");
+  });
+});
+
+describe("getCompletedImageRenderResult", () => {
+  let state: FakeDbState;
+
+  function seedCompletedClaim(overrides: Record<string, unknown> = {}) {
+    const now = new Date("2026-05-01T00:00:00.000Z");
+    const identity = deriveAttempt();
+    const row: Record<string, unknown> = {
+      id: state.rows.length + 1,
+      userId: 7,
+      contentPostId: 13,
+      activeClaimKey: null,
+      ownerToken: makeOwnerToken(1),
+      status: "completed",
+      leaseExpiresAt: FUTURE_LEASE,
+      createdAt: now,
+      updatedAt: now,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      deductionRecorded: true,
+      generatedImageId: 5000,
+      resultImageUrl: makeResult().imageUrl,
+      resultProvider: "v2",
+      resultProviderJobId: "premium-v2-123",
+      resultCreditsCharged: 12,
+      resultQualityTier: "premium",
+      resultQualityLabel: "Premium Marketing Leaflet",
+      resultIsDraft: false,
+      completedAt: RESULT_COMPLETED_AT,
+      ...overrides,
+    };
+    state.rows.push(row);
+    return { row, identity };
+  }
+
+  function seedGeneratedImage(overrides: Record<string, unknown> = {}) {
+    const row: Record<string, unknown> = {
+      id: 5000,
+      userId: 7,
+      contentPostId: 13,
+      url: makeResult().imageUrl,
+      status: "completed",
+      __table: "generated_images",
+      ...overrides,
+    };
+    state.rows.push(row);
+    return row;
+  }
+
+  function lookupParams(identity: ReturnType<typeof deriveAttempt>) {
+    return {
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+    };
+  }
+
+  beforeEach(() => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+  });
+
+  it("returns the exact replayable projection for a completed linked claim", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage();
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: true,
+      result: {
+        generatedImageId: 5000,
+        imageUrl: makeResult().imageUrl,
+        provider: "v2",
+        providerJobId: "premium-v2-123",
+        creditsCharged: 12,
+        qualityTier: "premium",
+        qualityLabel: "Premium Marketing Leaflet",
+        isDraft: false,
+        completedAt: RESULT_COMPLETED_AT,
+      },
+    });
+  });
+
+  it("returns null providerJobId when the stored snapshot has none", async () => {
+    const { identity } = seedCompletedClaim({ resultProviderJobId: null });
+    seedGeneratedImage();
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result.replayable).toBe(true);
+    if (result.replayable) {
+      expect(result.result.providerJobId).toBeNull();
+    }
+  });
+
+  it("rejects a conflicting intent fingerprint", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage();
+    const other = deriveAttempt(7, 13, "attempt-token-1", { regenerate: true });
+
+    const result = await getCompletedImageRenderResult({
+      ...lookupParams(identity),
+      intentFingerprint: other.intentFingerprint,
+    });
+
+    expect(result).toEqual({ replayable: false, reason: "intent_conflict" });
+  });
+
+  it("rejects a wrong user or post as not_completed_or_not_found", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage();
+
+    const wrongUser = await getCompletedImageRenderResult({
+      ...lookupParams(identity),
+      userId: 8,
+    });
+    expect(wrongUser).toEqual({
+      replayable: false,
+      reason: "not_completed_or_not_found",
+    });
+
+    const wrongPost = await getCompletedImageRenderResult({
+      ...lookupParams(identity),
+      contentPostId: 14,
+    });
+    expect(wrongPost).toEqual({
+      replayable: false,
+      reason: "not_completed_or_not_found",
+    });
+  });
+
+  it("rejects running or failed claims as not_completed_or_not_found", async () => {
+    const running = seedCompletedClaim({ id: 1, status: "running" });
+    const failed = seedCompletedClaim({
+      id: 2,
+      status: "failed",
+      requestAttemptKey: deriveAttempt(7, 13, "attempt-token-2").requestAttemptKey,
+    });
+
+    const runningResult = await getCompletedImageRenderResult(
+      lookupParams(running.identity)
+    );
+    expect(runningResult).toEqual({
+      replayable: false,
+      reason: "not_completed_or_not_found",
+    });
+
+    const failedResult = await getCompletedImageRenderResult(
+      lookupParams(failed.identity)
+    );
+    expect(failedResult).toEqual({
+      replayable: false,
+      reason: "not_completed_or_not_found",
+    });
+  });
+
+  it("fails closed on completed claims without a result link", async () => {
+    const { identity } = seedCompletedClaim({
+      generatedImageId: null,
+      resultImageUrl: null,
+      resultProvider: null,
+      resultProviderJobId: null,
+      resultCreditsCharged: null,
+      resultQualityTier: null,
+      resultQualityLabel: null,
+      resultIsDraft: null,
+      completedAt: null,
+    });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({ replayable: false, reason: "completed_without_result" });
+  });
+
+  it("fails closed on a partial stored snapshot", async () => {
+    const { identity } = seedCompletedClaim({ resultQualityLabel: null });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({ replayable: false, reason: "completed_without_result" });
+  });
+
+  it("rejects a missing generated_images row", async () => {
+    const { identity } = seedCompletedClaim();
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: false,
+      reason: "linked_result_missing_or_mismatched",
+    });
+  });
+
+  it("rejects a linked row owned by a different user", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({ userId: 8 });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: false,
+      reason: "linked_result_missing_or_mismatched",
+    });
+  });
+
+  it("rejects a linked row attached to a different content post", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({ contentPostId: 14 });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: false,
+      reason: "linked_result_missing_or_mismatched",
+    });
+  });
+
+  it("rejects a linked row with a null contentPostId", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({ contentPostId: null });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: false,
+      reason: "linked_result_missing_or_mismatched",
+    });
+  });
+
+  it("never uses latest-image ordering: returns the linked result, not the newest row", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({ id: 5000, url: makeResult().imageUrl });
+    seedGeneratedImage({
+      id: 5001,
+      url: makeResult().imageUrl,
+    });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result.replayable).toBe(true);
+    if (result.replayable) {
+      // The replayed identity is the linked image (5000), never the newest row.
+      expect(result.result.generatedImageId).toBe(5000);
+      expect(result.result.generatedImageId).not.toBe(5001);
+      expect(result.result.imageUrl).toBe(makeResult().imageUrl);
+    }
+  });
+
+  it("never exposes internal identity or ownership fields in any outcome", async () => {
+    const { identity } = seedCompletedClaim();
+    // No generated image row: blocked outcome.
+    const blocked = await getCompletedImageRenderResult(lookupParams(identity));
+    expect(blocked.replayable).toBe(false);
+    expect(Object.keys(blocked).sort()).toEqual(["reason", "replayable"]);
+
+    const serializedBlocked = JSON.stringify(blocked);
+    expect(serializedBlocked).not.toContain(makeOwnerToken(1));
+    expect(serializedBlocked).not.toContain("active:7:post:13:image");
+    expect(serializedBlocked).not.toContain(identity.requestAttemptKey);
+    expect(serializedBlocked).not.toContain(identity.intentFingerprint);
+    expect(serializedBlocked).not.toContain(identity.deductionKey);
+    expect(serializedBlocked).not.toContain("deductionRecorded");
+
+    seedGeneratedImage();
+    const replayable = await getCompletedImageRenderResult(lookupParams(identity));
+    expect(Object.keys(replayable).sort()).toEqual(["replayable", "result"]);
+    if (replayable.replayable) {
+      expect(Object.keys(replayable.result).sort()).toEqual([
+        "completedAt",
+        "creditsCharged",
+        "generatedImageId",
+        "imageUrl",
+        "isDraft",
+        "provider",
+        "providerJobId",
+        "qualityLabel",
+        "qualityTier",
+      ]);
+      const serializedReplayable = JSON.stringify(replayable);
+      expect(serializedReplayable).not.toContain(makeOwnerToken(1));
+      expect(serializedReplayable).not.toContain(identity.requestAttemptKey);
+      expect(serializedReplayable).not.toContain(identity.intentFingerprint);
+      expect(serializedReplayable).not.toContain(identity.deductionKey);
+    }
+  });
+
+  it("rejects malformed keys before touching the database", async () => {
+    const { identity } = seedCompletedClaim();
+    await expect(
+      getCompletedImageRenderResult({
+        userId: 7,
+        contentPostId: 13,
+        requestAttemptKey: "bad-key",
+        intentFingerprint: identity.intentFingerprint,
+      })
+    ).rejects.toThrow(/Invalid requestAttemptKey/);
+    await expect(
+      getCompletedImageRenderResult({
+        userId: 7,
+        contentPostId: 13,
+        requestAttemptKey: identity.requestAttemptKey,
+        intentFingerprint: "bad-key",
+      })
+    ).rejects.toThrow(/Invalid intentFingerprint/);
+  });
+});
+
+
+// ─── B2B-2A correction: executor seam, deduction identity, linked-result validation ───
+
+function asExecutor(fake: ReturnType<typeof createFakeDb>): ImageRenderClaimDbExecutor {
+  return fake.db as unknown as ImageRenderClaimDbExecutor;
+}
+
+describe("executor seam (B2B-2A correction)", () => {
+  let state: FakeDbState;
+  let fake: ReturnType<typeof createFakeDb>;
+
+  function seedRunningClaim(overrides: Record<string, unknown> = {}) {
+    const now = new Date("2026-05-01T00:00:00.000Z");
+    const identity = deriveAttempt();
+    const row: Record<string, unknown> = {
+      id: state.rows.length + 1,
+      userId: 7,
+      contentPostId: 13,
+      activeClaimKey: "active:7:post:13:image",
+      ownerToken: makeOwnerToken(1),
+      status: "running",
+      leaseExpiresAt: FUTURE_LEASE,
+      createdAt: now,
+      updatedAt: now,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      deductionRecorded: false,
+      generatedImageId: null,
+      resultImageUrl: null,
+      resultProvider: null,
+      resultProviderJobId: null,
+      resultCreditsCharged: null,
+      resultQualityTier: null,
+      resultQualityLabel: null,
+      resultIsDraft: null,
+      completedAt: null,
+      ...overrides,
+    };
+    state.rows.push(row);
+    return { row, identity };
+  }
+
+  function completionParams(identity: ReturnType<typeof deriveAttempt>) {
+    return {
+      claimId: 1,
+      ownerToken: makeOwnerToken(1),
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      result: makeResult(),
+    };
+  }
+
+  beforeEach(() => {
+    fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+  });
+
+  it("uses the supplied executor for completion and never calls getDb", async () => {
+    const { identity } = seedRunningClaim();
+    mockGetDb.mockClear();
+
+    const result = await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      executor: asExecutor(fake),
+    });
+
+    expect(result.completed).toBe(true);
+    expect(fake.db.update).toHaveBeenCalledTimes(1);
+    expect(fake.db.select).toHaveBeenCalledTimes(1);
+    expect(mockGetDb).not.toHaveBeenCalled();
+  });
+
+  it("uses the supplied executor for the zero-row reread without calling getDb", async () => {
+    const { identity } = seedRunningClaim();
+    mockGetDb.mockClear();
+
+    const result = await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      ownerToken: makeOwnerToken(999),
+      executor: asExecutor(fake),
+    });
+
+    expect(result).toEqual({
+      completed: false,
+      reason: "not_found_or_unauthorized",
+    });
+    // One UPDATE attempt plus exactly one classification reread, both through
+    // the supplied executor.
+    expect(fake.db.update).toHaveBeenCalledTimes(1);
+    expect(fake.db.select).toHaveBeenCalledTimes(1);
+    expect(mockGetDb).not.toHaveBeenCalled();
+  });
+
+  it("uses the supplied executor for replay lookup (claim + image queries) without getDb", async () => {
+    const now = new Date("2026-05-01T00:00:00.000Z");
+    const identity = deriveAttempt();
+    state.rows.push({
+      id: 1,
+      userId: 7,
+      contentPostId: 13,
+      activeClaimKey: null,
+      ownerToken: makeOwnerToken(1),
+      status: "completed",
+      leaseExpiresAt: FUTURE_LEASE,
+      createdAt: now,
+      updatedAt: now,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      deductionRecorded: true,
+      generatedImageId: 5000,
+      resultImageUrl: makeResult().imageUrl,
+      resultProvider: "v2",
+      resultProviderJobId: "premium-v2-123",
+      resultCreditsCharged: 12,
+      resultQualityTier: "premium",
+      resultQualityLabel: "Premium Marketing Leaflet",
+      resultIsDraft: false,
+      completedAt: RESULT_COMPLETED_AT,
+    });
+    state.rows.push({
+      id: 5000,
+      userId: 7,
+      contentPostId: 13,
+      url: makeResult().imageUrl,
+      status: "completed",
+      __table: "generated_images",
+    });
+    mockGetDb.mockClear();
+
+    const result = await getCompletedImageRenderResult({
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      executor: asExecutor(fake),
+    });
+
+    expect(result.replayable).toBe(true);
+    // Claim lookup + linked-image query, both through the supplied executor.
+    expect(fake.db.select).toHaveBeenCalledTimes(2);
+    expect(mockGetDb).not.toHaveBeenCalled();
+  });
+
+  it("routes every query of one operation through the same executor instance", async () => {
+    const { identity } = seedRunningClaim();
+    mockGetDb.mockClear();
+
+    await completeImageRenderClaimWithResult({
+      ...completionParams(identity),
+      executor: asExecutor(fake),
+    });
+
+    // The mutation and the success read-back both ran on the fake's spies,
+    // proving a single executor instance handled the whole operation.
+    expect(fake.db.update.mock.invocationCallOrder[0]).toBeLessThan(
+      fake.db.select.mock.invocationCallOrder[0]
+    );
+    expect(mockGetDb).not.toHaveBeenCalled();
+  });
+
+  it("preserves getDb() default behavior when no executor is supplied", async () => {
+    const { identity } = seedRunningClaim();
+    mockGetDb.mockClear();
+
+    const result = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+
+    expect(result.completed).toBe(true);
+    expect(mockGetDb).toHaveBeenCalled();
+  });
+
+  it("sanitizes executor errors without leaking raw error text", async () => {
+    seedRunningClaim();
+    const brokenExecutor = {
+      select: (() => {
+        throw new Error("should not be called");
+      }) as unknown as ImageRenderClaimDbExecutor["select"],
+      update: (() => {
+        throw new Error("tx aborted: deadlock found");
+      }) as unknown as ImageRenderClaimDbExecutor["update"],
+    };
+
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...completionParams(deriveAttempt()),
+        executor: brokenExecutor,
+      })
+    ).rejects.toThrow(/Image render claim completion failed/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...completionParams(deriveAttempt()),
+        executor: brokenExecutor,
+      })
+    ).rejects.not.toThrow(/deadlock/);
+  });
+});
+
+describe("deduction identity hardening (B2B-2A correction)", () => {
+  let state: FakeDbState;
+
+  function seedRunningClaim(overrides: Record<string, unknown> = {}) {
+    const now = new Date("2026-05-01T00:00:00.000Z");
+    const identity = deriveAttempt();
+    const row: Record<string, unknown> = {
+      id: state.rows.length + 1,
+      userId: 7,
+      contentPostId: 13,
+      activeClaimKey: "active:7:post:13:image",
+      ownerToken: makeOwnerToken(1),
+      status: "running",
+      leaseExpiresAt: FUTURE_LEASE,
+      createdAt: now,
+      updatedAt: now,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      deductionRecorded: false,
+      generatedImageId: null,
+      resultImageUrl: null,
+      resultProvider: null,
+      resultProviderJobId: null,
+      resultCreditsCharged: null,
+      resultQualityTier: null,
+      resultQualityLabel: null,
+      resultIsDraft: null,
+      completedAt: null,
+      ...overrides,
+    };
+    state.rows.push(row);
+    return { row, identity };
+  }
+
+  function completionParams(identity: ReturnType<typeof deriveAttempt>) {
+    return {
+      claimId: 1,
+      ownerToken: makeOwnerToken(1),
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      result: makeResult(),
+    };
+  }
+
+  beforeEach(() => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+  });
+
+  it("completes successfully with the correctly derived deductionKey", async () => {
+    const { identity } = seedRunningClaim();
+
+    const result = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+
+    expect(result.completed).toBe(true);
+    expect(state.rows[0].status).toBe("completed");
+  });
+
+  it("rejects a malformed deductionKey before any mutation", async () => {
+    const { identity } = seedRunningClaim();
+    const fakeDb = mockGetDb();
+    const updateSpy = fakeDb.update as ReturnType<typeof vi.fn>;
+
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...completionParams(identity),
+        deductionKey: "",
+      })
+    ).rejects.toThrow(/Invalid deductionKey/);
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...completionParams(identity),
+        deductionKey: "x".repeat(192),
+      })
+    ).rejects.toThrow(/Invalid deductionKey/);
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(state.rows[0].status).toBe("running");
+  });
+
+  it("rejects a valid-format but incorrectly derived deductionKey before mutation", async () => {
+    const { identity } = seedRunningClaim();
+    const fakeDb = mockGetDb();
+    const updateSpy = fakeDb.update as ReturnType<typeof vi.fn>;
+    // Format-valid, derived from a DIFFERENT attempt key.
+    const foreign = deriveAttempt(7, 13, "attempt-token-2");
+
+    await expect(
+      completeImageRenderClaimWithResult({
+        ...completionParams(identity),
+        deductionKey: foreign.deductionKey,
+      })
+    ).rejects.toThrow(/does not match the derived attempt identity/);
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(state.rows[0].status).toBe("running");
+  });
+
+  it("prevents completion when the persisted deductionKey is NULL", async () => {
+    const { identity } = seedRunningClaim({ deductionKey: null });
+
+    const result = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+
+    expect(result).toEqual({ completed: false, reason: "identity_mismatch" });
+    expect(state.rows[0].status).toBe("running");
+    expect(state.rows[0].generatedImageId).toBeNull();
+  });
+
+  it("prevents completion when the persisted deductionKey is mismatched", async () => {
+    const { identity } = seedRunningClaim({
+      deductionKey: `img-deduction:${"b".repeat(64)}`,
+    });
+
+    const result = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+
+    expect(result).toEqual({ completed: false, reason: "identity_mismatch" });
+    expect(state.rows[0].status).toBe("running");
+  });
+
+  it("classifies a zero-row reread with mismatched persisted deductionKey as identity_mismatch", async () => {
+    const { identity } = seedRunningClaim();
+    // Complete once legitimately, then corrupt the persisted deduction key and
+    // retry with the (correctly derived) original key.
+    const first = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+    expect(first.completed).toBe(true);
+
+    state.rows[0].deductionKey = `img-deduction:${"c".repeat(64)}`;
+    const retry = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+
+    expect(retry).toEqual({ completed: false, reason: "identity_mismatch" });
+  });
+
+  it("never classifies a mismatched persisted deductionKey as idempotent success", async () => {
+    const { identity } = seedRunningClaim();
+    const first = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+    expect(first.completed).toBe(true);
+
+    // Snapshot still matches fully, but the persisted deduction key drifted:
+    // must fail closed as identity_mismatch, never already_completed_with_same_result.
+    state.rows[0].deductionKey = `img-deduction:${"d".repeat(64)}`;
+    const retry = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+
+    expect(retry).toEqual({ completed: false, reason: "identity_mismatch" });
+    expect(retry).not.toEqual({
+      completed: false,
+      reason: "already_completed_with_same_result",
+    });
+  });
+
+  it("leaves deductionRecorded unchanged by completion", async () => {
+    const { identity } = seedRunningClaim({ deductionRecorded: true });
+
+    const result = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+
+    expect(result.completed).toBe(true);
+    expect(state.rows[0].deductionRecorded).toBe(true);
+  });
+
+  it("leaves deductionRecorded false when it was never recorded", async () => {
+    const { identity } = seedRunningClaim({ deductionRecorded: false });
+
+    const result = await completeImageRenderClaimWithResult(
+      completionParams(identity)
+    );
+
+    expect(result.completed).toBe(true);
+    expect(state.rows[0].deductionRecorded).toBe(false);
+  });
+});
+
+describe("linked-result validation hardening (B2B-2A correction)", () => {
+  let state: FakeDbState;
+
+  function seedCompletedClaim(overrides: Record<string, unknown> = {}) {
+    const now = new Date("2026-05-01T00:00:00.000Z");
+    const identity = deriveAttempt();
+    const row: Record<string, unknown> = {
+      id: state.rows.length + 1,
+      userId: 7,
+      contentPostId: 13,
+      activeClaimKey: null,
+      ownerToken: makeOwnerToken(1),
+      status: "completed",
+      leaseExpiresAt: FUTURE_LEASE,
+      createdAt: now,
+      updatedAt: now,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      deductionRecorded: true,
+      generatedImageId: 5000,
+      resultImageUrl: makeResult().imageUrl,
+      resultProvider: "v2",
+      resultProviderJobId: "premium-v2-123",
+      resultCreditsCharged: 12,
+      resultQualityTier: "premium",
+      resultQualityLabel: "Premium Marketing Leaflet",
+      resultIsDraft: false,
+      completedAt: RESULT_COMPLETED_AT,
+      ...overrides,
+    };
+    state.rows.push(row);
+    return { row, identity };
+  }
+
+  function seedGeneratedImage(overrides: Record<string, unknown> = {}) {
+    const row: Record<string, unknown> = {
+      id: 5000,
+      userId: 7,
+      contentPostId: 13,
+      url: makeResult().imageUrl,
+      status: "completed",
+      __table: "generated_images",
+      ...overrides,
+    };
+    state.rows.push(row);
+    return row;
+  }
+
+  function lookupParams(identity: ReturnType<typeof deriveAttempt>) {
+    return {
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+    };
+  }
+
+  beforeEach(() => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+  });
+
+  it("replays a completed linked image with matching URL", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({ status: "completed", url: makeResult().imageUrl });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result.replayable).toBe(true);
+    if (result.replayable) {
+      expect(result.result.generatedImageId).toBe(5000);
+      expect(result.result.imageUrl).toBe(makeResult().imageUrl);
+    }
+  });
+
+  it("rejects a pending linked image", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({ status: "pending" });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: false,
+      reason: "linked_result_missing_or_mismatched",
+    });
+  });
+
+  it("rejects a failed linked image", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({ status: "failed" });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: false,
+      reason: "linked_result_missing_or_mismatched",
+    });
+  });
+
+  it("rejects a linked image whose URL differs from the snapshot", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({ url: "/generated/images/7/rewritten-later.png" });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: false,
+      reason: "linked_result_missing_or_mismatched",
+    });
+  });
+
+  it("requires the exact linked ID and never falls back to a newer row", async () => {
+    const { identity } = seedCompletedClaim();
+    // Only a newer, fully-valid row exists; the linked id 5000 is absent.
+    seedGeneratedImage({ id: 5001 });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: false,
+      reason: "linked_result_missing_or_mismatched",
+    });
+  });
+
+  it("rejects a linked row owned by a different user", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({ userId: 8 });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: false,
+      reason: "linked_result_missing_or_mismatched",
+    });
+  });
+
+  it("rejects a linked row attached to a different content post", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({ contentPostId: 14 });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result).toEqual({
+      replayable: false,
+      reason: "linked_result_missing_or_mismatched",
+    });
+  });
+
+  it("returns a projection with no full row and no internal identity fields", async () => {
+    const { identity } = seedCompletedClaim();
+    seedGeneratedImage({
+      prompt: "raw prompt text",
+      metadata: { secret: "internal" },
+      providerJobId: "internal-job",
+    });
+
+    const result = await getCompletedImageRenderResult(lookupParams(identity));
+
+    expect(result.replayable).toBe(true);
+    if (result.replayable) {
+      expect(Object.keys(result.result).sort()).toEqual([
+        "completedAt",
+        "creditsCharged",
+        "generatedImageId",
+        "imageUrl",
+        "isDraft",
+        "provider",
+        "providerJobId",
+        "qualityLabel",
+        "qualityTier",
+      ]);
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain("raw prompt text");
+      expect(serialized).not.toContain("internal-job");
+      expect(serialized).not.toContain("secret");
+      expect(serialized).not.toContain(identity.requestAttemptKey);
+      expect(serialized).not.toContain(identity.intentFingerprint);
+      expect(serialized).not.toContain(identity.deductionKey);
+    }
   });
 });
