@@ -1418,6 +1418,7 @@ describe("rearmFailedImageRenderClaim", () => {
 
 describe("markImageRenderDeductionRecorded", () => {
   let state: FakeDbState;
+  let fake: ReturnType<typeof createFakeDb>;
 
   function seedRunningIdentityRow(overrides: Record<string, unknown> = {}) {
     const now = new Date();
@@ -1442,8 +1443,25 @@ describe("markImageRenderDeductionRecorded", () => {
     return { row, identity };
   }
 
+  function markerParams(
+    row: Record<string, unknown>,
+    identity: ReturnType<typeof deriveAttempt>,
+    overrides: Record<string, unknown> = {}
+  ) {
+    return {
+      claimId: row.id as number,
+      userId: 7,
+      contentPostId: 13,
+      ownerToken: makeOwnerToken(1),
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      ...overrides,
+    };
+  }
+
   beforeEach(() => {
-    const fake = createFakeDb();
+    fake = createFakeDb();
     state = fake.state;
     mockGetDb.mockReturnValue(fake.db);
   });
@@ -1451,12 +1469,7 @@ describe("markImageRenderDeductionRecorded", () => {
   it("flips deductionRecorded false→true exactly once for the authorized owner", async () => {
     const { row, identity } = seedRunningIdentityRow();
 
-    const result = await markImageRenderDeductionRecorded({
-      claimId: row.id as number,
-      ownerToken: makeOwnerToken(1),
-      requestAttemptKey: identity.requestAttemptKey,
-      deductionKey: identity.deductionKey,
-    });
+    const result = await markImageRenderDeductionRecorded(markerParams(row, identity));
 
     expect(result).toEqual({ recorded: true });
     expect(state.rows[0].deductionRecorded).toBe(true);
@@ -1464,12 +1477,7 @@ describe("markImageRenderDeductionRecorded", () => {
 
   it("a repeated call does not change state and cannot reset the flag", async () => {
     const { row, identity } = seedRunningIdentityRow();
-    const params = {
-      claimId: row.id as number,
-      ownerToken: makeOwnerToken(1),
-      requestAttemptKey: identity.requestAttemptKey,
-      deductionKey: identity.deductionKey,
-    };
+    const params = markerParams(row, identity);
 
     await markImageRenderDeductionRecorded(params);
     const second = await markImageRenderDeductionRecorded(params);
@@ -1482,12 +1490,9 @@ describe("markImageRenderDeductionRecorded", () => {
     const { row, identity } = seedRunningIdentityRow();
     const before = { ...state.rows[0] };
 
-    const result = await markImageRenderDeductionRecorded({
-      claimId: row.id as number,
-      ownerToken: makeOwnerToken(999),
-      requestAttemptKey: identity.requestAttemptKey,
-      deductionKey: identity.deductionKey,
-    });
+    const result = await markImageRenderDeductionRecorded(
+      markerParams(row, identity, { ownerToken: makeOwnerToken(999) })
+    );
 
     expect(result).toEqual({ recorded: false, reason: "not_found_or_unauthorized" });
     expect(state.rows[0]).toEqual(before);
@@ -1498,35 +1503,63 @@ describe("markImageRenderDeductionRecorded", () => {
     state.rows[0].status = "failed";
     state.rows[0].activeClaimKey = null;
 
-    const result = await markImageRenderDeductionRecorded({
-      claimId: row.id as number,
-      ownerToken: makeOwnerToken(1),
-      requestAttemptKey: identity.requestAttemptKey,
-      deductionKey: identity.deductionKey,
-    });
+    const result = await markImageRenderDeductionRecorded(markerParams(row, identity));
 
     expect(result).toEqual({ recorded: false, reason: "not_found_or_unauthorized" });
     expect(state.rows[0].deductionRecorded).toBe(false);
+  });
+
+  it("rejects a claim whose active key has been released", async () => {
+    const { row, identity } = seedRunningIdentityRow({ activeClaimKey: null });
+
+    const result = await markImageRenderDeductionRecorded(markerParams(row, identity));
+
+    expect(result).toEqual({ recorded: false, reason: "not_found_or_unauthorized" });
+    expect(state.rows[0].deductionRecorded).toBe(false);
+  });
+
+  it("rejects a mismatched userId, contentPostId, or intentFingerprint without mutation", async () => {
+    const attempts: [string, Record<string, unknown> | null][] = [
+      ["userId", { userId: 8 }],
+      ["contentPostId", { contentPostId: 14 }],
+      [
+        "intentFingerprint",
+        {
+          intentFingerprint: deriveAttempt(7, 13, "attempt-token-1", {
+            creativeType: "poster",
+          }).intentFingerprint,
+        },
+      ],
+    ];
+    for (const [field, overrides] of attempts) {
+      state.rows.length = 0;
+      const { row, identity } = seedRunningIdentityRow();
+      const before = { ...state.rows[0] };
+
+      const result = await markImageRenderDeductionRecorded(
+        markerParams(row, identity, overrides ?? {})
+      );
+
+      expect(result, field).toEqual({
+        recorded: false,
+        reason: "not_found_or_unauthorized",
+      });
+      expect(state.rows[0], field).toEqual(before);
+    }
   });
 
   it("rejects a mismatched requestAttemptKey or deductionKey", async () => {
     const { row, identity } = seedRunningIdentityRow();
     const other = deriveAttempt(7, 13, "attempt-token-2");
 
-    const wrongKey = await markImageRenderDeductionRecorded({
-      claimId: row.id as number,
-      ownerToken: makeOwnerToken(1),
-      requestAttemptKey: other.requestAttemptKey,
-      deductionKey: identity.deductionKey,
-    });
+    const wrongKey = await markImageRenderDeductionRecorded(
+      markerParams(row, identity, { requestAttemptKey: other.requestAttemptKey })
+    );
     expect(wrongKey).toEqual({ recorded: false, reason: "not_found_or_unauthorized" });
 
-    const wrongDeduction = await markImageRenderDeductionRecorded({
-      claimId: row.id as number,
-      ownerToken: makeOwnerToken(1),
-      requestAttemptKey: identity.requestAttemptKey,
-      deductionKey: other.deductionKey,
-    });
+    const wrongDeduction = await markImageRenderDeductionRecorded(
+      markerParams(row, identity, { deductionKey: other.deductionKey })
+    );
     expect(wrongDeduction).toEqual({
       recorded: false,
       reason: "not_found_or_unauthorized",
@@ -1536,23 +1569,69 @@ describe("markImageRenderDeductionRecorded", () => {
 
   it("rejects malformed keys before touching the database", async () => {
     const { row, identity } = seedRunningIdentityRow();
+    const base = markerParams(row, identity);
     await expect(
-      markImageRenderDeductionRecorded({
-        claimId: row.id as number,
-        ownerToken: makeOwnerToken(1),
-        requestAttemptKey: "bad-key",
-        deductionKey: identity.deductionKey,
-      })
+      markImageRenderDeductionRecorded({ ...base, requestAttemptKey: "bad-key" })
     ).rejects.toThrow(/Invalid requestAttemptKey/);
     await expect(
-      markImageRenderDeductionRecorded({
-        claimId: row.id as number,
-        ownerToken: makeOwnerToken(1),
-        requestAttemptKey: identity.requestAttemptKey,
-        deductionKey: "",
-      })
+      markImageRenderDeductionRecorded({ ...base, intentFingerprint: "bad-fingerprint" })
+    ).rejects.toThrow(/Invalid intentFingerprint/);
+    await expect(
+      markImageRenderDeductionRecorded({ ...base, deductionKey: "" })
     ).rejects.toThrow(/Invalid deductionKey/);
+    await expect(
+      markImageRenderDeductionRecorded({ ...base, userId: 0 })
+    ).rejects.toThrow(/Invalid userId/);
+    await expect(
+      markImageRenderDeductionRecorded({ ...base, contentPostId: -1 })
+    ).rejects.toThrow(/Invalid contentPostId/);
+    expect(fake.db.update).not.toHaveBeenCalled();
     expect(state.rows[0].deductionRecorded).toBe(false);
+  });
+
+  it("uses the supplied executor without calling getDb and performs exactly one mutation", async () => {
+    const { row, identity } = seedRunningIdentityRow();
+    mockGetDb.mockClear();
+
+    const result = await markImageRenderDeductionRecorded({
+      ...markerParams(row, identity),
+      executor: asExecutor(fake),
+    });
+
+    expect(result).toEqual({ recorded: true });
+    expect(mockGetDb).not.toHaveBeenCalled();
+    expect(fake.db.update).toHaveBeenCalledTimes(1);
+    expect(fake.db.select).not.toHaveBeenCalled();
+  });
+
+  it("preserves the getDb default route when no executor is supplied", async () => {
+    const { row, identity } = seedRunningIdentityRow();
+    mockGetDb.mockClear();
+
+    const result = await markImageRenderDeductionRecorded(markerParams(row, identity));
+
+    expect(result).toEqual({ recorded: true });
+    expect(mockGetDb).toHaveBeenCalled();
+  });
+
+  it("mutates only deductionRecorded and returns the stable union", async () => {
+    const { row, identity } = seedRunningIdentityRow();
+    const before = { ...state.rows[0] };
+
+    const result = await markImageRenderDeductionRecorded(markerParams(row, identity));
+
+    expect(Object.keys(result).sort()).toEqual(["recorded"]);
+    const after = { ...state.rows[0] };
+    const beforeRest = { ...before };
+    const afterRest = { ...after };
+    // deductionRecorded is the intended mutation; updatedAt is bumped by the
+    // fake (mirroring the schema $onUpdate) on any update.
+    delete beforeRest.deductionRecorded;
+    delete afterRest.deductionRecorded;
+    delete beforeRest.updatedAt;
+    delete afterRest.updatedAt;
+    expect(afterRest).toEqual(beforeRest);
+    expect(after.deductionRecorded).toBe(true);
   });
 });
 

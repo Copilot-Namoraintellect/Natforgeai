@@ -705,23 +705,29 @@ export interface ImageRenderDeductionMarkerResult {
 
 export async function markImageRenderDeductionRecorded({
   claimId,
+  userId,
+  contentPostId,
   ownerToken,
   requestAttemptKey,
+  intentFingerprint,
   deductionKey,
+  executor,
 }: {
   claimId: number;
+  userId: number;
+  contentPostId: number;
   ownerToken: string;
   requestAttemptKey: string;
+  intentFingerprint: string;
   deductionKey: string;
+  executor?: ImageRenderClaimDbExecutor;
 }): Promise<ImageRenderDeductionMarkerResult> {
   assertValidId(claimId, "claimId");
+  assertValidId(userId, "userId");
+  assertValidId(contentPostId, "contentPostId");
   assertValidOwnerToken(ownerToken);
-  if (typeof requestAttemptKey !== "string" || !/^[0-9a-f]{64}$/.test(requestAttemptKey)) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Invalid requestAttemptKey: expected 64-character lowercase SHA-256 hex",
-    });
-  }
+  assertValidSha256HexValue(requestAttemptKey, "requestAttemptKey");
+  assertValidSha256HexValue(intentFingerprint, "intentFingerprint");
   if (typeof deductionKey !== "string" || deductionKey.length === 0 || deductionKey.length > 191) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -729,17 +735,20 @@ export async function markImageRenderDeductionRecorded({
     });
   }
 
-  const db = getDb();
+  const db = resolveImageRenderClaimDb(executor);
   const result = await db
     .update(imageRenderClaims)
     .set({ deductionRecorded: true })
     .where(
       and(
         eq(imageRenderClaims.id, claimId),
+        eq(imageRenderClaims.userId, userId),
+        eq(imageRenderClaims.contentPostId, contentPostId),
         eq(imageRenderClaims.ownerToken, ownerToken),
         eq(imageRenderClaims.status, "running"),
         isNotNull(imageRenderClaims.activeClaimKey),
         eq(imageRenderClaims.requestAttemptKey, requestAttemptKey),
+        eq(imageRenderClaims.intentFingerprint, intentFingerprint),
         eq(imageRenderClaims.deductionKey, deductionKey),
         eq(imageRenderClaims.deductionRecorded, false)
       )

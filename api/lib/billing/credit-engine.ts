@@ -37,12 +37,35 @@ function throwIdempotencyCollision(): never {
   });
 }
 
+type CreditEngineDb = ReturnType<typeof getDb>;
+
+/**
+ * Structural transaction seam for the billing primitives (B2B-3B). The
+ * default getDb() client and a Drizzle transaction callback client both
+ * satisfy this shape. Exported only so the future B2B-3C finalization
+ * transaction can pass its `tx` client through; neither deductCredits nor
+ * recordAiUsage opens a transaction on a supplied executor, and the seam
+ * carries no transaction-lifecycle ownership.
+ */
+export interface CreditEngineDbExecutor {
+  select: CreditEngineDb["select"];
+  insert: CreditEngineDb["insert"];
+  update: CreditEngineDb["update"];
+  execute: CreditEngineDb["execute"];
+}
+
+function resolveCreditEngineDb(executor?: CreditEngineDbExecutor): CreditEngineDbExecutor {
+  return executor ?? getDb();
+}
 
 /**
  * Ensures a credit wallet exists for a user. Creates one if missing.
  */
-export async function ensureWallet(userId: number): Promise<typeof creditWallets.$inferSelect> {
-  const db = getDb();
+export async function ensureWallet(
+  userId: number,
+  executor?: CreditEngineDbExecutor
+): Promise<typeof creditWallets.$inferSelect> {
+  const db = resolveCreditEngineDb(executor);
 
   const [existing] = await db
     .select()
@@ -149,6 +172,7 @@ export async function deductCredits({
   description,
   metadata,
   idempotencyKey,
+  executor,
 }: {
   userId: number;
   amount: number;
@@ -156,14 +180,13 @@ export async function deductCredits({
   description: string;
   metadata?: Record<string, any>;
   idempotencyKey?: string;
+  executor?: CreditEngineDbExecutor;
 }): Promise<{ newBalance: number; alreadyDeducted?: boolean }> {
-  const db = getDb();
-
-  const wallet = await ensureWallet(userId);
+  const wallet = await ensureWallet(userId, executor);
 
   // Check spend limit
   if (wallet.spendLimit !== null && wallet.spendLimit > 0) {
-    const spentThisMonth = await getCreditsSpentThisMonth(userId);
+    const spentThisMonth = await getCreditsSpentThisMonth(userId, executor);
     if (spentThisMonth + amount > wallet.spendLimit) {
       throw new TRPCError({
         code: "FORBIDDEN",
@@ -173,75 +196,46 @@ export async function deductCredits({
   }
 
   if (idempotencyKey) {
-    // Run the deduction inside a transaction. If another caller has already
-    // claimed this idempotency key, MySQL rejects the claim INSERT with
-    // ER_DUP_ENTRY. The transaction then rolls back and we look up the
-    // already-committed transaction from outside the failed transaction. This
-    // avoids deadlocks that can occur if we try to lock-read the duplicate row
-    // inside the same transaction that just failed to insert it.
+    // Run the deduction inside a transaction when no executor is supplied. If
+    // another caller has already claimed this idempotency key, MySQL rejects
+    // the claim INSERT with ER_DUP_ENTRY. The transaction then rolls back and
+    // we look up the already-committed transaction from outside the failed
+    // transaction. This avoids deadlocks that can occur if we try to lock-read
+    // the duplicate row inside the same transaction that just failed to insert
+    // it. When a caller-owned executor (B2B-3B seam) is supplied, the body
+    // runs directly on it and no nested transaction is opened.
     try {
-      return await db.transaction(async (tx) => {
-        // Claim the idempotency key first. The unique constraint guarantees
-        // that only one transaction can record a claim for this key.
-        await tx.insert(creditTransactions).values({
+      if (executor) {
+        return await runIdempotentDeduction(executor, {
           userId,
-          walletId: wallet.id,
+          wallet,
+          amount,
           type,
-          amount: -amount,
-          balanceAfter: 0,
           description,
-          metadata: metadata as any,
+          metadata,
           idempotencyKey,
         });
-
-        // Atomic balance deduction with race-condition protection
-        const updateResult = await tx.execute(
-          sql`UPDATE credit_wallets
-              SET balance = balance - ${amount}, lifetimeSpent = lifetimeSpent + ${amount}, updatedAt = NOW()
-              WHERE id = ${wallet.id} AND balance >= ${amount}`
-        );
-
-        // MySQL2 returns [ResultSetHeader, ...] where affectedRows is on the first element
-        const walletAffectedRows = (updateResult as any)?.[0]?.affectedRows ?? 0;
-
-        if (walletAffectedRows === 0) {
-          throw new TRPCError({
-            code: "PAYMENT_REQUIRED",
-            message: `Insufficient credits. Balance: ${wallet.balance}. Required: ${amount}. Upgrade your plan or purchase more credits.`,
-          });
-        }
-
-        // Re-read wallet to avoid stale balance under concurrency
-        const [updatedWallet] = await tx
-          .select()
-          .from(creditWallets)
-          .where(eq(creditWallets.id, wallet.id))
-          .limit(1);
-        const newBalance = updatedWallet?.balance ?? wallet.balance - amount;
-
-        // Test-only seam: allow tests to force a failure after the wallet UPDATE
-        // but before the claim row is materialised, proving the transaction rolls
-        // back and leaves no idempotency claim.
-        if (testHookAfterWalletUpdate) {
-          await testHookAfterWalletUpdate();
-        }
-
-        // Materialise the actual post-deduction balance on the idempotency claim.
-        // If this or any earlier step fails, the transaction rolls back and the
-        // claim row is never visible.
-        await tx
-          .update(creditTransactions)
-          .set({ balanceAfter: newBalance })
-          .where(eq(creditTransactions.idempotencyKey, idempotencyKey));
-
-        return { newBalance };
-      });
+      }
+      const db = getDb();
+      return await db.transaction(async (tx) =>
+        runIdempotentDeduction(tx, {
+          userId,
+          wallet,
+          amount,
+          type,
+          description,
+          metadata,
+          idempotencyKey,
+        })
+      );
     } catch (err) {
       if (isMySqlDuplicateKeyError(err)) {
-        // The failed transaction has already rolled back. Read the committed
-        // transaction that won the race and verify it represents the same
-        // deduction before reporting alreadyDeducted.
-        const [existing] = await db
+        // The failed transaction has already rolled back (or, on a supplied
+        // executor, the statement aborted). Read the committed transaction
+        // that won the race through the SAME database route and verify it
+        // represents the same deduction before reporting alreadyDeducted.
+        const rereadDb = resolveCreditEngineDb(executor);
+        const [existing] = await rereadDb
           .select()
           .from(creditTransactions)
           .where(eq(creditTransactions.idempotencyKey, idempotencyKey))
@@ -271,6 +265,7 @@ export async function deductCredits({
   }
 
   // Non-idempotent path: preserve existing behaviour exactly.
+  const db = resolveCreditEngineDb(executor);
   // Atomic balance deduction with race-condition protection
   const updateResult = await db.execute(
     sql`UPDATE credit_wallets 
@@ -310,6 +305,82 @@ export async function deductCredits({
 }
 
 /**
+ * Keyed deduction body shared by the self-owned transaction path and the
+ * B2B-3B supplied-executor path. Runs the exact same operations in the exact
+ * same order on the given database route; it never opens a transaction and
+ * never retries.
+ */
+async function runIdempotentDeduction(
+  db: CreditEngineDbExecutor,
+  args: {
+    userId: number;
+    wallet: typeof creditWallets.$inferSelect;
+    amount: number;
+    type: typeof creditTransactions.$inferInsert["type"];
+    description: string;
+    metadata?: Record<string, any>;
+    idempotencyKey: string;
+  }
+): Promise<{ newBalance: number }> {
+  const { userId, wallet, amount, type, description, metadata, idempotencyKey } = args;
+
+  // Claim the idempotency key first. The unique constraint guarantees that
+  // only one transaction can record a claim for this key.
+  await db.insert(creditTransactions).values({
+    userId,
+    walletId: wallet.id,
+    type,
+    amount: -amount,
+    balanceAfter: 0,
+    description,
+    metadata: metadata as any,
+    idempotencyKey,
+  });
+
+  // Atomic balance deduction with race-condition protection
+  const updateResult = await db.execute(
+    sql`UPDATE credit_wallets
+        SET balance = balance - ${amount}, lifetimeSpent = lifetimeSpent + ${amount}, updatedAt = NOW()
+        WHERE id = ${wallet.id} AND balance >= ${amount}`
+  );
+
+  // MySQL2 returns [ResultSetHeader, ...] where affectedRows is on the first element
+  const walletAffectedRows = (updateResult as any)?.[0]?.affectedRows ?? 0;
+
+  if (walletAffectedRows === 0) {
+    throw new TRPCError({
+      code: "PAYMENT_REQUIRED",
+      message: `Insufficient credits. Balance: ${wallet.balance}. Required: ${amount}. Upgrade your plan or purchase more credits.`,
+    });
+  }
+
+  // Re-read wallet to avoid stale balance under concurrency
+  const [updatedWallet] = await db
+    .select()
+    .from(creditWallets)
+    .where(eq(creditWallets.id, wallet.id))
+    .limit(1);
+  const newBalance = updatedWallet?.balance ?? wallet.balance - amount;
+
+  // Test-only seam: allow tests to force a failure after the wallet UPDATE
+  // but before the claim row is materialised, proving the transaction rolls
+  // back and leaves no idempotency claim.
+  if (testHookAfterWalletUpdate) {
+    await testHookAfterWalletUpdate();
+  }
+
+  // Materialise the actual post-deduction balance on the idempotency claim.
+  // If this or any earlier step fails, the transaction rolls back and the
+  // claim row is never visible.
+  await db
+    .update(creditTransactions)
+    .set({ balanceAfter: newBalance })
+    .where(eq(creditTransactions.idempotencyKey, idempotencyKey));
+
+  return { newBalance };
+}
+
+/**
  * Record AI usage and deduct credits in one operation.
  */
 export async function recordAiUsage({
@@ -323,6 +394,7 @@ export async function recordAiUsage({
   estimatedCostUsdMicro,
   creditsDeducted,
   metadata,
+  executor,
 }: {
   userId: number;
   campaignId?: number;
@@ -334,8 +406,9 @@ export async function recordAiUsage({
   estimatedCostUsdMicro: number;
   creditsDeducted: number;
   metadata?: Record<string, any>;
+  executor?: CreditEngineDbExecutor;
 }): Promise<void> {
-  const db = getDb();
+  const db = resolveCreditEngineDb(executor);
 
   await db.insert(aiUsage).values({
     userId,
@@ -368,8 +441,11 @@ export async function checkCredits(userId: number, estimatedCost: number): Promi
 /**
  * Get total credits spent this calendar month.
  */
-export async function getCreditsSpentThisMonth(userId: number): Promise<number> {
-  const db = getDb();
+export async function getCreditsSpentThisMonth(
+  userId: number,
+  executor?: CreditEngineDbExecutor
+): Promise<number> {
+  const db = resolveCreditEngineDb(executor);
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
