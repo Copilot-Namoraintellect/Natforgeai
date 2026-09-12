@@ -16,6 +16,7 @@ export default defineConfig({
   test: {
     environment: "node",
     testTimeout: 10000,
+    maxWorkers: 4,
     include: [
       "api/**/*.test.ts",
       "api/**/*.test.tsx",
