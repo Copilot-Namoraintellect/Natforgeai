@@ -12,6 +12,7 @@ import {
   rearmFailedImageRenderClaim,
   markImageRenderDeductionRecorded,
   renewImageRenderClaimLease,
+  terminalizeStaleImageRenderClaim,
   completeImageRenderClaimWithResult,
   getCompletedImageRenderResult,
   IMAGE_RENDER_OPERATION_KIND,
@@ -82,7 +83,21 @@ function matchesCondition(cond: unknown, row: Record<string, unknown>): boolean 
     if (token.t === "col") {
       const next = tokens[i + 1];
       // Comparison against database NOW() (lease predicates). Checked before
-      // the "=" branch because ">=" also contains "=".
+      // the "=" branch because "<=" / ">=" also contain "=".
+      if (next && next.t === "str" && next.s.includes("<")) {
+        const rhs = tokens[i + 2];
+        const rowValue = row[token.name];
+        const rowMs = rowValue instanceof Date ? rowValue.getTime() : Number(rowValue ?? NaN);
+        let rhsMs = NaN;
+        if (rhs && rhs.t === "str" && /NOW\(\)/i.test(rhs.s)) {
+          rhsMs = Date.now();
+        } else if (rhs && rhs.t === "val" && typeof rhs.v === "number") {
+          rhsMs = rhs.v;
+        }
+        predicates.push(next.s.includes("<=") ? rowMs <= rhsMs : rowMs < rhsMs);
+        i += 3;
+        continue;
+      }
       if (next && next.t === "str" && next.s.includes(">")) {
         const rhs = tokens[i + 2];
         const rowValue = row[token.name];
@@ -3132,5 +3147,210 @@ describe("renewImageRenderClaimLease (Slice C1)", () => {
     const result = await renewImageRenderClaimLease(renewalArgs(row));
 
     expect(JSON.stringify(result)).not.toContain(row.ownerToken as string);
+  });
+});
+
+// ─── Slice C3: dormant stale terminalization ───
+
+describe("terminalizeStaleImageRenderClaim (Slice C3)", () => {
+  let state: FakeDbState;
+  const PAST = new Date("2000-01-01T00:00:00.000Z");
+  const FUTURE = new Date("2999-01-01T00:00:00.000Z");
+
+  function seedStaleRow(overrides: Record<string, unknown> = {}): {
+    row: Record<string, unknown>;
+    args: Parameters<typeof terminalizeStaleImageRenderClaim>[0];
+  } {
+    const identity = deriveAttempt();
+    const now = new Date();
+    const row: Record<string, unknown> = {
+      id: state.rows.length + 1,
+      userId: 7,
+      contentPostId: 13,
+      activeClaimKey: "active:7:post:13:image",
+      ownerToken: makeOwnerToken(1),
+      status: "running",
+      leaseExpiresAt: PAST,
+      createdAt: now,
+      updatedAt: now,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      deductionRecorded: false,
+      generatedImageId: null,
+      resultImageUrl: null,
+      resultProvider: null,
+      resultProviderJobId: null,
+      resultCreditsCharged: null,
+      resultQualityTier: null,
+      resultQualityLabel: null,
+      resultIsDraft: null,
+      completedAt: null,
+      ...overrides,
+    };
+    state.rows.push(row);
+    return {
+      row,
+      args: {
+        claimId: row.id as number,
+        userId: row.userId as number,
+        contentPostId: row.contentPostId as number,
+        requestAttemptKey: identity.requestAttemptKey,
+        intentFingerprint: identity.intentFingerprint,
+        deductionKey: identity.deductionKey,
+      },
+    };
+  }
+
+  beforeEach(() => {
+    mockGetDb.mockClear();
+  });
+
+  it("terminalizes the exact stale pre-deduction identity and preserves everything else", async () => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+    const { row, args } = seedStaleRow();
+    const before = { ...row };
+
+    const result = await terminalizeStaleImageRenderClaim(args);
+
+    expect(result).toEqual({ terminalized: true });
+    expect(row.status).toBe("failed");
+    expect(row.activeClaimKey).toBeNull();
+    // Recovery evidence preserved verbatim.
+    expect(row.leaseExpiresAt).toBe(PAST);
+    expect(row.ownerToken).toBe(before.ownerToken);
+    expect(row.requestAttemptKey).toBe(before.requestAttemptKey);
+    expect(row.intentFingerprint).toBe(before.intentFingerprint);
+    expect(row.deductionKey).toBe(before.deductionKey);
+    expect(row.deductionRecorded).toBe(false);
+    const untouched = { ...before, status: "failed", activeClaimKey: null, updatedAt: row.updatedAt };
+    delete (untouched as Record<string, unknown>).updatedAt;
+    const afterRest = { ...row };
+    delete (afterRest as Record<string, unknown>).updatedAt;
+    expect(afterRest).toEqual(untouched);
+  });
+
+  it("a lease just past the database-now boundary counts as expired", async () => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+    // One millisecond in the past exercises the <= boundary semantics the
+    // fake supports (exact equality with a moving clock is not testable).
+    const { row, args } = seedStaleRow({
+      leaseExpiresAt: new Date(Date.now() - 1),
+    });
+
+    const result = await terminalizeStaleImageRenderClaim(args);
+
+    expect(result).toEqual({ terminalized: true });
+    expect(row.status).toBe("failed");
+  });
+
+  it.each([
+    ["active lease", { leaseExpiresAt: FUTURE }],
+    ["failed claim", { status: "failed", activeClaimKey: null }],
+    ["completed claim", { status: "completed", activeClaimKey: null }],
+    ["released active key", { activeClaimKey: null }],
+    ["deduction marker recorded", { deductionRecorded: true }],
+    ["generated image linked", { generatedImageId: 555 }],
+    ["completedAt present", { completedAt: new Date("2026-01-01T00:00:00.000Z") }],
+    ["partial result snapshot url", { resultImageUrl: "https://cdn.example.com/x.png" }],
+    ["partial result snapshot credits", { resultCreditsCharged: 5 }],
+    ["partial result snapshot draft flag", { resultIsDraft: false }],
+  ] as const)("%s yields zero rows with no mutation", async (_label, overrides) => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+    const { row, args } = seedStaleRow(overrides);
+    const before = { ...row };
+
+    const result = await terminalizeStaleImageRenderClaim(args);
+
+    expect(result).toEqual({ terminalized: false });
+    expect(result).not.toHaveProperty("reason");
+    expect(row).toEqual(before);
+    // Single update attempt: no reread, no retry.
+    expect(fake.db.update).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["wrong claimId", { claimId: 424242 }],
+    ["wrong userId", { userId: 8 }],
+    ["wrong contentPostId", { contentPostId: 14 }],
+    [
+      "wrong requestAttemptKey",
+      (() => {
+        const other = deriveAttempt(7, 13, "attempt-token-2");
+        return {
+          requestAttemptKey: other.requestAttemptKey,
+          deductionKey: other.deductionKey,
+        };
+      })(),
+    ],
+    ["wrong intentFingerprint", { intentFingerprint: "d".repeat(64) }],
+  ] as const)("%s yields zero rows without mutation", async (_label, overrides) => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+    const { row, args } = seedStaleRow();
+    const before = { ...row };
+
+    const result = await terminalizeStaleImageRenderClaim({ ...args, ...overrides });
+
+    expect(result).toEqual({ terminalized: false });
+    expect(row).toEqual(before);
+    expect(fake.db.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("a mismatched deductionKey is rejected before any mutation", async () => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+    const { row, args } = seedStaleRow();
+    const before = { ...row };
+
+    await expect(
+      terminalizeStaleImageRenderClaim({
+        ...args,
+        deductionKey: `img-deduction:${"e".repeat(64)}`,
+      })
+    ).rejects.toThrow(/does not match the derived attempt identity/);
+
+    expect(row).toEqual(before);
+    expect(fake.db.update).not.toHaveBeenCalled();
+  });
+
+  it("requires no owner token and returns no identity or secrets", async () => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+    const { row, args } = seedStaleRow();
+
+    const result = await terminalizeStaleImageRenderClaim(args);
+
+    expect(result).toEqual({ terminalized: true });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(row.ownerToken as string);
+    expect(serialized).not.toContain(row.requestAttemptKey as string);
+    expect(serialized).not.toContain(row.intentFingerprint as string);
+    expect(serialized).not.toContain(row.deductionKey as string);
+  });
+
+  it("a supplied executor is used instead of getDb", async () => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockClear();
+    const { row, args } = seedStaleRow();
+
+    const result = await terminalizeStaleImageRenderClaim({
+      ...args,
+      executor: asExecutor(fake),
+    });
+
+    expect(result).toEqual({ terminalized: true });
+    expect(row.status).toBe("failed");
+    expect(mockGetDb).not.toHaveBeenCalled();
   });
 });

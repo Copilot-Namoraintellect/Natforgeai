@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { TRPCError } from "@trpc/server";
-import { eq, and, gt, isNotNull, isNull, sql, SQL } from "drizzle-orm";
+import { eq, and, gt, isNotNull, isNull, lte, sql, SQL } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
 import { imageRenderClaims, generatedImages } from "@db/schema";
 import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
@@ -826,6 +826,95 @@ export async function renewImageRenderClaimLease({
     );
 
   return { renewed: getAffectedRows(result) === 1 };
+}
+
+// ─── Dormant stale terminalization (Slice C3) ───
+//
+// Converts exactly one provably stale, pre-deduction running claim into an
+// ordinary failed claim so the existing later deliberate-request rearm path
+// may handle it. This is NOT failImageRenderClaim: recovery cannot rely on a
+// dead owner's token, so authority comes from the exact immutable attempt
+// identity plus the complementary expired-lease state (leaseExpiresAt <=
+// database NOW(); C1 defines ownership as valid only while the lease is
+// strictly greater than NOW()). The UPDATE itself is the stale-authority
+// checkpoint: an active lease renewed by a live owner heartbeat, any
+// deduction evidence, or any result evidence yields zero rows — never a
+// second attempt. The only mutations are status=failed and activeClaimKey
+// cleared; the expired lease timestamp and all identity columns are preserved
+// as recovery evidence. No reread, no reason, no logging.
+
+export interface TerminalizeStaleImageRenderClaimResult {
+  terminalized: boolean;
+}
+
+export async function terminalizeStaleImageRenderClaim({
+  claimId,
+  userId,
+  contentPostId,
+  requestAttemptKey,
+  intentFingerprint,
+  deductionKey,
+  executor,
+}: {
+  claimId: number;
+  userId: number;
+  contentPostId: number;
+  requestAttemptKey: string;
+  intentFingerprint: string;
+  deductionKey: string;
+  executor?: ImageRenderClaimDbExecutor;
+}): Promise<TerminalizeStaleImageRenderClaimResult> {
+  assertValidId(claimId, "claimId");
+  assertValidId(userId, "userId");
+  assertValidId(contentPostId, "contentPostId");
+  assertValidSha256HexValue(requestAttemptKey, "requestAttemptKey");
+  assertValidSha256HexValue(intentFingerprint, "intentFingerprint");
+  if (
+    typeof deductionKey !== "string" ||
+    deductionKey.length === 0 ||
+    deductionKey.length > 191
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid deductionKey: expected 1-191 characters",
+    });
+  }
+  if (deductionKey !== buildImageRenderDeductionKey(requestAttemptKey)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid deductionKey: does not match the derived attempt identity",
+    });
+  }
+
+  const db = resolveImageRenderClaimDb(executor);
+  const result = await db
+    .update(imageRenderClaims)
+    .set({ status: "failed", activeClaimKey: null })
+    .where(
+      and(
+        eq(imageRenderClaims.id, claimId),
+        eq(imageRenderClaims.userId, userId),
+        eq(imageRenderClaims.contentPostId, contentPostId),
+        eq(imageRenderClaims.requestAttemptKey, requestAttemptKey),
+        eq(imageRenderClaims.intentFingerprint, intentFingerprint),
+        eq(imageRenderClaims.deductionKey, deductionKey),
+        eq(imageRenderClaims.status, "running"),
+        isNotNull(imageRenderClaims.activeClaimKey),
+        eq(imageRenderClaims.deductionRecorded, false),
+        lte(imageRenderClaims.leaseExpiresAt, sql`NOW()`),
+        isNull(imageRenderClaims.generatedImageId),
+        isNull(imageRenderClaims.completedAt),
+        isNull(imageRenderClaims.resultImageUrl),
+        isNull(imageRenderClaims.resultProvider),
+        isNull(imageRenderClaims.resultProviderJobId),
+        isNull(imageRenderClaims.resultCreditsCharged),
+        isNull(imageRenderClaims.resultQualityTier),
+        isNull(imageRenderClaims.resultQualityLabel),
+        isNull(imageRenderClaims.resultIsDraft)
+      )
+    );
+
+  return { terminalized: getAffectedRows(result) === 1 };
 }
 
 // ─── Dormant durable result linkage + replay snapshot (B2B-2A) ───
