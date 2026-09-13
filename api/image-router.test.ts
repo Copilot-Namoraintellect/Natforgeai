@@ -290,7 +290,7 @@ describe("imageRouter.generatePremiumLeaflet Slice 5E router ownership", () => {
   });
 });
 
-describe("imageRouter.generatePremiumLeaflet B2A clientAttemptId ingress (dormant)", () => {
+describe("imageRouter.generatePremiumLeaflet B2B-3D clientAttemptId threading", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.QUALITY_AUTHORITY_MODE = "off";
@@ -365,18 +365,17 @@ describe("imageRouter.generatePremiumLeaflet B2A clientAttemptId ingress (dorman
     expect(serviceCalls()).toHaveLength(0);
   });
 
-  it("never forwards the token to the service, mints no server token, and leaves the external response unchanged", async () => {
+  it("forwards a provided token unchanged to the service and leaves the external response unchanged", async () => {
     const result = await imageRouter
       .createCaller(buildCtx())
       .generatePremiumLeaflet({ ...CALLER_INPUT, clientAttemptId: UUID_TOKEN });
 
     const args = serviceCalls();
     expect(args).toHaveLength(1);
-    // The service receives exactly its previous argument shape: no token key,
-    // and the token value appears nowhere in the arguments.
-    expect("clientAttemptId" in args[0]).toBe(false);
-    expect(JSON.stringify(args[0])).not.toContain(UUID_TOKEN);
-    // No server-minted token is added to the external response.
+    // Threading only: the exact validated token reaches the service, which
+    // alone owns claim orchestration.
+    expect(args[0].clientAttemptId).toBe(UUID_TOKEN);
+    // No server-minted token or claim identity is added to the response.
     expect(result).toEqual({
       success: true,
       imageUrl: "https://example.com/leaflet.png",
@@ -389,6 +388,15 @@ describe("imageRouter.generatePremiumLeaflet B2A clientAttemptId ingress (dorman
     });
     expect(Object.keys(result)).not.toContain("clientAttemptId");
     expect(JSON.stringify(result)).not.toContain(UUID_TOKEN);
+  });
+
+  it("keeps an absent token undefined in service arguments", async () => {
+    await imageRouter.createCaller(buildCtx()).generatePremiumLeaflet(CALLER_INPUT);
+
+    const args = serviceCalls();
+    expect(args).toHaveLength(1);
+    expect("clientAttemptId" in args[0]).toBe(true);
+    expect(args[0].clientAttemptId).toBeUndefined();
   });
 
   it("keeps not-found lineage behavior unchanged when a token is present", async () => {

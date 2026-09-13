@@ -376,6 +376,10 @@ export const imageRouter = createRouter({
         allowNoLogo: input.allowNoLogo,
         regenerate: input.regenerate,
         forceRegenerate: input.forceRegenerate,
+        // B2B-3D: threading only. The token is consumed exclusively by
+        // service-owned claim orchestration when image-render claims are
+        // effective; it is never derived, stored, or returned here.
+        clientAttemptId: input.clientAttemptId,
         workflowObservation,
       });
 

@@ -76,6 +76,69 @@ import {
 } from "./contracts/rendered-quality-observation-scope";
 import { InMemoryRenderedEvidenceRegistry } from "./quality/rendered-evidence-registry";
 import { extractApprovedStrategyLineage, resolveExpectedApprovedStrategyFingerprint } from "./contracts/observe-quality-authority";
+import { randomBytes } from "crypto";
+import type { ImageRenderClaimsMode } from "./image-render-claims-mode";
+import {
+  getEffectiveImageRenderClaimsMode,
+  createImageRenderClaimsReadinessChecker,
+  createDefaultImageRenderClaimsReadinessExecutor,
+} from "./image-render-claims-readiness";
+import { evaluateImageRenderClaimGate } from "./image-render-claim-gate";
+import {
+  coordinateImageRenderAttempt,
+  createDefaultImageRenderClaimCoordinatorDeps,
+  type ImageRenderClaimOwnerContext,
+} from "./image-render-claim-coordinator";
+import { failImageRenderClaim, getCompletedImageRenderResult } from "./image-render-claim";
+import {
+  createDefaultImageRenderFinalizationDeps,
+  finalizeImageRenderAttempt,
+} from "./image-render-finalization";
+
+// ─── Dormant image-render claim orchestration seams (B2B-3D) ───
+//
+// Image-render claims are DEFAULT OFF. The module-scope readiness checker is
+// constructed once (performing no database work at construction; the probe
+// stays lazy) so the established positive/negative caching semantics survive
+// across requests. Configured-off short-circuits before any readiness call;
+// effective-off executes the exact legacy path with zero claim/gate/
+// finalization activity. Tests may replace the orchestration wiring through
+// the exported test-only seam; production callers always use the defaults.
+
+const IMAGE_RENDER_CLIENT_ATTEMPT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const IMAGE_RENDER_CLAIM_LEASE_MS = 10 * 60_000;
+
+const imageRenderClaimsReadinessChecker = createImageRenderClaimsReadinessChecker({
+  executor: createDefaultImageRenderClaimsReadinessExecutor(),
+  now: () => Date.now(),
+});
+
+export interface ImageRenderClaimOrchestration {
+  getEffectiveMode: () => Promise<ImageRenderClaimsMode>;
+  evaluateGate: typeof evaluateImageRenderClaimGate;
+  createFinalizationDeps: typeof createDefaultImageRenderFinalizationDeps;
+  finalize: typeof finalizeImageRenderAttempt;
+  failClaim: typeof failImageRenderClaim;
+}
+
+const defaultImageRenderClaimOrchestration: ImageRenderClaimOrchestration = {
+  getEffectiveMode: () =>
+    getEffectiveImageRenderClaimsMode({ readiness: imageRenderClaimsReadinessChecker }),
+  evaluateGate: evaluateImageRenderClaimGate,
+  createFinalizationDeps: createDefaultImageRenderFinalizationDeps,
+  finalize: finalizeImageRenderAttempt,
+  failClaim: failImageRenderClaim,
+};
+
+let activeImageRenderClaimOrchestration = defaultImageRenderClaimOrchestration;
+
+/** Test-only seam. Never used by production callers. */
+export function __setImageRenderClaimOrchestrationForTests(
+  orchestration: ImageRenderClaimOrchestration | null
+): void {
+  activeImageRenderClaimOrchestration =
+    orchestration ?? defaultImageRenderClaimOrchestration;
+}
 
 function newGenerationRunId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -672,6 +735,7 @@ export async function generatePremiumLeaflet({
   regenerate = false,
   forceRegenerate = false,
   workflowObservation = null,
+  clientAttemptId,
 }: {
   userId: number;
   contentPostId: number;
@@ -691,8 +755,18 @@ export async function generatePremiumLeaflet({
    * rendered-quality observation stays inactive and rendering is unchanged.
    */
   workflowObservation?: RenderedQualityObservationAuthority | null;
+  /**
+   * Validated client attempt token (B2B-3D). Forwarded by the router; only
+   * consumed when image-render claims are effectively ON. When claims are
+   * effectively OFF this token changes nothing about the legacy path.
+   */
+  clientAttemptId?: string;
 }): Promise<ImageResult> {
   const { post, campaign, business } = await loadPostCampaignBusiness({ userId, contentPostId });
+  // Default-off claim mode resolution: configured-off performs zero readiness
+  // work; the actual readiness probe stays lazy and cached (B2B-3A contract).
+  const imageRenderClaimsEffectiveMode =
+    await activeImageRenderClaimOrchestration.getEffectiveMode();
   const db = getDb();
   const currentMeta = (post.metadata || {}) as any;
   const allPreviousImages = await db
@@ -710,10 +784,13 @@ export async function generatePremiumLeaflet({
   const iterationNumber = getNextIterationNumber(currentMeta, allPreviousImages);
 
   // ─── Idempotency: reuse existing valid premium leaflet only when no explicit new attempt is requested ───
+  // Effective-on claim mode bypasses generic existing-image reuse entirely:
+  // replay is authoritative only through the request-attempt claim gate, and
+  // an acquired claim must never be stranded by an early generic reuse return.
   const hasRefinementInstruction = !!refinementInstruction?.trim();
   const isExplicitRegenerate = regenerate || forceRegenerate;
 
-  if (post.campaignId) {
+  if (post.campaignId && imageRenderClaimsEffectiveMode === "off") {
     const existingPack = await loadApprovedMessagePack(post.campaignId);
     const existingImage = allPreviousImages
       .filter((img) => img.metadata && (img.metadata as any).assetTier === "premium")
@@ -878,6 +955,103 @@ export async function generatePremiumLeaflet({
   // Pre-flight credit check only — no deduction until copy + image are validated.
   await assertCanAfford(userId, cost, "Premium Marketing Leaflet");
 
+  // ─── B2B-3D: default-off image-render claim gate ───
+  // Runs only when claims are effective. Executes after ownership, provider
+  // selection and the affordability pre-check, and before message-pack
+  // processing, rendering, storage, and every billing/persistence write.
+  // Attempt identity (requestAttemptKey/intentFingerprint/deductionKey) is
+  // derived exclusively inside the established gate/coordinator primitives.
+  let imageRenderClaimOwner: ImageRenderClaimOwnerContext | null = null;
+  let imageRenderClaimTerminalHandled = false;
+  if (imageRenderClaimsEffectiveMode === "on") {
+    if (clientAttemptId === undefined || clientAttemptId === null) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "clientAttemptId is required for premium image generation",
+      });
+    }
+    if (!IMAGE_RENDER_CLIENT_ATTEMPT_ID_PATTERN.test(clientAttemptId)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Invalid clientAttemptId: must be 1-64 characters of [A-Za-z0-9_-]",
+      });
+    }
+    const ownerToken = randomBytes(32).toString("hex");
+    const leaseExpiresAt = new Date(Date.now() + IMAGE_RENDER_CLAIM_LEASE_MS);
+    const gateResult = await activeImageRenderClaimOrchestration.evaluateGate(
+      {
+        userId,
+        contentPostId,
+        clientAttemptId,
+        intent: {
+          regenerate: regenerate === true,
+          forceRegenerate: forceRegenerate === true,
+          refinementInstruction: refinementInstruction ?? null,
+          creativeGuidance: creativeGuidance ?? null,
+          strongerBrandFit: strongerBrandFit === true,
+          provider: provider ?? null,
+          templateId: templateId ?? null,
+          brandColors: brandColors ?? null,
+          creativeType: creativeType ?? null,
+          allowNoLogo: allowNoLogo === true,
+        },
+        ownerToken,
+        leaseExpiresAt,
+      },
+      {
+        coordinateImageRenderAttempt,
+        coordinatorDeps: createDefaultImageRenderClaimCoordinatorDeps(),
+        getCompletedImageRenderResult: (args) => getCompletedImageRenderResult(args),
+      }
+    );
+    if (gateResult.status === "replay") {
+      // Verified stored result: return before provider/render/storage/billing.
+      return {
+        jobId: gateResult.response.jobId,
+        provider: gateResult.response.provider,
+        status: "completed",
+        imageUrl: gateResult.response.imageUrl,
+        extension: "png",
+        creditsCharged: gateResult.response.creditsCharged,
+        qualityTier: gateResult.response.qualityTier as ImageQualityTier,
+        qualityLabel: gateResult.response.qualityLabel,
+        isDraft: gateResult.response.isDraft,
+        usingFallback: false,
+      };
+    }
+    if (gateResult.status === "blocked") {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "IMAGE_RENDER_CLAIM_BLOCKED",
+      });
+    }
+    if (gateResult.status === "unavailable") {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "IMAGE_RENDER_CLAIM_UNAVAILABLE",
+      });
+    }
+    imageRenderClaimOwner = gateResult.owner;
+  }
+
+  // B2B-3D: fail an owned (proceed) claim exactly once when a pre-finalization
+  // failure returns early instead of throwing. No-ops when claims are off, so
+  // the legacy path is untouched.
+  const failOwnedClaimOnce = async (): Promise<void> => {
+    if (!imageRenderClaimOwner || imageRenderClaimTerminalHandled) {
+      return;
+    }
+    imageRenderClaimTerminalHandled = true;
+    try {
+      await activeImageRenderClaimOrchestration.failClaim({
+        claimId: imageRenderClaimOwner.claimId,
+        ownerToken: imageRenderClaimOwner.ownerToken,
+      });
+    } catch {
+      // Fail closed: no additional mutation, no automatic retry.
+    }
+  };
+
   await setPostImageStatus(contentPostId, { imageStatus: "generating", imageError: null });
 
   try {
@@ -885,6 +1059,7 @@ export async function generatePremiumLeaflet({
     if (!hasLogo && !allowNoLogo) {
       const message = "Please upload your business logo in Settings before generating a Premium Marketing Leaflet. Premium leaflets require your logo and brand colours.";
       await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+      await failOwnedClaimOnce();
       return { status: "failed", jobId: "", errorMessage: message };
     }
 
@@ -1018,6 +1193,7 @@ export async function generatePremiumLeaflet({
           const message = `Campaign copy did not pass quality validation: ${basePack.validation.rejections.join("; ")}`;
           logError("[PremiumLeaflet] Copy validation failed", { userId, contentPostId, error: message });
           await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+          await failOwnedClaimOnce();
           return { status: "failed", jobId: "", errorMessage: message };
         }
 
@@ -1074,6 +1250,7 @@ export async function generatePremiumLeaflet({
               ...preRefinementMetaSnapshot,
               lastRefinementError: message,
             });
+            await failOwnedClaimOnce();
             return { status: "failed", jobId: "", errorMessage: message };
           } else {
             approvedMessagePack = refinedPack;
@@ -1112,6 +1289,7 @@ export async function generatePremiumLeaflet({
     if (isExternalProvider && !providerTemplateId) {
       const message = `Premium template "${premiumTemplateId}" is not configured for provider "${templateRenderer.name}". Contact admin to set the provider template ID.`;
       await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+      await failOwnedClaimOnce();
       return { status: "failed", jobId: "", errorMessage: message };
     }
 
@@ -1178,6 +1356,7 @@ export async function generatePremiumLeaflet({
         const message = `Premium V2 brief failed quality gate: ${v2Quality.criticalFailures.join("; ")}`;
         logError("[PremiumLeaflet] V2 brief quality gate failed", { userId, contentPostId, error: message, failures: v2Quality.criticalFailures });
         await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+        await failOwnedClaimOnce();
         return { status: "failed", jobId: "", errorMessage: message };
       }
 
@@ -1186,6 +1365,7 @@ export async function generatePremiumLeaflet({
         const message = `Brand Asset Review Required: ${brandAssetGate.criticalIssues.join("; ")}`;
         logError("[PremiumLeaflet] Brand asset gate failed", { userId, contentPostId, error: message, issues: brandAssetGate.criticalIssues });
         await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+        await failOwnedClaimOnce();
         return { status: "failed", jobId: "", errorMessage: message };
       }
     }
@@ -1259,6 +1439,7 @@ export async function generatePremiumLeaflet({
         const message = `Rendered copy failed quality validation: ${renderCopyValidation.rejections.join("; ")}`;
         console.error(`[PremiumLeaflet] Render copy validation failed | userId=${userId} | contentPostId=${contentPostId} | error="${message}"`);
         await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+        await failOwnedClaimOnce();
         return { status: "failed", jobId: "", errorMessage: message };
       }
 
@@ -1390,6 +1571,7 @@ export async function generatePremiumLeaflet({
             imageError: message,
             imageAttempts: aiRender.attempts,
           });
+          await failOwnedClaimOnce();
           return {
             status: "failed",
             jobId: "",
@@ -1488,6 +1670,7 @@ export async function generatePremiumLeaflet({
             : `Hybrid pipeline did not reach premium_ready (finalDecision=${hybridResult.metadata.finalDecision}). ${hybridResult.metadata.fallbackReason || ""}`.trim();
           logError("[PremiumLeaflet] Hybrid pipeline blocked by brand-asset/content/fallback gate", { userId, contentPostId, finalDecision: hybridResult.metadata.finalDecision, reason: hybridResult.metadata.fallbackReason, inventedOfferDetected: hybridResult.metadata.inventedOfferDetected });
           await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message, brandAsset: hybridBrandAsset });
+          await failOwnedClaimOnce();
           return { status: "failed", jobId: renderResult.providerJobId || "", errorMessage: message, provider: "premium-v2-hybrid" };
         }
       } else {
@@ -1500,6 +1683,7 @@ export async function generatePremiumLeaflet({
           imageStatus: "failed",
           imageError: `${errorMessage} You can generate a Basic Draft (0 credits) instead.`,
         });
+        await failOwnedClaimOnce();
         return {
           status: "failed",
           jobId: renderResult.providerJobId || "",
@@ -1525,6 +1709,7 @@ export async function generatePremiumLeaflet({
           imageStatus: "failed",
           imageError: `Obtaining rendered image failed: ${downloadErr.message}. You can generate a Basic Draft (0 credits) instead.`,
         });
+        await failOwnedClaimOnce();
         return {
           status: "failed",
           jobId: renderResult.providerJobId || "",
@@ -1542,6 +1727,7 @@ export async function generatePremiumLeaflet({
           const message = `Premium V2 leaflet failed quality gate: ${v2QualityResult.criticalFailures.join("; ")}`;
           logError("[PremiumLeaflet] V2 render quality gate failed", { userId, contentPostId, error: message, failures: v2QualityResult.criticalFailures });
           await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+          await failOwnedClaimOnce();
           return { status: "failed", jobId: renderResult.providerJobId || "", errorMessage: message, provider: templateRenderer.name };
         }
       }
@@ -1588,10 +1774,13 @@ export async function generatePremiumLeaflet({
       : undefined;
 
     // ─── Charge credits only after successful render + storage + quality validation ───
+    // Effective-on claim mode skips the legacy write entirely: the B2B-3C
+    // finalization transaction owns deduction, usage, image insert and the
+    // content-post update atomically.
     let deduction: { newBalance?: number | null } = {
       newBalance: null,
     };
-    if (cost > 0) {
+    if (cost > 0 && !imageRenderClaimOwner) {
       deduction = await deductCredits({
         userId,
         amount: cost,
@@ -1672,6 +1861,194 @@ export async function generatePremiumLeaflet({
     };
     const imageVersions = [...previousVersions, newVersion];
 
+    if (imageRenderClaimOwner) {
+      // ─── B2B-3C finalization owns the post-render write set atomically ───
+      // Provider rendering and storage already succeeded above; the single
+      // caller-owned transaction persists the image row, updates the content
+      // post, performs the keyed deduction, records usage, marks the
+      // deduction and completes the claim. The exact generated image id comes
+      // from the driver's insertId inside that transaction — never a
+      // latest-image inference.
+      const {
+        qualityObservationScope: _ignoredObservationScope,
+        ...persistedRenderRequest
+      } = renderReq;
+      const finalizationResult = await activeImageRenderClaimOrchestration.finalize(
+        {
+          // Exact gate-returned owner context; userId/contentPostId are the
+          // authoritative values this request was ownership-verified against.
+          claim: { ...imageRenderClaimOwner, userId, contentPostId },
+          charge: {
+            amount: cost,
+            description: `Premium Marketing Leaflet (${finalProviderName})`,
+            metadata: {
+              provider: finalProviderName,
+              providerJobId: renderResult.providerJobId,
+              providerTemplateId: finalProviderTemplateId,
+              contentPostId: post.id,
+              campaignId: post.campaignId,
+              cost,
+              source: "premium",
+              ...(fallbackMeta?.creditsReason ? { creditsReason: fallbackMeta.creditsReason } : {}),
+            },
+          },
+          usage: {
+            campaignId: post.campaignId ?? null,
+            agentType: "image_generation",
+            model: `${finalProviderName}-template`,
+            promptTokens: 500,
+            completionTokens: 100,
+            actualCostUsdMicro: usdToMicroCents(renderResult.costUsd || 0),
+            estimatedCostUsdMicro: usdToMicroCents(renderResult.costUsd || 0),
+            metadata: {
+              provider: finalProviderName,
+              providerJobId: renderResult.providerJobId,
+              providerTemplateId: finalProviderTemplateId,
+              contentPostId: post.id,
+              aspectRatio,
+              outputUrl: stored.publicUrl,
+              source: "premium",
+              ...(fallbackMeta?.creditsReason ? { creditsReason: fallbackMeta.creditsReason } : {}),
+            },
+          },
+          result: {
+            provider: finalProviderName,
+            providerJobId: renderResult.providerJobId ?? null,
+            imageUrl: stored.publicUrl,
+            qualityTier,
+            qualityLabel,
+            isDraft: false,
+            completedAt: new Date(),
+          },
+          generatedImage: {
+            campaignId: post.campaignId ?? null,
+            businessId: business.id ?? null,
+            provider: finalProviderName,
+            providerJobId: renderResult.providerJobId ?? null,
+            prompt: renderReq.headline,
+            url: stored.publicUrl,
+            aspectRatio,
+            style: campaign.contentStyle || business.visualStyle,
+            providerCostUsd: usdToMicroCents(renderResult.costUsd || 0),
+            metadata: {
+              originalUrl: renderResult.imageUrl,
+              localPath: stored.localPath,
+              source: "premium",
+              providerTemplateId: finalProviderTemplateId,
+              qualityScore: score,
+              qualityTier,
+              qualityLabel,
+              isDraft: false,
+              templateId: selectedTemplate,
+              versions: imageVersions,
+              renderRequest: persistedRenderRequest,
+              generationRunId,
+              iterationNumber,
+              assetType: "leaflet",
+              assetTier: "premium",
+              approvedMessagePack,
+              brandAsset: brandAssetMetadata,
+              ...(aiAttempts ? { attempts: aiAttempts } : {}),
+              ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
+              ...(fallbackMessage ? { fallbackMessage } : {}),
+            },
+          },
+          buildContentPostPatch: ({ generatedImageId, creditsCharged }) => ({
+            ...currentMeta,
+            currentVersionId: generatedImageId,
+            imageCurrentVersionId: generatedImageId,
+            imageUrl: stored.publicUrl,
+            imageProvider: finalProviderName,
+            imageJobId: renderResult.providerJobId,
+            imageStatus: "ready",
+            imageGeneratedAt: new Date().toISOString(),
+            imageError: null,
+            lastRefinementError: null,
+            imageCreditsCharged: creditsCharged,
+            imageExtension: renderResult.extension || "png",
+            imageSource: "premium",
+            source: "premium",
+            imageTemplateId: selectedTemplate,
+            templateId: selectedTemplate,
+            imageQualityScore: score,
+            qualityScore: score,
+            imageQualityTier: qualityTier,
+            qualityTier,
+            imageQualityLabel: qualityLabel,
+            qualityLabel,
+            imageIsDraft: false,
+            isDraft: false,
+            imageQualityWarnings: warnings,
+            validationIssues: warnings,
+            imageVersions,
+            imageFallbackMessage: fallbackMessage,
+            imageFallback: fallbackMeta,
+            imageBrandPalette: brandPalette,
+            imageHasLogo: hasLogo,
+            imageCreativeGuidance: creativeGuidance,
+            imageRefinementInstruction: refinementInstruction,
+            generationRunId,
+            iterationNumber,
+            assetType: "leaflet",
+            assetTier: "premium",
+            brandAsset: brandAssetMetadata,
+            creativeBriefFingerprint: getCampaignFingerprint(campaign),
+            ...(aiAttempts ? { imageAttempts: aiAttempts } : {}),
+          }),
+        },
+        activeImageRenderClaimOrchestration.createFinalizationDeps()
+      );
+
+      if (finalizationResult.status === "finalized") {
+        // Caption pack only after committed finalization success; identical
+        // fire-and-forget semantics to the legacy path.
+        generateCaptionPack({
+          userId,
+          contentPostId: post.id,
+          generationRunId,
+          iterationNumber,
+          assetTier: "premium",
+        }).catch((err) => {
+          console.error(`[PremiumLeaflet] Caption pack async error | userId=${userId} | contentPostId=${post.id} | error="${err.message}"`);
+        });
+        return {
+          jobId: renderResult.providerJobId || "premium",
+          provider: finalProviderName,
+          status: "completed",
+          imageUrl: stored.publicUrl,
+          extension: renderResult.extension || "png",
+          creditsCharged: cost,
+          qualityTier,
+          qualityLabel,
+          isDraft: false,
+          usingFallback: !!fallbackMeta,
+          fallbackMessage,
+          renderEvaluationStatus,
+        };
+      }
+      // replay / blocked / failed: claim terminal state is owned by the
+      // gate/coordinator/finalization layer. Never rerender, re-bill, refund,
+      // or caption here.
+      imageRenderClaimTerminalHandled = true;
+      if (finalizationResult.status === "replay") {
+        return {
+          jobId: finalizationResult.response.jobId,
+          provider: finalizationResult.response.provider,
+          status: "completed",
+          imageUrl: finalizationResult.response.imageUrl,
+          extension: "png",
+          creditsCharged: finalizationResult.response.creditsCharged,
+          qualityTier: finalizationResult.response.qualityTier as ImageQualityTier,
+          qualityLabel: finalizationResult.response.qualityLabel,
+          isDraft: finalizationResult.response.isDraft,
+          usingFallback: false,
+        };
+      }
+      throw new Error("IMAGE_RENDER_FINALIZATION_NOT_COMMITTED");
+    }
+
+    // Legacy post-render writes run only when claims are effectively OFF.
+    if (!imageRenderClaimOwner) {
     await db.insert(generatedImages).values({
       userId,
       campaignId: post.campaignId,
@@ -1770,6 +2147,7 @@ export async function generatePremiumLeaflet({
         },
       })
       .where(eq(contentPosts.id, post.id));
+    }
 
     // Caption pack is included with premium leaflet.
     generateCaptionPack({
@@ -1815,6 +2193,11 @@ export async function generatePremiumLeaflet({
       renderEvaluationStatus,
     };
   } catch (err) {
+    // B2B-3D: a claim owned by a proceed outcome must not be stranded by a
+    // pre-finalization failure (storage and any other thrown error). The
+    // helper no-ops when claims are off or the terminal state is already
+    // owned by the finalization layer, and it never retries.
+    await failOwnedClaimOnce();
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error(`[PremiumLeaflet] Unexpected error | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`, err);
     await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: errorMessage });
