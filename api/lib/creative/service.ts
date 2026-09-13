@@ -99,6 +99,10 @@ import {
   createDefaultImageRenderFinalizationDeps,
   finalizeImageRenderAttempt,
 } from "./image-render-finalization";
+import {
+  createImageRenderClaimHeartbeat,
+  type ImageRenderClaimHeartbeatHandle,
+} from "./image-render-claim-heartbeat";
 
 // ─── Dormant image-render claim orchestration seams (B2B-3D) ───
 //
@@ -143,6 +147,32 @@ export function __setImageRenderClaimOrchestrationForTests(
 ): void {
   activeImageRenderClaimOrchestration =
     orchestration ?? defaultImageRenderClaimOrchestration;
+}
+
+// ─── Slice C1: heartbeat factory seam ───
+//
+// The default factory wires the dormant lease-renewal primitive. The
+// controller is constructed only for an effective-on proceed outcome, so off
+// mode performs zero heartbeat work.
+
+export type ImageRenderClaimHeartbeatFactory = (owner: {
+  claimId: number;
+  ownerToken: string;
+}) => ImageRenderClaimHeartbeatHandle;
+
+const defaultImageRenderClaimHeartbeatFactory: ImageRenderClaimHeartbeatFactory = ({
+  claimId,
+  ownerToken,
+}) => createImageRenderClaimHeartbeat({ claimId, ownerToken });
+
+let activeImageRenderClaimHeartbeatFactory = defaultImageRenderClaimHeartbeatFactory;
+
+/** Test-only seam. Never used by production callers. */
+export function __setImageRenderClaimHeartbeatFactoryForTests(
+  factory: ImageRenderClaimHeartbeatFactory | null
+): void {
+  activeImageRenderClaimHeartbeatFactory =
+    factory ?? defaultImageRenderClaimHeartbeatFactory;
 }
 
 // ─── B2B-4: sanitized machine-readable claim outcome mapping ───
@@ -990,6 +1020,7 @@ export async function generatePremiumLeaflet({
   // derived exclusively inside the established gate/coordinator primitives.
   let imageRenderClaimOwner: ImageRenderClaimOwnerContext | null = null;
   let imageRenderClaimTerminalHandled = false;
+  let imageRenderClaimHeartbeat: ImageRenderClaimHeartbeatHandle | null = null;
   if (imageRenderClaimsEffectiveMode === "on") {
     if (clientAttemptId === undefined || clientAttemptId === null) {
       throw new TRPCError({
@@ -1060,6 +1091,12 @@ export async function generatePremiumLeaflet({
       });
     }
     imageRenderClaimOwner = gateResult.owner;
+    // Slice C1: keep the owned lease alive across long-running message/render
+    // work, using the exact gate owner identity. Never regenerating ownership.
+    imageRenderClaimHeartbeat = activeImageRenderClaimHeartbeatFactory({
+      claimId: gateResult.owner.claimId,
+      ownerToken: gateResult.owner.ownerToken,
+    });
   }
 
   // B2B-3D: fail an owned (proceed) claim exactly once when a pre-finalization
@@ -1070,6 +1107,13 @@ export async function generatePremiumLeaflet({
       return;
     }
     imageRenderClaimTerminalHandled = true;
+    await imageRenderClaimHeartbeat?.stop();
+    // Slice C1: if the heartbeat established ownership loss (expired lease,
+    // owner mismatch, or liveness failure), never force-fail the claim with
+    // stale authority. Fail closed; Slice C recovery owns the row.
+    if (imageRenderClaimHeartbeat?.lostOwnership) {
+      return;
+    }
     try {
       await activeImageRenderClaimOrchestration.failClaim({
         claimId: imageRenderClaimOwner.claimId,
@@ -1785,6 +1829,13 @@ export async function generatePremiumLeaflet({
       v2: "premium-leaflet-v2",
     }[storageProvider];
 
+    // Slice C1 ownership guard: never store the rendered bytes after
+    // ownership loss. The provider may already have executed; what we prevent
+    // here is any NEW durable side effect.
+    if (imageRenderClaimHeartbeat) {
+      await imageRenderClaimHeartbeat.assertStillOwned();
+    }
+
     const stored = await storeImageBuffer(buffer, {
       campaignId: post.campaignId ?? undefined,
       prefix: storagePrefix,
@@ -1901,6 +1952,12 @@ export async function generatePremiumLeaflet({
         qualityObservationScope: _ignoredObservationScope,
         ...persistedRenderRequest
       } = renderReq;
+      // Slice C1: heartbeat activity must not race claim completion. Stop and
+      // confirm ownership before the finalization transaction begins.
+      if (imageRenderClaimHeartbeat) {
+        await imageRenderClaimHeartbeat.stop();
+        await imageRenderClaimHeartbeat.assertStillOwned();
+      }
       const finalizationResult = await activeImageRenderClaimOrchestration.finalize(
         {
           // Exact gate-returned owner context; userId/contentPostId are the

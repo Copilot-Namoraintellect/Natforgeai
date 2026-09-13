@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { TRPCError } from "@trpc/server";
-import { eq, and, isNotNull, isNull, SQL } from "drizzle-orm";
+import { eq, and, gt, isNotNull, isNull, sql, SQL } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
 import { imageRenderClaims, generatedImages } from "@db/schema";
 import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
@@ -759,6 +759,73 @@ export async function markImageRenderDeductionRecorded({
   }
 
   return { recorded: true };
+}
+
+// ─── Dormant lease renewal (Slice C1) ───
+//
+// Renews ONLY the currently owned, still-unexpired running claim, using
+// database time for both validity and renewal so JS/DB clock skew can never
+// revive an expired lease. An expired lease is never extended: Slice C
+// recovery depends on expired leases remaining trustworthy evidence. No
+// reread follows a zero-row update and no failure reason is revealed.
+
+export interface ImageRenderLeaseRenewalResult {
+  renewed: boolean;
+}
+
+export function calculateImageRenderLeaseExpiry(leaseSeconds: number): SQL {
+  // MySQL NOW() keeps lease times consistent with the database clock and
+  // session timezone, matching the creative-generation claim convention.
+  return sql`DATE_ADD(NOW(), INTERVAL ${leaseSeconds} SECOND)`;
+}
+
+/**
+ * Renews the lease of the claim owned by this owner. The predicate requires
+ * the row to be running, active, leased, and NOT expired (strictly greater
+ * than database NOW()); the only mutation is leaseExpiresAt.
+ */
+export async function renewImageRenderClaimLease({
+  claimId,
+  ownerToken,
+  leaseSeconds,
+  executor,
+}: {
+  claimId: number;
+  ownerToken: string;
+  leaseSeconds: number;
+  executor?: ImageRenderClaimDbExecutor;
+}): Promise<ImageRenderLeaseRenewalResult> {
+  assertValidId(claimId, "claimId");
+  assertValidOwnerToken(ownerToken);
+  if (
+    typeof leaseSeconds !== "number" ||
+    !Number.isFinite(leaseSeconds) ||
+    !Number.isInteger(leaseSeconds) ||
+    leaseSeconds <= 0 ||
+    leaseSeconds > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid leaseSeconds: expected positive safe integer",
+    });
+  }
+
+  const db = resolveImageRenderClaimDb(executor);
+  const result = await db
+    .update(imageRenderClaims)
+    .set({ leaseExpiresAt: calculateImageRenderLeaseExpiry(leaseSeconds) })
+    .where(
+      and(
+        eq(imageRenderClaims.id, claimId),
+        eq(imageRenderClaims.ownerToken, ownerToken),
+        eq(imageRenderClaims.status, "running"),
+        isNotNull(imageRenderClaims.activeClaimKey),
+        isNotNull(imageRenderClaims.leaseExpiresAt),
+        gt(imageRenderClaims.leaseExpiresAt, sql`NOW()`)
+      )
+    );
+
+  return { renewed: getAffectedRows(result) === 1 };
 }
 
 // ─── Dormant durable result linkage + replay snapshot (B2B-2A) ───

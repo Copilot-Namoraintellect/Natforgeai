@@ -11,6 +11,7 @@ import {
   lookupImageRenderAttempt,
   rearmFailedImageRenderClaim,
   markImageRenderDeductionRecorded,
+  renewImageRenderClaimLease,
   completeImageRenderClaimWithResult,
   getCompletedImageRenderResult,
   IMAGE_RENDER_OPERATION_KIND,
@@ -66,6 +67,9 @@ function flatten(node: unknown): Token[] {
   if (obj && typeof obj.name === "string" && "table" in obj) {
     return [{ t: "col", name: obj.name }];
   }
+  if (typeof obj === "number" || typeof obj === "boolean") {
+    return [{ t: "val", v: obj }];
+  }
   return [];
 }
 
@@ -77,6 +81,22 @@ function matchesCondition(cond: unknown, row: Record<string, unknown>): boolean 
     const token = tokens[i];
     if (token.t === "col") {
       const next = tokens[i + 1];
+      // Comparison against database NOW() (lease predicates). Checked before
+      // the "=" branch because ">=" also contains "=".
+      if (next && next.t === "str" && next.s.includes(">")) {
+        const rhs = tokens[i + 2];
+        const rowValue = row[token.name];
+        const rowMs = rowValue instanceof Date ? rowValue.getTime() : Number(rowValue ?? NaN);
+        let rhsMs = NaN;
+        if (rhs && rhs.t === "str" && /NOW\(\)/i.test(rhs.s)) {
+          rhsMs = Date.now();
+        } else if (rhs && rhs.t === "val" && typeof rhs.v === "number") {
+          rhsMs = rhs.v;
+        }
+        predicates.push(next.s.includes(">=") ? rowMs >= rhsMs : rowMs > rhsMs);
+        i += 3;
+        continue;
+      }
       if (next && next.t === "str" && next.s.includes("=")) {
         const valueToken = tokens[i + 2];
         predicates.push(
@@ -99,6 +119,24 @@ function matchesCondition(cond: unknown, row: Record<string, unknown>): boolean 
     i += 1;
   }
   return predicates.every(Boolean);
+}
+
+function evaluateSqlPatchValue(value: unknown): unknown {
+  if (!value || typeof value !== "object" || !Array.isArray((value as { queryChunks?: unknown }).queryChunks)) {
+    return value;
+  }
+  const tokens = flatten(value);
+  const text = tokens.map((token) => (token.t === "str" ? token.s : "")).join("");
+  if (/DATE_ADD\(NOW\(\)/i.test(text)) {
+    const secondsToken = tokens.find((token) => token.t === "val");
+    if (secondsToken && secondsToken.t === "val" && typeof secondsToken.v === "number") {
+      return new Date(Date.now() + secondsToken.v * 1000);
+    }
+  }
+  if (/^NOW\(\)$/i.test(text.trim())) {
+    return new Date();
+  }
+  return value;
 }
 
 function duplicateKeyError(): Error {
@@ -200,7 +238,13 @@ function createFakeDb() {
               ) {
                 throw duplicateKeyError();
               }
-              Object.assign(row, patch, { updatedAt: new Date() });
+              const evaluatedPatch = Object.fromEntries(
+                Object.entries(patch).map(([key, value]) => [
+                  key,
+                  evaluateSqlPatchValue(value),
+                ])
+              );
+              Object.assign(row, evaluatedPatch, { updatedAt: new Date() });
               affectedRows += 1;
             }
           }
@@ -2940,5 +2984,153 @@ describe("linked-result validation hardening (B2B-2A correction)", () => {
       expect(serialized).not.toContain(identity.intentFingerprint);
       expect(serialized).not.toContain(identity.deductionKey);
     }
+  });
+});
+
+// ─── Slice C1: dormant lease renewal ───
+
+describe("renewImageRenderClaimLease (Slice C1)", () => {
+  let state: FakeDbState;
+  const FUTURE = new Date("2999-01-01T00:00:00.000Z");
+  const PAST = new Date("2000-01-01T00:00:00.000Z");
+
+  function seedRunningRow(
+    state: FakeDbState,
+    overrides: Record<string, unknown> = {}
+  ): Record<string, unknown> {
+    const identity = deriveAttempt();
+    const now = new Date();
+    const row: Record<string, unknown> = {
+      id: state.rows.length + 1,
+      userId: 7,
+      contentPostId: 13,
+      activeClaimKey: "active:7:post:13:image",
+      ownerToken: makeOwnerToken(1),
+      status: "running",
+      leaseExpiresAt: FUTURE,
+      createdAt: now,
+      updatedAt: now,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      deductionRecorded: false,
+      ...overrides,
+    };
+    state.rows.push(row);
+    return row;
+  }
+
+  function renewalArgs(row: Record<string, unknown>) {
+    return {
+      claimId: row.id as number,
+      ownerToken: row.ownerToken as string,
+      leaseSeconds: 300,
+    };
+  }
+
+  beforeEach(() => {
+    mockGetDb.mockClear();
+  });
+
+  it("renews the lease of the correct running owner using database time", async () => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+    const row = seedRunningRow(state);
+    const before = { ...row };
+
+    const result = await renewImageRenderClaimLease(renewalArgs(row));
+
+    expect(result).toEqual({ renewed: true });
+    const renewedAt = (row.leaseExpiresAt as Date).getTime();
+    expect(renewedAt).toBeGreaterThan(Date.now() + 290_000);
+    expect(renewedAt).toBeLessThanOrEqual(Date.now() + 300_000);
+    // Only leaseExpiresAt (and the fake's updatedAt bookkeeping) changed.
+    const { leaseExpiresAt: _l, updatedAt: _u, ...beforeRest } = before;
+    const { leaseExpiresAt: _l2, updatedAt: _u2, ...afterRest } = row;
+    expect(afterRest).toEqual(beforeRest);
+  });
+
+  it("a supplied executor bypasses getDb following repository convention", async () => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockClear();
+    const row = seedRunningRow(state);
+
+    const result = await renewImageRenderClaimLease({
+      ...renewalArgs(row),
+      executor: asExecutor(fake),
+    });
+
+    expect(result).toEqual({ renewed: true });
+    expect(mockGetDb).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["wrong owner", { ownerToken: makeOwnerToken(999) }, {}],
+    ["wrong claim", { claimId: 424242 }, {}],
+    ["failed claim", {}, { status: "failed" }],
+    ["completed claim", {}, { status: "completed" }],
+    ["null lease", {}, { leaseExpiresAt: null }],
+    ["expired lease", {}, { leaseExpiresAt: PAST }],
+    ["released active key", {}, { activeClaimKey: null }],
+  ] as const)(
+    "%s cannot renew and the row stays untouched",
+    async (_label, argOverrides, rowOverrides) => {
+      const fake = createFakeDb();
+      state = fake.state;
+      mockGetDb.mockReturnValue(fake.db);
+      const row = seedRunningRow(state, rowOverrides);
+      const before = { ...row };
+      const args = { ...renewalArgs(row), ...argOverrides };
+
+      const result = await renewImageRenderClaimLease(args);
+
+      expect(result).toEqual({ renewed: false });
+      expect(result).not.toHaveProperty("reason");
+      expect(row).toEqual(before);
+    }
+  );
+
+  it("never revives an expired lease: the expired timestamp remains the evidence", async () => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+    const row = seedRunningRow(state, { leaseExpiresAt: PAST });
+
+    const result = await renewImageRenderClaimLease(renewalArgs(row));
+
+    expect(result).toEqual({ renewed: false });
+    expect(row.leaseExpiresAt).toBe(PAST);
+  });
+
+  it("rejects invalid inputs before touching the database", async () => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+    const row = seedRunningRow(state);
+    const updateCallsBefore = fake.db.update.mock.calls.length;
+
+    await expect(
+      renewImageRenderClaimLease({ claimId: 0, ownerToken: row.ownerToken as string, leaseSeconds: 300 })
+    ).rejects.toThrow(/Invalid claimId/);
+    await expect(
+      renewImageRenderClaimLease({ claimId: row.id as number, ownerToken: "", leaseSeconds: 300 })
+    ).rejects.toThrow(/Invalid ownerToken/);
+    await expect(
+      renewImageRenderClaimLease({ claimId: row.id as number, ownerToken: row.ownerToken as string, leaseSeconds: 0 })
+    ).rejects.toThrow(/Invalid leaseSeconds/);
+    expect(fake.db.update.mock.calls.length).toBe(updateCallsBefore);
+  });
+
+  it("never logs or returns the owner token", async () => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+    const row = seedRunningRow(state);
+
+    const result = await renewImageRenderClaimLease(renewalArgs(row));
+
+    expect(JSON.stringify(result)).not.toContain(row.ownerToken as string);
   });
 });

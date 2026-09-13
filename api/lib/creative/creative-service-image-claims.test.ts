@@ -91,7 +91,13 @@ vi.mock("./registry", async () => {
 });
 
 import { generateText } from "ai";
-import { generatePremiumLeaflet, __setImageRenderClaimOrchestrationForTests, type ImageRenderClaimOrchestration } from "./service";
+import { TRPCError } from "@trpc/server";
+import {
+  generatePremiumLeaflet,
+  __setImageRenderClaimOrchestrationForTests,
+  __setImageRenderClaimHeartbeatFactoryForTests,
+  type ImageRenderClaimOrchestration,
+} from "./service";
 import * as architect from "./campaign-message-architect";
 import * as creditEngine from "../billing/credit-engine";
 import * as registry from "./registry";
@@ -298,10 +304,18 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   affordabilityState.allowed = true;
+  // Slice C1: every test gets a benign heartbeat double unless it installs
+  // its own; the real controller/timer is never constructed in this suite.
+  __setImageRenderClaimHeartbeatFactoryForTests(() => ({
+    lostOwnership: false,
+    assertStillOwned: async () => {},
+    stop: async () => {},
+  }));
 });
 
 afterEach(() => {
   __setImageRenderClaimOrchestrationForTests(null);
+  __setImageRenderClaimHeartbeatFactoryForTests(null);
   if (process.env.IMAGE_RENDER_CLAIMS_MODE !== undefined) {
     delete process.env.IMAGE_RENDER_CLAIMS_MODE;
   }
@@ -914,5 +928,233 @@ describe("generatePremiumLeaflet — post-proceed failure returns fail the owned
     };
     const { orchestration, result } = await runFailureCase(thinPack);
     expectCleanClaimFailure(orchestration, result, /Rendered copy failed quality validation/);
+  });
+});
+
+// ─── Slice C1: heartbeat integration and ownership-loss guard ───
+
+describe("generatePremiumLeaflet — Slice C1 heartbeat integration", () => {
+  function makeHeartbeatFactory(config: { loseAtAssert?: number; lostImmediately?: boolean } = {}) {
+    const state = {
+      created: 0,
+      stopCount: 0,
+      assertCount: 0,
+      lost: config.lostImmediately ?? false,
+      owners: [] as Array<{ claimId: number; ownerToken: string }>,
+      handles: [] as Array<{ stop: ReturnType<typeof vi.fn>; assertStillOwned: ReturnType<typeof vi.fn> }>,
+    };
+    const factory = vi.fn(({ claimId, ownerToken }: { claimId: number; ownerToken: string }) => {
+      state.created += 1;
+      state.owners.push({ claimId, ownerToken });
+      const handle = {
+        get lostOwnership() {
+          return state.lost;
+        },
+        assertStillOwned: vi.fn(async () => {
+          state.assertCount += 1;
+          if (
+            state.lost ||
+            (config.loseAtAssert !== undefined && state.assertCount >= config.loseAtAssert)
+          ) {
+            state.lost = true;
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "CLAIM_SUBSYSTEM_UNAVAILABLE",
+            });
+          }
+        }),
+        stop: vi.fn(async () => {
+          state.stopCount += 1;
+        }),
+      };
+      state.handles.push(handle);
+      return handle;
+    });
+    return { factory, state };
+  }
+
+  async function runWithFactory(
+    factory: ReturnType<typeof makeHeartbeatFactory>["factory"],
+    orchestration: ImageRenderClaimOrchestration,
+    clientAttemptId = "attempt-heartbeat"
+  ) {
+    __setImageRenderClaimHeartbeatFactoryForTests(factory);
+    const { getDb } = await import("../../queries/connection");
+    vi.mocked(getDb).mockReturnValue(createMockDb().db as never);
+    vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(validPack as never);
+    vi.mocked(architect.loadApprovedMessagePack).mockResolvedValue(validPack as never);
+    __setImageRenderClaimOrchestrationForTests(orchestration);
+    let result: Awaited<ReturnType<typeof generatePremiumLeaflet>> | null = null;
+    let caught: unknown = null;
+    try {
+      result = await generatePremiumLeaflet({
+        userId: 10,
+        contentPostId: 100,
+        provider: "v2",
+        clientAttemptId,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    return { result, caught };
+  }
+
+  it("gate proceed starts exactly one heartbeat with the exact gate owner identity, stopped before finalization", async () => {
+    const { factory, state } = makeHeartbeatFactory();
+    const orchestration = makeOrchestration({ mode: "on" });
+
+    const { result } = await runWithFactory(factory, orchestration);
+
+    expect(result?.status).toBe("completed");
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(state.owners).toEqual([{ claimId: OWNER.claimId, ownerToken: OWNER.ownerToken }]);
+    expect(state.stopCount).toBe(1);
+    // stop ran strictly before finalization.
+    expect(state.handles[0].stop.mock.invocationCallOrder[0]).toBeLessThan(
+      (orchestration.finalize as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]
+    );
+    expect(orchestration.failClaim).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["gate replay", { mode: "on", gate: async () => ({ status: "replay" as const, response: REPLAY_RESPONSE }) }, "completed"],
+    ["gate blocked", { mode: "on", gate: async () => ({ status: "blocked" as const, reason: "already_running" as const }) }, "error"],
+    ["gate unavailable", { mode: "on", gate: async () => ({ status: "unavailable" as const, reason: "claim_subsystem_unavailable" as const }) }, "error"],
+    ["effective off", { mode: "off" }, "completed"],
+  ] as const)("%s constructs no heartbeat", async (_label, config, expectation) => {
+    const { factory, state } = makeHeartbeatFactory();
+    const orchestration = makeOrchestration(config as Parameters<typeof makeOrchestration>[0]);
+    if (config.mode === "off") {
+      // Off mode must not even reach the gate; a throwing gate proves it.
+      orchestration.evaluateGate = vi.fn(async () => {
+        throw new Error("gate must not run when effective off");
+      }) as ImageRenderClaimOrchestration["evaluateGate"];
+    }
+    const { result, caught } = await runWithFactory(factory, orchestration);
+    if (expectation === "completed") {
+      expect(result?.status).toBe("completed");
+      if (config.mode === "off") {
+        expect(creditEngine.deductCredits).toHaveBeenCalledTimes(1);
+      }
+    } else {
+      expect((caught as { code?: string })?.code).toBeDefined();
+    }
+    expect(state.created).toBe(0);
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("missing and invalid tokens construct no heartbeat", async () => {
+    for (const clientAttemptId of [undefined, "bad token"] as const) {
+      const { factory, state } = makeHeartbeatFactory();
+      __setImageRenderClaimHeartbeatFactoryForTests(factory);
+      const { getDb } = await import("../../queries/connection");
+      vi.mocked(getDb).mockReturnValue(createMockDb().db as never);
+      const orchestration = makeOrchestration({ mode: "on" });
+      __setImageRenderClaimOrchestrationForTests(orchestration);
+
+      await expect(
+        generatePremiumLeaflet({
+          userId: 10,
+          contentPostId: 100,
+          provider: "v2",
+          clientAttemptId,
+        })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+      expect(state.created).toBe(0);
+      expect(orchestration.evaluateGate).not.toHaveBeenCalled();
+    }
+  });
+
+  it("ownership loss before storage prevents storage/finalization/billing and never force-fails", async () => {
+    const { factory, state } = makeHeartbeatFactory({ lostImmediately: true });
+    const orchestration = makeOrchestration({ mode: "on" });
+
+    const { caught } = await runWithFactory(factory, orchestration, "attempt-lost-before-storage");
+
+    expect((caught as { code?: string })?.code).toBe("INTERNAL_SERVER_ERROR");
+    expect((caught as { message?: string })?.message).toBe("CLAIM_SUBSYSTEM_UNAVAILABLE");
+    const serialized = JSON.stringify(caught);
+    expect(serialized).not.toContain(OWNER.ownerToken);
+    expect(serialized).not.toContain(OWNER.deductionKey);
+
+    expect(storeImageBuffer).not.toHaveBeenCalled();
+    expect(orchestration.finalize).not.toHaveBeenCalled();
+    expect(creditEngine.deductCredits).not.toHaveBeenCalled();
+    expect(creditEngine.recordAiUsage).not.toHaveBeenCalled();
+    // Stale authority is never used to force-fail; fail closed.
+    expect(orchestration.failClaim).not.toHaveBeenCalled();
+    expect(state.stopCount).toBe(1);
+  });
+
+  it("ownership loss before finalization prevents finalization and all billing without render retry", async () => {
+    const { factory, state } = makeHeartbeatFactory({ loseAtAssert: 2 });
+    const orchestration = makeOrchestration({ mode: "on" });
+
+    const { caught } = await runWithFactory(factory, orchestration, "attempt-lost-before-finalize");
+
+    expect((caught as { message?: string })?.message).toBe("CLAIM_SUBSYSTEM_UNAVAILABLE");
+    // Storage happened exactly once (no retry); finalization never ran.
+    expect(storeImageBuffer).toHaveBeenCalledTimes(1);
+    expect(orchestration.finalize).not.toHaveBeenCalled();
+    expect(creditEngine.deductCredits).not.toHaveBeenCalled();
+    expect(creditEngine.recordAiUsage).not.toHaveBeenCalled();
+    expect(orchestration.failClaim).not.toHaveBeenCalled();
+    // stop ran before finalization, and the fail-closed catch stopped again
+    // (idempotent) without ever force-failing stale authority.
+    expect(state.stopCount).toBe(2);
+  });
+
+  it("pre-finalization failure stops the heartbeat and still fails the owned claim once", async () => {
+    const { factory, state } = makeHeartbeatFactory();
+    const orchestration = makeOrchestration({ mode: "on" });
+    __setImageRenderClaimHeartbeatFactoryForTests(factory);
+    const { getDb } = await import("../../queries/connection");
+    vi.mocked(getDb).mockReturnValue(createMockDb().db as never);
+    vi.mocked(architect.ensureApprovedMessagePack).mockRejectedValue(new Error("pack boom"));
+    __setImageRenderClaimOrchestrationForTests(orchestration);
+
+    const result = await generatePremiumLeaflet({
+      userId: 10,
+      contentPostId: 100,
+      provider: "v2",
+      clientAttemptId: "attempt-hb-packfail",
+    });
+
+    expect(result.status).toBe("failed");
+    expect(state.stopCount).toBe(1);
+    expect(orchestration.failClaim).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["replay", { status: "replay" as const, response: REPLAY_RESPONSE }],
+    ["blocked", { status: "blocked" as const, reason: "ambiguous_deduction_blocked" as const }],
+    ["failed", { status: "failed" as const, reason: "insufficient_credits" as const }],
+  ] as const)("finalization %s leaves the heartbeat stopped exactly once", async (_label, outcome) => {
+    const { factory, state } = makeHeartbeatFactory();
+    const orchestration = makeOrchestration({
+      mode: "on",
+      finalize: (async () => outcome) as ImageRenderClaimOrchestration["finalize"],
+    });
+    __setImageRenderClaimHeartbeatFactoryForTests(factory);
+    const { getDb } = await import("../../queries/connection");
+    vi.mocked(getDb).mockReturnValue(createMockDb().db as never);
+    vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(validPack as never);
+    __setImageRenderClaimOrchestrationForTests(orchestration);
+
+    if (outcome.status === "blocked") {
+      await expect(
+        generatePremiumLeaflet({ userId: 10, contentPostId: 100, provider: "v2", clientAttemptId: "attempt-hb-blocked" })
+      ).rejects.toMatchObject({ code: "CONFLICT", message: "AMBIGUOUS_BLOCKED" });
+    } else if (outcome.status === "failed") {
+      const result = await generatePremiumLeaflet({ userId: 10, contentPostId: 100, provider: "v2", clientAttemptId: "attempt-hb-failed" });
+      expect(result.status).toBe("failed");
+    } else {
+      const result = await generatePremiumLeaflet({ userId: 10, contentPostId: 100, provider: "v2", clientAttemptId: "attempt-hb-replay" });
+      expect(result.status).toBe("completed");
+    }
+
+    expect(state.stopCount).toBe(1);
+    expect(state.stopCount).toBe(1);
   });
 });
