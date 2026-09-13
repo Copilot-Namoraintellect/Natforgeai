@@ -6,6 +6,8 @@ import {
   classifyImageRenderAttemptError,
   computeClientAttemptStorageKey,
   computeMaterialIntentFingerprint,
+  extractImageRenderClaimErrorCode,
+  getImageRenderClaimErrorGuidance,
   mintClientAttemptId,
   normalizeBrandColors,
   sha256Hex,
@@ -13,6 +15,11 @@ import {
   type ClientAttemptStore,
   type ImageRenderMaterialIntentInput,
 } from "./image-render-client-attempt";
+import {
+  IMAGE_RENDER_CLAIM_ERROR_CODES,
+  isImageRenderClaimErrorCode,
+  type ImageRenderClaimErrorCode,
+} from "@contracts/image-render-claim-errors";
 
 function createMemoryStore(): ClientAttemptStore & { dump: () => Map<string, string> } {
   const map = new Map<string, string>();
@@ -519,5 +526,204 @@ describe("persist-before-transmit ordering", () => {
     const retry = controller.beginAttempt(scope());
     if (retry.status !== "ready") throw new Error("expected ready");
     expect(retry.token).toBe(began.token);
+  });
+});
+
+// ─── B2B-4: shared machine-code extraction, classification and guidance ───
+
+describe("isImageRenderClaimErrorCode (shared contract predicate)", () => {
+  it("accepts exactly the eight public codes and rejects everything else", () => {
+    for (const code of IMAGE_RENDER_CLAIM_ERROR_CODES) {
+      expect(isImageRenderClaimErrorCode(code)).toBe(true);
+    }
+    for (const notCode of [
+      "ambiguous_deduction_blocked",
+      "already_running",
+      "TOKEN_REQUIRED ",
+      " token_required",
+      "AMBIGUOUS",
+      "",
+      null,
+      undefined,
+      42,
+      {},
+    ]) {
+      expect(isImageRenderClaimErrorCode(notCode)).toBe(false);
+    }
+  });
+});
+
+describe("extractImageRenderClaimErrorCode", () => {
+  it.each(IMAGE_RENDER_CLAIM_ERROR_CODES.map((code) => [code, code] as const))(
+    "recognizes %s from a direct message string",
+    (_label, code) => {
+      expect(extractImageRenderClaimErrorCode({ message: code })).toBe(code);
+      expect(extractImageRenderClaimErrorCode(code)).toBe(code);
+    }
+  );
+
+  it.each(IMAGE_RENDER_CLAIM_ERROR_CODES.map((code) => [code, code] as const))(
+    "recognizes %s from a realistic tRPC client error shape",
+    (_label, code) => {
+      const trpcLike = {
+        message: code,
+        data: { code: "CONFLICT", httpStatus: 409 },
+        cause: undefined,
+      };
+      expect(extractImageRenderClaimErrorCode(trpcLike)).toBe(code);
+      // Also when only the data/cause layer carries readable structure.
+      expect(
+        extractImageRenderClaimErrorCode({ message: "Request failed", cause: { message: code } })
+      ).toBe(code);
+    }
+  );
+
+  it("does not interpret arbitrary prose or nested internal reasons as machine codes", () => {
+    expect(extractImageRenderClaimErrorCode({ message: "Generation failed: ALREADY_RUNNING now" })).toBeNull();
+    expect(extractImageRenderClaimErrorCode({ message: "ambiguous_deduction_blocked" })).toBeNull();
+    expect(
+      extractImageRenderClaimErrorCode({
+        message: "Request failed",
+        data: { code: "CONFLICT", reason: "ambiguous_deduction_blocked" },
+      })
+    ).toBeNull();
+    expect(extractImageRenderClaimErrorCode(new Error("network down"))).toBeNull();
+    expect(extractImageRenderClaimErrorCode(null)).toBeNull();
+    expect(extractImageRenderClaimErrorCode(undefined)).toBeNull();
+  });
+
+  it("respects the depth bound and never walks cyclic structures forever", () => {
+    const deep: Record<string, unknown> = {};
+    let current = deep;
+    for (let i = 0; i < 20; i += 1) {
+      current.cause = {};
+      current = current.cause as Record<string, unknown>;
+    }
+    current.message = "ALREADY_RUNNING";
+    expect(extractImageRenderClaimErrorCode(deep)).toBeNull();
+
+    const cyclic: Record<string, unknown> = { message: "nope" };
+    cyclic.cause = cyclic;
+    expect(extractImageRenderClaimErrorCode(cyclic)).toBeNull();
+  });
+});
+
+describe("classifyImageRenderAttemptError — B2B-4 machine-code precedence", () => {
+  const definitiveCodes: ImageRenderClaimErrorCode[] = [
+    "TOKEN_REQUIRED",
+    "INVALID_TOKEN",
+    "INTENT_CONFLICT",
+  ];
+  const ambiguousCodes: ImageRenderClaimErrorCode[] = [
+    "ALREADY_RUNNING",
+    "STALE_BLOCKED",
+    "ACTIVE_POST_CONFLICT",
+    "AMBIGUOUS_BLOCKED",
+    "CLAIM_SUBSYSTEM_UNAVAILABLE",
+  ];
+
+  it.each(definitiveCodes.map((code) => [code, code] as const))(
+    "%s is definitive (retire the token; next action mints fresh)",
+    (_label, code) => {
+      expect(classifyImageRenderAttemptError({ message: code })).toBe("definitive");
+      expect(
+        classifyImageRenderAttemptError({ message: code, data: { code: "CONFLICT" } })
+      ).toBe("definitive");
+    }
+  );
+
+  it.each(ambiguousCodes.map((code) => [code, code] as const))(
+    "%s is ambiguous (retain the exact token for an unchanged-intent retry)",
+    (_label, code) => {
+      expect(classifyImageRenderAttemptError({ message: code })).toBe("ambiguous");
+      expect(
+        classifyImageRenderAttemptError({ message: code, data: { code: "CONFLICT" } })
+      ).toBe("ambiguous");
+    }
+  );
+
+  it("preserves legacy classification for non-claim errors exactly", () => {
+    // Generic BAD_REQUEST and PAYMENT_REQUIRED remain ambiguous.
+    expect(classifyImageRenderAttemptError({ data: { code: "BAD_REQUEST" } })).toBe("ambiguous");
+    expect(classifyImageRenderAttemptError({ data: { code: "PAYMENT_REQUIRED" } })).toBe("ambiguous");
+    // Proven pre-work rejections remain definitive.
+    for (const code of ["UNAUTHORIZED", "FORBIDDEN", "NOT_FOUND", "TOO_MANY_REQUESTS", "NOT_IMPLEMENTED"]) {
+      expect(classifyImageRenderAttemptError({ data: { code } })).toBe("definitive");
+    }
+    // Network/5xx/unknown remain ambiguous.
+    expect(classifyImageRenderAttemptError(new Error("fetch failed"))).toBe("ambiguous");
+    expect(classifyImageRenderAttemptError({ data: { code: "INTERNAL_SERVER_ERROR" } })).toBe("ambiguous");
+  });
+});
+
+describe("getImageRenderClaimErrorGuidance", () => {
+  const EXPECTED_COPY: Record<ImageRenderClaimErrorCode, string> = {
+    TOKEN_REQUIRED: "Please try the image generation again to start a fresh request.",
+    INVALID_TOKEN: "This image request is no longer valid. Please try again.",
+    ALREADY_RUNNING:
+      "This image is already being generated. Wait for the current attempt to finish, then try again.",
+    STALE_BLOCKED:
+      "A previous image request is still locked. No new generation was started. If this persists, contact support.",
+    INTENT_CONFLICT:
+      "The image settings changed during this attempt. Try again to start a fresh request with the current settings.",
+    ACTIVE_POST_CONFLICT:
+      "Another image request for this post is already active. Wait for it to finish, then try again.",
+    AMBIGUOUS_BLOCKED:
+      "We couldn't safely confirm the previous image request's final state. No new render was started. Please avoid repeated retries and contact support if this persists.",
+    CLAIM_SUBSYSTEM_UNAVAILABLE:
+      "Image generation is temporarily unavailable. Please try again later.",
+  };
+
+  it.each(IMAGE_RENDER_CLAIM_ERROR_CODES.map((code) => [code, code] as const))(
+    "returns the exact safe copy and disposition for %s",
+    (_label, code) => {
+      const guidance = getImageRenderClaimErrorGuidance({ message: code });
+      expect(guidance).toEqual({
+        code,
+        message: EXPECTED_COPY[code],
+        tokenDisposition:
+          code === "TOKEN_REQUIRED" || code === "INVALID_TOKEN" || code === "INTENT_CONFLICT"
+            ? "retire"
+            : "retain",
+      });
+    }
+  );
+
+  it("returns null for non-claim errors so callers keep generic behavior", () => {
+    expect(getImageRenderClaimErrorGuidance(new Error("network down"))).toBeNull();
+    expect(getImageRenderClaimErrorGuidance({ message: "ambiguous_deduction_blocked" })).toBeNull();
+    expect(getImageRenderClaimErrorGuidance({ data: { code: "PAYMENT_REQUIRED" } })).toBeNull();
+    expect(getImageRenderClaimErrorGuidance(null)).toBeNull();
+  });
+
+  it("never includes tokens, hashes, claim ids, or raw dependency errors", () => {
+    const secretValues = [
+      "owner-token-secret",
+      "a".repeat(64),
+      "img-deduction:" + "b".repeat(64),
+      "claim id 777",
+      "ER_ACCESS_DENIED",
+    ];
+    for (const code of IMAGE_RENDER_CLAIM_ERROR_CODES) {
+      const guidance = getImageRenderClaimErrorGuidance({
+        message: code,
+        cause: new Error("ER_ACCESS_DENIED mysql://u:p@h/db"),
+      });
+      const serialized = JSON.stringify(guidance);
+      for (const secret of secretValues) {
+        expect(serialized, `${code}:${secret.slice(0, 24)}`).not.toContain(secret);
+      }
+    }
+  });
+
+  it("ambiguous guidance never asserts credit state either way", () => {
+    for (const code of ["ALREADY_RUNNING", "STALE_BLOCKED", "ACTIVE_POST_CONFLICT", "AMBIGUOUS_BLOCKED", "CLAIM_SUBSYSTEM_UNAVAILABLE"] as const) {
+      const message = getImageRenderClaimErrorGuidance({ message: code })?.message ?? "";
+      expect(message.toLowerCase(), code).not.toContain("credits");
+      expect(message.toLowerCase(), code).not.toContain("charged");
+      expect(message.toLowerCase(), code).not.toContain("refund");
+      expect(message.toLowerCase(), code).not.toContain("automatically clear");
+      expect(message.toLowerCase(), code).not.toContain("recovered");
+    }
   });
 });

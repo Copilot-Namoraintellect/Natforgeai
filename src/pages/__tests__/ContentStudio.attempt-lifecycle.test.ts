@@ -97,3 +97,60 @@ describe("ContentStudio attempt controller ownership (B2A wiring)", () => {
     expect(contentStudioSource).not.toContain("userId || 0");
   });
 });
+
+describe("ContentStudio B2B-4 machine-readable claim guidance wiring", () => {
+  const lifecycleMarker = contentStudioSource.indexOf(
+    "Token lifecycle: definitive pre-work rejections retire the token"
+  );
+  expect(lifecycleMarker).toBeGreaterThan(-1);
+  const onErrorStart = contentStudioSource.lastIndexOf("onError:", lifecycleMarker);
+  expect(onErrorStart).toBeGreaterThan(-1);
+  const onErrorRegion = contentStudioSource.slice(
+    onErrorStart,
+    contentStudioSource.indexOf("const selectedIteration", lifecycleMarker)
+  );
+
+  it("routes claim outcomes through the guidance helper before the generic error chain", () => {
+    expect(onErrorRegion).toContain("getImageRenderClaimErrorGuidance(err)");
+    const guidanceToast = onErrorRegion.indexOf("toast.error(claimGuidance.message)");
+    expect(guidanceToast).toBeGreaterThan(-1);
+    // The claim-guidance branch runs before any generic toast handling.
+    const genericToast = onErrorRegion.indexOf('code === "PAYMENT_REQUIRED"');
+    expect(genericToast).toBeGreaterThan(guidanceToast);
+    // The generic fallback chain is preserved for non-claim errors.
+    expect(onErrorRegion).toContain("toast.error(message ||");
+  });
+
+  it("keeps the token lifecycle routing and never mints or resubmits from onError", () => {
+    expect(onErrorRegion).toContain("classifyImageRenderAttemptError(err)");
+    expect(onErrorRegion).toContain("premiumAttemptControllerRef.current?.failDefinitive(attemptKey)");
+    expect(onErrorRegion).toContain(
+      "premiumAttemptControllerRef.current?.failAmbiguous(attemptKey, variables.clientAttemptId)"
+    );
+    expect(onErrorRegion).not.toContain("beginAttempt(");
+    expect(onErrorRegion).not.toContain(".mutate(");
+    // A deliberate retry re-enters through the normal submit path.
+    expect(contentStudioSource.indexOf("beginAttempt(")).toBeGreaterThan(-1);
+  });
+
+  it("contains no internal claim reasons, keys, tokens or identity fields", () => {
+    for (const forbidden of [
+      "ambiguous_deduction_blocked",
+      "legacy_attempt_blocked",
+      "completed_without_result",
+      "linked_result_missing_or_mismatched",
+      "completed_result_not_found",
+      "ownerToken",
+      "requestAttemptKey",
+      "intentFingerprint",
+      "deductionKey",
+      "activeClaimKey",
+      "claimId",
+    ]) {
+      expect(contentStudioSource).not.toContain(forbidden);
+    }
+    // Guidance copy is sourced from the client-attempt helper, never inline
+    // prose carrying machine internals.
+    expect(contentStudioSource).not.toContain("IMAGE_RENDER_CLAIM_BLOCKED");
+  });
+});

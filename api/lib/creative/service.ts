@@ -84,6 +84,11 @@ import {
   createDefaultImageRenderClaimsReadinessExecutor,
 } from "./image-render-claims-readiness";
 import { evaluateImageRenderClaimGate } from "./image-render-claim-gate";
+import type { ImageRenderClaimGateBlockedReason } from "./image-render-claim-gate";
+import {
+  isImageRenderClaimErrorCode,
+  type ImageRenderClaimErrorCode,
+} from "@contracts/image-render-claim-errors";
 import {
   coordinateImageRenderAttempt,
   createDefaultImageRenderClaimCoordinatorDeps,
@@ -139,6 +144,28 @@ export function __setImageRenderClaimOrchestrationForTests(
   activeImageRenderClaimOrchestration =
     orchestration ?? defaultImageRenderClaimOrchestration;
 }
+
+// ─── B2B-4: sanitized machine-readable claim outcome mapping ───
+//
+// The shared machine code is the TRPCError.message (standard tRPC codes carry
+// HTTP semantics). Internal gate/finalization reasons, keys, tokens and raw
+// errors are never exposed: replay-integrity and legacy blocked outcomes all
+// surface as AMBIGUOUS_BLOCKED, and finalization blocked outcomes do too.
+
+const IMAGE_RENDER_CLAIM_BLOCKED_TRANSPORT: Record<
+  ImageRenderClaimGateBlockedReason,
+  { code: "CONFLICT"; message: ImageRenderClaimErrorCode }
+> = {
+  already_running: { code: "CONFLICT", message: "ALREADY_RUNNING" },
+  stale_blocked: { code: "CONFLICT", message: "STALE_BLOCKED" },
+  intent_conflict: { code: "CONFLICT", message: "INTENT_CONFLICT" },
+  active_post_conflict: { code: "CONFLICT", message: "ACTIVE_POST_CONFLICT" },
+  ambiguous_deduction_blocked: { code: "CONFLICT", message: "AMBIGUOUS_BLOCKED" },
+  legacy_attempt_blocked: { code: "CONFLICT", message: "AMBIGUOUS_BLOCKED" },
+  completed_without_result: { code: "CONFLICT", message: "AMBIGUOUS_BLOCKED" },
+  linked_result_missing_or_mismatched: { code: "CONFLICT", message: "AMBIGUOUS_BLOCKED" },
+  completed_result_not_found: { code: "CONFLICT", message: "AMBIGUOUS_BLOCKED" },
+};
 
 function newGenerationRunId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -967,13 +994,13 @@ export async function generatePremiumLeaflet({
     if (clientAttemptId === undefined || clientAttemptId === null) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: "clientAttemptId is required for premium image generation",
+        message: "TOKEN_REQUIRED",
       });
     }
     if (!IMAGE_RENDER_CLIENT_ATTEMPT_ID_PATTERN.test(clientAttemptId)) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: "Invalid clientAttemptId: must be 1-64 characters of [A-Za-z0-9_-]",
+        message: "INVALID_TOKEN",
       });
     }
     const ownerToken = randomBytes(32).toString("hex");
@@ -1020,15 +1047,16 @@ export async function generatePremiumLeaflet({
       };
     }
     if (gateResult.status === "blocked") {
+      const transport = IMAGE_RENDER_CLAIM_BLOCKED_TRANSPORT[gateResult.reason];
       throw new TRPCError({
-        code: "CONFLICT",
-        message: "IMAGE_RENDER_CLAIM_BLOCKED",
+        code: transport.code,
+        message: transport.message,
       });
     }
     if (gateResult.status === "unavailable") {
       throw new TRPCError({
         code: "INTERNAL_SERVER_ERROR",
-        message: "IMAGE_RENDER_CLAIM_UNAVAILABLE",
+        message: "CLAIM_SUBSYSTEM_UNAVAILABLE",
       });
     }
     imageRenderClaimOwner = gateResult.owner;
@@ -2044,6 +2072,12 @@ export async function generatePremiumLeaflet({
           usingFallback: false,
         };
       }
+      // B2B-4: post-render claim-safe blocking is machine-readable and
+      // sanitized. No refund, no rerender, no second failure transition, and
+      // no exposure of the internal finalization reason.
+      if (finalizationResult.status === "blocked") {
+        throw new TRPCError({ code: "CONFLICT", message: "AMBIGUOUS_BLOCKED" });
+      }
       throw new Error("IMAGE_RENDER_FINALIZATION_NOT_COMMITTED");
     }
 
@@ -2198,6 +2232,11 @@ export async function generatePremiumLeaflet({
     // helper no-ops when claims are off or the terminal state is already
     // owned by the finalization layer, and it never retries.
     await failOwnedClaimOnce();
+    // B2B-4: sanitized machine-readable claim outcomes propagate unchanged;
+    // they are never converted into the legacy failed result.
+    if (err instanceof TRPCError && isImageRenderClaimErrorCode(err.message)) {
+      throw err;
+    }
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error(`[PremiumLeaflet] Unexpected error | userId=${userId} | contentPostId=${contentPostId} | error="${errorMessage}"`, err);
     await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: errorMessage });

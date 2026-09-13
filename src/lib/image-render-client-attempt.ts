@@ -10,6 +10,11 @@
 // Raw refinement/guidance text, raw brand colours and the raw token never
 // appear in storage keys or values other than the token field itself.
 
+import {
+  isImageRenderClaimErrorCode,
+  type ImageRenderClaimErrorCode,
+} from "@contracts/image-render-claim-errors";
+
 export const IMAGE_RENDER_OPERATION_KIND = "premium_image" as const;
 export const CLIENT_ATTEMPT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -268,9 +273,134 @@ function parseStoredAttempt(raw: string | null): StoredClientAttempt | null {
 
 export type ClientAttemptErrorClassification = "definitive" | "ambiguous";
 
+// ─── B2B-4: shared machine-code extraction (bounded, strict) ───
+//
+// Recognizes the sanitized public claim outcome codes from realistic tRPC
+// client error shapes (message / nested data / nested cause) with a hard
+// depth bound. Only exact values accepted by isImageRenderClaimErrorCode
+// count — arbitrary prose and internal reason strings never match.
+
+const MAX_CLAIM_CODE_SEARCH_DEPTH = 4;
+
+export function extractImageRenderClaimErrorCode(
+  err: unknown
+): ImageRenderClaimErrorCode | null {
+  const seen = new Set<unknown>();
+  const queue: Array<{ value: unknown; depth: number }> = [
+    { value: (err as { message?: unknown } | null | undefined)?.message, depth: 0 },
+    { value: err, depth: 0 },
+  ];
+  while (queue.length > 0) {
+    const entry = queue.shift();
+    if (!entry) break;
+    const { value, depth } = entry;
+    if (value === null || value === undefined || depth > MAX_CLAIM_CODE_SEARCH_DEPTH) {
+      continue;
+    }
+    if (typeof value === "string") {
+      if (isImageRenderClaimErrorCode(value)) {
+        return value;
+      }
+      continue;
+    }
+    if (typeof value !== "object" || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    const record = value as Record<string, unknown>;
+    queue.push(
+      { value: record.message, depth: depth + 1 },
+      { value: record.data, depth: depth + 1 },
+      { value: record.cause, depth: depth + 1 }
+    );
+  }
+  return null;
+}
+
+export interface ImageRenderClaimErrorGuidance {
+  code: ImageRenderClaimErrorCode;
+  message: string;
+  tokenDisposition: "retire" | "retain";
+}
+
+const IMAGE_RENDER_CLAIM_GUIDANCE: Record<
+  ImageRenderClaimErrorCode,
+  { message: string; tokenDisposition: "retire" | "retain" }
+> = {
+  TOKEN_REQUIRED: {
+    message: "Please try the image generation again to start a fresh request.",
+    tokenDisposition: "retire",
+  },
+  INVALID_TOKEN: {
+    message: "This image request is no longer valid. Please try again.",
+    tokenDisposition: "retire",
+  },
+  ALREADY_RUNNING: {
+    message:
+      "This image is already being generated. Wait for the current attempt to finish, then try again.",
+    tokenDisposition: "retain",
+  },
+  STALE_BLOCKED: {
+    message:
+      "A previous image request is still locked. No new generation was started. If this persists, contact support.",
+    tokenDisposition: "retain",
+  },
+  INTENT_CONFLICT: {
+    message:
+      "The image settings changed during this attempt. Try again to start a fresh request with the current settings.",
+    tokenDisposition: "retire",
+  },
+  ACTIVE_POST_CONFLICT: {
+    message:
+      "Another image request for this post is already active. Wait for it to finish, then try again.",
+    tokenDisposition: "retain",
+  },
+  AMBIGUOUS_BLOCKED: {
+    message:
+      "We couldn't safely confirm the previous image request's final state. No new render was started. Please avoid repeated retries and contact support if this persists.",
+    tokenDisposition: "retain",
+  },
+  CLAIM_SUBSYSTEM_UNAVAILABLE: {
+    message: "Image generation is temporarily unavailable. Please try again later.",
+    tokenDisposition: "retain",
+  },
+};
+
+/**
+ * Safe user-facing guidance for recognized claim outcomes; null for any
+ * non-claim error (callers then preserve their existing generic behavior).
+ * The copy never asserts credit state, never promises automatic recovery, and
+ * never contains tokens, keys, claim ids, or raw dependency errors.
+ */
+export function getImageRenderClaimErrorGuidance(
+  err: unknown
+): ImageRenderClaimErrorGuidance | null {
+  const code = extractImageRenderClaimErrorCode(err);
+  if (!code) {
+    return null;
+  }
+  const entry = IMAGE_RENDER_CLAIM_GUIDANCE[code];
+  return { code, message: entry.message, tokenDisposition: entry.tokenDisposition };
+}
+
 export function classifyImageRenderAttemptError(
   err: unknown
 ): ClientAttemptErrorClassification {
+  // B2B-4: exact shared machine codes take precedence over the legacy tRPC
+  // code classification. Definitive machine codes prove no paid work started
+  // for THIS logical attempt; ambiguous machine codes must retain the exact
+  // token so a deliberate unchanged-intent retry cannot fork the attempt.
+  const claimCode = extractImageRenderClaimErrorCode(err);
+  if (claimCode) {
+    switch (claimCode) {
+      case "TOKEN_REQUIRED":
+      case "INVALID_TOKEN":
+      case "INTENT_CONFLICT":
+        return "definitive";
+      default:
+        return "ambiguous";
+    }
+  }
   const code =
     (err as { data?: { code?: string } } | null | undefined)?.data?.code ??
     (err as { code?: string } | null | undefined)?.code;

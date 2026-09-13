@@ -335,7 +335,7 @@ describe("generatePremiumLeaflet — effective-on token rule", () => {
 
     await expect(
       generatePremiumLeaflet({ userId: 10, contentPostId: 100, provider: "v2" })
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    ).rejects.toMatchObject({ code: "BAD_REQUEST", message: "TOKEN_REQUIRED" });
 
     expect(orchestration.evaluateGate).not.toHaveBeenCalled();
     expect(orchestration.finalize).not.toHaveBeenCalled();
@@ -353,7 +353,7 @@ describe("generatePremiumLeaflet — effective-on token rule", () => {
 
     await expect(
       generatePremiumLeaflet({ userId: 10, contentPostId: 100, provider: "v2", clientAttemptId: "bad token" })
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    ).rejects.toMatchObject({ code: "BAD_REQUEST", message: "INVALID_TOKEN" });
     expect(orchestration.evaluateGate).not.toHaveBeenCalled();
   });
 
@@ -499,23 +499,42 @@ describe("generatePremiumLeaflet — claim gate orchestration", () => {
     expect(JSON.stringify(result)).not.toContain(OWNER.ownerToken);
   });
 
-  it("blocked and unavailable gate outcomes exit before provider/storage/finalization/billing", async () => {
-    for (const [label, outcome, code] of [
-      ["blocked", { status: "blocked" as const, reason: "already_running" as const }, "CONFLICT"],
-      ["unavailable", { status: "unavailable" as const, reason: "claim_subsystem_unavailable" as const }, "INTERNAL_SERVER_ERROR"],
-    ] as const) {
+  it("every gate blocked reason maps to its sanitized machine code and exits before side effects", async () => {
+    const cases: [string, string, string][] = [
+      ["already_running", "CONFLICT", "ALREADY_RUNNING"],
+      ["stale_blocked", "CONFLICT", "STALE_BLOCKED"],
+      ["intent_conflict", "CONFLICT", "INTENT_CONFLICT"],
+      ["active_post_conflict", "CONFLICT", "ACTIVE_POST_CONFLICT"],
+      ["ambiguous_deduction_blocked", "CONFLICT", "AMBIGUOUS_BLOCKED"],
+      ["legacy_attempt_blocked", "CONFLICT", "AMBIGUOUS_BLOCKED"],
+      ["completed_without_result", "CONFLICT", "AMBIGUOUS_BLOCKED"],
+      ["linked_result_missing_or_mismatched", "CONFLICT", "AMBIGUOUS_BLOCKED"],
+      ["completed_result_not_found", "CONFLICT", "AMBIGUOUS_BLOCKED"],
+    ];
+    for (const [reason, code, message] of cases) {
       const orchestration = makeOrchestration({
         mode: "on",
-        gate: (async () => outcome) as ImageRenderClaimOrchestration["evaluateGate"],
+        gate: (async () => ({ status: "blocked" as const, reason: reason as never })) as ImageRenderClaimOrchestration["evaluateGate"],
       });
       __setImageRenderClaimOrchestrationForTests(orchestration);
       const { getDb } = await import("../../queries/connection");
       vi.mocked(getDb).mockReturnValue(createMockDb().db as never);
       vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(validPack as never);
 
-      await expect(
-        generatePremiumLeaflet({ userId: 10, contentPostId: 100, provider: "v2", clientAttemptId: `attempt-${label}` })
-      ).rejects.toMatchObject({ code });
+      let caught: unknown = null;
+      try {
+        await generatePremiumLeaflet({ userId: 10, contentPostId: 100, provider: "v2", clientAttemptId: `attempt-${reason}` });
+      } catch (err) {
+        caught = err;
+      }
+      expect((caught as { code?: string })?.code, reason).toBe(code);
+      expect((caught as { message?: string })?.message, reason).toBe(message);
+      // No internal reason/key/token leaks into the serialized public error.
+      const serialized = JSON.stringify(caught);
+      expect(serialized, reason).not.toContain(OWNER.ownerToken);
+      expect(serialized, reason).not.toContain("ambiguous_deduction_blocked");
+      expect(serialized, reason).not.toContain(OWNER.requestAttemptKey);
+      expect(serialized, reason).not.toContain(OWNER.deductionKey);
 
       expect(orchestration.evaluateGate).toHaveBeenCalledTimes(1);
       expect(orchestration.finalize).not.toHaveBeenCalled();
@@ -523,7 +542,32 @@ describe("generatePremiumLeaflet — claim gate orchestration", () => {
       expect(storeImageBuffer).not.toHaveBeenCalled();
       expect(creditEngine.deductCredits).not.toHaveBeenCalled();
       expect(creditEngine.recordAiUsage).not.toHaveBeenCalled();
+      vi.mocked(storeImageBuffer).mockClear();
+      vi.mocked(creditEngine.deductCredits).mockClear();
+      vi.mocked(creditEngine.recordAiUsage).mockClear();
     }
+  });
+
+  it("gate unavailable maps to CLAIM_SUBSYSTEM_UNAVAILABLE and exits before side effects", async () => {
+    const orchestration = makeOrchestration({
+      mode: "on",
+      gate: (async () => ({ status: "unavailable" as const, reason: "claim_subsystem_unavailable" as const })) as ImageRenderClaimOrchestration["evaluateGate"],
+    });
+    __setImageRenderClaimOrchestrationForTests(orchestration);
+    const { getDb } = await import("../../queries/connection");
+    vi.mocked(getDb).mockReturnValue(createMockDb().db as never);
+    vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(validPack as never);
+
+    await expect(
+      generatePremiumLeaflet({ userId: 10, contentPostId: 100, provider: "v2", clientAttemptId: "attempt-unavailable" })
+    ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: "CLAIM_SUBSYSTEM_UNAVAILABLE" });
+
+    expect(orchestration.evaluateGate).toHaveBeenCalledTimes(1);
+    expect(orchestration.finalize).not.toHaveBeenCalled();
+    expect(orchestration.failClaim).not.toHaveBeenCalled();
+    expect(storeImageBuffer).not.toHaveBeenCalled();
+    expect(creditEngine.deductCredits).not.toHaveBeenCalled();
+    expect(creditEngine.recordAiUsage).not.toHaveBeenCalled();
   });
 
   it("bypasses generic existing-image reuse in effective-on mode", async () => {
@@ -624,29 +668,66 @@ describe("generatePremiumLeaflet — proceed/finalization integration", () => {
     expect(creditEngine.deductCredits).not.toHaveBeenCalled();
   });
 
-  it("finalization blocked/failed performs no refund and no second claim-failure transition", async () => {
-    for (const [label, outcome] of [
-      ["blocked", { status: "blocked" as const, reason: "ambiguous_deduction_blocked" as const }],
-      ["failed", { status: "failed" as const, reason: "insufficient_credits" as const }],
+  it("finalization blocked maps both reasons to CONFLICT/AMBIGUOUS_BLOCKED with zero new work", async () => {
+    for (const [label, blockedReason] of [
+      ["ambiguous_deduction_blocked", "ambiguous_deduction_blocked"],
+      ["integrity_blocked", "integrity_blocked"],
     ] as const) {
       const orchestration = makeOrchestration({
         mode: "on",
-        finalize: (async () => outcome) as ImageRenderClaimOrchestration["finalize"],
+        finalize: (async () => ({ status: "blocked" as const, reason: blockedReason as never })) as ImageRenderClaimOrchestration["finalize"],
       });
       __setImageRenderClaimOrchestrationForTests(orchestration);
       const { getDb } = await import("../../queries/connection");
       vi.mocked(getDb).mockReturnValue(createMockDb().db as never);
       vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(validPack as never);
 
-      const result = await generatePremiumLeaflet({
-        userId: 10, contentPostId: 100, provider: "v2", clientAttemptId: `attempt-${label}`,
-      });
+      let caught: unknown = null;
+      try {
+        await generatePremiumLeaflet({
+          userId: 10, contentPostId: 100, provider: "v2", clientAttemptId: `attempt-final-${label}`,
+        });
+      } catch (err) {
+        caught = err;
+      }
 
-      expect(result.status, label).toBe("failed");
-      expect(String(result.errorMessage)).toContain("IMAGE_RENDER_FINALIZATION_NOT_COMMITTED");
+      expect((caught as { code?: string })?.code, label).toBe("CONFLICT");
+      expect((caught as { message?: string })?.message, label).toBe("AMBIGUOUS_BLOCKED");
+      const serialized = JSON.stringify(caught);
+      expect(serialized, label).not.toContain(blockedReason);
+      expect(serialized, label).not.toContain(OWNER.ownerToken);
+      expect(serialized, label).not.toContain(OWNER.deductionKey);
+
+      // No refund, no rerender, no second failure transition, no billing.
       expect(orchestration.failClaim, label).not.toHaveBeenCalled();
+      expect(orchestration.finalize, label).toHaveBeenCalledTimes(1);
       expect(creditEngine.deductCredits, label).not.toHaveBeenCalled();
+      expect(creditEngine.recordAiUsage, label).not.toHaveBeenCalled();
+      expect(vi.mocked(generateText).mock.calls.length, label).toBe(0);
+      vi.mocked(storeImageBuffer).mockClear();
+      vi.mocked(creditEngine.deductCredits).mockClear();
+      vi.mocked(creditEngine.recordAiUsage).mockClear();
     }
+  });
+
+  it("finalization failed keeps the existing legacy failed result with no second claim-failure transition", async () => {
+    const orchestration = makeOrchestration({
+      mode: "on",
+      finalize: (async () => ({ status: "failed" as const, reason: "insufficient_credits" as const })) as ImageRenderClaimOrchestration["finalize"],
+    });
+    __setImageRenderClaimOrchestrationForTests(orchestration);
+    const { getDb } = await import("../../queries/connection");
+    vi.mocked(getDb).mockReturnValue(createMockDb().db as never);
+    vi.mocked(architect.ensureApprovedMessagePack).mockResolvedValue(validPack as never);
+
+    const result = await generatePremiumLeaflet({
+      userId: 10, contentPostId: 100, provider: "v2", clientAttemptId: "attempt-finalfailed",
+    });
+
+    expect(result.status).toBe("failed");
+    expect(String(result.errorMessage)).toContain("IMAGE_RENDER_FINALIZATION_NOT_COMMITTED");
+    expect(orchestration.failClaim).not.toHaveBeenCalled();
+    expect(creditEngine.deductCredits).not.toHaveBeenCalled();
   });
 });
 

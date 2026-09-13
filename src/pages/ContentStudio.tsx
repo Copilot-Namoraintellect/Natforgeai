@@ -74,6 +74,7 @@ import {
   ImageRenderAttemptController,
   classifyImageRenderAttemptError,
   computeClientAttemptStorageKey,
+  getImageRenderClaimErrorGuidance,
 } from "@/lib/image-render-client-attempt";
 
 const ENABLE_PREMIUM_VIDEO = import.meta.env.VITE_ENABLE_PREMIUM_VIDEO === "true";
@@ -1334,6 +1335,16 @@ Include:
         }
       }
       const message = err.message || "";
+      // B2B-4: recognized claim outcomes show safe machine-code guidance and
+      // skip the generic error chain. The token lifecycle above already ran
+      // with machine-code precedence; nothing here mints tokens, retries, or
+      // resubmits automatically.
+      const claimGuidance = getImageRenderClaimErrorGuidance(err);
+      if (claimGuidance) {
+        toast.error(claimGuidance.message);
+        setLeafletGenerationError(claimGuidance.message);
+        return;
+      }
       const code = (err as { data?: { code?: string } } | undefined)?.data?.code;
       const prefix = message ? `${message} ` : "";
       if (code === "PAYMENT_REQUIRED" || message.includes("Insufficient credits") || message.includes("credits.")) {
