@@ -669,6 +669,37 @@ describe("generatePremiumLeaflet — proceed/finalization integration", () => {
     );
   });
 
+  it("service callback builds the metadata payload (not a wrapped assignment) for the coordinator to persist", async () => {
+    const orchestration = makeOrchestration({ mode: "on" });
+    const { result } = await runClaimService(orchestration, { clientAttemptId: "attempt-metadata-contract" });
+
+    expect(result?.status).toBe("completed");
+    const input = orchestration.lastFinalizeInput;
+    const expectedCredits = getPremiumImageInternalCredits();
+
+    // Invoke the seam exactly as the coordinator does, with a deterministic id.
+    const metadata = input.buildContentPostPatch({
+      generatedImageId: 4242,
+      creditsCharged: expectedCredits,
+    });
+
+    // The service returns the METADATA CONTENTS for the physical
+    // content_posts.metadata column — never a top-level wrapper.
+    expect(metadata).not.toHaveProperty("metadata");
+    expect(metadata).toMatchObject({
+      currentVersionId: 4242,
+      imageCurrentVersionId: 4242,
+      imageUrl: "https://example.com/v2-image.png",
+      imageProvider: "premium-v2",
+      imageStatus: "ready",
+      imageCreditsCharged: expectedCredits,
+      imageSource: "premium",
+      source: "premium",
+      imageIsDraft: false,
+      isDraft: false,
+    });
+  });
+
   it("finalization replay rerenders nothing and captions nothing", async () => {
     const orchestration = makeOrchestration({
       mode: "on",

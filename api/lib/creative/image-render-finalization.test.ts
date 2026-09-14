@@ -330,14 +330,92 @@ describe("finalizeImageRenderAttempt — positive-credit success", () => {
     expect(insert.op).toBe("insert-image");
     const completion = calls.find((call) => call.name === "complete");
     expect((completion?.args.result as Record<string, unknown>).generatedImageId).toBe(4242);
+    // The coordinator wraps the caller-built payload under the physical
+    // metadata column; it is never spread as top-level update fields.
     expect(runner.runs[0].tx.ops[1]).toEqual({
       op: "update-post",
       payload: {
-        currentVersionId: 4242,
-        imageCurrentVersionId: 4242,
-        imageCreditsCharged: 12,
+        metadata: {
+          currentVersionId: 4242,
+          imageCurrentVersionId: 4242,
+          imageCreditsCharged: 12,
+        },
       },
     });
+  });
+
+  it("persists the caller-built payload under the physical metadata column with no top-level image keys", async () => {
+    const callbackArgs: Array<{ generatedImageId: number; creditsCharged: number }> = [];
+    const callbackResults: Record<string, unknown>[] = [];
+    const input = makeInput();
+    const recordingInput: ImageRenderFinalizationInput = {
+      ...input,
+      buildContentPostPatch: (args) => {
+        callbackArgs.push(args);
+        const result = input.buildContentPostPatch(args);
+        callbackResults.push(result);
+        return result;
+      },
+    };
+
+    const { runner, deps } = makeHarness();
+    const result = await finalizeImageRenderAttempt(recordingInput, deps);
+
+    expect(result.status).toBe("finalized");
+    // Exactly one content-post update.
+    const postUpdates = runner.runs[0].tx.ops.filter((op) => op.op === "update-post");
+    expect(postUpdates).toHaveLength(1);
+    const updateValue = postUpdates[0].payload as Record<string, unknown>;
+    // Exact physical outer shape: { metadata: <callback result> }.
+    expect(Object.keys(updateValue).sort()).toEqual(["metadata"]);
+    expect(updateValue.metadata).toEqual(callbackResults[0]);
+    expect(typeof updateValue.metadata).toBe("object");
+    // The callback saw the exact insertId and the finalization charge.
+    expect(callbackArgs).toEqual([{ generatedImageId: 4242, creditsCharged: 12 }]);
+    // None of the metadata fields appear as top-level update keys.
+    for (const forbidden of [
+      "currentVersionId",
+      "imageCurrentVersionId",
+      "imageUrl",
+      "imageProvider",
+      "imageJobId",
+      "imageStatus",
+      "imageCreditsCharged",
+    ]) {
+      expect(updateValue, forbidden).not.toHaveProperty(forbidden);
+    }
+  });
+
+  it("zero-credit path uses the same physical metadata wrapper", async () => {
+    const input = makeInput();
+    const zeroCredit: ImageRenderFinalizationInput = {
+      ...input,
+      charge: { ...input.charge, amount: 0 },
+    };
+    const { runner, deps } = makeHarness();
+    const result = await finalizeImageRenderAttempt(zeroCredit, deps);
+
+    expect(result).toMatchObject({ status: "finalized", creditsCharged: 0 });
+    const postUpdates = runner.runs[0].tx.ops.filter((op) => op.op === "update-post");
+    expect(postUpdates).toHaveLength(1);
+    const updateValue = postUpdates[0].payload as Record<string, unknown>;
+    expect(Object.keys(updateValue).sort()).toEqual(["metadata"]);
+    expect((updateValue.metadata as Record<string, unknown>).imageCreditsCharged).toBe(0);
+  });
+
+  it("a content-post update failure rolls back with the existing failure semantics", async () => {
+    const { runner, deps, calls } = makeHarness({
+      txScripts: [{ updateError: new Error("post boom") }],
+    });
+    const result = await finalizeImageRenderAttempt(makeInput(), deps);
+
+    expect(result).toEqual({ status: "failed", reason: "content_post_update_failed" });
+    expect(runner.runs).toHaveLength(1);
+    expect(runner.runs[0].committed).toBe(false);
+    expect(runner.runs[0].tx.rolledBack).toBe(true);
+    expect(countCalls(calls, "deduct")).toBe(0);
+    expect(countCalls(calls, "usage")).toBe(0);
+    expect(countCalls(calls, "complete")).toBe(0);
   });
 
   it("runs the exact required order and passes the same transaction executor to every primitive", async () => {
@@ -372,7 +450,9 @@ describe("finalizeImageRenderAttempt — positive-credit success", () => {
     expect(result).toMatchObject({ status: "finalized", generatedImageId: 98765 });
     const completion = calls.find((call) => call.name === "complete");
     expect((completion?.args.result as Record<string, unknown>).generatedImageId).toBe(98765);
-    expect(runner.runs[0].tx.ops[1].payload).toMatchObject({ currentVersionId: 98765 });
+    expect(runner.runs[0].tx.ops[1].payload).toMatchObject({
+      metadata: { currentVersionId: 98765 },
+    });
   });
 });
 

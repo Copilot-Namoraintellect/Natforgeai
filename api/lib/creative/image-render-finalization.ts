@@ -129,9 +129,13 @@ export interface ImageRenderFinalizationInput {
     metadata: Record<string, unknown>;
   };
   /**
-   * Content-post metadata patch semantics are owned by the caller (the future
-   * service integration). The coordinator injects the exact generated image
-   * id and the actually-charged credits; storage/rendering are never invoked.
+   * Returns the COMPLETE JSON value to persist into the physical
+   * `content_posts.metadata` column — the full merged metadata object
+   * (`{ ...currentMeta, ...new image fields }`). It does NOT return top-level
+   * content_posts column assignments: the coordinator owns the physical
+   * wrapper `{ metadata: <callback result> }`. The callback receives the
+   * exact generated_images insertId (`generatedImageId`) and the actually
+   * charged credits; storage/rendering are never invoked.
    */
   buildContentPostPatch: (args: {
     generatedImageId: number;
@@ -533,11 +537,18 @@ async function runFinalizationTransaction(
     throw new ImageRenderFinalizationInvalidImageId();
   }
 
-  // 2. Update the authoritative content post with the exact generated id.
+  // 2. Persist the caller-built metadata payload into the physical
+  // content_posts.metadata JSON column. The coordinator owns the
+  // `{ metadata: ... }` wrapper; the callback result is never spread as
+  // top-level column assignments.
+  const contentPostMetadata = input.buildContentPostPatch({
+    generatedImageId,
+    creditsCharged,
+  });
   try {
     await tx
       .update(contentPosts)
-      .set(input.buildContentPostPatch({ generatedImageId, creditsCharged }))
+      .set({ metadata: contentPostMetadata })
       .where(eq(contentPosts.id, claim.contentPostId));
   } catch (err) {
     throw new ImageRenderFinalizationPostUpdateFailed(err);
