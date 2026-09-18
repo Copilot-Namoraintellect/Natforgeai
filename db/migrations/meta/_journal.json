@@ -148,6 +148,20 @@
       "when": 1789041839926,
       "tag": "0020_real_smasher",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "5",
+      "when": 1789746900262,
+      "tag": "0021_narrow_loners",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1789750000000,
+      "tag": "0022_engagement_inbound_crash_recovery",
+      "breakpoints": true
     }
   ]
 }

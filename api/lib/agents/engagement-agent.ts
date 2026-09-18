@@ -3,6 +3,7 @@ import { runAgent } from "./runner";
 import { getDb } from "../../queries/connection";
 import { conversationThreads, conversationMessages, leads, leadActivities } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
 
 const ReplySchema = z.object({
   reply: z.string(),
@@ -31,9 +32,10 @@ export async function generateReply({
   messageText,
   platform,
   businessContext,
+  dedupKey,
 }: {
   userId: number;
-  campaignId: number;
+  campaignId: number | null;
   threadId: number;
   messageText: string;
   platform: string;
@@ -43,6 +45,8 @@ export async function generateReply({
     brandTone?: string;
     mainGoal?: string;
   };
+  /** Event-scoped idempotency key; when set, the persisted AI reply is deduplicated per event. */
+  dedupKey?: string;
 }) {
   const db = getDb();
 
@@ -95,7 +99,7 @@ Respond with structured data.`;
 
   const result = await runAgent({
     userId,
-    campaignId,
+    campaignId: campaignId ?? undefined,
     agentType: "engagement",
     prompt,
     schema: ReplySchema,
@@ -103,14 +107,23 @@ Respond with structured data.`;
       "You are an expert customer service and sales engagement AI. You write natural, persuasive replies that build trust and move conversations toward conversion. You are careful with sensitive topics and always escalate when unsure. Always respond with valid structured data.",
   });
 
-  // Save the AI reply
-  await db.insert(conversationMessages).values({
-    threadId,
-    senderType: "ai",
-    messageText: result.output.reply,
-    aiGenerated: true,
-    sentiment: result.output.sentiment,
-  });
+  // Save the AI reply. When driven by the inbound pipeline's event-scoped
+  // dedupKey, a recovery retry of an event whose reply was already persisted
+  // must not write a second proposal.
+  try {
+    await db.insert(conversationMessages).values({
+      threadId,
+      senderType: "ai",
+      messageText: result.output.reply,
+      aiGenerated: true,
+      sentiment: result.output.sentiment,
+      dedupKey: dedupKey ? `${dedupKey}:ai-reply` : null,
+    });
+  } catch (err: any) {
+    if (!dedupKey || !isMySqlDuplicateKeyError(err)) throw err;
+    // Reply proposal already recorded for this event; continue with the
+    // thread update and lead linkage below.
+  }
 
   // Update thread
   const threadUpdates: any = {
@@ -183,9 +196,10 @@ export async function handleNewMessage({
   externalThreadId,
   messageText,
   businessContext,
+  dedupKey,
 }: {
   userId: number;
-  campaignId: number;
+  campaignId: number | null;
   platform: string;
   externalThreadId: string;
   messageText: string;
@@ -195,6 +209,13 @@ export async function handleNewMessage({
     brandTone?: string;
     mainGoal?: string;
   };
+  /**
+   * Event-scoped idempotency key (e.g. `<provider>:<externalEventId>`).
+   * When set, the persisted inbound message and the AI reply proposal are
+   * deduplicated per event, so a pipeline recovery retry cannot duplicate
+   * them even if the original attempt failed partway through.
+   */
+  dedupKey?: string;
 }) {
   const db = getDb();
 
@@ -232,13 +253,21 @@ export async function handleNewMessage({
     } as any;
   }
 
-  // Save incoming message
-  await db.insert(conversationMessages).values({
-    threadId: thread.id,
-    senderType: "lead",
-    messageText,
-    aiGenerated: false,
-  });
+  // Save incoming message. The (threadId, dedupKey) unique index makes this
+  // insert idempotent per webhook event: a recovery retry of an event whose
+  // inbound message was already recorded skips the re-insert.
+  try {
+    await db.insert(conversationMessages).values({
+      threadId: thread.id,
+      senderType: "lead",
+      messageText,
+      aiGenerated: false,
+      dedupKey: dedupKey ?? null,
+    });
+  } catch (err: any) {
+    if (!dedupKey || !isMySqlDuplicateKeyError(err)) throw err;
+    // Inbound message already recorded for this event (retry path).
+  }
 
   // Generate AI reply
   const result = await generateReply({
@@ -248,7 +277,8 @@ export async function handleNewMessage({
     messageText,
     platform,
     businessContext,
+    dedupKey,
   });
 
-  return result;
+  return { threadId: thread.id, result };
 }

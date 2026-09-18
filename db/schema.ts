@@ -1006,10 +1006,75 @@ export const conversationMessages = mysqlTable("conversation_messages", {
     "negative",
     "urgent",
   ]),
+  dedupKey: varchar("dedupKey", { length: 255 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+},
+(table) => ({
+  // Idempotency guard for inbound processing retries: one durable record per
+  // (thread, event dedup key). MySQL unique indexes allow multiple NULLs, so
+  // manually composed messages (no dedupKey) are unaffected.
+  threadDedupIdx: uniqueIndex("conversation_messages_thread_dedup_idx").on(
+    table.threadId,
+    table.dedupKey
+  ),
+})
+);
 
 export type ConversationMessage = typeof conversationMessages.$inferSelect;
+
+// ─── Engagement Webhook Events (inbound ingestion audit + idempotency) ───
+//
+// Processing lifecycle (crash-recovery hardened):
+//   received → processing → completed | escalated
+//                    └────→ failed (retryable on redelivery / explicit recovery)
+// Legacy rows may still carry: accepted (processed, terminal), error
+// (terminal under the pre-recovery semantics), rejected, duplicate.
+export const engagementWebhookEvents = mysqlTable(
+  "engagement_webhook_events",
+  {
+    id: serial("id").primaryKey(),
+    provider: varchar("provider", { length: 50 }).notNull(),
+    externalEventId: varchar("externalEventId", { length: 255 }).notNull(),
+    eventType: varchar("eventType", { length: 50 }).notNull(),
+    status: mysqlEnum("status", [
+      "accepted",
+      "duplicate",
+      "rejected",
+      "escalated",
+      "error",
+      "received",
+      "processing",
+      "completed",
+      "failed",
+    ])
+      .default("received")
+      .notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }),
+    integrationId: bigint("integrationId", { mode: "number", unsigned: true }),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    threadId: bigint("threadId", { mode: "number", unsigned: true }),
+    actorId: varchar("actorId", { length: 255 }),
+    payloadSummary: json("payloadSummary"),
+    error: text("error"),
+    // Processing lease: only the holder of a healthy (unexpired) claim may
+    // invoke Engagement processing for this event.
+    claimedAt: timestamp("claimedAt"),
+    claimExpiresAt: timestamp("claimExpiresAt"),
+    completedAt: timestamp("completedAt"),
+    retryCount: int("retryCount").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    lastSeenAt: timestamp("lastSeenAt"),
+  },
+  (table) => ({
+    providerEventIdx: uniqueIndex(
+      "engagement_webhook_events_provider_event_idx"
+    ).on(table.provider, table.externalEventId),
+  })
+);
+
+export type EngagementWebhookEvent = typeof engagementWebhookEvents.$inferSelect;
+export type InsertEngagementWebhookEvent =
+  typeof engagementWebhookEvents.$inferInsert;
 
 // ─── Optimisation Logs ───
 export const optimisationLogs = mysqlTable("optimisation_logs", {

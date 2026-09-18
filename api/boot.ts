@@ -11,6 +11,7 @@ import { connectRedis, isRedisConfigured } from "./lib/redis";
 import { startPublishingWorker } from "./lib/queue/publishing-worker";
 import { startContentGenerationWorker } from "./lib/queue/content-generation-worker";
 import { handleOAuthCallback } from "./lib/integrations/oauth-callback";
+import { processInboundWebhook } from "./lib/engagement/inbound";
 import { getDb } from "./queries/connection";
 import { videoRenderJobs } from "@db/schema";
 import { eq } from "drizzle-orm";
@@ -50,20 +51,29 @@ app.get("/api/oauth/callback", handleOAuthCallback);
 app.get("/api/oauth/meta/callback", handleOAuthCallback);
 
 // Webhook endpoints for inbound social platform messages
-// For now: verify signatures where possible and log payloads safely
+// Inbound engagement events are verified, normalized, deduplicated and
+// processed exactly once by the engagement ingestion pipeline (inbound only —
+// no outbound sending in this phase).
 app.post("/api/webhooks/:platform", async (c) => {
   const platform = c.req.param("platform");
-  const payload = await c.req.json().catch(() => null);
+  const rawBody = await c.req.text();
   const signature = c.req.header("x-hub-signature-256") || c.req.header("x-twilio-signature") || c.req.header("x-zendesk-webhook-signature") || "";
 
   console.log(`[Webhook ${platform}] Received payload`, {
     timestamp: new Date().toISOString(),
     signaturePresent: !!signature,
-    payloadKeys: payload ? Object.keys(payload) : null,
+    bodyBytes: rawBody.length,
   });
 
   // Creatify video generation webhook
   if (platform === "creatify") {
+    const payload = (() => {
+      try {
+        return JSON.parse(rawBody);
+      } catch {
+        return null;
+      }
+    })();
     const providerJobId = payload?.id;
     if (!providerJobId) {
       return c.json({ received: false, error: "Missing Creatify job id" }, 400);
@@ -92,21 +102,17 @@ app.post("/api/webhooks/:platform", async (c) => {
     }
   }
 
-  // Meta (Facebook/Instagram/WhatsApp) signature verification placeholder
-  if (platform === "facebook" || platform === "instagram" || platform === "whatsapp") {
-    const appSecret = process.env.FACEBOOK_APP_SECRET || "";
-    if (appSecret && signature) {
-      // In production: verify HMAC-SHA256 signature
-      // const expectedSig = "sha256=" + crypto.createHmac("sha256", appSecret).update(JSON.stringify(payload)).digest("hex");
-      // if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) { return c.json({ error: "Invalid signature" }, 401); }
-      console.log(`[Webhook ${platform}] Signature verification skipped (FACEBOOK_APP_SECRET configured)`);
-    } else {
-      console.log(`[Webhook ${platform}] No signature verification (FACEBOOK_APP_SECRET not configured)`);
-    }
-  }
-
-  // Return 200 OK quickly — platforms expect fast responses
-  return c.json({ received: true, platform, timestamp: Date.now() });
+  // Inbound engagement ingestion (facebook / instagram / whatsapp).
+  const outcome = await processInboundWebhook({ platform, rawBody, signature });
+  return c.json(
+    {
+      received: outcome.received,
+      platform,
+      results: outcome.dispositions,
+      error: outcome.error,
+    },
+    outcome.httpStatus as 200 | 401
+  );
 });
 
 // Meta webhook verification (GET challenge)
