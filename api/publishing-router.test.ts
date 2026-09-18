@@ -435,6 +435,41 @@ describe("publishingRouter.publishPost Phase 2B gate", () => {
     expect(publishSinglePost).toHaveBeenCalledTimes(1);
     expect(publishSinglePost).toHaveBeenCalledWith(13);
   });
+
+  it("rejects publishing standalone content without publication authority before the runner runs", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishingRouter } = await import("./publishing-router");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+
+    const standalonePost = {
+      id: 306,
+      userId: 18,
+      campaignId: null,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: { creativeBriefFingerprint: "test-fingerprint-ready" },
+    };
+
+    const approvedQueue = {
+      id: 14,
+      userId: 18,
+      campaignId: 28,
+      contentPostId: 306,
+      platform: "Instagram",
+      status: "approved",
+    };
+
+    const db = buildMockDb({
+      contentPosts: [standalonePost],
+      publishingQueue: [approvedQueue],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = publishingRouter.createCaller(buildCtx());
+    await expect(caller.publishPost({ queueId: 14 })).rejects.toThrow(/publication authority/i);
+    expect(publishSinglePost).not.toHaveBeenCalled();
+  });
 });
 
 

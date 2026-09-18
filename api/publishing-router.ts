@@ -10,7 +10,7 @@ import { schedulePublishingJob, isBullMQAvailable } from "./lib/queue/bullmq";
 import { env } from "./lib/env";
 import { publishToFacebook } from "./lib/integrations/platforms";
 import { decryptToken } from "./lib/crypto";
-import { loadAndAssertCampaignPublicationReadiness } from "./lib/creative/publication-readiness-service";
+import { loadAndAssertCampaignPublicationReadiness, loadAndAssertPublicationReadiness } from "./lib/creative/publication-readiness-service";
 
 export const publishingRouter = createRouter({
   createPublishingQueue: authedQuery
@@ -182,7 +182,9 @@ export const publishingRouter = createRouter({
         });
       }
 
-      // Phase 2B: single-item readiness gate before the external platform call.
+      // Phase 2B: single-item publication-authority gate before the external
+      // platform call. Campaign-linked posts require the campaign_launch
+      // approval; standalone posts have no authority model and fail closed.
       if (item.contentPostId) {
         const [contentPost] = await db
           .select()
@@ -195,15 +197,13 @@ export const publishingRouter = createRouter({
         if (contentPost.campaignId && contentPost.campaignId !== item.campaignId) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Content post does not belong to this campaign" });
         }
-        if (contentPost?.campaignId) {
-          await loadAndAssertCampaignPublicationReadiness({
-            db,
-            userId: ctx.user.id,
-            campaignId: item.campaignId,
-            selectedOutput: { record: contentPost, type: "content_post" },
-            requireLaunchApproval: true,
-          });
-        }
+        await loadAndAssertPublicationReadiness({
+          db,
+          userId: ctx.user.id,
+          campaignId: contentPost.campaignId ?? null,
+          selectedOutput: { record: contentPost, type: "content_post" },
+          requireLaunchApproval: true,
+        });
       }
 
       const result = await publishSinglePost(item.id);

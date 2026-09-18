@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 process.env.PUBLIC_APP_URL = "https://natforgeai.com";
 
+import { buildGroundedCreativeBrief } from "../../creative/brief-grounding";
+import { deductCredits } from "../../billing/credit-engine";
+
 vi.mock("../../../queries/connection", () => ({
   getDb: vi.fn(),
 }));
@@ -50,34 +53,62 @@ function createMockDb({
   queueItem,
   contentPost,
   integration,
+  campaign,
+  business,
+  campaignAssets = [],
+  generatedImages = [],
+  approvals = [],
 }: {
   queueItem?: Record<string, unknown>;
   contentPost?: Record<string, unknown>;
   integration?: Record<string, unknown>;
+  campaign?: Record<string, unknown>;
+  business?: Record<string, unknown>;
+  campaignAssets?: Record<string, unknown>[];
+  generatedImages?: Record<string, unknown>[];
+  approvals?: Record<string, unknown>[];
 }) {
-  return {
+  const updateCalls: Array<{ table: string | undefined; set: Record<string, unknown> }> = [];
+  const db = {
+    updateCalls,
     select: vi.fn(() => ({
-      from: vi.fn((table: unknown) => ({
-        where: vi.fn(() => ({
-          limit: vi.fn(async () => {
-            const name = getTableName(table);
-            if (name === "publishing_queue") return queueItem ? [queueItem] : [];
-            if (name === "content_posts") return contentPost ? [contentPost] : [];
-            if (name === "social_integrations") return integration ? [integration] : [];
-            return [];
-          }),
-        })),
-      })),
+      from: vi.fn((table: unknown) => {
+        const name = getTableName(table);
+        let rows: unknown[] = [];
+        if (name === "publishing_queue") rows = queueItem ? [queueItem] : [];
+        if (name === "content_posts") rows = contentPost ? [contentPost] : [];
+        if (name === "social_integrations") rows = integration ? [integration] : [];
+        if (name === "campaigns") rows = campaign ? [campaign] : [];
+        if (name === "businesses") rows = business ? [business] : [];
+        if (name === "campaign_assets") rows = campaignAssets;
+        if (name === "generated_images") rows = generatedImages;
+        if (name === "approval_requests") rows = approvals;
+
+        const chainable = {
+          limit: vi.fn(async () => rows),
+          orderBy: vi.fn(() => chainable),
+          then: (resolve: (value: unknown[]) => unknown, reject?: (reason?: unknown) => unknown) =>
+            Promise.resolve(rows).then(resolve, reject),
+        };
+        return {
+          where: vi.fn(() => chainable),
+          orderBy: vi.fn(() => chainable),
+        };
+      }),
     })),
     insert: vi.fn(() => ({
       values: vi.fn(async () => [{ insertId: 1 }]),
     })),
-    update: vi.fn(() => ({
-      set: vi.fn(() => ({
-        where: vi.fn(async () => []),
+    update: vi.fn((table: unknown) => ({
+      set: vi.fn((data: Record<string, unknown>) => ({
+        where: vi.fn(async () => {
+          updateCalls.push({ table: getTableName(table), set: data });
+          return [];
+        }),
       })),
     })),
   };
+  return db;
 }
 
 const baseQueueItem = {
@@ -117,6 +148,52 @@ const baseContentPost = {
   metadata: { imageUrl: relativeImageUrl },
 };
 
+// Campaign-linked fixtures that pass the publication-authority gate: current
+// creative-brief fingerprint on the selected output plus an approved
+// campaign_launch approval.
+const readyCampaign = {
+  id: 27,
+  userId: 14,
+  businessId: 24,
+  status: "active",
+  productOrService: "Payout platform",
+  targetBuyer: "Restaurants and delivery platforms",
+  mainPainPoint: "manual payout reconciliation",
+  primaryOutcome: "awareness",
+  coreMessage: "Faster payouts for frontline teams",
+};
+
+const readyBusiness = {
+  id: 24,
+  userId: 14,
+  name: "Zuto Hub",
+  industry: "fintech payouts",
+};
+
+function currentFingerprintFor(campaign: Record<string, unknown>) {
+  return buildGroundedCreativeBrief({ campaign, business: readyBusiness }).fingerprint;
+}
+
+function campaignLinkedContentPost(overrides: Record<string, unknown> = {}) {
+  return {
+    ...baseContentPost,
+    campaignId: 27,
+    metadata: {
+      imageUrl: relativeImageUrl,
+      creativeBriefFingerprint: currentFingerprintFor(readyCampaign),
+    },
+    ...overrides,
+  };
+}
+
+const approvedLaunchApproval = {
+  id: 7,
+  userId: 14,
+  campaignId: 27,
+  approvalType: "campaign_launch",
+  status: "approved",
+};
+
 describe("publishSinglePost", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -136,8 +213,11 @@ describe("publishSinglePost", () => {
     vi.mocked(getDb).mockReturnValue(
       createMockDb({
         queueItem: { ...baseQueueItem, integrationId: 9 },
-        contentPost: baseContentPost,
+        contentPost: campaignLinkedContentPost(),
         integration: baseIntegration,
+        campaign: readyCampaign,
+        business: readyBusiness,
+        approvals: [approvedLaunchApproval],
       }) as any
     );
 
@@ -170,8 +250,11 @@ describe("publishSinglePost", () => {
     vi.mocked(getDb).mockReturnValue(
       createMockDb({
         queueItem: { ...baseQueueItem, integrationId: null },
-        contentPost: baseContentPost,
+        contentPost: campaignLinkedContentPost(),
         integration: baseIntegration,
+        campaign: readyCampaign,
+        business: readyBusiness,
+        approvals: [approvedLaunchApproval],
       }) as any
     );
 
@@ -193,8 +276,11 @@ describe("publishSinglePost", () => {
     vi.mocked(getDb).mockReturnValue(
       createMockDb({
         queueItem: { ...baseQueueItem, integrationId: null },
-        contentPost: baseContentPost,
+        contentPost: campaignLinkedContentPost(),
         integration: undefined,
+        campaign: readyCampaign,
+        business: readyBusiness,
+        approvals: [approvedLaunchApproval],
       }) as any
     );
 
@@ -213,8 +299,16 @@ describe("publishSinglePost", () => {
     vi.mocked(getDb).mockReturnValue(
       createMockDb({
         queueItem: { ...baseQueueItem, integrationId: 9 },
-        contentPost: { ...baseContentPost, metadata: { imageUrl: "blob:https://natforgeai.com/abc" } },
+        contentPost: campaignLinkedContentPost({
+          metadata: {
+            imageUrl: "blob:https://natforgeai.com/abc",
+            creativeBriefFingerprint: currentFingerprintFor(readyCampaign),
+          },
+        }),
         integration: baseIntegration,
+        campaign: readyCampaign,
+        business: readyBusiness,
+        approvals: [approvedLaunchApproval],
       }) as any
     );
 
@@ -223,5 +317,52 @@ describe("publishSinglePost", () => {
     expect(result.status).toBe("failed");
     expect(result.error).toContain("invalid image URL");
     expect(publishToFacebook).not.toHaveBeenCalled();
+  });
+
+  it("queue approval alone is not publication authority — campaign content without launch approval cannot publish", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishSinglePost } = await import("../publishing-runner");
+
+    const db = createMockDb({
+      queueItem: { ...baseQueueItem, integrationId: 9 },
+      contentPost: campaignLinkedContentPost(),
+      integration: baseIntegration,
+      campaign: readyCampaign,
+      business: readyBusiness,
+      approvals: [],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const result = await publishSinglePost(1);
+
+    expect(result.status).toBe("precondition_failed");
+    expect(result.error).toMatch(/launch approval is pending/i);
+    expect(publishToFacebook).not.toHaveBeenCalled();
+    expect(vi.mocked(deductCredits)).not.toHaveBeenCalled();
+    const queueUpdate = db.updateCalls.find((call) => call.table === "publishing_queue");
+    expect(queueUpdate?.set.status).toBe("failed");
+  });
+
+  it("fails closed for standalone content without explicit publication authority", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishSinglePost } = await import("../publishing-runner");
+
+    const standalonePost = { ...baseContentPost, campaignId: null };
+    const db = createMockDb({
+      queueItem: { ...baseQueueItem, integrationId: 9 },
+      contentPost: standalonePost,
+      integration: baseIntegration,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const result = await publishSinglePost(1);
+
+    expect(result.status).toBe("precondition_failed");
+    expect(result.error).toMatch(/publication authority/i);
+    expect(publishToFacebook).not.toHaveBeenCalled();
+    const queueUpdate = db.updateCalls.find((call) => call.table === "publishing_queue");
+    expect(queueUpdate?.set.status).toBe("failed");
   });
 });

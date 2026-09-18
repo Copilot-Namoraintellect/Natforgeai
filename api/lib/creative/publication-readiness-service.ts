@@ -82,3 +82,45 @@ export async function loadAndAssertCampaignPublicationReadiness(
   const result = await loadAndResolveCampaignPublicationReadiness(input);
   assertCampaignPublicationReadiness(result);
 }
+
+/**
+ * Publication-authority gate for any content-bound queue item.
+ *
+ * Campaign-linked content keeps the existing authority model: an approved
+ * campaign_launch approval plus fingerprint-current outputs. Standalone
+ * content (no campaignId) has no authority model and fails closed here, so no
+ * router action (queue creation, queue-item approval) can produce an
+ * effective publish-authorised state for it.
+ */
+export async function loadAndAssertPublicationReadiness(input: {
+  db: any;
+  userId: number;
+  campaignId?: number | null;
+  selectedOutput?: {
+    record: unknown;
+    type: "content_post" | "campaign_asset" | "generated_image";
+  };
+  requireLaunchApproval?: boolean;
+}): Promise<void> {
+  const recordCampaignId =
+    input.selectedOutput?.record && typeof input.selectedOutput.record === "object"
+      ? (input.selectedOutput.record as { campaignId?: unknown }).campaignId
+      : null;
+
+  if (recordCampaignId != null && recordCampaignId !== undefined) {
+    await loadAndAssertCampaignPublicationReadiness({
+      db: input.db,
+      userId: input.userId,
+      campaignId: Number(recordCampaignId),
+      selectedOutput: input.selectedOutput,
+      requireLaunchApproval: input.requireLaunchApproval,
+    });
+    return;
+  }
+
+  const result = resolveCampaignPublicationReadiness({
+    selectedOutput: input.selectedOutput,
+    requireLaunchApproval: input.requireLaunchApproval,
+  });
+  assertCampaignPublicationReadiness(result);
+}

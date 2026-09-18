@@ -17,7 +17,7 @@ import { deductCredits } from "../billing/credit-engine";
 import { createAlert } from "../alerts";
 import { rateLimitUser } from "../rate-limiter";
 import { ingestAudienceData } from "../audience/ingest";
-import { loadAndAssertCampaignPublicationReadiness } from "../creative/publication-readiness-service";
+import { loadAndAssertPublicationReadiness } from "../creative/publication-readiness-service";
 
 const RETRY_DELAYS_MS = [60_000, 300_000, 900_000]; // 1min, 5min, 15min
 
@@ -192,12 +192,15 @@ export async function publishSinglePost(queueItemId: number) {
         .limit(1)
     : [null];
 
-  if (contentPost?.campaignId) {
+  // Publication-authority gate for every content-bound item, before any side
+  // effect: campaign-linked content requires the campaign_launch approval;
+  // standalone content has no authority model and fails closed.
+  if (contentPost) {
     try {
-      await loadAndAssertCampaignPublicationReadiness({
+      await loadAndAssertPublicationReadiness({
         db,
         userId: post.userId,
-        campaignId: contentPost.campaignId,
+        campaignId: contentPost.campaignId ?? null,
         selectedOutput: { record: contentPost, type: "content_post" },
         requireLaunchApproval: true,
       });

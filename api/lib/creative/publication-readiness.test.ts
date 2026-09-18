@@ -499,7 +499,7 @@ describe("publication-readiness resolver", () => {
     expect(result.reasons).toContain("caption_pack_stale");
   });
 
-  it("allows one-off content without a campaign", () => {
+  it("fails closed for one-off content without a campaign", () => {
     const result = resolveCampaignPublicationReadiness({
       selectedOutput: {
         record: buildContentPost({ campaignId: null, metadata: {} }),
@@ -507,8 +507,8 @@ describe("publication-readiness resolver", () => {
       },
     });
 
-    expect(result.ready).toBe(true);
-    expect(result.reasons).toEqual([]);
+    expect(result.ready).toBe(false);
+    expect(result.reasons).toEqual(["publication_authority_missing"]);
   });
 
   it("blocks selected stale output for individual publish paths", () => {

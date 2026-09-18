@@ -28,7 +28,8 @@ export type CampaignPublicationReadinessReason =
   | "selected_output_stale"
   | "approval_pending"
   | "output_failed"
-  | "output_stale";
+  | "output_stale"
+  | "publication_authority_missing";
 
 export interface CampaignPublicationReadinessOutput {
   present: boolean;
@@ -248,15 +249,19 @@ export function resolveCampaignPublicationReadiness(
   const reasons: CampaignPublicationReadinessReason[] = [];
   const isSingleMode = !!selectedOutput;
 
-  // One-off content support: if a selected output is not linked to any campaign,
-  // it is outside the scope of the campaign-readiness gate and is allowed.
+  // Standalone content support: a selected output that is not linked to any
+  // campaign has no publication-authority model (campaign-linked content is
+  // governed by the campaign_launch approval; there is no equivalent authority
+  // record for standalone content). Fail closed: never treat standalone
+  // content as publishable via this gate.
   if (selectedOutput?.record && typeof selectedOutput.record === "object") {
     const recordCampaignId = asUnknown(selectedOutput.record).campaignId;
     if (recordCampaignId == null || recordCampaignId === undefined) {
+      reasons.push("publication_authority_missing");
       return {
-        ready: true,
+        ready: false,
         currentCreativeBriefFingerprint: "",
-        reasons: [],
+        reasons: Array.from(new Set(reasons)),
         requiredOutputs: {
           leaflet: { present: false, current: false, recordId: null },
           captionPack: { present: false, current: false, recordId: null },
@@ -430,6 +435,8 @@ export function buildPublicationReadinessErrorMessage(result: CampaignPublicatio
     selected_output_missing: "Selected output does not exist.",
     selected_output_stale: "Selected output is stale. Regenerate it from the current brief before publishing.",
     approval_pending: "Campaign launch approval is pending. Complete the approval before publishing.",
+    publication_authority_missing:
+      "Content is not linked to a campaign and has no standalone publication authority. Publication is blocked until an explicit, auditable authority exists for this content.",
     output_failed: "One or more campaign outputs are failed, cancelled, or still generating. Review and regenerate them before publishing.",
     output_stale: "One or more campaign outputs are stale relative to the current brief. Regenerate them before publishing.",
   };
