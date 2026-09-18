@@ -5,6 +5,44 @@ vi.mock("../agents/runner", () => ({
   isTestMode: vi.fn(() => true),
 }));
 
+vi.mock("./message-approval/evaluator", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./message-approval/evaluator")>();
+  return { ...actual, evaluateMessageCandidate: vi.fn(actual.evaluateMessageCandidate) };
+});
+
+vi.mock("./message-approval/canary-proof", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./message-approval/canary-proof")>();
+  return { ...actual, verifyCanaryApprovalProof: vi.fn(actual.verifyCanaryApprovalProof) };
+});
+
+// Tripwires: the campaign message architect must never invoke content
+// generation orchestration, BullMQ queues, or downstream agents directly.
+// These mocks intercept any future wiring at those boundaries.
+vi.mock("../jobs/content-generation-job", () => ({
+  processContentGenerationJob: vi.fn(),
+}));
+
+vi.mock("../queue/bullmq", () => ({
+  isBullMQAvailable: vi.fn(() => false),
+  getPublishingQueue: vi.fn(),
+  getContentGenerationQueue: vi.fn(),
+  toSafeBullMqJobId: vi.fn(),
+  toContentGenerationBullMqJobId: vi.fn(),
+  toPublishingBullMqJobId: vi.fn(),
+  schedulePublishingJob: vi.fn(),
+  removePublishingJob: vi.fn(),
+  scheduleContentGenerationJob: vi.fn(),
+  pausePublishingQueue: vi.fn(),
+}));
+
+vi.mock("../agents/creative-agent", () => ({
+  runCreativeAgent: vi.fn(),
+}));
+
+vi.mock("../agents/distribution-agent", () => ({
+  runDistributionAgent: vi.fn(),
+}));
+
 vi.mock("./message-approval/shadow-runner", () => ({
   runShadowMessageApproval: vi.fn(() => null),
 }));
@@ -31,6 +69,16 @@ import {
 } from "./campaign-message-architect";
 import * as architectModule from "./campaign-message-architect";
 import { runShadowMessageApproval } from "./message-approval/shadow-runner";
+import { verifyCanaryApprovalProof } from "./message-approval/canary-proof";
+import { processContentGenerationJob } from "../jobs/content-generation-job";
+import {
+  getContentGenerationQueue,
+  getPublishingQueue,
+  scheduleContentGenerationJob,
+  schedulePublishingJob,
+} from "../queue/bullmq";
+import { runCreativeAgent } from "../agents/creative-agent";
+import { runDistributionAgent } from "../agents/distribution-agent";
 import { campaign30BusinessDna, campaign30Policy, campaign30ReplayCases, campaign30Strategy } from "./message-approval/fixtures/campaign30";
 import { createMessagePackCandidate } from "./message-approval/candidate";
 import * as candidateModule from "./message-approval/candidate";
@@ -48,6 +96,8 @@ function createMockDb(overrides?: {
   throwOnCampaignAssetsUpdate?: boolean;
   campaignSelectCount?: { count: number };
   businessSelectCount?: { count: number };
+  campaignFields?: Record<string, unknown>;
+  businessFields?: Record<string, unknown>;
 }) {
   const storedRows = (overrides?.storedRowsRaw || (overrides?.storedPacks || []).map((pack, index) => ({
     id: index + 200,
@@ -56,19 +106,26 @@ function createMockDb(overrides?: {
     createdAt: new Date("2026-07-01T08:00:00.000Z"),
   })));
 
-  return {
+  const tableNameOf = (table: any) =>
+    (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string;
+  const insertCalls: Array<{ table: string; values: any }> = [];
+  const updateCalls: Array<{ table: string; set: any }> = [];
+
+  const mock = {
+    insertCalls,
+    updateCalls,
     select: vi.fn(() => ({
       from: vi.fn((table: any) => ({
         where: vi.fn(() => ({
           orderBy: vi.fn(() => ({
             limit: vi.fn(async () => {
-              const tableName = (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string;
+              const tableName = tableNameOf(table);
               if (tableName === "campaign_assets") return storedRows;
               return [];
             }),
           })),
           limit: vi.fn(async () => {
-            const tableName = (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string;
+            const tableName = tableNameOf(table);
             if (tableName === "campaigns") {
               if (overrides?.campaignSelectCount) overrides.campaignSelectCount.count += 1;
               return [
@@ -85,6 +142,7 @@ function createMockDb(overrides?: {
                   preferredCta: "Awareness: Learn More\nConsideration: Book a Demo\nConversion: Request a Walkthrough",
                   platforms: "Instagram, Facebook",
                   location: "South Africa",
+                  ...(overrides?.campaignFields || {}),
                 },
               ];
             }
@@ -107,6 +165,7 @@ function createMockDb(overrides?: {
                     ],
                     targetCustomers: ["restaurants", "delivery platforms", "frontline teams"],
                   },
+                  ...(overrides?.businessFields || {}),
                 },
               ];
             }
@@ -115,14 +174,16 @@ function createMockDb(overrides?: {
         })),
       })),
     })),
-    insert: vi.fn(() => ({ values: vi.fn(async () => {
+    insert: vi.fn((table: any) => ({ values: vi.fn(async (values: any) => {
+      insertCalls.push({ table: tableNameOf(table), values });
       if (overrides?.insertThrows) throw new Error("insert failed");
       return [{ insertId: 1 }];
     }) })),
     update: vi.fn((table: any) => ({
-      set: vi.fn(() => ({
+      set: vi.fn((set: any) => ({
         where: vi.fn(async () => {
-          const tableName = (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string;
+          const tableName = tableNameOf(table);
+          updateCalls.push({ table: tableName, set });
           if (overrides?.throwOnCampaignAssetsUpdate && tableName === "campaign_assets") {
             throw new Error("supersede update failed");
           }
@@ -131,6 +192,8 @@ function createMockDb(overrides?: {
       })),
     })),
   };
+
+  return mock;
 }
 
 const basePack: CampaignMessagePack = {
@@ -1611,6 +1674,496 @@ describe("campaign-message-architect canary wrappers", () => {
       expect(runAgent).toHaveBeenCalledTimes(1);
       expect(runShadowMessageApproval).not.toHaveBeenCalled();
       expect(countShadowObservations()).toBe(0);
+    });
+  });
+
+  describe("WBS 4E.3 forceRebuild canary containment — single invocation", () => {
+    const setSelectedCanary = () => {
+      process.env.CREATIVE_PIPELINE_V2_MODE = "canary";
+      process.env.CREATIVE_PIPELINE_V2_CANARY_ENABLED = "true";
+      process.env.CREATIVE_PIPELINE_V2_CANARY_CAMPAIGN_IDS = "1";
+    };
+
+    const NEW_PACK_HEADLINE = "Cut delayed staff payouts with Zuto Hub payout platform";
+
+    const forceRebuildInvocation = {
+      userId: 10,
+      campaignId: 1,
+      skipBilling: true,
+      maxAttempts: 1,
+      forceRebuild: true,
+      privacyMode: "safe" as const,
+    };
+
+    const storedApprovedPack = (cta?: string): CampaignMessagePack => ({
+      ...basePack,
+      cta: cta ?? basePack.cta,
+      platformCaptions: basePack.platformCaptions.map((caption) => ({
+        ...caption,
+        cta: cta ?? caption.cta,
+      })),
+      validation: { passed: true, score: 100, rejections: [], warnings: [] },
+      messagePackSource: "latest_message_pack",
+      isGeneric: false,
+    });
+
+    // With this brief override the exact V2 CTA policy requires
+    // "Request a Walkthrough" (awareness stage) — a CTA that legacy
+    // genericity derivation does NOT classify as generic. Tests that assert
+    // exact supersede counts use it so the generic-marking housekeeping in
+    // saveApprovedMessagePack stays out of the assertion surface.
+    const WALKTHROUGH_CAMPAIGN_FIELDS = {
+      preferredCta: "Awareness: Request a Walkthrough\nConsideration: Book a Demo\nConversion: Request a Walkthrough",
+    };
+
+    const walkthroughAgentOutput = {
+      headline: NEW_PACK_HEADLINE,
+      subheadline:
+        "Restaurants and delivery platforms reduce manual payout reconciliation with mass disbursements.",
+      benefitBullets: [
+        "Mass disbursements improve payout speed for frontline teams.",
+        "Tips and commissions payouts reduce reconciliation bottlenecks.",
+        "Supplier payouts remain consistent across restaurant locations.",
+      ],
+      cta: "Request a Walkthrough",
+      footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "South Africa" },
+      proofPoints: ["Payout platform supports mass disbursements and supplier payouts."],
+      platformCaptions: [
+        {
+          platform: "Instagram",
+          caption:
+            "Frontline teams can avoid delayed staff payouts using Zuto Hub payout platform automation.",
+          cta: "Request a Walkthrough",
+          hashtags: ["#payoutplatform", "#frontlineteams"],
+        },
+      ],
+    };
+
+    // Passes legacy validation (CTA mismatch is only a legacy warning) but is
+    // rejected by the V2 authority: the campaign strategy requires the exact
+    // CTA "Learn More" (awareness stage) for this fixture.
+    const ctaMismatchedAgentOutput = {
+      headline: NEW_PACK_HEADLINE,
+      subheadline:
+        "Restaurants and delivery platforms reduce manual payout reconciliation with mass disbursements.",
+      benefitBullets: [
+        "Mass disbursements improve payout speed for frontline teams.",
+        "Tips and commissions payouts reduce reconciliation bottlenecks.",
+        "Supplier payouts remain consistent across restaurant locations.",
+      ],
+      cta: "Book a Demo",
+      footerContact: { phone: null, whatsapp: null, email: null, website: null, location: "South Africa" },
+      proofPoints: ["Payout platform supports mass disbursements and supplier payouts."],
+      platformCaptions: [
+        {
+          platform: "Instagram",
+          caption:
+            "Frontline teams can avoid delayed staff payouts using Zuto Hub payout platform automation.",
+          cta: "Book a Demo",
+          hashtags: ["#payoutplatform", "#frontlineteams"],
+        },
+      ],
+    };
+
+    it("TEST A — forceRebuild evaluates the stored approved pack but does not reuse or return it", async () => {
+      setSelectedCanary();
+      const db = createMockDb({ storedPacks: [storedApprovedPack()] }) as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      const pack = await ensureApprovedMessagePack(forceRebuildInvocation);
+
+      // The new candidate path was attempted via the creative agent.
+      expect(runAgent).toHaveBeenCalled();
+      // The returned pack is the freshly generated candidate, not the stored pack.
+      expect(pack.headline).toBe(NEW_PACK_HEADLINE);
+      expect(pack.headline).not.toBe(basePack.headline);
+      // Exactly one save occurred and it persisted the NEW candidate.
+      expect(db.insert).toHaveBeenCalledTimes(1);
+      expect(db.insertCalls).toHaveLength(1);
+      expect(db.insertCalls[0].table).toBe("campaign_assets");
+      expect(db.insertCalls[0].values.assetType).toBe("message_pack");
+      expect(db.insertCalls[0].values.metadata.approvedMessagePack.headline).toBe(NEW_PACK_HEADLINE);
+    });
+
+    it("TEST B — a successful V2 candidate saves exactly once in canary mode with a verified proof and envelope", async () => {
+      setSelectedCanary();
+      const db = createMockDb() as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      const pack = await ensureApprovedMessagePack(forceRebuildInvocation);
+
+      // Exactly one persistence call — no second save path.
+      expect(db.insert).toHaveBeenCalledTimes(1);
+      expect(db.insertCalls).toHaveLength(1);
+      const savedValues = db.insertCalls[0].values;
+      expect(savedValues.assetType).toBe("message_pack");
+      expect(savedValues.status).toBe("ready");
+      // The persisted pack carries the V2 approval envelope (canary-mode evidence).
+      expect(savedValues.metadata.v2ApprovalEnvelope).toBeDefined();
+      expect(savedValues.metadata.approvedMessagePack.v2ApprovalEnvelope).toBeDefined();
+      expect(savedValues.metadata.v2ApprovalEnvelope.candidateSource).toBe("ai_initial");
+      expect(pack.v2ApprovalEnvelope).toBeDefined();
+      // Proof verification ran exactly once for the single save — proof was supplied.
+      expect(verifyCanaryApprovalProof).toHaveBeenCalledTimes(1);
+      const [verifiedPack, verifiedProof] = vi.mocked(verifyCanaryApprovalProof).mock.calls[0];
+      expect(verifiedPack.v2ApprovalEnvelope).toBeDefined();
+      expect(verifiedProof.envelope).toBeDefined();
+      // Single attempt — no retry loop and no duplicate agent run.
+      expect(runAgent).toHaveBeenCalledTimes(1);
+    });
+
+    it("TEST C — the prior-best asset is superseded exactly once, only after the replacement save succeeds", async () => {
+      setSelectedCanary();
+      const db = createMockDb({
+        storedPacks: [storedApprovedPack("Request a Walkthrough")],
+        campaignFields: WALKTHROUGH_CAMPAIGN_FIELDS,
+      }) as any;
+      vi.mocked(getDb).mockReturnValue(db);
+      vi.mocked(runAgent).mockResolvedValue({ runId: 123, output: walkthroughAgentOutput } as any);
+
+      await ensureApprovedMessagePack(forceRebuildInvocation);
+
+      expect(db.insert).toHaveBeenCalledTimes(1);
+      const newAssetId = 1; // createMockDb insertId
+
+      const assetUpdates = db.updateCalls.filter((call: any) => call.table === "campaign_assets");
+      expect(assetUpdates).toHaveLength(1);
+      expect(assetUpdates[0].set.metadata.supersededBy).toBe(newAssetId);
+      expect(assetUpdates[0].set.metadata.approvedMessagePack.supersededBy).toBe(newAssetId);
+
+      // The supersede is strictly ordered after the replacement insert.
+      const insertOrder = (db.insert as any).mock.invocationCallOrder[0] as number;
+      const assetUpdateIndex = (db.update as any).mock.calls.findIndex((call: any[]) => {
+        const tableName = (call[0] as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string;
+        return tableName === "campaign_assets";
+      });
+      const assetUpdateOrder = (db.update as any).mock.invocationCallOrder[assetUpdateIndex] as number;
+      expect(assetUpdateOrder).toBeGreaterThan(insertOrder);
+    });
+
+    it("TEST D — a failed replacement save never supersedes and leaves the prior asset and workflow context untouched", async () => {
+      setSelectedCanary();
+      const db = createMockDb({ storedPacks: [storedApprovedPack()], insertThrows: true }) as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      await expect(ensureApprovedMessagePack(forceRebuildInvocation)).rejects.toThrow(/insert failed/);
+
+      // The replacement was attempted exactly once and failed before any supersede.
+      expect(db.insertCalls.filter((call: any) => call.table === "campaign_assets")).toHaveLength(1);
+      expect(db.updateCalls.filter((call: any) => call.table === "campaign_assets")).toHaveLength(0);
+      // campaigns.workflowContext is only written after a successful save.
+      expect(db.updateCalls.filter((call: any) => call.table === "campaigns")).toHaveLength(0);
+    });
+
+    it("TEST E — rejected AI candidates and a rejected deterministic fallback fail safely with BAD_REQUEST", async () => {
+      setSelectedCanary();
+      // Default brief: the deterministic fallback pack misses pain-point alignment,
+      // so every candidate (initial, refinements, deterministic) is V2-rejected.
+      const db = createMockDb() as any;
+      vi.mocked(getDb).mockReturnValue(db);
+      vi.mocked(runAgent).mockResolvedValue({ runId: 123, output: ctaMismatchedAgentOutput } as any);
+
+      const error = await ensureApprovedMessagePack(forceRebuildInvocation).catch((err) => err);
+      expect(error).toBeInstanceOf(Error);
+      expect(error.code).toBe("BAD_REQUEST");
+      expect(error.message).toBe("V2 message approval rejected all candidates.");
+
+      // Bounded candidate attempts: initial + two refinements (the deterministic
+      // fallback requires no agent run).
+      expect(runAgent).toHaveBeenCalledTimes(3);
+      // No message pack saved and no existing pack superseded.
+      expect(db.insert).not.toHaveBeenCalled();
+      expect(db.insertCalls).toHaveLength(0);
+      expect(db.updateCalls).toHaveLength(0);
+    });
+
+    it("TEST F — the deterministic fallback is approved through V2 and replaces the prior best after exactly one save", async () => {
+      setSelectedCanary();
+      // Relax the pain point so the deterministic fallback aligns with the V2
+      // grounding policy and can be approved. "reconciliation" is a substring of
+      // both the stored pack's "manual payout reconciliation" and the
+      // deterministic pack's "less manual reconciliation", so the prior best
+      // stays V2-eligible. The brief override also makes "Request a
+      // Walkthrough" the exact required CTA (non-generic per legacy
+      // derivation) so exactly one supersede update is expected.
+      const db = createMockDb({
+        storedPacks: [storedApprovedPack("Request a Walkthrough")],
+        campaignFields: {
+          ...WALKTHROUGH_CAMPAIGN_FIELDS,
+          mainPainPoint: "reconciliation",
+        },
+      }) as any;
+      vi.mocked(getDb).mockReturnValue(db);
+      vi.mocked(runAgent).mockResolvedValue({ runId: 123, output: ctaMismatchedAgentOutput } as any);
+
+      const pack = await ensureApprovedMessagePack(forceRebuildInvocation);
+
+      expect(runAgent).toHaveBeenCalledTimes(3);
+      expect(db.insert).toHaveBeenCalledTimes(1);
+      const savedValues = db.insertCalls[0].values;
+      expect(savedValues.metadata.v2ApprovalEnvelope).toBeDefined();
+      expect(savedValues.metadata.v2ApprovalEnvelope.candidateSource).toBe("deterministic_fallback");
+      expect(savedValues.metadata.approvedMessagePack.messagePackSource).toBe("fallback_deterministic");
+      expect(pack.messagePackSource).toBe("fallback_deterministic");
+      expect(verifyCanaryApprovalProof).toHaveBeenCalledTimes(1);
+      // Supersession of the prior best occurred exactly once, after the save.
+      const assetUpdates = db.updateCalls.filter((call: any) => call.table === "campaign_assets");
+      expect(assetUpdates).toHaveLength(1);
+      const insertOrder = (db.insert as any).mock.invocationCallOrder[0] as number;
+      const assetUpdateIndex = (db.update as any).mock.calls.findIndex((call: any[]) => {
+        const tableName = (call[0] as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string;
+        return tableName === "campaign_assets";
+      });
+      const assetUpdateOrder = (db.update as any).mock.invocationCallOrder[assetUpdateIndex] as number;
+      expect(assetUpdateOrder).toBeGreaterThan(insertOrder);
+    });
+
+    it("TEST G — a duplicate evaluation key is evaluated once and creates no second approval/save path", async () => {
+      setSelectedCanary();
+      // Stored pack copy is byte-identical to the generated candidate copy.
+      const identicalStoredPack: CampaignMessagePack = {
+        headline: NEW_PACK_HEADLINE,
+        subheadline:
+          "Restaurants and delivery platforms reduce manual payout reconciliation with mass disbursements.",
+        benefitBullets: [
+          "Mass disbursements improve payout speed for frontline teams.",
+          "Tips and commissions payouts reduce reconciliation bottlenecks.",
+          "Supplier payouts remain consistent across restaurant locations.",
+        ],
+        cta: "Request a Walkthrough",
+        footerContact: { location: "South Africa" },
+        proofPoints: ["Payout platform supports mass disbursements and supplier payouts."],
+        platformCaptions: [
+          {
+            platform: "Instagram",
+            caption:
+              "Frontline teams can avoid delayed staff payouts using Zuto Hub payout platform automation.",
+            cta: "Request a Walkthrough",
+            hashtags: ["#payoutplatform", "#frontlineteams"],
+          },
+        ],
+        validation: { passed: true, score: 100, rejections: [], warnings: [] },
+        messagePackSource: "latest_message_pack",
+        isGeneric: false,
+      };
+      const db = createMockDb({
+        storedPacks: [identicalStoredPack],
+        campaignFields: WALKTHROUGH_CAMPAIGN_FIELDS,
+      }) as any;
+      vi.mocked(getDb).mockReturnValue(db);
+      vi.mocked(runAgent).mockResolvedValue({ runId: 123, output: walkthroughAgentOutput } as any);
+
+      const evaluationsBefore = vi.mocked(evaluateMessageCandidate).mock.calls.length;
+
+      const pack = await ensureApprovedMessagePack(forceRebuildInvocation);
+
+      // Stored pack (1 evaluation) + generated candidate (cache hit) = exactly one V2 evaluation.
+      expect(vi.mocked(evaluateMessageCandidate).mock.calls.length - evaluationsBefore).toBe(1);
+      expect(
+        vi.mocked(logInfo).mock.calls.some((call) => String(call[0]).includes("duplicate candidate key reused"))
+      ).toBe(true);
+      // The duplicate created no second approval/save path.
+      expect(db.insert).toHaveBeenCalledTimes(1);
+      expect(pack.v2ApprovalEnvelope).toBeDefined();
+      const assetUpdates = db.updateCalls.filter((call: any) => call.table === "campaign_assets");
+      expect(assetUpdates).toHaveLength(1);
+    });
+
+    it("TEST H — the direct architect invocation propagates skipBilling=true to every agent execution", async () => {
+      setSelectedCanary();
+      const db = createMockDb({ storedPacks: [storedApprovedPack()] }) as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      await ensureApprovedMessagePack(forceRebuildInvocation);
+
+      expect(runAgent).toHaveBeenCalledTimes(1);
+      for (const call of vi.mocked(runAgent).mock.calls) {
+        expect(call[0].skipBilling).toBe(true);
+      }
+    });
+
+    it("TEST I — the force-rebuild path writes only the approved message pack asset and the workflow-context envelope", async () => {
+      setSelectedCanary();
+      const db = createMockDb({ storedPacks: [storedApprovedPack()] }) as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      await ensureApprovedMessagePack(forceRebuildInvocation);
+
+      // Only one row inserted, into campaign_assets (the approved message pack).
+      // No content_posts, publishing_queue, schedules, approval_requests,
+      // agent_runs, or ai_usage rows are created by this path.
+      expect(db.insertCalls.map((call: any) => call.table)).toEqual(["campaign_assets"]);
+      // Only campaign_assets (supersede) and campaigns (workflowContext) are updated.
+      const updatedTables = [...new Set(db.updateCalls.map((call: any) => call.table))] as string[];
+      expect(updatedTables.every((table) => ["campaign_assets", "campaigns"].includes(table))).toBe(true);
+
+      // The campaigns update touches only workflowContext — no status/state progression.
+      const campaignUpdates = db.updateCalls.filter((call: any) => call.table === "campaigns");
+      expect(campaignUpdates).toHaveLength(1);
+      expect(Object.keys(campaignUpdates[0].set)).toEqual(["workflowContext"]);
+      expect(campaignUpdates[0].set.workflowContext.v2ApprovalEnvelope).toBeDefined();
+      expect(campaignUpdates[0].set.workflowContext.approvedMessagePack).toBeDefined();
+      expect(campaignUpdates[0].set.status).toBeUndefined();
+
+      // No workflow orchestration, queue, publishing, distribution, or content
+      // generation side effects at the module boundaries.
+      expect(processContentGenerationJob).not.toHaveBeenCalled();
+      expect(scheduleContentGenerationJob).not.toHaveBeenCalled();
+      expect(getContentGenerationQueue).not.toHaveBeenCalled();
+      expect(getPublishingQueue).not.toHaveBeenCalled();
+      expect(schedulePublishingJob).not.toHaveBeenCalled();
+      expect(runCreativeAgent).not.toHaveBeenCalled();
+      expect(runDistributionAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("WBS 4E.3 canary save authority", () => {
+    it("rejects a canary save whose pack lacks the V2 approval envelope even when a proof object is supplied", async () => {
+      const { proof, pack } = createValidCanarySaveBaseline();
+      const db = createMockDb() as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      const { v2ApprovalEnvelope, ...envelopeLessPack } = pack;
+      expect(v2ApprovalEnvelope).toBeDefined();
+
+      await expect(
+        saveApprovedMessagePack(10, 1, envelopeLessPack as CampaignMessagePack, { mode: "canary", proof })
+      ).rejects.toThrow(/Canary save requires approval proof and envelope/);
+
+      // Rejected before proof verification and before any persistence.
+      expect(verifyCanaryApprovalProof).not.toHaveBeenCalled();
+      expect(db.insert).not.toHaveBeenCalled();
+    });
+
+    it("accepts a valid proof with matching envelope once and writes the envelope to workflowContext only after the save", async () => {
+      const { envelope, proof, pack } = createValidCanarySaveBaseline();
+      const db = createMockDb() as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      await saveApprovedMessagePack(10, 1, pack, { mode: "canary", proof });
+
+      expect(verifyCanaryApprovalProof).toHaveBeenCalledTimes(1);
+      expect(db.insert).toHaveBeenCalledTimes(1);
+      expect(db.insertCalls[0].values.metadata.v2ApprovalEnvelope).toEqual(envelope);
+      const campaignUpdates = db.updateCalls.filter((call: any) => call.table === "campaigns");
+      expect(campaignUpdates).toHaveLength(1);
+      expect(campaignUpdates[0].set.workflowContext.v2ApprovalEnvelope).toEqual(envelope);
+    });
+
+    it("does not write the V2 envelope to workflowContext when the save itself fails", async () => {
+      const { proof, pack } = createValidCanarySaveBaseline();
+      const db = createMockDb({ insertThrows: true }) as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      await expect(saveApprovedMessagePack(10, 1, pack, { mode: "canary", proof })).rejects.toThrow(/insert failed/);
+
+      expect(verifyCanaryApprovalProof).toHaveBeenCalledTimes(1);
+      expect(db.updateCalls.filter((call: any) => call.table === "campaigns")).toHaveLength(0);
+    });
+
+    it("treats legacy validation.passed as insufficient authority for canary saves while leaving legacy mode intact", async () => {
+      const db = createMockDb() as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      // A pack with every legacy green light (passed, non-generic) but no V2
+      // proof/envelope is still rejected in canary mode. The CTA avoids the
+      // legacy generic-CTA list so the legacy control save below exercises the
+      // validation.passed branch specifically.
+      const legacyGreenPack: CampaignMessagePack = {
+        ...basePack,
+        cta: "Request a Walkthrough",
+        platformCaptions: basePack.platformCaptions.map((caption) => ({
+          ...caption,
+          cta: "Request a Walkthrough",
+        })),
+        validation: { passed: true, score: 100, rejections: [], warnings: [] },
+        isGeneric: false,
+      };
+      await expect(
+        saveApprovedMessagePack(10, 1, legacyGreenPack, { mode: "canary" })
+      ).rejects.toThrow(/Canary save requires approval proof and envelope/);
+      expect(verifyCanaryApprovalProof).not.toHaveBeenCalled();
+      expect(db.insert).not.toHaveBeenCalled();
+
+      // The very same pack is accepted by the unchanged legacy authority.
+      await saveApprovedMessagePack(10, 1, legacyGreenPack);
+      expect(db.insert).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets the V2 proof authority — not the legacy validation flag — decide canary approval", async () => {
+      const { proof, pack } = createValidCanarySaveBaseline();
+      const db = createMockDb() as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      // Force a failing legacy validation result onto a fully proven V2 pack.
+      const legacyFailingProvenPack: CampaignMessagePack = {
+        ...pack,
+        validation: { passed: false, score: 12, rejections: ["legacy rejection"], warnings: [] },
+      };
+      await saveApprovedMessagePack(10, 1, legacyFailingProvenPack, { mode: "canary", proof });
+      expect(verifyCanaryApprovalProof).toHaveBeenCalledTimes(1);
+      expect(db.insert).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not let the legacy isGeneric flag grant or block canary saves — proof remains the sole authority", async () => {
+      const { proof, pack } = createValidCanarySaveBaseline();
+      const db = createMockDb() as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      // The baseline copy derives isGeneric=true (its CTA "Learn More" sits on
+      // the legacy generic-CTA list). Claiming isGeneric=false on the input
+      // cannot smuggle it past the canary authority: the flag is re-derived
+      // from the verified final copy, and the proven canary save still succeeds
+      // because canary authority never consults the legacy generic flag.
+      const claimedNonGeneric: CampaignMessagePack = { ...pack, isGeneric: false };
+      await saveApprovedMessagePack(10, 1, claimedNonGeneric, { mode: "canary", proof });
+      expect(verifyCanaryApprovalProof).toHaveBeenCalledTimes(1);
+      expect(db.insert).toHaveBeenCalledTimes(1);
+      expect(db.insertCalls[0].values.metadata.isGeneric).toBe(true);
+
+      // Contrast: the unchanged legacy authority rejects the same derived-generic
+      // pack even with validation.passed=true — legacy protections are intact.
+      await expect(
+        saveApprovedMessagePack(10, 1, { ...claimedNonGeneric, validation: { passed: true, score: 95, rejections: [], warnings: [] } })
+      ).rejects.toThrow(/Generic message packs cannot be approved/);
+      expect(db.insert).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the legacy isGeneric protection fully enforced for legacy saves", async () => {
+      const db = createMockDb() as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      const genericPack: CampaignMessagePack = {
+        ...basePack,
+        cta: "Click Here",
+        validation: { passed: true, score: 100, rejections: [], warnings: [] },
+      };
+      await expect(saveApprovedMessagePack(10, 1, genericPack)).rejects.toThrow(
+        /Generic message packs cannot be approved/
+      );
+      expect(db.insert).not.toHaveBeenCalled();
+    });
+
+    it("rejects a tampered proof whose envelope identity binding no longer matches", async () => {
+      const { envelope, proof, pack } = createValidCanarySaveBaseline();
+      const db = createMockDb() as any;
+      vi.mocked(getDb).mockReturnValue(db);
+
+      await expect(
+        saveApprovedMessagePack(10, 1, pack, {
+          mode: "canary",
+          proof: { ...proof, envelope: { ...envelope, candidateId: "tampered-candidate" } },
+        })
+      ).rejects.toThrow(/identity mismatch/);
+
+      await expect(
+        saveApprovedMessagePack(10, 1, pack, {
+          mode: "canary",
+          proof: { ...proof, envelope: { ...envelope, approvedRevisionId: "tampered-revision" } },
+        })
+      ).rejects.toThrow(/identity mismatch/);
+
+      expect(db.insert).not.toHaveBeenCalled();
     });
   });
 });
