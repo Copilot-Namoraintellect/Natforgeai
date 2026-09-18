@@ -120,6 +120,21 @@ function getBaseTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:BaseName") as symbol] as string | undefined;
 }
 
+/**
+ * G-04: launch approval evidence must be corroborated by durable lineage in
+ * the campaign workflowContext. Test fixtures pair an approved campaign_launch
+ * row (id = approvalRequestId) with this matching lineage.
+ */
+function launchApprovalContext(approvalRequestId: number) {
+  return {
+    launchApprovalLineage: {
+      creativeBriefFingerprint: "test-fingerprint-ready",
+      approvalRequestId,
+      status: "approved",
+    },
+  };
+}
+
 type WhereNode =
   | { op: "and"; left: WhereNode; right: WhereNode }
   | { op: "or"; left: WhereNode; right: WhereNode }
@@ -866,6 +881,7 @@ describe("contentRouter.publishCampaignPack", () => {
     mainPainPoint: "Wasting time",
     primaryOutcome: "More leads",
     coreMessage: "Empower your workforce",
+    workflowContext: launchApprovalContext(1),
   };
 
   const basePost = {
@@ -1081,6 +1097,7 @@ describe("contentRouter.publishCampaignPack", () => {
       mainPainPoint: "Wasting time",
       primaryOutcome: "More leads",
       coreMessage: "Empower your workforce",
+      workflowContext: launchApprovalContext(1),
     };
 
     const post = {
@@ -1189,6 +1206,7 @@ describe("contentRouter.publishCampaignPack", () => {
       mainPainPoint: "Wasting time",
       primaryOutcome: "More leads",
       coreMessage: "Empower your workforce",
+      workflowContext: launchApprovalContext(1),
     };
 
     const fbPost = {
@@ -1324,7 +1342,7 @@ describe("contentRouter.publishCampaignPack", () => {
     expect(retryPlatforms).not.toContain("instagram");
   });
 
-  it("finalizes campaign to campaign_live when all queue rows are published after Facebook approve-and-publish", async () => {
+  it("finalizes campaign to campaign_live when all queue rows are published and does not auto-approve the stale pending launch approval (G-04)", async () => {
     const { getDb } = await import("./queries/connection");
 
     const campaign23Publish = {
@@ -1405,8 +1423,10 @@ describe("contentRouter.publishCampaignPack", () => {
       instagramPostId: "18106085213021936",
     });
 
-    const approvalUpdate = mockDb.updateSetByTableName.get("approval_requests")?.mock.calls[0]?.[0];
-    expect(approvalUpdate).toMatchObject({ status: "approved" });
+    // G-04 fail-closed: finalize must never convert the pending launch approval
+    // into an approval decision; it stays pending for a human decision.
+    const approvalUpdateSpy = mockDb.updateSetByTableName.get("approval_requests");
+    expect(approvalUpdateSpy).toBeUndefined();
   });
 });
 
@@ -1435,6 +1455,7 @@ describe("contentRouter.ensurePublishEligibility", () => {
     platforms: "Facebook, Instagram",
     name: "3@1 Newmarket Campaign",
     aiGenerated: true,
+    workflowContext: launchApprovalContext(99),
   };
 
   const approvedPost = {
@@ -2009,6 +2030,7 @@ describe("contentRouter.publishCampaignPack Phase 2B gate", () => {
     mainPainPoint: "Wasting time",
     primaryOutcome: "More leads",
     coreMessage: "Empower your workforce",
+    workflowContext: launchApprovalContext(1),
   };
 
   const readyLeafletPost = {
@@ -2366,6 +2388,7 @@ describe("contentRouter.getCampaignPublishReadiness", () => {
       mainPainPoint: "Wasting time",
       primaryOutcome: "More leads",
       coreMessage: "Empower your workforce",
+      workflowContext: launchApprovalContext(1),
     };
 
     const leaflet = {

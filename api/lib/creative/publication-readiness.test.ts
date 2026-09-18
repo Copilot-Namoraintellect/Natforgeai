@@ -12,7 +12,7 @@ import {
 import { buildGroundedCreativeBrief } from "./brief-grounding";
 
 function buildCampaign(fields: Record<string, unknown> = {}) {
-  return {
+  const campaign = {
     id: 30,
     userId: 18,
     businessId: 24,
@@ -31,6 +31,19 @@ function buildCampaign(fields: Record<string, unknown> = {}) {
     contentStyle: "professional",
     ...fields,
   };
+  // By default, carry durable launch approval lineage that corroborates
+  // buildApproval("approved") (request id 1) for this campaign's brief.
+  if (!("workflowContext" in fields)) {
+    const fp = buildGroundedCreativeBrief({ campaign, business: buildBusiness() }).fingerprint;
+    (campaign as Record<string, unknown>).workflowContext = {
+      launchApprovalLineage: {
+        creativeBriefFingerprint: fp,
+        approvalRequestId: 1,
+        status: "approved",
+      },
+    };
+  }
+  return campaign;
 }
 
 function buildBusiness() {
@@ -641,6 +654,126 @@ describe("publication-readiness requireLaunchApproval", () => {
       requireLaunchApproval: false,
     });
     expect(result.ready).toBe(true);
+  });
+});
+
+describe("publication-readiness launch approval lineage (G-04 fail-closed)", () => {
+  function buildCurrentPack(campaign: ReturnType<typeof buildCampaign>) {
+    const fp = currentFingerprint(campaign);
+    return {
+      campaign,
+      business: buildBusiness(),
+      contentPosts: [
+        buildContentPost({
+          metadata: {
+            assetType: "leaflet",
+            assetKind: "master_campaign_post",
+            imageUrl: "https://example.com/leaflet.png",
+            creativeBriefFingerprint: fp,
+          },
+        }),
+      ],
+      campaignAssets: [
+        buildCampaignAsset({
+          assetType: "caption_pack",
+          metadata: { creativeBriefFingerprint: fp },
+        }),
+        buildCampaignAsset({ metadata: { creativeBriefFingerprint: fp } }),
+      ],
+      approvals: [buildApproval("approved")],
+    };
+  }
+
+  it("publishing remains blocked when the only approved row has no durable lineage", () => {
+    const campaign = buildCampaign({ workflowContext: {} });
+    const result = resolveCampaignPublicationReadiness(buildCurrentPack(campaign));
+
+    expect(result.ready).toBe(false);
+    expect(result.reasons).toContain("approval_pending");
+  });
+
+  it("publishing remains blocked when lineage is still pending", () => {
+    const campaign = buildCampaign({
+      workflowContext: {
+        launchApprovalLineage: {
+          creativeBriefFingerprint: currentFingerprint(buildCampaign()),
+          approvalRequestId: 1,
+          status: "pending",
+        },
+      },
+    });
+    const result = resolveCampaignPublicationReadiness(buildCurrentPack(campaign));
+
+    expect(result.ready).toBe(false);
+    expect(result.reasons).toContain("approval_pending");
+  });
+
+  it("publishing remains blocked when the lineage fingerprint no longer matches the brief", () => {
+    const campaign = buildCampaign({
+      workflowContext: {
+        launchApprovalLineage: {
+          creativeBriefFingerprint: staleFingerprint(),
+          approvalRequestId: 1,
+          status: "approved",
+        },
+      },
+    });
+    const result = resolveCampaignPublicationReadiness(buildCurrentPack(campaign));
+
+    expect(result.ready).toBe(false);
+    expect(result.reasons).toContain("approval_pending");
+  });
+
+  it("publishing remains blocked when lineage points at a different approval request", () => {
+    const campaign = buildCampaign({
+      workflowContext: {
+        launchApprovalLineage: {
+          creativeBriefFingerprint: currentFingerprint(buildCampaign()),
+          approvalRequestId: 999,
+          status: "approved",
+        },
+      },
+    });
+    const result = resolveCampaignPublicationReadiness(buildCurrentPack(campaign));
+
+    expect(result.ready).toBe(false);
+    expect(result.reasons).toContain("approval_pending");
+  });
+
+  it("publishing remains blocked when the approval row belongs to a different campaign", () => {
+    const campaign = buildCampaign();
+    const pack = buildCurrentPack(campaign);
+    pack.approvals = [{ ...buildApproval("approved"), campaignId: 31 }];
+    const result = resolveCampaignPublicationReadiness(pack);
+
+    expect(result.ready).toBe(false);
+    expect(result.reasons).toContain("approval_pending");
+  });
+
+  it("publishing remains blocked when only a stale auto-repairable pending approval exists", () => {
+    const campaign = buildCampaign({
+      workflowContext: {
+        launchApprovalLineage: {
+          creativeBriefFingerprint: currentFingerprint(buildCampaign()),
+          approvalRequestId: 1,
+          status: "pending",
+        },
+      },
+    });
+    const pack = buildCurrentPack(campaign);
+    pack.approvals = [buildApproval("pending")];
+    const result = resolveCampaignPublicationReadiness(pack);
+
+    expect(result.ready).toBe(false);
+    expect(result.reasons).toContain("approval_pending");
+  });
+
+  it("allows publishing when explicit approval evidence matches lineage and campaign context", () => {
+    const campaign = buildCampaign();
+    const result = resolveCampaignPublicationReadiness(buildCurrentPack(campaign));
+
+    expect(result.ready).toBe(true);
+    expect(result.reasons).toEqual([]);
   });
 });
 

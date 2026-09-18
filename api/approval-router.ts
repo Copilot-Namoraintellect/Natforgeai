@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { approvalRequests, campaigns, businesses, contentPosts, socialIntegrations, agentRuns } from "@db/schema";
-import { eq, and, or, desc, count, inArray, isNull } from "drizzle-orm";
+import { approvalRequests, campaigns, businesses, socialIntegrations, agentRuns } from "@db/schema";
+import { eq, and, or, desc, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { onApprovalResolved } from "./lib/workflow/triggers";
 import { createApprovalRequest } from "./lib/workflow/engine";
@@ -11,21 +11,13 @@ import {
   isLineageAuthoritative,
   validateStrategyRunForCampaign,
 } from "./lib/workflow/strategy-approval";
-
-const beyondStrategyReviewStates = new Set([
-  "strategy_approved",
-  "creatives_generating",
-  "creatives_ready",
-  "audience_generating",
-  "audience_ready",
-  "schedule_generated",
-  "launch_approval_required",
-  "campaign_live",
-  "engagement_active",
-  "leads_converting",
-  "optimisation_active",
-  "completed",
-]);
+import {
+  getLaunchApprovalStatus,
+  buildLaunchApprovalLineage,
+  isLaunchApprovalEvidenceUsable,
+  readLaunchApprovalLineage,
+  type LaunchApprovalLineage,
+} from "./lib/workflow/launch-approval";
 
 /**
  * Validate that a pending strategy_review approval can still be authorised.
@@ -118,72 +110,291 @@ async function validateStrategyApprovalLineage(approval: {
   }
 }
 
-async function repairStaleApprovals(userId: number) {
+/**
+ * G-04 fail-closed invariant: no code path may convert a pending or rejected
+ * campaign_launch approval into an approval decision. Approval authority must
+ * come from an explicit human decision recorded through approveAction /
+ * editAndApproveAction only.
+ *
+ * Previously this function auto-resolved stale pending launch approvals to
+ * "approved" whenever the campaign workflow state had advanced or AI content
+ * existed — silently converting governed launch approval into machine
+ * approval. Both behaviours have been removed. A stale pending request is
+ * left pending for a human decision; the only permitted repair is recreation
+ * of a MISSING pending request (see repairMissingLaunchApproval in
+ * syncPendingApprovals), which restores the ask without fabricating the
+ * answer.
+ */
+async function repairStaleApprovals(_userId: number) {
+  // Intentionally a no-op: kept as the documented seam for approval-repair
+  // bookkeeping so the fail-closed contract is explicit at the call site.
+}
+
+/**
+ * Validate that a pending campaign_launch approval can still be authorised.
+ * Authorisation requires a durable launch lineage in workflowContext that
+ * links this exact approval request to the current campaign brief
+ * fingerprint. A mismatch means the request is stale: authorising it would
+ * launch a campaign on an out-of-date brief.
+ */
+async function validateLaunchApprovalLineage(approval: {
+  id: number;
+  campaignId: number | null;
+  userId: number;
+}) {
+  if (!approval.campaignId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "This launch approval request is not linked to a campaign.",
+    });
+  }
+
+  const db = getDb();
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(and(eq(campaigns.id, approval.campaignId), eq(campaigns.userId, approval.userId)))
+    .limit(1);
+
+  if (!campaign) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "The campaign for this launch approval no longer exists.",
+    });
+  }
+
+  const [business] = campaign.businessId
+    ? await db
+        .select()
+        .from(businesses)
+        .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, approval.userId)))
+        .limit(1)
+    : [null];
+
+  const status = getLaunchApprovalStatus(campaign, business);
+  if (!status.lineage) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "This launch approval request is not linked to a recorded launch approval lineage. Recreate the pending launch request for the current campaign brief.",
+    });
+  }
+
+  if (status.lineage.approvalRequestId !== approval.id) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "This launch approval request is not the current launch approval request. Review the pending request created for the current brief.",
+    });
+  }
+
+  if (status.lineage.creativeBriefFingerprint !== status.currentFingerprint) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "The campaign brief has changed since this launch approval was requested. Recreate the launch approval for the current brief.",
+    });
+  }
+}
+
+async function persistLaunchApprovalLineage(
+  campaignId: number,
+  existingContext: Record<string, unknown> | null | undefined,
+  creativeBriefFingerprint: string,
+  approvalRequestId: number,
+  status: LaunchApprovalLineage["status"]
+) {
+  const db = getDb();
+  await db
+    .update(campaigns)
+    .set({
+      workflowContext: {
+        ...(existingContext || {}),
+        launchApprovalLineage: buildLaunchApprovalLineage(
+          creativeBriefFingerprint,
+          approvalRequestId,
+          status
+        ),
+      } as any,
+    })
+    .where(eq(campaigns.id, campaignId));
+}
+
+/**
+ * Persist the resolved launch lineage after an explicit human decision so the
+ * durable record reflects the terminal state of the request.
+ */
+async function persistResolvedLaunchApprovalLineage(
+  request: { id: number; campaignId: number | null; userId: number; approvalType: string },
+  decision: "approved" | "rejected"
+) {
+  if (request.approvalType !== "campaign_launch" || !request.campaignId) return;
+
+  const db = getDb();
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(and(eq(campaigns.id, request.campaignId), eq(campaigns.userId, request.userId)))
+    .limit(1);
+
+  if (!campaign) return;
+
+  const existing = readLaunchApprovalLineage((campaign.workflowContext || {}) as Record<string, unknown>);
+  const creativeBriefFingerprint =
+    existing?.creativeBriefFingerprint ?? getLaunchApprovalStatus(campaign).currentFingerprint;
+
+  await persistLaunchApprovalLineage(
+    campaign.id,
+    (campaign.workflowContext || {}) as Record<string, unknown>,
+    creativeBriefFingerprint,
+    request.id,
+    decision
+  );
+}
+
+/**
+ * Repair a MISSING campaign_launch approval request for a campaign that needs
+ * one. Fail closed:
+ * - explicit approval evidence is reused only when lineage and campaign
+ *   context still match (isLaunchApprovalEvidenceUsable);
+ * - an existing pending request is adopted into the lineage (safe bookkeeping
+ *   that links the ask to the current brief — never a decision);
+ * - a rejected request is preserved as evidence and never repaired into an
+ *   approval; a fresh pending request is created for a new human decision.
+ */
+async function repairMissingLaunchApproval(
+  campaign: {
+    id: number;
+    userId: number;
+    name: string;
+    platforms: string | null;
+    businessId: number | null;
+    workflowContext: unknown;
+    createdAt?: Date | string | null;
+  },
+  userId: number,
+  opts: { requireConnectedAutoPlatform: boolean }
+) {
   const db = getDb();
 
-  // Only auto-repair campaign_launch approvals. strategy_review approvals must be
-  // resolved through lineage-aware validation so historical requests are preserved
-  // as evidence and cannot be auto-approved after the brief changes.
-  const stale = await db
-    .select({ id: approvalRequests.id, campaignId: approvalRequests.campaignId })
+  if (opts.requireConnectedAutoPlatform) {
+    const campaignPlatforms = (campaign.platforms || "")
+      .split(/[,;]+/)
+      .map((p) => p.trim().toLowerCase())
+      .filter(Boolean);
+    const autoPublishPlatforms = ["facebook", "instagram", "linkedin", "twitter", "tiktok", "email"];
+
+    const hasAutoPublishPlatform = campaignPlatforms.some((p) => autoPublishPlatforms.includes(p));
+    if (!hasAutoPublishPlatform) return;
+
+    const campaignBusinessId = campaign.businessId ?? null;
+    const businessFilter =
+      campaignBusinessId == null
+        ? isNull(socialIntegrations.businessId)
+        : or(isNull(socialIntegrations.businessId), eq(socialIntegrations.businessId, campaignBusinessId));
+
+    const connectedIntegrations = await db
+      .select()
+      .from(socialIntegrations)
+      .where(and(eq(socialIntegrations.userId, userId), eq(socialIntegrations.status, "connected"), businessFilter));
+
+    const connectedPlatforms = new Set(connectedIntegrations.map((i) => i.platform));
+    const hasConnectedAutoPlatform = campaignPlatforms.some(
+      (p) => autoPublishPlatforms.includes(p) && connectedPlatforms.has(p as any)
+    );
+
+    if (!hasConnectedAutoPlatform) return;
+  }
+
+  const launchRows = await db
+    .select()
     .from(approvalRequests)
-    .innerJoin(campaigns, eq(approvalRequests.campaignId, campaigns.id))
     .where(
       and(
+        eq(approvalRequests.campaignId, campaign.id),
         eq(approvalRequests.userId, userId),
-        eq(approvalRequests.approvalType, "campaign_launch"),
-        eq(approvalRequests.status, "pending"),
-        eq(campaigns.userId, userId)
+        eq(approvalRequests.approvalType, "campaign_launch")
       )
     );
 
-  for (const row of stale) {
-    const [campaign] = await db
-      .select()
-      .from(campaigns)
-      .where(and(eq(campaigns.id, row.campaignId!), eq(campaigns.userId, userId)))
-      .limit(1);
+  const [business] = campaign.businessId
+    ? await db
+        .select()
+        .from(businesses)
+        .where(and(eq(businesses.id, campaign.businessId), eq(businesses.userId, userId)))
+        .limit(1)
+    : [null];
 
-    if (!campaign) continue;
+  const status = getLaunchApprovalStatus(campaign, business);
+  const fingerprint = status.currentFingerprint;
 
-    // If campaign has moved beyond launch approval, auto-resolve the stale pending launch approval
-    if (beyondStrategyReviewStates.has(campaign.workflowState)) {
-      await db
-        .update(approvalRequests)
-        .set({
-          status: "approved",
-          approvedAt: new Date(),
-          description: `Auto-resolved: campaign workflow state is now ${campaign.workflowState}.`,
-        })
-        .where(eq(approvalRequests.id, row.id));
-      console.log(`[ApprovalRepair] Auto-resolved stale launch approval ${row.id} for campaign ${row.campaignId} (state=${campaign.workflowState})`);
-      continue;
+  // Reuse explicit approval evidence only when lineage and campaign context
+  // still match. A bare approved row without corroborating lineage is never
+  // sufficient authority.
+  const hasUsableApproval = launchRows.some(
+    (row) =>
+      (row.status === "approved" || row.status === "edited") &&
+      isLaunchApprovalEvidenceUsable(campaign, row, business)
+  );
+  if (hasUsableApproval) return;
+
+  const pendingRows = launchRows
+    .filter((row) => row.status === "pending")
+    .sort(
+      (a, b) =>
+        new Date((b as any).createdAt || 0).getTime() - new Date((a as any).createdAt || 0).getTime()
+    );
+
+  // Adopt the most recent pending request into the durable lineage. This only
+  // links the existing human-asked request to the current brief fingerprint;
+  // it does not fabricate an approval decision.
+  if (pendingRows.length > 0) {
+    const latest = pendingRows[0];
+    const lineage = status.lineage;
+    if (
+      !lineage ||
+      lineage.approvalRequestId !== latest.id ||
+      lineage.creativeBriefFingerprint !== fingerprint ||
+      lineage.status !== "pending"
+    ) {
+      await persistLaunchApprovalLineage(
+        campaign.id,
+        (campaign.workflowContext || {}) as Record<string, unknown>,
+        fingerprint,
+        latest.id,
+        "pending"
+      );
+      console.log(`[ApprovalRepair] Linked pending launch approval ${latest.id} to current brief for campaign ${campaign.id}`);
     }
-
-    // If campaign already has published content, auto-resolve stale launch approval
-    const [contentCount] = await db
-      .select({ value: count() })
-      .from(contentPosts)
-      .where(and(eq(contentPosts.campaignId, row.campaignId!), eq(contentPosts.aiGenerated, true)));
-
-    if (contentCount && contentCount.value > 0) {
-      await db
-        .update(approvalRequests)
-        .set({
-          status: "approved",
-          approvedAt: new Date(),
-          description: `Auto-resolved: campaign already has ${contentCount.value} generated content posts.`,
-        })
-        .where(eq(approvalRequests.id, row.id));
-      console.log(`[ApprovalRepair] Auto-resolved stale launch approval ${row.id} for campaign ${row.campaignId} (contentCount=${contentCount.value})`);
-    }
+    return;
   }
+
+  // No pending request exists: recreate one so a human decision can be made.
+  // Any rejected request remains untouched as historical evidence.
+  const { id } = await createApprovalRequest({
+    userId,
+    campaignId: campaign.id,
+    approvalType: "campaign_launch",
+    title: `Approve Launch: ${campaign.name}`,
+    description: `The campaign "${campaign.name}" is ready to launch. Review and approve the launch to publish to connected channels.`,
+    aiRecommendation: "All strategy and creative assets are ready. Approve the launch to go live.",
+    riskLevel: "low",
+  });
+  await persistLaunchApprovalLineage(
+    campaign.id,
+    (campaign.workflowContext || {}) as Record<string, unknown>,
+    fingerprint,
+    id,
+    "pending"
+  );
+  console.log(`[ApprovalRepair] Recreated missing pending launch approval ${id} for campaign ${campaign.id}`);
 }
 
 async function syncPendingApprovals(userId: number) {
   const db = getDb();
 
-  // First, auto-resolve any stale pending approvals
+  // G-04: stale approvals are never auto-resolved (fail closed). The seam is
+  // kept explicitly so no future "repair" reintroduces fabricated decisions.
   await repairStaleApprovals(userId);
 
   // Find campaigns that should have pending approvals but don't
@@ -263,108 +474,18 @@ async function syncPendingApprovals(userId: number) {
       }
     }
 
-    // Repair missing campaign_launch approvals
+    // Repair missing campaign_launch approvals. Reuse of explicit approval
+    // evidence is lineage-gated; missing pending requests are recreated
+    // without ever fabricating an approval decision.
     if (state === "launch_approval_required") {
-      const alreadyApproved = await db
-        .select()
-        .from(approvalRequests)
-        .where(
-          and(
-            eq(approvalRequests.campaignId, campaign.id),
-            eq(approvalRequests.userId, userId),
-            eq(approvalRequests.approvalType, "campaign_launch"),
-            eq(approvalRequests.status, "approved")
-          )
-        )
-        .limit(1);
-
-      if (alreadyApproved.length > 0) {
-        continue;
-      }
-
-      const existingPending = await db
-        .select()
-        .from(approvalRequests)
-        .where(
-          and(
-            eq(approvalRequests.campaignId, campaign.id),
-            eq(approvalRequests.userId, userId),
-            eq(approvalRequests.approvalType, "campaign_launch"),
-            eq(approvalRequests.status, "pending")
-          )
-        )
-        .limit(1);
-
-      if (existingPending.length === 0) {
-        await createApprovalRequest({
-          userId,
-          campaignId: campaign.id,
-          approvalType: "campaign_launch",
-          title: `Approve Launch: ${campaign.name}`,
-          description: `The campaign "${campaign.name}" is ready to launch. All strategy, creative, audience, and schedule assets have been generated.`,
-          aiRecommendation: "Based on the generated strategy and content, this campaign is ready to go live. Expected reach aligns with budget allocation.",
-          riskLevel: "low",
-        });
-      }
+      await repairMissingLaunchApproval(campaign, userId, { requireConnectedAutoPlatform: false });
     }
 
     // Repair missing campaign_launch approvals for campaigns that are content-ready
-    // but still in the creatives_ready state (e.g. Campaign #23).
+    // but still in the creatives_ready state (e.g. Campaign #23). Only applies when
+    // a connected auto-publish platform exists.
     if (state === "creatives_ready") {
-      const alreadyHasLaunchRequest = await db
-        .select()
-        .from(approvalRequests)
-        .where(
-          and(
-            eq(approvalRequests.campaignId, campaign.id),
-            eq(approvalRequests.userId, userId),
-            eq(approvalRequests.approvalType, "campaign_launch"),
-            inArray(approvalRequests.status, ["approved", "edited", "pending"])
-          )
-        )
-        .limit(1);
-
-      if (alreadyHasLaunchRequest.length === 0) {
-        const campaignPlatforms = (campaign.platforms || "")
-          .split(/[,;]+/)
-          .map((p) => p.trim().toLowerCase())
-          .filter(Boolean);
-        const autoPublishPlatforms = ["facebook", "instagram", "linkedin", "twitter", "tiktok", "email"];
-
-        const hasConnectedAutoPlatform = await (async () => {
-          const hasAutoPublishPlatform = campaignPlatforms.some((p) => autoPublishPlatforms.includes(p));
-          if (!hasAutoPublishPlatform) return false;
-
-          const campaignBusinessId = campaign.businessId ?? null;
-          const businessFilter =
-            campaignBusinessId == null
-              ? isNull(socialIntegrations.businessId)
-              : or(isNull(socialIntegrations.businessId), eq(socialIntegrations.businessId, campaignBusinessId));
-
-          const connectedIntegrations = await db
-            .select()
-            .from(socialIntegrations)
-            .where(and(eq(socialIntegrations.userId, userId), eq(socialIntegrations.status, "connected"), businessFilter));
-
-          const connectedPlatforms = new Set(connectedIntegrations.map((i) => i.platform));
-          return campaignPlatforms.some(
-            (p) => autoPublishPlatforms.includes(p) && connectedPlatforms.has(p as any)
-          );
-        })();
-
-        if (hasConnectedAutoPlatform) {
-          await createApprovalRequest({
-            userId,
-            campaignId: campaign.id,
-            approvalType: "campaign_launch",
-            title: `Approve Launch: ${campaign.name}`,
-            description: `The campaign "${campaign.name}" is ready to launch. Review and approve the launch to publish to connected channels.`,
-            aiRecommendation: "All strategy and creative assets are ready. Approve the launch to go live.",
-            riskLevel: "low",
-          });
-          console.log(`[ApprovalRepair] Created missing launch approval for creatives_ready campaign ${campaign.id}`);
-        }
-      }
+      await repairMissingLaunchApproval(campaign, userId, { requireConnectedAutoPlatform: true });
     }
   }
 }
@@ -445,6 +566,14 @@ export const approvalRouter = createRouter({
         });
       }
 
+      if (request.approvalType === "campaign_launch") {
+        await validateLaunchApprovalLineage({
+          id: request.id,
+          campaignId: request.campaignId,
+          userId: ctx.user.id,
+        });
+      }
+
       await db
         .update(approvalRequests)
         .set({
@@ -455,6 +584,8 @@ export const approvalRouter = createRouter({
             : request.description,
         })
         .where(eq(approvalRequests.id, input.approvalId));
+
+      await persistResolvedLaunchApprovalLineage(request, "approved");
 
       // Resume workflow through the trigger system — fire asynchronously so the HTTP
       // response returns immediately and does not wait for long-running agent chains.
@@ -510,6 +641,8 @@ export const approvalRouter = createRouter({
         })
         .where(eq(approvalRequests.id, input.approvalId));
 
+      await persistResolvedLaunchApprovalLineage(request, "rejected");
+
       // Resume workflow through the trigger system — fire asynchronously so the HTTP
       // response returns immediately and does not wait for long-running agent chains.
       Promise.resolve().then(() =>
@@ -562,6 +695,14 @@ export const approvalRouter = createRouter({
         });
       }
 
+      if (request.approvalType === "campaign_launch") {
+        await validateLaunchApprovalLineage({
+          id: request.id,
+          campaignId: request.campaignId,
+          userId: ctx.user.id,
+        });
+      }
+
       await db
         .update(approvalRequests)
         .set({
@@ -572,6 +713,8 @@ export const approvalRouter = createRouter({
             : `${request.description || ""}\n\nEdited by user: ${JSON.stringify(input.editedPayload)}`,
         })
         .where(eq(approvalRequests.id, input.approvalId));
+
+      await persistResolvedLaunchApprovalLineage(request, "approved");
 
       // Resume workflow through the trigger system — fire asynchronously so the HTTP
       // response returns immediately and does not wait for long-running agent chains.

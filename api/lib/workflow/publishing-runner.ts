@@ -1,5 +1,5 @@
 import { getDb } from "../../queries/connection";
-import { publishingQueue, contentPosts, socialIntegrations, campaigns, approvalRequests } from "@db/schema";
+import { publishingQueue, contentPosts, socialIntegrations, campaigns } from "@db/schema";
 import { eq, and, lte, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
@@ -145,18 +145,10 @@ export async function finalizeCampaignPublishState(campaignId: number | null | u
       })
       .where(eq(campaigns.id, campaignId));
 
-    // Clear any pending campaign_launch approval so the UI/eligibility no longer
-    // reports "launch approval required" for a fully-live campaign.
-    await db
-      .update(approvalRequests)
-      .set({ status: "approved", approvedAt: new Date() })
-      .where(
-        and(
-          eq(approvalRequests.campaignId, campaignId),
-          eq(approvalRequests.approvalType, "campaign_launch"),
-          eq(approvalRequests.status, "pending")
-        )
-      );
+    // G-04 fail-closed: never convert a pending campaign_launch approval into
+    // an approval decision here. Approval authority must come from an explicit
+    // human decision recorded through the approval router only. A stale pending
+    // request is left pending for a human to resolve.
   }
 }
 

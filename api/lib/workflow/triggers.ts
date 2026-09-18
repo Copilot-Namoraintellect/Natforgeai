@@ -35,6 +35,7 @@ import {
   buildStrategyApprovalLineage,
   validateStrategyRunForCampaign,
 } from "./strategy-approval";
+import { getLaunchApprovalStatus, buildLaunchApprovalLineage } from "./launch-approval";
 import { InMemoryWorkflowOperationRegistry } from "./workflow-operation";
 
 export async function onAgentRunComplete(runId: number) {
@@ -194,8 +195,9 @@ export async function onAgentRunComplete(runId: number) {
       console.error("[Workflow] Auto-distribution failed:", err.message);
     }
   } else if (state === "schedule_generated" && run.agentType === "distribution") {
-    // Create launch approval request
-    await createApprovalRequest({
+    // Create launch approval request and record the durable launch lineage so
+    // the approval is linked to the current brief (G-04 fail-closed).
+    const { id: launchApprovalRequestId } = await createApprovalRequest({
       userId: run.userId,
       campaignId: run.campaignId,
       approvalType: "campaign_launch",
@@ -204,6 +206,19 @@ export async function onAgentRunComplete(runId: number) {
       aiRecommendation: "Based on the generated strategy and content, this campaign is ready to go live. Expected reach aligns with budget allocation.",
       riskLevel: "low",
     });
+    await db
+      .update(campaigns)
+      .set({
+        workflowContext: {
+          ...(campaign.workflowContext || {}),
+          launchApprovalLineage: buildLaunchApprovalLineage(
+            getLaunchApprovalStatus(campaign, business).currentFingerprint,
+            launchApprovalRequestId,
+            "pending"
+          ),
+        } as any,
+      })
+      .where(eq(campaigns.id, run.campaignId));
     await transitionCampaignState(run.campaignId, run.userId, "request_launch_approval");
   }
 }

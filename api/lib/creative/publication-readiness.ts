@@ -9,11 +9,15 @@
  * - Requires a durable Marketing Leaflet with a usable preview URL, a current
  *   caption/message pack, and current supporting/content output before any
  *   campaign pack can be published.
+ * - Requires launch authority that is corroborated by durable launch approval
+ *   lineage matching the current brief (G-04 fail-closed). A bare
+ *   campaign_launch approval row is never sufficient on its own.
  * - Enforces the same rule for individual publication/scheduling paths so a
  *   disabled frontend button cannot be bypassed.
  */
 
 import { buildGroundedCreativeBrief } from "./brief-grounding";
+import { isLaunchApprovalEvidenceUsable } from "../workflow/launch-approval";
 import { logInfo, logError } from "../logger";
 import { TRPCError } from "@trpc/server";
 
@@ -195,15 +199,16 @@ function isBriefComplete(campaign: unknown): boolean {
   return coreFields.some((value) => typeof value === "string" && value.trim().length > 0);
 }
 
-function hasApprovedLaunchApproval(approvals: unknown[] | undefined): boolean {
+/**
+ * G-04 fail-closed: a campaign_launch approval row only grants launch
+ * authority when it is corroborated by durable launch lineage that matches
+ * the campaign context (same campaign/user, lineage pointing at this exact
+ * request, approved for the current brief fingerprint). A bare approved row —
+ * e.g. one fabricated by historical repair automation — is never sufficient.
+ */
+function hasApprovedLaunchApproval(campaign: unknown, approvals: unknown[] | undefined, business?: unknown): boolean {
   if (!approvals || !Array.isArray(approvals)) return false;
-  return approvals.some((a) => {
-    const approval = asUnknown(a);
-    return (
-      approval?.approvalType === "campaign_launch" &&
-      (approval?.status === "approved" || approval?.status === "edited")
-    );
-  });
+  return approvals.some((a) => isLaunchApprovalEvidenceUsable(campaign, a, business));
 }
 
 function computeCurrentFingerprint(campaign: unknown, business?: unknown): string {
@@ -306,7 +311,7 @@ export function resolveCampaignPublicationReadiness(
 
     // Final publication / scheduling of a campaign-linked post requires the
     // campaign launch approval, but the queue-item approval step must not.
-    if (requireLaunchApproval && !hasApprovedLaunchApproval(approvals)) {
+    if (requireLaunchApproval && !hasApprovedLaunchApproval(campaign, approvals, business)) {
       reasons.push("approval_pending");
     }
 
@@ -388,7 +393,7 @@ export function resolveCampaignPublicationReadiness(
   }
 
   // Launch approval
-  if (!hasApprovedLaunchApproval(approvals)) {
+  if (!hasApprovedLaunchApproval(campaign, approvals, business)) {
     reasons.push("approval_pending");
   }
 

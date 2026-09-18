@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations, approvalRequests, agentRuns } from "@db/schema";
+import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations, approvalRequests, agentRuns, businesses } from "@db/schema";
 import { eq, and, or, desc, count, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { env } from "./lib/env";
@@ -27,6 +27,11 @@ import {
   loadAndResolveCampaignPublicationReadiness,
   loadAndAssertCampaignPublicationReadiness,
 } from "./lib/creative/publication-readiness-service";
+import {
+  getLaunchApprovalStatus,
+  buildLaunchApprovalLineage,
+  isLaunchApprovalEvidenceUsable,
+} from "./lib/workflow/launch-approval";
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
@@ -761,6 +766,20 @@ export const contentRouter = createRouter({
 
       const campaignBusinessId = campaign.businessId ?? null;
 
+      const [business] =
+        campaignBusinessId != null
+          ? await db
+              .select()
+              .from(businesses)
+              .where(
+                and(
+                  eq(businesses.id, campaignBusinessId),
+                  eq(businesses.userId, ctx.user.id)
+                )
+              )
+              .limit(1)
+          : [null];
+
       // Load connected integrations scoped to this user and, when known, this business.
       const businessFilter =
         campaignBusinessId == null
@@ -816,9 +835,9 @@ export const contentRouter = createRouter({
           (a) => a.approvalType === "strategy_review" && (a.status === "approved" || a.status === "edited")
         );
 
-      const launchApproved = approvals.some(
-        (a) => a.approvalType === "campaign_launch" && (a.status === "approved" || a.status === "edited")
-      );
+      // G-04 fail-closed: launch authority must be lineage-corroborated, not
+      // just a bare approved row.
+      const launchApproved = approvals.some((a) => isLaunchApprovalEvidenceUsable(campaign, a, business));
       const pendingApprovalCount = approvals.filter(
         (a) => a.approvalType === "campaign_launch" && a.status === "pending"
       ).length;
@@ -879,7 +898,7 @@ export const contentRouter = createRouter({
         );
         if (!existingLaunchRequest) {
           try {
-            await createApprovalRequest({
+            const { id: launchApprovalRequestId } = await createApprovalRequest({
               userId: ctx.user.id,
               campaignId: input.campaignId,
               approvalType: "campaign_launch",
@@ -888,6 +907,21 @@ export const contentRouter = createRouter({
               aiRecommendation: "All strategy and creative assets are ready. Approve the launch to go live.",
               riskLevel: "low",
             });
+            // Record the durable launch lineage so the new request is linked to
+            // the current brief fingerprint (G-04 fail-closed).
+            await db
+              .update(campaigns)
+              .set({
+                workflowContext: {
+                  ...(campaign.workflowContext || {}),
+                  launchApprovalLineage: buildLaunchApprovalLineage(
+                    getLaunchApprovalStatus(campaign, business).currentFingerprint,
+                    launchApprovalRequestId,
+                    "pending"
+                  ),
+                } as any,
+              })
+              .where(eq(campaigns.id, input.campaignId));
           } catch (err: any) {
             logError("[PublishEligibility] Failed to create launch approval request", {
               campaignId: input.campaignId,

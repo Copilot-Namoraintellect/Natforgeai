@@ -130,6 +130,13 @@ const readyCampaign = {
   mainPainPoint: "Wasting time",
   primaryOutcome: "More leads",
   coreMessage: "Empower your workforce",
+  workflowContext: {
+    launchApprovalLineage: {
+      creativeBriefFingerprint: "test-fingerprint-ready",
+      approvalRequestId: 1,
+      status: "approved",
+    },
+  },
 };
 
 const readyLeafletPost = {
