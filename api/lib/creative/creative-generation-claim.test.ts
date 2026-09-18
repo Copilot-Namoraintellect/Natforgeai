@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll, vi } from "vitest";
 import { eq } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { env } from "../../lib/env";
 import { getDb } from "../../queries/connection";
 import { creativeGenerationClaims } from "@db/schema";
@@ -16,6 +17,7 @@ import {
   createClaimHeartbeatController,
   calculateLeaseExpiresAt,
   rearmCreativeGenerationClaim,
+  terminalizeStaleCreativeGenerationClaim,
   type AcquireCreativeGenerationClaimResult,
   type CreativeGenerationClaimAcquisition,
   type CreativeGenerationClaimCollision,
@@ -219,6 +221,100 @@ describe("rearmCreativeGenerationClaim input validation", () => {
         leaseExpiresAt: calculateLeaseExpiresAt(300),
       })
     ).rejects.toThrow(/Invalid operationSource/);
+  });
+});
+
+describe("terminalizeStaleCreativeGenerationClaim input validation", () => {
+  it("rejects invalid claimId before any database work", async () => {
+    await expect(
+      terminalizeStaleCreativeGenerationClaim({
+        claimId: 0,
+        userId: 1,
+        campaignId: 1,
+        staleBefore: new Date(),
+      })
+    ).rejects.toThrow(/Invalid claimId/);
+  });
+
+  it("rejects invalid staleBefore before any database work", async () => {
+    await expect(
+      terminalizeStaleCreativeGenerationClaim({
+        claimId: 1,
+        userId: 1,
+        campaignId: 1,
+        staleBefore: new Date("invalid"),
+      })
+    ).rejects.toThrow(/Invalid staleBefore/);
+  });
+});
+
+describe("terminalizeStaleCreativeGenerationClaim conditional update shape", () => {
+  function mockUpdateChain(affectedRows: number) {
+    const where = vi.fn(
+      (_cond?: unknown) => Promise.resolve([{ affectedRows }]) as never
+    );
+    const set = vi.fn((_values?: unknown) => ({ where }));
+    const update = vi.fn((_table?: unknown) => ({ set }));
+    mockGetDb.mockImplementationOnce(() => ({ update }) as never);
+    return { update, set, where };
+  }
+
+  it("issues exactly one evidence-preserving conditional UPDATE as the stale-authority checkpoint", async () => {
+    const chain = mockUpdateChain(1);
+    const staleBefore = new Date("2026-05-29T00:00:00.000Z");
+
+    const result = await terminalizeStaleCreativeGenerationClaim({
+      claimId: 42,
+      userId: 7,
+      campaignId: 13,
+      staleBefore,
+    });
+
+    expect(result).toEqual({ terminalized: true });
+    expect(chain.update).toHaveBeenCalledTimes(1);
+    expect(chain.update.mock.calls[0][0]).toBe(creativeGenerationClaims);
+    // The only mutations are status and activeClaimKey: lease evidence,
+    // heartbeat evidence, ownerToken, and identity columns are preserved.
+    expect(chain.set).toHaveBeenCalledTimes(1);
+    expect(chain.set.mock.calls[0][0]).toEqual({
+      status: "failed",
+      activeClaimKey: null,
+    });
+
+    // The WHERE clause re-proves staleness against the database clock: still
+    // running, and either the lease is expired or the row is an aged unleased
+    // legacy claim. A live renewed lease fails this predicate (zero rows).
+    const compiled = new MySqlDialect().sqlToQuery(
+      chain.where.mock.calls[0][0] as never
+    );
+    expect(compiled.sql).toContain("`id`");
+    expect(compiled.sql).toContain("`userId`");
+    expect(compiled.sql).toContain("`campaignId`");
+    expect(compiled.sql).toContain("`status`");
+    expect(compiled.sql).toContain("`leaseExpiresAt`");
+    expect(compiled.sql).toContain("`updatedAt`");
+    expect(compiled.sql).toContain("NOW()");
+    expect(compiled.params).toContain(42);
+    expect(compiled.params).toContain(7);
+    expect(compiled.params).toContain(13);
+    expect(compiled.params).toContain("running");
+    const expectedDate = staleBefore.toISOString().slice(0, 23).replace("T", " ");
+    expect(compiled.params).toContain(expectedDate);
+  });
+
+  it("maps zero affected rows to terminalized false without any retry", async () => {
+    const chain = mockUpdateChain(0);
+
+    const result = await terminalizeStaleCreativeGenerationClaim({
+      claimId: 42,
+      userId: 7,
+      campaignId: 13,
+      staleBefore: new Date(),
+    });
+
+    expect(result).toEqual({ terminalized: false });
+    expect(chain.update).toHaveBeenCalledTimes(1);
+    expect(chain.where).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -902,6 +998,259 @@ describe("creative generation claim primitive (DB)", () => {
       campaignId: testCampaignId,
     });
     expect(active?.id).toBe(claim.id);
+  });
+
+  describe("terminalizeStaleCreativeGenerationClaim", () => {
+    itSafe("recovers an expired-lease claim and preserves recovery evidence", async () => {
+      const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(-1) });
+
+      const result = await terminalizeStaleCreativeGenerationClaim({
+        claimId: claim.id,
+        userId: testUserId,
+        campaignId: testCampaignId,
+        staleBefore: new Date(),
+      });
+
+      expect(result).toEqual({ terminalized: true });
+
+      const [row] = await db
+        .select()
+        .from(creativeGenerationClaims)
+        .where(eq(creativeGenerationClaims.id, claim.id))
+        .limit(1);
+
+      expect(row?.status).toBe("failed");
+      expect(row?.activeClaimKey).toBeNull();
+      // The expired lease, owner token and heartbeat evidence are preserved.
+      expect(row?.leaseExpiresAt?.getTime()).toBe(claim.leaseExpiresAt?.getTime());
+      expect(row?.ownerToken).toBe(claim.ownerToken);
+      // Recovery terminalizations stay distinguishable from owner releases.
+      expect(row?.releasedAt).toBeNull();
+
+      const active = await getActiveCreativeGenerationClaim({
+        userId: testUserId,
+        campaignId: testCampaignId,
+      });
+      expect(active).toBeNull();
+    });
+
+    itSafe("never steals a live healthy claim with an active lease", async () => {
+      const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(300) });
+
+      const result = await terminalizeStaleCreativeGenerationClaim({
+        claimId: claim.id,
+        userId: testUserId,
+        campaignId: testCampaignId,
+        staleBefore: new Date(),
+      });
+
+      expect(result).toEqual({ terminalized: false });
+
+      const [row] = await db
+        .select()
+        .from(creativeGenerationClaims)
+        .where(eq(creativeGenerationClaims.id, claim.id))
+        .limit(1);
+
+      expect(row?.status).toBe("running");
+      expect(row?.activeClaimKey).toBe(
+        buildActiveCreativeClaimKey(testUserId, testCampaignId)
+      );
+      const remainingSeconds =
+        (new Date(row!.leaseExpiresAt!).getTime() - Date.now()) / 1000;
+      expect(remainingSeconds).toBeGreaterThan(250);
+    });
+
+    itSafe("recovers an aged unleased claim", async () => {
+      const claim = await acquire();
+      await db
+        .update(creativeGenerationClaims)
+        .set({ leaseExpiresAt: null, updatedAt: new Date(Date.now() - 60_000) })
+        .where(eq(creativeGenerationClaims.id, claim.id));
+
+      const result = await terminalizeStaleCreativeGenerationClaim({
+        claimId: claim.id,
+        userId: testUserId,
+        campaignId: testCampaignId,
+        staleBefore: new Date(Date.now() - 30_000),
+      });
+
+      expect(result).toEqual({ terminalized: true });
+
+      const [row] = await db
+        .select()
+        .from(creativeGenerationClaims)
+        .where(eq(creativeGenerationClaims.id, claim.id))
+        .limit(1);
+      expect(row?.status).toBe("failed");
+      expect(row?.activeClaimKey).toBeNull();
+    });
+
+    itSafe("refuses an unleased claim newer than the staleness threshold", async () => {
+      const claim = await acquire();
+      await db
+        .update(creativeGenerationClaims)
+        .set({ leaseExpiresAt: null })
+        .where(eq(creativeGenerationClaims.id, claim.id));
+
+      const result = await terminalizeStaleCreativeGenerationClaim({
+        claimId: claim.id,
+        userId: testUserId,
+        campaignId: testCampaignId,
+        staleBefore: new Date(Date.now() - 30_000),
+      });
+
+      expect(result).toEqual({ terminalized: false });
+
+      const [row] = await db
+        .select()
+        .from(creativeGenerationClaims)
+        .where(eq(creativeGenerationClaims.id, claim.id))
+        .limit(1);
+      expect(row?.status).toBe("running");
+    });
+
+    itSafe("is idempotent: a second terminalization attempt is a no-op", async () => {
+      const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(-1) });
+      const args = {
+        claimId: claim.id,
+        userId: testUserId,
+        campaignId: testCampaignId,
+        staleBefore: new Date(),
+      };
+
+      const first = await terminalizeStaleCreativeGenerationClaim(args);
+      expect(first).toEqual({ terminalized: true });
+
+      const [afterFirst] = await db
+        .select()
+        .from(creativeGenerationClaims)
+        .where(eq(creativeGenerationClaims.id, claim.id))
+        .limit(1);
+
+      const second = await terminalizeStaleCreativeGenerationClaim(args);
+      expect(second).toEqual({ terminalized: false });
+
+      const [afterSecond] = await db
+        .select()
+        .from(creativeGenerationClaims)
+        .where(eq(creativeGenerationClaims.id, claim.id))
+        .limit(1);
+      expect(afterSecond?.status).toBe("failed");
+      expect(afterSecond?.activeClaimKey).toBeNull();
+      expect(afterSecond?.leaseExpiresAt?.getTime()).toBe(
+        afterFirst?.leaseExpiresAt?.getTime()
+      );
+    });
+
+    itSafe("unblocks acquisition after crash-style recovery (restart scenario)", async () => {
+      // A crashed worker leaves a running claim with an expired lease that
+      // blocks every future acquisition for the same user and campaign.
+      await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(-1) });
+      const blocked = await acquireCreativeGenerationClaim({
+        userId: testUserId,
+        campaignId: testCampaignId,
+        operationSource: "job",
+        ownerToken: makeOwnerToken(),
+      });
+      expect(blocked.acquired).toBe(false);
+
+      const stale = await classifyStaleCreativeGenerationClaims({
+        staleBefore: new Date(),
+      });
+      expect(
+        stale.expiredLeasedClaims.some(
+          (c) => c.userId === testUserId && c.campaignId === testCampaignId
+        )
+      ).toBe(true);
+
+      for (const candidate of stale.expiredLeasedClaims) {
+        await terminalizeStaleCreativeGenerationClaim({
+          claimId: candidate.id,
+          userId: candidate.userId,
+          campaignId: candidate.campaignId,
+          staleBefore: new Date(),
+        });
+      }
+
+      // After recovery a fresh deliberate acquisition succeeds again.
+      const reacquired = await acquireCreativeGenerationClaim({
+        userId: testUserId,
+        campaignId: testCampaignId,
+        operationSource: "job",
+        ownerToken: makeOwnerToken(),
+        leaseExpiresAt: calculateLeaseExpiresAt(300),
+      });
+      expect(reacquired.acquired).toBe(true);
+      createdClaimIds.push(requireAcquiredClaim(reacquired).id);
+    });
+
+    itSafe("refuses to touch a claim released by its owner before recovery", async () => {
+      const claim = await acquire({ leaseExpiresAt: calculateLeaseExpiresAt(-1) });
+      await releaseCreativeGenerationClaim({
+        claimId: claim.id,
+        ownerToken: claim.ownerToken,
+        status: "completed",
+      });
+
+      const result = await terminalizeStaleCreativeGenerationClaim({
+        claimId: claim.id,
+        userId: testUserId,
+        campaignId: testCampaignId,
+        staleBefore: new Date(),
+      });
+
+      expect(result).toEqual({ terminalized: false });
+
+      const [row] = await db
+        .select()
+        .from(creativeGenerationClaims)
+        .where(eq(creativeGenerationClaims.id, claim.id))
+        .limit(1);
+      expect(row?.status).toBe("completed");
+      expect(row?.releasedAt).not.toBeNull();
+    });
+
+    itConcurrent(
+      "exactly one concurrent recovery attempt wins per stale claim",
+      async () => {
+        const userId = testUserId + 6000;
+        const campaignId = testCampaignId + 6000;
+        const claim = requireAcquiredClaim(
+          await acquireCreativeGenerationClaim({
+            userId,
+            campaignId,
+            operationSource: "job",
+            ownerToken: makeOwnerToken(),
+            leaseExpiresAt: calculateLeaseExpiresAt(-1),
+          })
+        );
+
+        const attempts = Array.from({ length: 5 }, () =>
+          terminalizeStaleCreativeGenerationClaim({
+            claimId: claim.id,
+            userId,
+            campaignId,
+            staleBefore: new Date(),
+          })
+        );
+
+        const results = await Promise.all(attempts);
+        const winners = results.filter((r) => r.terminalized);
+        expect(winners.length).toBe(1);
+
+        const [row] = await db
+          .select()
+          .from(creativeGenerationClaims)
+          .where(eq(creativeGenerationClaims.id, claim.id))
+          .limit(1);
+        expect(row?.status).toBe("failed");
+
+        await db
+          .delete(creativeGenerationClaims)
+          .where(eq(creativeGenerationClaims.userId, userId));
+      }
+    );
   });
 });
 });

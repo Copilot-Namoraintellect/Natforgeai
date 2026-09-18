@@ -854,3 +854,72 @@ export async function classifyStaleCreativeGenerationClaims({
 
   return { expiredLeasedClaims, legacyOrUnleasedClaims };
 }
+
+// ─── Dormant stale terminalization (claim recovery slice) ───
+//
+// Converts exactly one provably stale running claim into an ordinary failed
+// claim so the EXISTING deliberate-request rearm path (rearmCreativeGenerationClaim,
+// used by workflow orchestration) may subsequently handle a retry. This is NOT
+// releaseCreativeGenerationClaim: recovery cannot rely on a dead owner's token,
+// so authority comes from the complementary stale-state evidence (expired lease,
+// or no lease at all with an aged updatedAt threshold). The conditional UPDATE
+// below is the stale-authority checkpoint: a lease renewed by a live owner
+// heartbeat, an owner release that already closed the claim, a claim that was
+// never staler than staleBefore, or a peer recovery that won first all yield
+// zero rows — never a second attempt, never a stolen live claim. The only
+// mutations are status=failed and activeClaimKey cleared; the expired lease
+// timestamp, heartbeat evidence, ownerToken, and every identity column are
+// preserved as recovery evidence, and releasedAt is intentionally left null so
+// operator releases remain distinguishable from recovery terminalizations.
+// No reread, no retry, no billing interaction, no content generation.
+
+export interface TerminalizeStaleCreativeGenerationClaimResult {
+  terminalized: boolean;
+}
+
+export async function terminalizeStaleCreativeGenerationClaim({
+  claimId,
+  userId,
+  campaignId,
+  staleBefore,
+}: {
+  claimId: number;
+  userId: number;
+  campaignId: number;
+  staleBefore: Date;
+}): Promise<TerminalizeStaleCreativeGenerationClaimResult> {
+  assertValidId(claimId, "claimId");
+  assertValidId(userId, "userId");
+  assertValidId(campaignId, "campaignId");
+  if (!(staleBefore instanceof Date) || Number.isNaN(staleBefore.getTime())) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid staleBefore: expected Date",
+    });
+  }
+
+  const db = getDb();
+  const result = await db
+    .update(creativeGenerationClaims)
+    .set({ status: "failed", activeClaimKey: null })
+    .where(
+      and(
+        eq(creativeGenerationClaims.id, claimId),
+        eq(creativeGenerationClaims.userId, userId),
+        eq(creativeGenerationClaims.campaignId, campaignId),
+        eq(creativeGenerationClaims.status, "running"),
+        or(
+          and(
+            isNotNull(creativeGenerationClaims.leaseExpiresAt),
+            lt(creativeGenerationClaims.leaseExpiresAt, sql`NOW()`)
+          ),
+          and(
+            isNull(creativeGenerationClaims.leaseExpiresAt),
+            lt(creativeGenerationClaims.updatedAt, staleBefore)
+          )
+        )
+      )
+    );
+
+  return { terminalized: getAffectedRows(result) === 1 };
+}
