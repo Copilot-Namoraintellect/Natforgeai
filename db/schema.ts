@@ -1090,6 +1090,46 @@ export const optimisationLogs = mysqlTable("optimisation_logs", {
 
 export type OptimisationLog = typeof optimisationLogs.$inferSelect;
 
+// ─── Learning Records ───
+// Phase 1 Learning engine output. Additive to optimisation_logs: stores a
+// structured, evidence-backed learning record with full lineage
+// (source observations, evaluation version, window, provenance) and a
+// unique idempotency key so the same evaluation window/version executes once.
+// Phase 1 never auto-applies recommendations; governance JSON pins autoApply=false.
+export const learningRecords = mysqlTable(
+  "learning_records",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
+    evaluationVersion: varchar("evaluationVersion", { length: 64 }).notNull(),
+    windowStart: date("windowStart").notNull(),
+    windowEnd: date("windowEnd").notNull(),
+    idempotencyKey: varchar("idempotencyKey", { length: 255 }).notNull(),
+    objectiveSummary: text("objectiveSummary").notNull(),
+    kpiAssessment: json("kpiAssessment").notNull(),
+    performanceFacts: json("performanceFacts").notNull(),
+    positivePatterns: json("positivePatterns").notNull(),
+    negativePatterns: json("negativePatterns").notNull(),
+    confidence: mysqlEnum("confidence", ["low", "medium", "high"]).notNull(),
+    evidence: json("evidence").notNull(),
+    recommendedAdjustments: json("recommendedAdjustments").notNull(),
+    governance: json("governance").notNull(),
+    sourceObservations: json("sourceObservations").notNull(),
+    provenance: json("provenance").notNull(),
+    status: mysqlEnum("status", ["recorded"]).default("recorded").notNull(),
+    evaluatedAt: timestamp("evaluatedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    idempotencyKeyIdx: uniqueIndex("lr_idempotency_key_idx").on(table.idempotencyKey),
+    campaignIdx: index("lr_campaign_idx").on(table.campaignId),
+    userCampaignIdx: index("lr_user_campaign_idx").on(table.userId, table.campaignId),
+  })
+);
+
+export type LearningRecord = typeof learningRecords.$inferSelect;
+
 // ─── AI Usage ───
 export const aiUsage = mysqlTable("ai_usage", {
   id: serial("id").primaryKey(),

@@ -603,6 +603,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `admin` | `api/admin-router.ts` | Stats, users, payments, subscriptions, user management |
 | `banking` | `api/banking-router.ts` | Payment method CRUD |
 | `business` | `api/business-router.ts` | Business profile CRUD |
+| `learning` | `api/learning-router.ts` | Phase 1 Learning engine: governed, idempotent campaign-learning evaluation (`evaluate`, `records`, `record`) |
 
 ### Context
 

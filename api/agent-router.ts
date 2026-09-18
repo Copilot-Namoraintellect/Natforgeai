@@ -43,6 +43,8 @@ import {
 } from "./lib/creative/creative-generation-claim";
 import { env } from "./lib/env";
 import { InMemoryWorkflowOperationRegistry } from "./lib/workflow/workflow-operation";
+import { evaluateCampaignLearning } from "./lib/learning/learning-service";
+import { LEARNING_EVALUATION_VERSION } from "./lib/learning/contracts/learning-config";
 
 export const agentRouter = createRouter({
   runStrategyAgent: aiActionQuery
@@ -761,10 +763,24 @@ export const agentRouter = createRouter({
     }),
 
   runOptimisationAgent: aiActionQuery
-    .input(z.object({ campaignId: z.number().optional() }))
-    .mutation(async () => {
-      // Stub for Phase 5
-      return { success: false, message: "Optimisation Agent coming in Phase 5" };
+    .input(z.object({ campaignId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      // Phase 1 Learning engine: deterministic, grounded evaluation that
+      // persists a governed learning record. It never auto-applies changes to
+      // Strategy, Creative or Distribution; autonomous triggering remains a
+      // later-phase integration concern.
+      const result = await evaluateCampaignLearning({
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+        trigger: "manual",
+      });
+      return {
+        success: true,
+        automaticChanges: false,
+        engine: "learning-engine",
+        evaluationVersion: LEARNING_EVALUATION_VERSION,
+        ...result,
+      };
     }),
 
   runAudienceIntelligence: aiActionQuery
