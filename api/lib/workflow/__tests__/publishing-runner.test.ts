@@ -194,6 +194,16 @@ const approvedLaunchApproval = {
   status: "approved",
 };
 
+const readyCampaignWithApprovedLineage = {
+  ...readyCampaign,
+  workflowContext: {
+    launchApprovalLineage: {
+      creativeBriefFingerprint: currentFingerprintFor(readyCampaign),
+      approvalRequestId: approvedLaunchApproval.id,
+      status: "approved" as const,
+    },
+  },
+};
 describe("publishSinglePost", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -215,7 +225,7 @@ describe("publishSinglePost", () => {
         queueItem: { ...baseQueueItem, integrationId: 9 },
         contentPost: campaignLinkedContentPost(),
         integration: baseIntegration,
-        campaign: readyCampaign,
+        campaign: readyCampaignWithApprovedLineage,
         business: readyBusiness,
         approvals: [approvedLaunchApproval],
       }) as any
@@ -252,7 +262,7 @@ describe("publishSinglePost", () => {
         queueItem: { ...baseQueueItem, integrationId: null },
         contentPost: campaignLinkedContentPost(),
         integration: baseIntegration,
-        campaign: readyCampaign,
+        campaign: readyCampaignWithApprovedLineage,
         business: readyBusiness,
         approvals: [approvedLaunchApproval],
       }) as any
@@ -278,7 +288,7 @@ describe("publishSinglePost", () => {
         queueItem: { ...baseQueueItem, integrationId: null },
         contentPost: campaignLinkedContentPost(),
         integration: undefined,
-        campaign: readyCampaign,
+        campaign: readyCampaignWithApprovedLineage,
         business: readyBusiness,
         approvals: [approvedLaunchApproval],
       }) as any
@@ -306,7 +316,7 @@ describe("publishSinglePost", () => {
           },
         }),
         integration: baseIntegration,
-        campaign: readyCampaign,
+        campaign: readyCampaignWithApprovedLineage,
         business: readyBusiness,
         approvals: [approvedLaunchApproval],
       }) as any
