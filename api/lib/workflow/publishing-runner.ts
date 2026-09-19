@@ -2,6 +2,7 @@ import { getDb } from "../../queries/connection";
 import { publishingQueue, contentPosts, socialIntegrations, campaigns } from "@db/schema";
 import { eq, and, lte, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { transitionCampaignState } from "./engine";
 import {
   publishToFacebook,
   publishToInstagram,
@@ -135,20 +136,31 @@ export async function finalizeCampaignPublishState(campaignId: number | null | u
       .where(eq(contentPosts.id, postId as number));
   }
 
-  if (allPublished) {
+  if (allPublished && campaign.workflowState === "publication_pending") {
+    // Approval authorises publication; actual publication completion is the
+    // authority for the campaign_live transition.
+    await transitionCampaignState(campaignId, campaign.userId, "go_live");
+
     await db
       .update(campaigns)
       .set({
         status: "active",
-        workflowState: "campaign_live",
         updatedAt: new Date(),
       })
       .where(eq(campaigns.id, campaignId));
 
     // G-04 fail-closed: never convert a pending campaign_launch approval into
     // an approval decision here. Approval authority must come from an explicit
-    // human decision recorded through the approval router only. A stale pending
-    // request is left pending for a human to resolve.
+    // human decision recorded through the approval router only.
+  } else if (allPublished && campaign.workflowState === "campaign_live") {
+    // Idempotent finalization for a campaign that is already live.
+    await db
+      .update(campaigns)
+      .set({
+        status: "active",
+        updatedAt: new Date(),
+      })
+      .where(eq(campaigns.id, campaignId));
   }
 }
 

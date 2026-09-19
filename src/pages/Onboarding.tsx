@@ -675,7 +675,7 @@ export default function Onboarding() {
     const socialChannelsConnected = connectedIntegrations.some((integration) => integration.status === "connected");
     const audienceIntelligenceActive =
       (completedAudienceRuns?.length || 0) > 0 ||
-      (campaigns || []).some((campaign) => ["audience_ready", "schedule_generated", "launch_approval_required"].includes(campaign.workflowState));
+      (campaigns || []).some((campaign) => ["audience_ready", "schedule_generated", "launch_approval_required", "publication_pending"].includes(campaign.workflowState));
     const firstCampaignLaunched = (campaigns || []).some((campaign) => isLiveOrLaterWorkflowState(campaign.workflowState));
 
     return calculateOnboardingReadiness({

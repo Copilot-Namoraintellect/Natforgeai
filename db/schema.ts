@@ -245,6 +245,7 @@ export const campaigns = mysqlTable("campaigns", {
     "audience_ready",
     "schedule_generated",
     "launch_approval_required",
+    "publication_pending",
     "campaign_live",
     "engagement_active",
     "leads_converting",

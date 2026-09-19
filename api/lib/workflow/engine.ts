@@ -3,6 +3,10 @@ import { campaigns, approvalRequests } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
+import {
+  buildWorkflowTransitionContext,
+} from "./post-live-lifecycle-anchor";
+
 export type WorkflowState =
   | "business_onboarding"
   | "strategy_pending"
@@ -14,6 +18,7 @@ export type WorkflowState =
   | "audience_ready"
   | "schedule_generated"
   | "launch_approval_required"
+  | "publication_pending"
   | "campaign_live"
   | "engagement_active"
   | "leads_converting"
@@ -71,19 +76,26 @@ const validTransitions: Record<WorkflowState, Partial<Record<WorkflowAction, Wor
     request_launch_approval: "launch_approval_required",
   },
   launch_approval_required: {
-    approve_launch: "campaign_live",
+    approve_launch: "publication_pending",
     reject_launch: "strategy_approved",
+  },
+  publication_pending: {
+    go_live: "campaign_live",
   },
   campaign_live: {
     start_engagement: "engagement_active",
+    complete_campaign: "completed",
     pause: "strategy_approved",
   },
   engagement_active: {
     start_lead_conversion: "leads_converting",
+    start_optimisation: "optimisation_active",
+    complete_campaign: "completed",
     pause: "strategy_approved",
   },
   leads_converting: {
     start_optimisation: "optimisation_active",
+    complete_campaign: "completed",
     pause: "strategy_approved",
   },
   optimisation_active: {
@@ -95,6 +107,17 @@ const validTransitions: Record<WorkflowState, Partial<Record<WorkflowAction, Wor
   },
 };
 
+/**
+ * Pure workflow transition resolver used by the governed mutation path.
+ *
+ * Returning null means the action is not valid from the supplied state.
+ */
+export function resolveWorkflowTransition(
+  currentState: WorkflowState,
+  action: WorkflowAction
+): WorkflowState | null {
+  return validTransitions[currentState]?.[action] ?? null;
+}
 export async function transitionCampaignState(
   campaignId: number,
   userId: number,
@@ -113,8 +136,7 @@ export async function transitionCampaignState(
   }
 
   const currentState = campaign.workflowState as WorkflowState;
-  const transitions = validTransitions[currentState];
-  const nextState = transitions?.[action];
+  const nextState = resolveWorkflowTransition(currentState, action);
 
   if (!nextState) {
     throw new TRPCError({
@@ -123,21 +145,32 @@ export async function transitionCampaignState(
     });
   }
 
+  const transitionAt =
+    new Date().toISOString();
+
+  const workflowContext =
+    buildWorkflowTransitionContext({
+      existingContext:
+        campaign.workflowContext,
+      currentState,
+      nextState,
+      action,
+      transitionAt,
+    });
+
   await db
     .update(campaigns)
     .set({
       workflowState: nextState,
-      workflowContext: {
-        ...(campaign.workflowContext || {}),
-        lastTransition: {
-          from: currentState,
-          to: nextState,
-          action,
-          at: new Date().toISOString(),
-        },
-      } as any,
+      workflowContext:
+        workflowContext as any,
     })
-    .where(eq(campaigns.id, campaignId));
+    .where(
+      eq(
+        campaigns.id,
+        campaignId
+      )
+    );
 
   return nextState;
 }

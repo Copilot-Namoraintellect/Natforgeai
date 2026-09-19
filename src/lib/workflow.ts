@@ -14,11 +14,12 @@ export const workflowStateLabels: Record<string, { label: string; color: string;
   audience_ready: { label: "Audience Ready", color: "bg-purple-500/10 text-purple-600", step: 8 },
   schedule_generated: { label: "Schedule Ready", color: "bg-cyan-500/10 text-cyan-600", step: 9 },
   launch_approval_required: { label: "Awaiting Launch Approval", color: "bg-amber-500/10 text-amber-600", step: 10 },
-  campaign_live: { label: "Campaign Live", color: "bg-emerald-500/10 text-emerald-600", step: 11 },
-  engagement_active: { label: "Engagement Active", color: "bg-pink-500/10 text-pink-600", step: 12 },
-  leads_converting: { label: "Leads Converting", color: "bg-orange-500/10 text-orange-600", step: 13 },
-  optimisation_active: { label: "Optimising", color: "bg-indigo-500/10 text-indigo-600", step: 14 },
-  completed: { label: "Completed", color: "bg-gray-500/10 text-gray-600", step: 15 },
+  publication_pending: { label: "Publication Pending", color: "bg-cyan-500/10 text-cyan-600", step: 11 },
+  campaign_live: { label: "Campaign Live", color: "bg-emerald-500/10 text-emerald-600", step: 12 },
+  engagement_active: { label: "Engagement Active", color: "bg-pink-500/10 text-pink-600", step: 13 },
+  leads_converting: { label: "Leads Converting", color: "bg-orange-500/10 text-orange-600", step: 14 },
+  optimisation_active: { label: "Optimising", color: "bg-indigo-500/10 text-indigo-600", step: 15 },
+  completed: { label: "Completed", color: "bg-gray-500/10 text-gray-600", step: 16 },
 };
 
 export const workflowGuidance: Record<string, { explanation: string; nextAction: string; actionLabel?: string; actionHref?: string }> = {
@@ -31,7 +32,8 @@ export const workflowGuidance: Record<string, { explanation: string; nextAction:
   audience_generating: { explanation: "NatForgeAI is identifying your ideal audience segments.", nextAction: "Audience research is in progress." },
   audience_ready: { explanation: "Audience profiles are ready. Distribution scheduling is next.", nextAction: "Review audience profiles or proceed to scheduling." },
   schedule_generated: { explanation: "Your publishing schedule is ready. Review before launch.", nextAction: "Approve the schedule to set your campaign live." },
-  launch_approval_required: { explanation: "Your campaign is ready to launch. Final approval is required.", nextAction: "Approve the launch to go live.", actionLabel: "Approve Launch", actionHref: "/approvals" },
+  launch_approval_required: { explanation: "Your campaign is ready to launch. Final approval is required.", nextAction: "Review and approve the launch.", actionLabel: "Approve Launch", actionHref: "/approvals" },
+  publication_pending: { explanation: "Launch is approved and publication is queued for the scheduled channels.", nextAction: "NatForgeAI will publish at the scheduled time and confirm when the campaign is live.", actionLabel: "View Publishing Status", actionHref: "/automations" },
   campaign_live: { explanation: "Your campaign is live and running.", nextAction: "Monitor performance in Analytics." },
   engagement_active: { explanation: "Your campaign is actively engaging with your audience.", nextAction: "Monitor engagement and replies." },
   leads_converting: { explanation: "Leads are being nurtured and converted.", nextAction: "Check your Leads pipeline." },
@@ -55,6 +57,7 @@ export const journeyStage: Record<string, string> = {
   audience_ready: "Audience Ready",
   schedule_generated: "Scheduled",
   launch_approval_required: "Awaiting Launch Approval",
+  publication_pending: "Publishing Pending",
   campaign_live: "Published",
   engagement_active: "Leads Captured",
   leads_converting: "Leads Captured",
@@ -72,6 +75,7 @@ export function getContinueAction(campaign: any) {
   if (state === "creatives_ready" || state === "audience_ready" || state === "schedule_generated") return { label: "View Generated Content", href: `/content?campaignId=${campaign.id}` };
   if (state === "audience_generating") return { label: "View Progress", href: "/agent-activity" };
   if (state === "launch_approval_required") return { label: "Approve Launch", href: "/approvals" };
+  if (state === "publication_pending") return { label: "View Publishing Status", href: "/automations" };
   if (state === "campaign_live" || state === "engagement_active" || state === "leads_converting" || state === "optimisation_active") return { label: "View Analytics", href: "/analytics" };
   return null;
 }

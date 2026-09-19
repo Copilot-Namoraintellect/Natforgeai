@@ -64,6 +64,9 @@ function getCurrentWorkMessage(state: string): string {
   if (state === "schedule_generated") {
     return "AI has generated the publishing schedule and is waiting for launch decisions.";
   }
+  if (state === "publication_pending") {
+    return "Launch is approved. AI is waiting for scheduled publication to complete.";
+  }
   if (["campaign_live", "engagement_active", "leads_converting", "optimisation_active"].includes(state)) {
     return "AI is operating and optimising live campaign execution.";
   }
@@ -72,10 +75,10 @@ function getCurrentWorkMessage(state: string): string {
 
 function getCompletedByAi(state: string): string[] {
   const completionMap: Array<{ states: string[]; label: string }> = [
-    { states: ["strategy_generated", "strategy_approved", "creatives_generating", "creatives_ready", "audience_generating", "audience_ready", "schedule_generated", "launch_approval_required", "campaign_live", "engagement_active", "leads_converting", "optimisation_active", "completed"], label: "Strategy generated" },
-    { states: ["creatives_ready", "audience_generating", "audience_ready", "schedule_generated", "launch_approval_required", "campaign_live", "engagement_active", "leads_converting", "optimisation_active", "completed"], label: "Creative assets generated" },
-    { states: ["audience_ready", "schedule_generated", "launch_approval_required", "campaign_live", "engagement_active", "leads_converting", "optimisation_active", "completed"], label: "Audience targeting generated" },
-    { states: ["schedule_generated", "launch_approval_required", "campaign_live", "engagement_active", "leads_converting", "optimisation_active", "completed"], label: "Publishing schedule generated" },
+    { states: ["strategy_generated", "strategy_approved", "creatives_generating", "creatives_ready", "audience_generating", "audience_ready", "schedule_generated", "launch_approval_required", "publication_pending", "campaign_live", "engagement_active", "leads_converting", "optimisation_active", "completed"], label: "Strategy generated" },
+    { states: ["creatives_ready", "audience_generating", "audience_ready", "schedule_generated", "launch_approval_required", "publication_pending", "campaign_live", "engagement_active", "leads_converting", "optimisation_active", "completed"], label: "Creative assets generated" },
+    { states: ["audience_ready", "schedule_generated", "launch_approval_required", "publication_pending", "campaign_live", "engagement_active", "leads_converting", "optimisation_active", "completed"], label: "Audience targeting generated" },
+    { states: ["schedule_generated", "launch_approval_required", "publication_pending", "campaign_live", "engagement_active", "leads_converting", "optimisation_active", "completed"], label: "Publishing schedule generated" },
     { states: ["campaign_live", "engagement_active", "leads_converting", "optimisation_active", "completed"], label: "Campaign launched" },
   ];
 

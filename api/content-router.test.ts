@@ -1342,7 +1342,7 @@ describe("contentRouter.publishCampaignPack", () => {
     expect(retryPlatforms).not.toContain("instagram");
   });
 
-  it("finalizes campaign to campaign_live when all queue rows are published and does not auto-approve the stale pending launch approval (G-04)", async () => {
+  it("does not fabricate campaign_live before governed launch approval even when all queue rows are published (G-04)", async () => {
     const { getDb } = await import("./queries/connection");
 
     const campaign23Publish = {
@@ -1408,11 +1408,12 @@ describe("contentRouter.publishCampaignPack", () => {
     // Simulate the per-platform approve-and-publish path finalizing the campaign.
     await finalizeCampaignPublishState(23);
 
-    const campaignUpdate = mockDb.updateSetByTableName.get("campaigns")?.mock.calls[0]?.[0];
-    expect(campaignUpdate).toMatchObject({
-      status: "active",
-      workflowState: "campaign_live",
-    });
+    // P1.1 governance boundary: all-published queue rows alone are not
+    // sufficient authority to fabricate campaign_live. Until the campaign has
+    // passed human launch approval and entered publication_pending, the
+    // campaign state must remain untouched.
+    const campaignUpdateSpy = mockDb.updateSetByTableName.get("campaigns");
+    expect(campaignUpdateSpy).toBeUndefined();
 
     const contentPostUpdate = mockDb.updateSetByTableName.get("content_posts")?.mock.calls[0]?.[0];
     expect(contentPostUpdate.metadata).toMatchObject({

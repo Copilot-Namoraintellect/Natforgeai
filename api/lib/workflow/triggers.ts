@@ -18,6 +18,7 @@ import { runAudienceAgent } from "../agents/audience-agent";
 import { runAudienceIntelligenceAgent } from "../agents/audience-intelligence-agent";
 import { checkAudienceAgentAccess } from "../audience/access";
 import { canRunAutonomousWorkflow } from "../billing/cost-control";
+import { isBullMQAvailable, schedulePublishingJob } from "../queue/bullmq";
 import { ingestAudienceData } from "../audience/ingest";
 import {
   acquireCreativeGenerationClaim,
@@ -223,6 +224,50 @@ export async function onAgentRunComplete(runId: number) {
   }
 }
 
+async function enqueueApprovedPublishingRows(
+  campaignId: number,
+  userId: number
+): Promise<{ attempted: number; scheduled: number; failed: number }> {
+  const db = getDb();
+
+  const approvedQueueItems = await db
+    .select()
+    .from(publishingQueue)
+    .where(
+      and(
+        eq(publishingQueue.campaignId, campaignId),
+        eq(publishingQueue.userId, userId),
+        eq(publishingQueue.status, "approved")
+      )
+    );
+
+  let scheduled = 0;
+  let failed = 0;
+
+  for (const item of approvedQueueItems) {
+    try {
+      await schedulePublishingJob(
+        item.id,
+        item.userId,
+        item.platform,
+        item.scheduledAt ? new Date(item.scheduledAt) : new Date()
+      );
+      scheduled += 1;
+    } catch (error) {
+      failed += 1;
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[Workflow] Failed to enqueue publishing queue item ${item.id} for campaign ${campaignId}: ${message}`
+      );
+    }
+  }
+
+  return {
+    attempted: approvedQueueItems.length,
+    scheduled,
+    failed,
+  };
+}
 export async function onApprovalResolved(approvalId: number, decision: "approved" | "rejected", userId: number) {
   const db = getDb();
 
@@ -242,6 +287,14 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
   if (request.approvalType === "campaign_launch") {
     if (decision === "approved") {
       await transitionCampaignState(campaignId, userId, "approve_launch");
+
+      // Launch approval grants publication authority but does not mean the
+      // campaign is live. Distribution already created the durable queue rows.
+      // Enqueue only independently approved rows; publishSinglePost performs
+      // the authoritative launch/readiness check again before side effects.
+      if (isBullMQAvailable()) {
+        await enqueueApprovedPublishingRows(campaignId, userId);
+      }
 
       // Optional: auto-run audience intelligence after launch approval
       try {
@@ -280,6 +333,32 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
           .update(publishingQueue)
           .set({ status: "approved", approvalRequired: false })
           .where(eq(publishingQueue.id, item.id));
+      }
+
+      // A post-level approval may resolve after the launch approval. In that
+      // case production BullMQ must receive the newly approved durable row.
+      // Before launch authority exists, leave it approved but unscheduled;
+      // the later campaign_launch resolution will enqueue it.
+      if (isBullMQAvailable()) {
+        const [campaign] = await db
+          .select()
+          .from(campaigns)
+          .where(
+            and(
+              eq(campaigns.id, campaignId),
+              eq(campaigns.userId, userId)
+            )
+          )
+          .limit(1);
+
+        if (
+          campaign &&
+          ["publication_pending", "campaign_live"].includes(
+            campaign.workflowState
+          )
+        ) {
+          await enqueueApprovedPublishingRows(campaignId, userId);
+        }
       }
     }
     // If rejected, leave them as pending_approval / safety_blocked
