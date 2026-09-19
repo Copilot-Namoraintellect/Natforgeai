@@ -7,6 +7,7 @@ import { createContext } from "./context";
 import { env } from "./lib/env";
 import { startPublishingRunner } from "./lib/workflow/publishing-runner";
 import { startCreditRenewalScheduler } from "./lib/jobs/credit-renewal";
+import { startPostLiveLifecycleScheduler } from "./lib/workflow/post-live-lifecycle-scheduler";
 import { connectRedis, isRedisConfigured } from "./lib/redis";
 import { startPublishingWorker } from "./lib/queue/publishing-worker";
 import { startContentGenerationWorker } from "./lib/queue/content-generation-worker";
@@ -41,6 +42,14 @@ if (env.isProduction && isRedisConfigured()) {
 
 // Start daily credit renewal scheduler
 startCreditRenewalScheduler();
+
+// Post-live lifecycle reconciliation is deliberately default-off.
+// Production activation requires explicit operational configuration.
+if (env.postLiveLifecycleEnabled) {
+  startPostLiveLifecycleScheduler({
+    intervalMs: env.postLiveLifecycleIntervalMs,
+  });
+}
 
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 

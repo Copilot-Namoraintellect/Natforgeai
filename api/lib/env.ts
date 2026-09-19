@@ -103,6 +103,14 @@ export const env = {
     1800
   ),
 
+  // Post-live lifecycle reconciliation remains disabled unless explicitly authorised.
+  postLiveLifecycleEnabled:
+    process.env.POST_LIVE_LIFECYCLE_ENABLED === "true",
+  postLiveLifecycleIntervalMs: parsePositiveInteger(
+    process.env.POST_LIVE_LIFECYCLE_INTERVAL_MS,
+    300_000
+  ),
+
   bannerbearApiKey: process.env.BANNERBEAR_API_KEY ?? "",
   bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
   bannerbearTemplateServiceBusinessPromo: process.env.BANNERBEAR_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",
