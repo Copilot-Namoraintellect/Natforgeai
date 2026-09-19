@@ -822,6 +822,7 @@ export const contentRouter = createRouter({
         "audience_ready",
         "schedule_generated",
         "launch_approval_required",
+        "publication_pending",
         "campaign_live",
         "engagement_active",
         "leads_converting",

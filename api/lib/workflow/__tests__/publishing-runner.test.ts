@@ -43,6 +43,10 @@ vi.mock("../../audience/ingest", () => ({
   ingestAudienceData: vi.fn(async () => {}),
 }));
 
+vi.mock("../engine", () => ({
+  transitionCampaignState: vi.fn(async () => "campaign_live"),
+}));
+
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[
     Symbol.for("drizzle:Name") as symbol
@@ -374,5 +378,82 @@ describe("publishSinglePost", () => {
     expect(publishToFacebook).not.toHaveBeenCalled();
     const queueUpdate = db.updateCalls.find((call) => call.table === "publishing_queue");
     expect(queueUpdate?.set.status).toBe("failed");
+  });
+});
+
+describe("finalizeCampaignPublishState publication lifecycle authority", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("uses go_live only after all durable queue rows are published", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { transitionCampaignState } = await import("../engine");
+    const { finalizeCampaignPublishState } = await import("../publishing-runner");
+
+    const db = createMockDb({
+      queueItem: {
+        ...baseQueueItem,
+        status: "published",
+        externalPostId: "fb_live_123",
+      },
+      contentPost: campaignLinkedContentPost(),
+      campaign: {
+        ...readyCampaignWithApprovedLineage,
+        workflowState: "publication_pending",
+      },
+      business: readyBusiness,
+      approvals: [approvedLaunchApproval],
+    });
+
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await finalizeCampaignPublishState(27);
+
+    expect(transitionCampaignState).toHaveBeenCalledTimes(1);
+    expect(transitionCampaignState).toHaveBeenCalledWith(
+      27,
+      14,
+      "go_live"
+    );
+
+    const campaignUpdate = db.updateCalls.find(
+      (call) => call.table === "campaigns"
+    );
+
+    expect(campaignUpdate?.set.status).toBe("active");
+    expect(campaignUpdate?.set.workflowState).toBeUndefined();
+  });
+
+  it("does not go live while a durable publishing row is still unpublished", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { transitionCampaignState } = await import("../engine");
+    const { finalizeCampaignPublishState } = await import("../publishing-runner");
+
+    const db = createMockDb({
+      queueItem: {
+        ...baseQueueItem,
+        status: "approved",
+      },
+      contentPost: campaignLinkedContentPost(),
+      campaign: {
+        ...readyCampaignWithApprovedLineage,
+        workflowState: "publication_pending",
+      },
+      business: readyBusiness,
+      approvals: [approvedLaunchApproval],
+    });
+
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await finalizeCampaignPublishState(27);
+
+    expect(transitionCampaignState).not.toHaveBeenCalled();
+
+    const campaignUpdate = db.updateCalls.find(
+      (call) => call.table === "campaigns"
+    );
+
+    expect(campaignUpdate).toBeUndefined();
   });
 });

@@ -2454,3 +2454,33 @@ describe("Phase 4 — pre-generation readiness gate at router entry points", () 
     expect(createApprovalRequest).toHaveBeenCalled();
   });
 });
+
+describe("campaign.update publication-state authority guard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each(["publication_pending", "campaign_live"] as const)(
+    "rejects direct transition to %s without mutating the campaign",
+    async (workflowState) => {
+      const { getDb } = await import("./queries/connection");
+      const { campaignRouter } = await import("./campaign-router");
+
+      const db = createMockDb();
+      vi.mocked(getDb).mockReturnValue(db as any);
+
+      const caller = campaignRouter.createCaller(buildCtx());
+
+      await expect(
+        caller.update({
+          id: 42,
+          workflowState,
+        })
+      ).rejects.toThrow(
+        "Direct publication-state updates are not permitted. Use the governed launch and publishing workflow."
+      );
+
+      expect(db.update).not.toHaveBeenCalled();
+    }
+  );
+});

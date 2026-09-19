@@ -574,6 +574,7 @@ export const campaignRouter = createRouter({
           "audience_ready",
           "schedule_generated",
           "launch_approval_required",
+          "publication_pending",
           "campaign_live",
           "engagement_active",
           "leads_converting",
@@ -585,6 +586,18 @@ export const campaignRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const { id, ...rawData } = input;
+
+      // Publication authority is governed by launch approval and actual
+      // publishing completion. Never allow the generic campaign update
+      // endpoint to fabricate either guarded state.
+      if (
+        rawData.workflowState === "publication_pending" ||
+        rawData.workflowState === "campaign_live"
+      ) {
+        throw new Error(
+          "Direct publication-state updates are not permitted. Use the governed launch and publishing workflow."
+        );
+      }
 
       // Check if status is changing to completed
       if (rawData.status === "completed") {

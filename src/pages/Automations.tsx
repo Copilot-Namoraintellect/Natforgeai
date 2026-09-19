@@ -74,11 +74,12 @@ const WORKFLOW_STEP_MAP: Record<string, number> = {
   audience_ready: 6,
   schedule_generated: 7,
   launch_approval_required: 8,
-  campaign_live: 9,
-  engagement_active: 10,
-  leads_converting: 10,
-  optimisation_active: 10,
-  completed: 10,
+  publication_pending: 9,
+  campaign_live: 10,
+  engagement_active: 11,
+  leads_converting: 11,
+  optimisation_active: 11,
+  completed: 11,
 };
 
 const SYSTEM_STEPS = [
@@ -90,6 +91,7 @@ const SYSTEM_STEPS = [
   { id: "audience_ready", label: "Audience Intelligence Built" },
   { id: "schedule_generated", label: "Publishing Schedule Ready" },
   { id: "launch_approval_required", label: "Launch Approval Requested" },
+  { id: "publication_pending", label: "Publication Pending" },
   { id: "campaign_live", label: "Campaign Live" },
   { id: "optimisation_active", label: "Optimization Loop Active" },
 ];
@@ -120,6 +122,8 @@ function getCampaignAction(state: string) {
       return { label: "Review Content", href: "/content", variant: "default" as const };
     case "launch_approval_required":
       return { label: "Approve Launch", href: "/approvals", variant: "default" as const };
+    case "publication_pending":
+      return { label: "View Publishing Status", href: "/automations", variant: "outline" as const };
     case "campaign_live":
       return { label: "View Analytics", href: "/analytics", variant: "outline" as const };
     default:

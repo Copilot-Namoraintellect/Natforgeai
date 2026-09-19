@@ -14,6 +14,7 @@ export type WorkflowState =
   | "audience_ready"
   | "schedule_generated"
   | "launch_approval_required"
+  | "publication_pending"
   | "campaign_live"
   | "engagement_active"
   | "leads_converting"
@@ -71,8 +72,11 @@ const validTransitions: Record<WorkflowState, Partial<Record<WorkflowAction, Wor
     request_launch_approval: "launch_approval_required",
   },
   launch_approval_required: {
-    approve_launch: "campaign_live",
+    approve_launch: "publication_pending",
     reject_launch: "strategy_approved",
+  },
+  publication_pending: {
+    go_live: "campaign_live",
   },
   campaign_live: {
     start_engagement: "engagement_active",

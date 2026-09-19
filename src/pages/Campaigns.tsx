@@ -409,7 +409,7 @@ export default function Campaigns() {
     if (filter === "draft") return c.status === "draft" || c.workflowState === "business_onboarding";
     if (filter === "strategy_pending") return c.workflowState === "strategy_pending";
     if (filter === "strategy_ready") return c.workflowState === "strategy_generated";
-    if (filter === "active") return c.status === "active" || ["strategy_approved","creatives_generating","creatives_ready","audience_generating","audience_ready","schedule_generated","launch_approval_required","campaign_live","engagement_active","leads_converting","optimisation_active"].includes(c.workflowState);
+    if (filter === "active") return c.status === "active" || ["strategy_approved","creatives_generating","creatives_ready","audience_generating","audience_ready","schedule_generated","launch_approval_required","publication_pending","campaign_live","engagement_active","leads_converting","optimisation_active"].includes(c.workflowState);
     if (filter === "completed") return c.workflowState === "completed" || c.status === "completed";
     return true;
   });
@@ -1090,10 +1090,10 @@ export default function Campaigns() {
                     <div className="mt-2">
                       <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
                         <span>Autonomous Journey</span>
-                        <span>{Math.round((workflowStateLabels[camp.workflowState]?.step || 1) / 15 * 100)}%</span>
+                        <span>{Math.round((workflowStateLabels[camp.workflowState]?.step || 1) / 16 * 100)}%</span>
                       </div>
                       <Progress
-                        value={(workflowStateLabels[camp.workflowState]?.step || 1) / 15 * 100}
+                        value={(workflowStateLabels[camp.workflowState]?.step || 1) / 16 * 100}
                         className="h-1"
                       />
                     </div>
@@ -1184,9 +1184,9 @@ export default function Campaigns() {
                 <div className="space-y-1">
                   <div className="flex justify-between text-xs text-muted-foreground">
                     <span>Workflow Progress</span>
-                    <span>{Math.round((workflowStateLabels[viewCampaign.workflowState]?.step || 1) / 15 * 100)}%</span>
+                    <span>{Math.round((workflowStateLabels[viewCampaign.workflowState]?.step || 1) / 16 * 100)}%</span>
                   </div>
-                  <Progress value={(workflowStateLabels[viewCampaign.workflowState]?.step || 1) / 15 * 100} className="h-2" />
+                  <Progress value={(workflowStateLabels[viewCampaign.workflowState]?.step || 1) / 16 * 100} className="h-2" />
                 </div>
               )}
               <div>
@@ -1379,13 +1379,7 @@ export default function Campaigns() {
                   <Button
                     className="bg-gradient-to-r from-[#00D4FF] to-[#7C3AED] text-white"
                     onClick={() => {
-                      updateMutation.mutate({
-                        id: viewCampaign.id,
-                        status: "active",
-                        workflowState: "campaign_live",
-                      } as any);
-                      setViewCampaign({ ...viewCampaign, status: "active", workflowState: "campaign_live" });
-                      toast.success("Campaign launched!");
+                      window.location.assign("/approvals");
                     }}
                   >
                     Approve Launch
