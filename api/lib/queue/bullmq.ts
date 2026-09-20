@@ -236,6 +236,9 @@ export async function closePublishingQueue(): Promise<void> {
     await publishingWorker.close();
     publishingWorker = null;
   }
+}
+
+export async function closeContentGenerationQueue(): Promise<void> {
   if (contentGenerationQueue) {
     await contentGenerationQueue.close();
     contentGenerationQueue = null;
@@ -244,6 +247,9 @@ export async function closePublishingQueue(): Promise<void> {
     await contentGenerationWorker.close();
     contentGenerationWorker = null;
   }
+}
+
+export async function closeBullMqConnection(): Promise<void> {
   if (redisConnection) {
     await redisConnection.quit();
     redisConnection = null;
