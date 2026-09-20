@@ -258,6 +258,33 @@ boolean {
   return true;
 }
 
+export interface PostLiveLifecycleSchedulerStatus {
+  started: boolean;
+  intervalMs: number | null;
+  passInFlight: boolean;
+}
+
+/**
+ * Returns a read-only process-local scheduler snapshot for health and
+ * operational observation. Reading status never starts or stops the scheduler.
+ */
+export function getPostLiveLifecycleSchedulerStatus():
+PostLiveLifecycleSchedulerStatus {
+  if (!activeScheduler) {
+    return {
+      started: false,
+      intervalMs: null,
+      passInFlight: false,
+    };
+  }
+
+  return {
+    started: true,
+    intervalMs: activeScheduler.state.intervalMs,
+    passInFlight: activeScheduler.state.passInFlight,
+  };
+}
+
 export function isPostLiveLifecycleSchedulerStarted():
 boolean {
   return activeScheduler !== null;

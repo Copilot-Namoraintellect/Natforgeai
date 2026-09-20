@@ -24,6 +24,8 @@ import {
   Zap,
 } from "lucide-react";
 
+import { formatSystemHealthCheckValue } from "./system-health-check-display";
+
 export default function SystemHealth() {
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -132,7 +134,7 @@ export default function SystemHealth() {
                         <span className="text-sm capitalize">{name}</span>
                       </div>
                       <span className="text-xs text-muted-foreground">
-                        {check.status === "ok" ? `${check.latencyMs}ms` : check.message}
+                        {formatSystemHealthCheckValue(name, check)}
                       </span>
                     </div>
                   ))}
