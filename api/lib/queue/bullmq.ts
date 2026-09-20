@@ -2,6 +2,11 @@ import { Queue, Worker, Job } from "bullmq";
 import { Redis } from "ioredis";
 import { env } from "../env";
 import { createAlert } from "../alerts";
+import {
+  handleTerminalContentGenerationFailure,
+  handleTerminalPublishingFailure,
+  runContainedTerminalPersistence,
+} from "./terminal-failure";
 
 const PUBLISHING_QUEUE_NAME = "publishing-jobs";
 const CONTENT_GENERATION_QUEUE_NAME = "content-generation-jobs";
@@ -173,17 +178,35 @@ export function createPublishingWorker(
     console.log(`[BullMQ] Job ${job.id} completed`);
   });
 
-  publishingWorker.on("failed", async (job, err) => {
-    console.error(`[BullMQ] Job ${job?.id} failed:`, err.message);
-    await createAlert({
-      severity: "warning",
-      category: "worker",
-      message: `BullMQ publishing job failed: ${err.message}`,
-      details: { jobId: job?.id, queueItemId: job?.data.queueItemId, platform: job?.data.platform },
-    }).catch(() => {});
+  publishingWorker.on("failed", (job, err) => {
+    void handlePublishingWorkerFailed(job, err).catch(() => {});
   });
 
   return publishingWorker;
+}
+
+/**
+ * Publishing worker `failed` listener body. Existing logging and warning-alert
+ * behavior is preserved; terminal (unrecoverable / attempts-exhausted) failures
+ * additionally persist one durable queue_terminal_failures row, with
+ * persistence failures contained and escalated as a critical alert.
+ */
+export async function handlePublishingWorkerFailed(
+  job: Job<PublishingJobData> | undefined,
+  err: Error
+): Promise<void> {
+  console.error(`[BullMQ] Job ${job?.id} failed:`, err.message);
+  await createAlert({
+    severity: "warning",
+    category: "worker",
+    message: `BullMQ publishing job failed: ${err.message}`,
+    details: { jobId: job?.id, queueItemId: job?.data.queueItemId, platform: job?.data.platform },
+  }).catch(() => {});
+
+  await runContainedTerminalPersistence(
+    () => handleTerminalPublishingFailure({ job, error: err, failedAt: new Date() }),
+    { queueName: "publishing", bullmqJobId: job?.id }
+  );
 }
 
 export function createContentGenerationWorker(
@@ -206,17 +229,35 @@ export function createContentGenerationWorker(
     console.log(`[BullMQ] Content generation job ${job.id} completed`);
   });
 
-  contentGenerationWorker.on("failed", async (job, err) => {
-    console.error(`[BullMQ] Content generation job ${job?.id} failed:`, err.message);
-    await createAlert({
-      severity: "warning",
-      category: "worker",
-      message: `BullMQ content generation job failed: ${err.message}`,
-      details: { jobId: job?.id, campaignId: job?.data.campaignId, userId: job?.data.userId },
-    }).catch(() => {});
+  contentGenerationWorker.on("failed", (job, err) => {
+    void handleContentGenerationWorkerFailed(job, err).catch(() => {});
   });
 
   return contentGenerationWorker;
+}
+
+/**
+ * Content-generation worker `failed` listener body. Existing logging and
+ * warning-alert behavior is preserved; terminal failures additionally persist
+ * one durable queue_terminal_failures row, with persistence failures contained
+ * and escalated as a critical alert.
+ */
+export async function handleContentGenerationWorkerFailed(
+  job: Job<ContentGenerationJobData> | undefined,
+  err: Error
+): Promise<void> {
+  console.error(`[BullMQ] Content generation job ${job?.id} failed:`, err.message);
+  await createAlert({
+    severity: "warning",
+    category: "worker",
+    message: `BullMQ content generation job failed: ${err.message}`,
+    details: { jobId: job?.id, campaignId: job?.data.campaignId, userId: job?.data.userId },
+  }).catch(() => {});
+
+  await runContainedTerminalPersistence(
+    () => handleTerminalContentGenerationFailure({ job, error: err, failedAt: new Date() }),
+    { queueName: "content_generation", bullmqJobId: job?.id }
+  );
 }
 
 export function getPublishingWorker(): Worker | null {
