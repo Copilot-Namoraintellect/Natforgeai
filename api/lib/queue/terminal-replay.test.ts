@@ -597,20 +597,35 @@ describe("guarded state machine", () => {
     expect(reclaim).toMatchObject({ claimed: false, reason: "invalid_state" });
   });
 
-  it("enqueued cannot jump straight to resolved-style states and resolved cannot re-resolve", async () => {
+  it("requested cannot resolve directly; claimed may resolve for already-completed targets; resolved cannot re-resolve", async () => {
     const { db } = createFakeDb([publishingFailure]);
     const { record } = await requestTerminalFailureReplay(replayInput(), db);
-    await claimTerminalReplayRequest(record.id, undefined, db);
 
-    // claimed -> resolved is not a valid transition (must pass through enqueued)
+    // requested -> resolved is NOT a valid shortcut (WBS9D2A correction).
     await expect(
       markTerminalReplayResolved(record.id, undefined, db)
     ).rejects.toBeInstanceOf(TerminalReplayInvalidTransitionError);
 
-    await markTerminalReplayEnqueued(record.id, undefined, db);
-    await markTerminalReplayResolved(record.id, undefined, db);
+    // requested -> claimed -> resolved IS the governed already-completed path.
+    await claimTerminalReplayRequest(record.id, undefined, db);
+    const resolved = await markTerminalReplayResolved(record.id, undefined, db);
+    expect(resolved.status).toBe("resolved");
+
     await expect(
       markTerminalReplayResolved(record.id, undefined, db)
+    ).rejects.toBeInstanceOf(TerminalReplayInvalidTransitionError);
+  });
+
+  it("enqueued -> resolved remains valid and enqueued cannot re-enqueue", async () => {
+    const { db } = createFakeDb([publishingFailure]);
+    const { record } = await requestTerminalFailureReplay(replayInput(), db);
+    await claimTerminalReplayRequest(record.id, undefined, db);
+
+    await markTerminalReplayEnqueued(record.id, undefined, db);
+    const resolved = await markTerminalReplayResolved(record.id, undefined, db);
+    expect(resolved.status).toBe("resolved");
+    await expect(
+      markTerminalReplayEnqueued(record.id, undefined, db)
     ).rejects.toBeInstanceOf(TerminalReplayInvalidTransitionError);
   });
 });

@@ -1,6 +1,6 @@
 import { getDb } from "../../queries/connection";
 import { publishingQueue, contentPosts, socialIntegrations, campaigns } from "@db/schema";
-import { eq, and, lte, or } from "drizzle-orm";
+import { eq, and, lte, or, isNotNull, type SQL } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { transitionCampaignState } from "./engine";
 import {
@@ -609,6 +609,28 @@ export async function publishSinglePost(queueItemId: number) {
  * Publishes all due posts from the publishing queue.
  * Legacy cron-based approach — still available for manual triggers and dev fallback.
  */
+/**
+ * Due-post predicate for legacy cron selection.
+ *
+ * approved: eligible when scheduledAt <= now.
+ * retrying: eligible ONLY when nextRetryAt is non-null AND nextRetryAt <= now.
+ *           A null nextRetryAt therefore makes a re-armed row BullMQ-only —
+ *           legacy cron cannot race a deliberate controlled replay.
+ */
+export function buildDuePostsCondition(now: Date): SQL {
+  return or(
+    and(
+      eq(publishingQueue.status, "approved"),
+      lte(publishingQueue.scheduledAt, now)
+    ),
+    and(
+      eq(publishingQueue.status, "retrying"),
+      isNotNull(publishingQueue.nextRetryAt),
+      lte(publishingQueue.nextRetryAt, now)
+    )
+  )!;
+}
+
 export async function publishDuePosts() {
   const db = getDb();
   const now = new Date();
@@ -616,21 +638,7 @@ export async function publishDuePosts() {
   const duePosts = await db
     .select()
     .from(publishingQueue)
-    .where(
-      and(
-        or(
-          eq(publishingQueue.status, "approved"),
-          eq(publishingQueue.status, "retrying")
-        ),
-        or(
-          lte(publishingQueue.scheduledAt, now),
-          and(
-            eq(publishingQueue.status, "retrying"),
-            lte(publishingQueue.nextRetryAt, now)
-          )
-        )
-      )
-    );
+    .where(buildDuePostsCondition(now));
 
   const results = [];
   for (const post of duePosts) {

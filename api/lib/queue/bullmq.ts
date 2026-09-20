@@ -72,6 +72,8 @@ export interface PublishingJobData {
   queueItemId: number;
   userId: number;
   platform: string;
+  /** Set only for deliberate controlled replays (WBS9D2): the replay request that owns this job. */
+  replayRequestId?: number;
 }
 
 export interface ContentGenerationJobData {
@@ -103,12 +105,20 @@ export async function schedulePublishingJob(
   queueItemId: number,
   userId: number,
   platform: string,
-  scheduledAt: Date
+  scheduledAt: Date,
+  options?: { replayRequestId?: number }
 ): Promise<Job<PublishingJobData>> {
   const queue = getPublishingQueue();
   return queue.add(
     "publish",
-    { queueItemId, userId, platform },
+    {
+      queueItemId,
+      userId,
+      platform,
+      ...(options?.replayRequestId != null
+        ? { replayRequestId: options.replayRequestId }
+        : {}),
+    },
     {
       jobId: toPublishingBullMqJobId(queueItemId),
       delay: Math.max(0, scheduledAt.getTime() - Date.now()),
@@ -119,6 +129,45 @@ export async function schedulePublishingJob(
 export async function removePublishingJob(queueItemId: number): Promise<void> {
   const queue = getPublishingQueue();
   await queue.remove(toPublishingBullMqJobId(queueItemId));
+}
+
+export interface PublishingJobInspection {
+  exists: boolean;
+  jobId: string;
+  /** BullMQ job state, e.g. failed/waiting/delayed/active/completed; null if unreadable. */
+  state: string | null;
+  data: PublishingJobData | null;
+  timestamp: number | null;
+}
+
+/**
+ * Narrow inspection seam for controlled terminal replay (WBS9D2). Establishes
+ * job existence, identity and state so a replay executor can reconcile an
+ * existing deterministic job without touching live work it cannot prove.
+ */
+export async function inspectPublishingJob(jobId: string): Promise<PublishingJobInspection> {
+  const queue = getPublishingQueue();
+  const job = await queue.getJob(jobId);
+  if (!job) {
+    return { exists: false, jobId, state: null, data: null, timestamp: null };
+  }
+  const state = await job.getState().catch(() => null);
+  return {
+    exists: true,
+    jobId,
+    state,
+    data: (job.data as PublishingJobData | undefined) ?? null,
+    timestamp: job.timestamp ?? null,
+  };
+}
+
+/** Remove a publishing job by its deterministic id; no-op if it does not exist. */
+export async function removePublishingJobById(jobId: string): Promise<boolean> {
+  const queue = getPublishingQueue();
+  const job = await queue.getJob(jobId);
+  if (!job) return false;
+  await job.remove();
+  return true;
 }
 
 export async function scheduleContentGenerationJob(

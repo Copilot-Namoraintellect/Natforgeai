@@ -106,6 +106,18 @@ async function runInTransaction<T>(
   return fn(db);
 }
 
+/**
+ * Public transaction boundary for replay executors (WBS9D2+): runs fn against
+ * one transactional executor so coupled mutations (e.g. application-state
+ * compensation + replay-request failure) commit or roll back together.
+ */
+export async function withTerminalReplayTransaction<T>(
+  fn: (tx: TerminalReplayExecutor) => Promise<T>,
+  executor?: TerminalReplayExecutor
+): Promise<T> {
+  return runInTransaction(resolveDb(executor), fn);
+}
+
 /** Internal marker: the terminalFailureId unique authority rejected the claim. */
 class ActiveClaimTakenError extends Error {
   constructor() {
@@ -299,10 +311,12 @@ export async function claimTerminalReplayRequest(
   }
 }
 
-/** Allowed durable state transitions; resolved/failed are terminal. */
+/** Allowed durable state transitions; resolved/failed are terminal.
+ *  claimed may resolve directly when the target is discovered already
+ *  completed (used by the WBS9D2A publishing executor after claiming). */
 const VALID_TRANSITIONS: Record<ReplayRequestStatus, ReplayRequestStatus[]> = {
   requested: ["claimed", "failed"],
-  claimed: ["enqueued", "failed"],
+  claimed: ["enqueued", "resolved", "failed"],
   enqueued: ["resolved", "failed"],
   resolved: [],
   failed: [],
