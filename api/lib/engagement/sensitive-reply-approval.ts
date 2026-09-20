@@ -27,10 +27,12 @@ import { createHash } from "crypto";
 export const SENSITIVE_REPLY_APPROVAL_TYPE = "sensitive_reply" as const;
 
 /**
- * Namespace bound into the idempotency hash. Bumping this version
- * invalidates previously derived keys for the same event dedupKey.
+ * Version of the sensitive-reply approval contract. Bound into the idempotency
+ * hash and persisted into the approval context; bumping it invalidates
+ * previously derived keys for the same event dedupKey.
  */
-const IDEMPOTENCY_NAMESPACE = "engagement/sensitive-reply@v1";
+export const SENSITIVE_REPLY_APPROVAL_CONTRACT_VERSION =
+  "engagement/sensitive-reply@v1";
 
 /** Human-greppable prefix for derived idempotency keys. */
 const IDEMPOTENCY_KEY_PREFIX = "sr1";
@@ -70,6 +72,17 @@ export interface SensitiveReplyApprovalInput {
 }
 
 /**
+ * Structured internal lineage carried on the command for durable persistence
+ * (WBS14B). These fields are persisted into approval context, never shown to
+ * users, and never include the raw provider event key.
+ */
+export interface SensitiveReplyApprovalLineage {
+  contractVersion: string;
+  sentiment: SensitiveReplySentiment;
+  escalationReason: string | null;
+}
+
+/**
  * The full approval request command. Identity fields pass through from the
  * input; every other field is derived deterministically from the input.
  */
@@ -84,6 +97,7 @@ export interface SensitiveReplyApprovalCommand {
   description: string;
   aiRecommendation: string;
   riskLevel: ApprovalRiskLevel;
+  lineage: SensitiveReplyApprovalLineage;
 }
 
 function sha256Hex(value: string): string {
@@ -139,7 +153,7 @@ function normalizeOptionalText(
  */
 export function buildSensitiveReplyIdempotencyKey(dedupKey: string): string {
   const normalized = assertNonEmptyString(dedupKey, "dedupKey").trim();
-  return `${IDEMPOTENCY_KEY_PREFIX}:${sha256Hex(`${IDEMPOTENCY_NAMESPACE}:${normalized}`)}`;
+  return `${IDEMPOTENCY_KEY_PREFIX}:${sha256Hex(`${SENSITIVE_REPLY_APPROVAL_CONTRACT_VERSION}:${normalized}`)}`;
 }
 
 /**
@@ -228,5 +242,10 @@ export function buildSensitiveReplyApprovalRequest(
     }),
     aiRecommendation: proposedReply,
     riskLevel: deriveSensitiveReplyRiskLevel({ sentiment, escalationReason }),
+    lineage: {
+      contractVersion: SENSITIVE_REPLY_APPROVAL_CONTRACT_VERSION,
+      sentiment,
+      escalationReason,
+    },
   };
 }
