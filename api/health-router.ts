@@ -5,6 +5,9 @@ import { agentRuns, publishingQueue, aiUsage } from "@db/schema";
 import { eq, sql, gte, desc } from "drizzle-orm";
 import { isRedisConfigured, getRedisClient } from "./lib/redis";
 import { getPublishingQueueStats, getPublishingWorker } from "./lib/queue/bullmq";
+import { env } from "./lib/env";
+import { getPostLiveLifecycleSchedulerStatus } from "./lib/workflow/post-live-lifecycle-scheduler";
+import { resolvePostLiveLifecycleSchedulerHealth } from "./lib/workflow/post-live-lifecycle-health";
 import { createAlert, listAlerts, acknowledgeAlert, resolveAlerts, getAlertSummary } from "./lib/alerts";
 
 export const healthRouter = createRouter({
@@ -51,6 +54,17 @@ export const healthRouter = createRouter({
     } else {
       checks.worker = { status: "ok", latencyMs: 0, message: "BullMQ not configured (dev mode)" };
     }
+
+    // Post-live lifecycle scheduler readiness
+    const postLiveLifecycleRuntime =
+      getPostLiveLifecycleSchedulerStatus();
+    checks.postLiveLifecycle =
+      resolvePostLiveLifecycleSchedulerHealth({
+        enabled: env.postLiveLifecycleEnabled,
+        configuredIntervalMs:
+          env.postLiveLifecycleIntervalMs,
+        runtime: postLiveLifecycleRuntime,
+      });
 
     // API health
     checks.api = { status: "ok", latencyMs: 0 };
