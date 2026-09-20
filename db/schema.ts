@@ -1300,3 +1300,50 @@ export const systemSettings = mysqlTable("system_settings", {
 });
 
 export type SystemSetting = typeof systemSettings.$inferSelect;
+
+// ─── Audit Events ───
+// Durable WBS7B store for canonical WBS7A audit envelopes. Correlation
+// identifiers are searchable first-class columns so material decisions can be
+// reconstructed by lineage. No secrets or raw request bodies are stored; the
+// JSON metadata column only ever holds WBS7A-sanitized structured metadata.
+export const auditEvents = mysqlTable(
+  "audit_events",
+  {
+    id: serial("id").primaryKey(),
+    // SHA-256 of the canonical WBS7A envelope; unique so exact replay is
+    // idempotent at the database level.
+    eventFingerprint: varchar("eventFingerprint", { length: 64 }).notNull(),
+    schemaVersion: int("schemaVersion").notNull(),
+    eventType: varchar("eventType", { length: 64 }).notNull(),
+    // ISO 8601 from the event itself, stored verbatim as text so no timezone
+    // conversion can alter it; createdAt (below) records persistence time.
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    userId: int("userId").notNull(),
+    campaignId: int("campaignId"),
+    businessId: int("businessId"),
+    workflowOperationId: varchar("workflowOperationId", { length: 64 }),
+    workflowAttemptId: varchar("workflowAttemptId", { length: 64 }),
+    approvalRequestId: int("approvalRequestId"),
+    // Subject identifiers: the envelope allows string or numeric identifiers;
+    // they are normalized to text for a single searchable column.
+    artifactId: varchar("artifactId", { length: 128 }),
+    packageId: varchar("packageId", { length: 128 }),
+    contentId: varchar("contentId", { length: 128 }),
+    source: varchar("source", { length: 32 }).notNull(),
+    outcome: varchar("outcome", { length: 32 }).notNull(),
+    metadata: json("metadata").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventFingerprintUnique: uniqueIndex("ae_fingerprint_idx").on(table.eventFingerprint),
+    userIdx: index("ae_user_idx").on(table.userId),
+    campaignIdx: index("ae_campaign_idx").on(table.campaignId),
+    workflowOperationIdx: index("ae_workflow_operation_idx").on(table.workflowOperationId),
+    approvalRequestIdx: index("ae_approval_request_idx").on(table.approvalRequestId),
+    eventTypeIdx: index("ae_event_type_idx").on(table.eventType),
+    occurredAtIdx: index("ae_occurred_at_idx").on(table.occurredAt),
+  })
+);
+
+export type AuditEventRow = typeof auditEvents.$inferSelect;
+export type InsertAuditEventRow = typeof auditEvents.$inferInsert;
