@@ -1206,6 +1206,69 @@ export const creditTransactions = mysqlTable("credit_transactions", {
 
 export type CreditTransaction = typeof creditTransactions.$inferSelect;
 
+// ─── Credit Reservations ───
+// Durable persistence for the governed reservation state machine defined in
+// api/lib/billing/credit-reservation.ts (WBS 4F / Wave 2 / WBS8A/B).
+// reserved -> settled | released; both terminal, mutually exclusive.
+export const creditReservations = mysqlTable(
+  "credit_reservations",
+  {
+    id: serial("id").primaryKey(),
+    // sha256 hex of the canonical identity payload; authoritative unique guard.
+    reservationId: varchar("reservationId", { length: 64 }).notNull().unique(),
+    // Reservation claim key; an external idempotency key wins when supplied.
+    idempotencyKey: varchar("idempotencyKey", { length: 255 }).notNull().unique(),
+    reservationReference: varchar("reservationReference", { length: 255 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    workflowOperationId: varchar("workflowOperationId", { length: 64 }),
+    workflowAttemptId: varchar("workflowAttemptId", { length: 64 }),
+    stageId: varchar("stageId", { length: 128 }),
+    artifactId: varchar("artifactId", { length: 128 }),
+    packageId: varchar("packageId", { length: 128 }),
+    agentType: varchar("agentType", { length: 64 }),
+    model: varchar("model", { length: 128 }),
+    provider: varchar("provider", { length: 64 }),
+    reservedAmount: int("reservedAmount").notNull(),
+    settledAmount: int("settledAmount"),
+    state: mysqlEnum("state", ["reserved", "settled", "released"])
+      .default("reserved")
+      .notNull(),
+    reason: text("reason").notNull(),
+    settleKey: varchar("settleKey", { length: 255 }),
+    releaseKey: varchar("releaseKey", { length: 255 }),
+    releaseReason: text("releaseReason"),
+    reservedAt: timestamp("reservedAt").defaultNow().notNull(),
+    settledAt: timestamp("settledAt"),
+    releasedAt: timestamp("releasedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    userCampaignIdx: index("cr_user_campaign_idx").on(table.userId, table.campaignId),
+    // Durable authority for the WBS8A rule that a user's natural reservation
+    // reference binds to exactly one reservation identity; the store rereads
+    // by this pair after a duplicate-key error instead of trusting any
+    // select-before-insert observation.
+    userReferenceUnique: uniqueIndex("cr_user_reference_idx").on(
+      table.userId,
+      table.reservationReference
+    ),
+    workflowIdx: index("cr_workflow_idx").on(
+      table.workflowOperationId,
+      table.workflowAttemptId
+    ),
+    stageIdx: index("cr_stage_idx").on(table.stageId),
+    stateIdx: index("cr_state_idx").on(table.state),
+  })
+);
+
+export type CreditReservationRecord = typeof creditReservations.$inferSelect;
+export type InsertCreditReservationRecord = typeof creditReservations.$inferInsert;
+
 // ─── Video Render Jobs ───
 export const videoRenderJobs = mysqlTable("video_render_jobs", {
   id: serial("id").primaryKey(),

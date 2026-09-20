@@ -289,7 +289,8 @@ export function assertPositiveReservationAmount(amount: unknown): asserts amount
   }
 }
 
-function validateIdentityInput(input: CreditReservationIdentityInput): void {
+/** Persistence-facing identity validation shared by the registry and the durable store. */
+export function validateCreditReservationIdentity(input: CreditReservationIdentityInput): void {
   if (
     typeof input.userId !== "number" ||
     !Number.isInteger(input.userId) ||
@@ -306,6 +307,38 @@ function validateIdentityInput(input: CreditReservationIdentityInput): void {
       "Reservation reference must be a non-empty string."
     );
   }
+}
+
+/**
+ * Persistence-facing reserve validation: identity, positive amount, and a
+ * non-empty reason. The durable store must run the exact same checks before
+ * touching the database so persisted records can never disagree with the
+ * governed contract.
+ */
+export function validateReserveCreditsInput(input: ReserveCreditsInput): void {
+  validateCreditReservationIdentity(input);
+  assertPositiveReservationAmount(input.amount);
+  if (normalizeReference(input.reason ?? "").length === 0) {
+    throw new CreditReservationError(
+      "INVALID_RESERVATION_REASON",
+      "Reservation reason must be a non-empty string."
+    );
+  }
+}
+
+/** Persistence-facing settle/release key normalisation; blank keys fail closed. */
+export function normalizeReservationTransitionKey(
+  key: string | null | undefined,
+  kind: string
+): string {
+  const normalized = normalizeOptional(key);
+  if (!normalized) {
+    throw new CreditReservationError(
+      "INVALID_RESERVATION_TRANSITION_KEY",
+      `${kind} key must be a non-empty string.`
+    );
+  }
+  return normalized;
 }
 
 interface CreditReservationKeyBinding {
@@ -341,14 +374,7 @@ export class InMemoryCreditReservationRegistry {
   }
 
   private requireTransitionKey(key: string | null | undefined, kind: string): string {
-    const normalized = normalizeOptional(key);
-    if (!normalized) {
-      throw new CreditReservationError(
-        "INVALID_RESERVATION_TRANSITION_KEY",
-        `${kind} key must be a non-empty string.`
-      );
-    }
-    return normalized;
+    return normalizeReservationTransitionKey(key, kind);
   }
 
   private assertKeyAvailable(key: string, reservationId: string, kind: CreditReservationKeyKind): void {
@@ -368,16 +394,9 @@ export class InMemoryCreditReservationRegistry {
    * external idempotency key fails closed.
    */
   reserveCredits(input: ReserveCreditsInput): ReserveCreditsResult {
-    validateIdentityInput(input);
-    assertPositiveReservationAmount(input.amount);
+    validateReserveCreditsInput(input);
 
-    const reason = normalizeReference(input.reason ?? "");
-    if (reason.length === 0) {
-      throw new CreditReservationError(
-        "INVALID_RESERVATION_REASON",
-        "Reservation reason must be a non-empty string."
-      );
-    }
+    const reason = normalizeReference(input.reason);
 
     const reservationId = buildCreditReservationId(input);
     const idempotencyKey = buildCreditReservationIdempotencyKey(input);
