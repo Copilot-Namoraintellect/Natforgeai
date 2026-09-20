@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { buildBusinessDNASnapshot } from "../../../business-dna";
 import type {
   BusinessDNASnapshot,
   CampaignStrategySnapshot,
@@ -67,95 +68,16 @@ export function buildLegacyShadowContextProjection(
   const business = (input.business || {}) as any;
   const campaign = (input.campaign || {}) as any;
   const ctx = (input.validationContext || {}) as LegacyValidationContextInput;
-  const evidence = (business.websiteEvidence || {}) as any;
 
-  const productsAndServices = unique([
-    ...toStringArray(evidence.productsServices),
-    text(business.productOrService),
-    text(ctx.productOrService),
-  ]);
-
-  const verifiedUseCases = unique([
-    ...toStringArray(evidence.productsServices),
-    text(campaign.productOrService),
-  ]);
-
-  const targetCustomerSegments = unique([
-    ...toStringArray(evidence.targetCustomers),
-    text(business.targetCustomer),
-    text(business.targetAudience),
-    text(campaign.targetBuyer),
-    text(ctx.targetCustomer),
-  ]);
-
-  const customerPainPoints = unique([
-    text(campaign.mainPainPoint),
-    text(ctx.mainPainPoint),
-  ]);
-
-  const supportedOutcomes = unique([
-    ...toStringArray(campaign.keyOutcomes),
-    text(campaign.goal),
-    text(campaign.primaryOutcome),
-  ]);
-
-  const capabilities = unique([
-    ...toStringArray(evidence.productsServices),
-    text(ctx.productOrService),
-  ]);
-
-  const businessProjection = {
-    businessId: Number.isFinite(Number(business.id)) ? Number(business.id) : 0,
-    version: 1,
-    businessName: text(business.name) || text(ctx.businessName),
-    industry: text(business.industry) || text(evidence.businessCategory) || text(ctx.industry),
-    primaryOffering: text(business.productOrService) || text(ctx.productOrService),
-    productsAndServices,
-    verifiedUseCases,
-    targetCustomerSegments,
-    customerPainPoints,
-    supportedOutcomes,
-    capabilities,
-    approvedClaims: [] as string[],
-    prohibitedClaims: unique(toStringArray(business.avoidWords)),
-    brandLanguageConstraints: [] as string[],
-    evidenceReferences: [text(evidence.location)].filter(Boolean),
-  };
-
-  const evidenceHashSha256 = stableHash({
-    businessName: businessProjection.businessName,
-    industry: businessProjection.industry,
-    primaryOffering: businessProjection.primaryOffering,
-    productsAndServices: businessProjection.productsAndServices,
-    verifiedUseCases: businessProjection.verifiedUseCases,
-    targetCustomerSegments: businessProjection.targetCustomerSegments,
-    customerPainPoints: businessProjection.customerPainPoints,
-    supportedOutcomes: businessProjection.supportedOutcomes,
-    capabilities: businessProjection.capabilities,
-    prohibitedClaims: businessProjection.prohibitedClaims,
-    evidenceReferences: businessProjection.evidenceReferences,
-  });
-
-  const businessDna: BusinessDNASnapshot = {
-    snapshotId: `shadow-bdna-${businessProjection.businessId}-${evidenceHashSha256.slice(0, 16)}`,
-    businessId: businessProjection.businessId,
-    version: businessProjection.version,
-    evidenceHashSha256,
+  // Business DNA synthesis is owned by the neutral BI module; the Creative
+  // shadow projection delegates to it so behavior stays semantically
+  // equivalent. The epoch anchor preserves the legacy deterministic identity.
+  const businessDna: BusinessDNASnapshot = buildBusinessDNASnapshot({
+    business,
+    campaignSignals: campaign,
+    validationSignals: ctx,
     capturedAtIso: new Date(0).toISOString(),
-    businessName: businessProjection.businessName,
-    industry: businessProjection.industry,
-    primaryOffering: businessProjection.primaryOffering,
-    productsAndServices: businessProjection.productsAndServices,
-    verifiedUseCases: businessProjection.verifiedUseCases,
-    targetCustomerSegments: businessProjection.targetCustomerSegments,
-    customerPainPoints: businessProjection.customerPainPoints,
-    supportedOutcomes: businessProjection.supportedOutcomes,
-    capabilities: businessProjection.capabilities,
-    approvedClaims: businessProjection.approvedClaims,
-    prohibitedClaims: businessProjection.prohibitedClaims,
-    brandLanguageConstraints: businessProjection.brandLanguageConstraints,
-    evidenceReferences: businessProjection.evidenceReferences,
-  };
+  });
 
   const requiredCta = text(
     selectStageCta(text(ctx.preferredCta) || text(campaign.preferredCta) || text(campaign.ctaStrategy), text(ctx.funnelStage) || text(ctx.campaignObjective) || text(campaign.primaryOutcome) || text(campaign.goal))
