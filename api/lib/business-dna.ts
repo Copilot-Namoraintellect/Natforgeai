@@ -215,3 +215,58 @@ export function buildBusinessDNASnapshot(
     evidenceReferences,
   };
 }
+
+const CANONICAL_STRING_FIELDS = [
+  "snapshotId",
+  "evidenceHashSha256",
+  "capturedAtIso",
+  "businessName",
+  "industry",
+  "primaryOffering",
+] as const;
+
+const GOVERNED_STRING_ARRAY_FIELDS = [
+  "productsAndServices",
+  "verifiedUseCases",
+  "targetCustomerSegments",
+  "customerPainPoints",
+  "supportedOutcomes",
+  "capabilities",
+  "approvedClaims",
+  "prohibitedClaims",
+  "brandLanguageConstraints",
+  "evidenceReferences",
+] as const;
+
+/**
+ * Persistence-facing guard: validates that a value reconstructed from durable
+ * storage is a canonical BusinessDNASnapshot. Fails closed on any deviation so
+ * a corrupt stored payload can never be served as authority.
+ */
+export function assertCanonicalBusinessDnaSnapshot(value: unknown): BusinessDNASnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("stored business DNA snapshot payload is not a canonical object");
+  }
+  const candidate = value as Record<string, unknown>;
+  for (const field of CANONICAL_STRING_FIELDS) {
+    if (typeof candidate[field] !== "string") {
+      throw new Error(`stored business DNA snapshot field "${field}" is not a string`);
+    }
+  }
+  if (
+    !Number.isFinite(Number(candidate.businessId)) ||
+    !Number.isFinite(Number(candidate.version))
+  ) {
+    throw new Error("stored business DNA snapshot has a non-numeric businessId or version");
+  }
+  if (!/^[a-f0-9]{64}$/.test(candidate.evidenceHashSha256 as string)) {
+    throw new Error("stored business DNA snapshot has an invalid evidenceHashSha256");
+  }
+  for (const field of GOVERNED_STRING_ARRAY_FIELDS) {
+    const arr = candidate[field];
+    if (!Array.isArray(arr) || !arr.every((item) => typeof item === "string")) {
+      throw new Error(`stored business DNA snapshot field "${field}" is not a string array`);
+    }
+  }
+  return candidate as unknown as BusinessDNASnapshot;
+}

@@ -201,6 +201,39 @@ export const businesses = mysqlTable("businesses", {
 
 export type Business = typeof businesses.$inferSelect;
 
+// ─── Business DNA Snapshots (BI authority) ───
+// Immutable canonical BusinessDNASnapshot rows. Once inserted, the governed
+// snapshot JSON is the durable historical authority; it is never rebuilt from
+// the mutable businesses row.
+export const businessDnaSnapshots = mysqlTable(
+  "business_dna_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    snapshotId: varchar("snapshotId", { length: 128 }).notNull().unique(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    version: int("version").notNull(),
+    evidenceHashSha256: varchar("evidenceHashSha256", { length: 64 }).notNull(),
+    businessName: varchar("businessName", { length: 255 }).notNull(),
+    industry: varchar("industry", { length: 100 }).notNull(),
+    primaryOffering: text("primaryOffering").notNull(),
+    // Full canonical BusinessDNASnapshot payload (governed structured fields).
+    snapshot: json("snapshot").notNull(),
+    // Explicit caller-provided capture authority (never generated here).
+    capturedAt: timestamp("capturedAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    businessIdIdx: index("bdna_business_id_idx").on(table.businessId),
+    userIdIdx: index("bdna_user_id_idx").on(table.userId),
+    evidenceHashIdx: index("bdna_evidence_hash_idx").on(table.evidenceHashSha256),
+    capturedAtIdx: index("bdna_captured_at_idx").on(table.capturedAt),
+  })
+);
+
+export type BusinessDnaSnapshotRow = typeof businessDnaSnapshots.$inferSelect;
+export type InsertBusinessDnaSnapshotRow = typeof businessDnaSnapshots.$inferInsert;
+
 // ─── Campaigns ───
 export const campaigns = mysqlTable("campaigns", {
   id: serial("id").primaryKey(),
