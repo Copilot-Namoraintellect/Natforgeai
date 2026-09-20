@@ -8,7 +8,9 @@ import { createHash } from "crypto";
  * pure function of the normalized governed fields — never of wall-clock time —
  * so semantically identical input always yields the same evidence hash and the
  * same snapshot identity. Facts that are not present in the source input are
- * left empty rather than invented.
+ * left empty rather than invented. Governed brand-language input (tone,
+ * brandTone, brandVoiceNotes, avoidWords) is preserved deterministically and
+ * participates in the evidence hash.
  */
 
 export const BUSINESS_DNA_SNAPSHOT_VERSION = 1;
@@ -54,6 +56,9 @@ export interface BusinessProfileSnapshotSource {
   readonly productOrService?: unknown;
   readonly targetCustomer?: unknown;
   readonly targetAudience?: unknown;
+  readonly tone?: unknown;
+  readonly brandTone?: unknown;
+  readonly brandVoiceNotes?: unknown;
   readonly avoidWords?: unknown;
   readonly websiteEvidence?: unknown;
 }
@@ -177,7 +182,13 @@ export function buildBusinessDNASnapshot(
   const primaryOffering = text(business.productOrService) || text(ctx.productOrService);
   const approvedClaims: string[] = [];
   const prohibitedClaims = unique(toStringArray(business.avoidWords));
-  const brandLanguageConstraints: string[] = [];
+  // Governed brand-language input from the live profile, preserved as
+  // constraints verbatim (normalized/deduped). No voice guidance is invented.
+  const brandLanguageConstraints = unique([
+    text(business.tone),
+    text(business.brandTone),
+    text(business.brandVoiceNotes),
+  ]);
   const evidenceReferences = [text(evidence.location)].filter(Boolean);
 
   const evidenceHashSha256 = sha256Hex({
@@ -191,6 +202,7 @@ export function buildBusinessDNASnapshot(
     supportedOutcomes,
     capabilities,
     prohibitedClaims,
+    brandLanguageConstraints,
     evidenceReferences,
   });
 
