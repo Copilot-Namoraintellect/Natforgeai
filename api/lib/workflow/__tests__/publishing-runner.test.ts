@@ -73,7 +73,7 @@ function createMockDb({
   approvals?: Record<string, unknown>[];
 }) {
   const updateCalls: Array<{ table: string | undefined; set: Record<string, unknown> }> = [];
-  const db = {
+  const db: any = {
     updateCalls,
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => {
@@ -107,10 +107,11 @@ function createMockDb({
       set: vi.fn((data: Record<string, unknown>) => ({
         where: vi.fn(async () => {
           updateCalls.push({ table: getTableName(table), set: data });
-          return [];
+          return [{ affectedRows: 1 }];
         }),
       })),
     })),
+    transaction: async (cb: any) => cb(db),
   };
   return db;
 }
@@ -354,7 +355,7 @@ describe("publishSinglePost", () => {
     expect(result.error).toMatch(/launch approval is pending/i);
     expect(publishToFacebook).not.toHaveBeenCalled();
     expect(vi.mocked(deductCredits)).not.toHaveBeenCalled();
-    const queueUpdate = db.updateCalls.find((call) => call.table === "publishing_queue");
+    const queueUpdate = db.updateCalls.find((call: { table: string | undefined; set: Record<string, unknown> }) => call.table === "publishing_queue");
     expect(queueUpdate?.set.status).toBe("failed");
   });
 
@@ -376,7 +377,7 @@ describe("publishSinglePost", () => {
     expect(result.status).toBe("precondition_failed");
     expect(result.error).toMatch(/publication authority/i);
     expect(publishToFacebook).not.toHaveBeenCalled();
-    const queueUpdate = db.updateCalls.find((call) => call.table === "publishing_queue");
+    const queueUpdate = db.updateCalls.find((call: { table: string | undefined; set: Record<string, unknown> }) => call.table === "publishing_queue");
     expect(queueUpdate?.set.status).toBe("failed");
   });
 });
@@ -418,7 +419,7 @@ describe("finalizeCampaignPublishState publication lifecycle authority", () => {
     );
 
     const campaignUpdate = db.updateCalls.find(
-      (call) => call.table === "campaigns"
+      (call: { table: string | undefined; set: Record<string, unknown> }) => call.table === "campaigns"
     );
 
     expect(campaignUpdate?.set.status).toBe("active");
@@ -451,7 +452,7 @@ describe("finalizeCampaignPublishState publication lifecycle authority", () => {
     expect(transitionCampaignState).not.toHaveBeenCalled();
 
     const campaignUpdate = db.updateCalls.find(
-      (call) => call.table === "campaigns"
+      (call: { table: string | undefined; set: Record<string, unknown> }) => call.table === "campaigns"
     );
 
     expect(campaignUpdate).toBeUndefined();
