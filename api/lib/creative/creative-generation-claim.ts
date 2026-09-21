@@ -243,6 +243,7 @@ export async function rearmCreativeGenerationClaim({
   operationReferenceId,
   ownerToken,
   leaseExpiresAt,
+  db: executor,
 }: {
   userId: number;
   campaignId: number;
@@ -250,6 +251,8 @@ export async function rearmCreativeGenerationClaim({
   operationReferenceId: number;
   ownerToken: string;
   leaseExpiresAt: Date | SQL;
+  /** Optional transaction/DB seam (WBS9D2B): couples re-arm with replay binding. */
+  db?: any;
 }): Promise<RearmCreativeGenerationClaimSuccess | null> {
   assertValidId(userId, "userId");
   assertValidId(campaignId, "campaignId");
@@ -270,7 +273,7 @@ export async function rearmCreativeGenerationClaim({
   }
 
   const activeClaimKey = buildActiveCreativeClaimKey(userId, campaignId);
-  const db = getDb();
+  const db = executor ?? getDb();
 
   const result = await db
     .update(creativeGenerationClaims)
@@ -400,10 +403,13 @@ export async function releaseCreativeGenerationClaim({
   claimId,
   ownerToken,
   status,
+  db: executor,
 }: {
   claimId: number;
   ownerToken: string;
   status: "completed" | "failed";
+  /** Optional transaction/DB seam (WBS9D2B): couples compensation atomically. */
+  db?: any;
 }): Promise<void> {
   assertValidId(claimId, "claimId");
   assertValidOwnerToken(ownerToken);
@@ -414,7 +420,7 @@ export async function releaseCreativeGenerationClaim({
     });
   }
 
-  const db = getDb();
+  const db = executor ?? getDb();
   const result = await db
     .update(creativeGenerationClaims)
     .set({
@@ -882,11 +888,14 @@ export async function terminalizeStaleCreativeGenerationClaim({
   userId,
   campaignId,
   staleBefore,
+  db: executor,
 }: {
   claimId: number;
   userId: number;
   campaignId: number;
   staleBefore: Date;
+  /** Optional transaction/DB seam (WBS9D2B): couples stale terminalization. */
+  db?: any;
 }): Promise<TerminalizeStaleCreativeGenerationClaimResult> {
   assertValidId(claimId, "claimId");
   assertValidId(userId, "userId");
@@ -898,7 +907,7 @@ export async function terminalizeStaleCreativeGenerationClaim({
     });
   }
 
-  const db = getDb();
+  const db = executor ?? getDb();
   const result = await db
     .update(creativeGenerationClaims)
     .set({ status: "failed", activeClaimKey: null })

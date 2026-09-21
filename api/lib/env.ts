@@ -36,6 +36,8 @@ export const env = {
   openaiImageModel: process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-1",
   openaiImageOutputFormat: process.env.OPENAI_IMAGE_OUTPUT_FORMAT ?? "png",
   openaiImageQuality: process.env.OPENAI_IMAGE_QUALITY ?? "high",
+  // Central AI provider request timeout (runAgent boundary); fallback when unset/invalid.
+  aiProviderTimeoutMs: parsePositiveInteger(process.env.AI_PROVIDER_TIMEOUT_MS, 120_000),
   tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY ?? "",
   smtpHost: process.env.SMTP_HOST ?? "",
   smtpPort: parseInt(process.env.SMTP_PORT || "587"),

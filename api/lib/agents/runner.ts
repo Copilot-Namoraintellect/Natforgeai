@@ -13,6 +13,7 @@ import {
   isProviderOrPlatformError,
   emitAgentProviderAlert,
 } from "./provider-error";
+import { withProviderTimeout } from "../reliability/provider-timeout";
 
 export function isTestMode(): boolean {
   return (
@@ -110,15 +111,19 @@ export async function runAgent<TOutput>({
   const runId = Number(insertResult.insertId);
 
   try {
-    const result = await generateObject({
-      model: defaultModel,
-      system:
-        system ??
-        "You are an expert marketing AI agent. Respond with structured, actionable output.",
-      prompt,
-      schema,
-      abortSignal,
-    });
+    const result = await withProviderTimeout(
+      (signal) =>
+        generateObject({
+          model: defaultModel,
+          system:
+            system ??
+            "You are an expert marketing AI agent. Respond with structured, actionable output.",
+          prompt,
+          schema,
+          abortSignal: signal,
+        }),
+      { signal: abortSignal }
+    );
 
     const object = result.object;
     const usage = (result as any).usage;

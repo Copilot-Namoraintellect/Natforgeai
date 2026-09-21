@@ -1266,6 +1266,113 @@ export const twoFactorChallenges = mysqlTable("two_factor_challenges", {
 
 export type TwoFactorChallenge = typeof twoFactorChallenges.$inferSelect;
 
+// ─── Queue Terminal Failures ───
+// Durable dead-letter evidence for BullMQ jobs that reached a terminal state
+// (UnrecoverableError or exhausted retry attempts). Queue-level evidence only:
+// publishing_queue, agent_runs and creative claim records keep their own
+// recovery responsibilities.
+export const queueTerminalFailures = mysqlTable(
+  "queue_terminal_failures",
+  {
+    id: serial("id").primaryKey(),
+    failureKey: varchar("failureKey", { length: 255 }).notNull(),
+    queueName: mysqlEnum("queueName", ["publishing", "content_generation"]).notNull(),
+    bullmqJobId: varchar("bullmqJobId", { length: 191 }).notNull(),
+    terminalReason: mysqlEnum("terminalReason", ["unrecoverable", "retries_exhausted"])
+      .notNull(),
+    attemptsMade: int("attemptsMade").notNull(),
+    attemptsConfigured: int("attemptsConfigured").notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    publishingQueueItemId: bigint("publishingQueueItemId", {
+      mode: "number",
+      unsigned: true,
+    }),
+    agentRunId: bigint("agentRunId", { mode: "number", unsigned: true }),
+    errorName: varchar("errorName", { length: 128 }),
+    errorCode: varchar("errorCode", { length: 64 }),
+    errorSummary: text("errorSummary"),
+    failedAt: timestamp("failedAt").notNull(),
+    status: mysqlEnum("status", ["open"]).default("open").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    failureKeyUnique: uniqueIndex("qtf_failure_key_idx").on(table.failureKey),
+    queueJobIdx: index("qtf_queue_job_idx").on(table.queueName, table.bullmqJobId),
+    userIdIdx: index("qtf_user_id_idx").on(table.userId),
+    campaignIdIdx: index("qtf_campaign_id_idx").on(table.campaignId),
+    statusIdx: index("qtf_status_idx").on(table.status),
+    failedAtIdx: index("qtf_failed_at_idx").on(table.failedAt),
+  })
+);
+
+export type QueueTerminalFailure = typeof queueTerminalFailures.$inferSelect;
+
+// ─── Queue Replay Requests ───
+// Durable operator replay-request authority (WBS9D1). Records replay intent
+// only — no queue mutation happens in this slice; the queue-specific replay
+// executor arrives in WBS9D2. Immutable terminal-failure evidence above is
+// never updated by replay activity.
+export const queueReplayRequests = mysqlTable(
+  "queue_replay_requests",
+  {
+    id: serial("id").primaryKey(),
+    replayKey: varchar("replayKey", { length: 255 }).notNull(),
+    terminalFailureId: bigint("terminalFailureId", { mode: "number", unsigned: true }).notNull(),
+    failureKey: varchar("failureKey", { length: 255 }).notNull(),
+    queueName: mysqlEnum("queueName", ["publishing", "content_generation"]).notNull(),
+    originalBullmqJobId: varchar("originalBullmqJobId", { length: 191 }).notNull(),
+    requestedByUserId: bigint("requestedByUserId", { mode: "number", unsigned: true }).notNull(),
+    reason: text("reason"),
+    status: mysqlEnum("status", ["requested", "claimed", "enqueued", "resolved", "failed"])
+      .default("requested")
+      .notNull(),
+    replayMode: mysqlEnum("replayMode", ["publishing_requeue", "content_domain_recovery"]).notNull(),
+    replayBullmqJobId: varchar("replayBullmqJobId", { length: 191 }),
+    // Durable content-recovery binding (WBS9D2B): correlates THIS replay
+    // request with the exact re-armed creative-generation claim. Only a
+    // SHA-256 fingerprint of the ownerToken is stored — never the raw token.
+    contentRecoveryClaimId: bigint("contentRecoveryClaimId", {
+      mode: "number",
+      unsigned: true,
+    }),
+    contentRecoveryOwnerTokenHash: varchar("contentRecoveryOwnerTokenHash", { length: 64 }),
+    contentRecoveryPreparedAt: timestamp("contentRecoveryPreparedAt"),
+    claimedAt: timestamp("claimedAt"),
+    enqueuedAt: timestamp("enqueuedAt"),
+    resolvedAt: timestamp("resolvedAt"),
+    failedAt: timestamp("failedAt"),
+    lastErrorSummary: text("lastErrorSummary"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    replayKeyUnique: uniqueIndex("qrr_replay_key_idx").on(table.replayKey),
+    terminalFailureIdx: index("qrr_terminal_failure_idx").on(table.terminalFailureId),
+    failureKeyIdx: index("qrr_failure_key_idx").on(table.failureKey),
+    queueNameIdx: index("qrr_queue_name_idx").on(table.queueName),
+    statusIdx: index("qrr_status_idx").on(table.status),
+    requestedByIdx: index("qrr_requested_by_idx").on(table.requestedByUserId),
+  })
+);
+
+export type QueueReplayRequest = typeof queueReplayRequests.$inferSelect;
+
+// ─── Queue Replay Active Claims ───
+// Durable mutual-exclusion guard for replay claims. terminalFailureId ALONE
+// is the primary/unique authority: at most one replay request per terminal
+// failure may be actively claimed/enqueuing at a time, enforced by the
+// database unique constraint (not by pre-reads). Released when a request
+// resolves or fails.
+export const queueReplayActiveClaims = mysqlTable("queue_replay_active_claims", {
+  terminalFailureId: bigint("terminalFailureId", { mode: "number", unsigned: true }).primaryKey(),
+  replayRequestId: bigint("replayRequestId", { mode: "number", unsigned: true }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type QueueReplayActiveClaim = typeof queueReplayActiveClaims.$inferSelect;
+
 // ─── System Alerts ───
 export const systemAlerts = mysqlTable("system_alerts", {
   id: serial("id").primaryKey(),

@@ -2,6 +2,11 @@ import { Queue, Worker, Job } from "bullmq";
 import { Redis } from "ioredis";
 import { env } from "../env";
 import { createAlert } from "../alerts";
+import {
+  handleTerminalContentGenerationFailure,
+  handleTerminalPublishingFailure,
+  runContainedTerminalPersistence,
+} from "./terminal-failure";
 
 const PUBLISHING_QUEUE_NAME = "publishing-jobs";
 const CONTENT_GENERATION_QUEUE_NAME = "content-generation-jobs";
@@ -67,6 +72,8 @@ export interface PublishingJobData {
   queueItemId: number;
   userId: number;
   platform: string;
+  /** Set only for deliberate controlled replays (WBS9D2): the replay request that owns this job. */
+  replayRequestId?: number;
 }
 
 export interface ContentGenerationJobData {
@@ -76,6 +83,8 @@ export interface ContentGenerationJobData {
   regenerate: boolean;
   claimId?: number;
   ownerToken?: string;
+  /** Set only for deliberate controlled replays (WBS9D2): the replay request that owns this job. */
+  replayRequestId?: number;
 }
 
 export function toSafeBullMqJobId(value: string | number): string {
@@ -98,12 +107,20 @@ export async function schedulePublishingJob(
   queueItemId: number,
   userId: number,
   platform: string,
-  scheduledAt: Date
+  scheduledAt: Date,
+  options?: { replayRequestId?: number }
 ): Promise<Job<PublishingJobData>> {
   const queue = getPublishingQueue();
   return queue.add(
     "publish",
-    { queueItemId, userId, platform },
+    {
+      queueItemId,
+      userId,
+      platform,
+      ...(options?.replayRequestId != null
+        ? { replayRequestId: options.replayRequestId }
+        : {}),
+    },
     {
       jobId: toPublishingBullMqJobId(queueItemId),
       delay: Math.max(0, scheduledAt.getTime() - Date.now()),
@@ -114,6 +131,86 @@ export async function schedulePublishingJob(
 export async function removePublishingJob(queueItemId: number): Promise<void> {
   const queue = getPublishingQueue();
   await queue.remove(toPublishingBullMqJobId(queueItemId));
+}
+
+export interface PublishingJobInspection {
+  exists: boolean;
+  jobId: string;
+  /** BullMQ job state, e.g. failed/waiting/delayed/active/completed; null if unreadable. */
+  state: string | null;
+  data: PublishingJobData | null;
+  timestamp: number | null;
+}
+
+/**
+ * Narrow inspection seam for controlled terminal replay (WBS9D2). Establishes
+ * job existence, identity and state so a replay executor can reconcile an
+ * existing deterministic job without touching live work it cannot prove.
+ */
+export async function inspectPublishingJob(jobId: string): Promise<PublishingJobInspection> {
+  const queue = getPublishingQueue();
+  const job = await queue.getJob(jobId);
+  if (!job) {
+    return { exists: false, jobId, state: null, data: null, timestamp: null };
+  }
+  const state = await job.getState().catch(() => null);
+  return {
+    exists: true,
+    jobId,
+    state,
+    data: (job.data as PublishingJobData | undefined) ?? null,
+    timestamp: job.timestamp ?? null,
+  };
+}
+
+/** Remove a publishing job by its deterministic id; no-op if it does not exist. */
+export async function removePublishingJobById(jobId: string): Promise<boolean> {
+  const queue = getPublishingQueue();
+  const job = await queue.getJob(jobId);
+  if (!job) return false;
+  await job.remove();
+  return true;
+}
+
+export interface ContentGenerationJobInspection {
+  exists: boolean;
+  jobId: string;
+  /** BullMQ job state, e.g. failed/waiting/delayed/active/completed; null if unreadable. */
+  state: string | null;
+  data: ContentGenerationJobData | null;
+  timestamp: number | null;
+}
+
+/**
+ * Narrow inspection seam for controlled content terminal replay (WBS9D2B).
+ * Establishes job existence, identity and state so recovery can reconcile an
+ * existing deterministic job without touching live work it cannot prove.
+ */
+export async function inspectContentGenerationJob(
+  jobId: string
+): Promise<ContentGenerationJobInspection> {
+  const queue = getContentGenerationQueue();
+  const job = await queue.getJob(jobId);
+  if (!job) {
+    return { exists: false, jobId, state: null, data: null, timestamp: null };
+  }
+  const state = await job.getState().catch(() => null);
+  return {
+    exists: true,
+    jobId,
+    state,
+    data: (job.data as ContentGenerationJobData | undefined) ?? null,
+    timestamp: job.timestamp ?? null,
+  };
+}
+
+/** Remove a content-generation job by its deterministic id; no-op if absent. */
+export async function removeContentGenerationJobById(jobId: string): Promise<boolean> {
+  const queue = getContentGenerationQueue();
+  const job = await queue.getJob(jobId);
+  if (!job) return false;
+  await job.remove();
+  return true;
 }
 
 export async function scheduleContentGenerationJob(
@@ -173,17 +270,35 @@ export function createPublishingWorker(
     console.log(`[BullMQ] Job ${job.id} completed`);
   });
 
-  publishingWorker.on("failed", async (job, err) => {
-    console.error(`[BullMQ] Job ${job?.id} failed:`, err.message);
-    await createAlert({
-      severity: "warning",
-      category: "worker",
-      message: `BullMQ publishing job failed: ${err.message}`,
-      details: { jobId: job?.id, queueItemId: job?.data.queueItemId, platform: job?.data.platform },
-    }).catch(() => {});
+  publishingWorker.on("failed", (job, err) => {
+    void handlePublishingWorkerFailed(job, err).catch(() => {});
   });
 
   return publishingWorker;
+}
+
+/**
+ * Publishing worker `failed` listener body. Existing logging and warning-alert
+ * behavior is preserved; terminal (unrecoverable / attempts-exhausted) failures
+ * additionally persist one durable queue_terminal_failures row, with
+ * persistence failures contained and escalated as a critical alert.
+ */
+export async function handlePublishingWorkerFailed(
+  job: Job<PublishingJobData> | undefined,
+  err: Error
+): Promise<void> {
+  console.error(`[BullMQ] Job ${job?.id} failed:`, err.message);
+  await createAlert({
+    severity: "warning",
+    category: "worker",
+    message: `BullMQ publishing job failed: ${err.message}`,
+    details: { jobId: job?.id, queueItemId: job?.data.queueItemId, platform: job?.data.platform },
+  }).catch(() => {});
+
+  await runContainedTerminalPersistence(
+    () => handleTerminalPublishingFailure({ job, error: err, failedAt: new Date() }),
+    { queueName: "publishing", bullmqJobId: job?.id }
+  );
 }
 
 export function createContentGenerationWorker(
@@ -206,17 +321,35 @@ export function createContentGenerationWorker(
     console.log(`[BullMQ] Content generation job ${job.id} completed`);
   });
 
-  contentGenerationWorker.on("failed", async (job, err) => {
-    console.error(`[BullMQ] Content generation job ${job?.id} failed:`, err.message);
-    await createAlert({
-      severity: "warning",
-      category: "worker",
-      message: `BullMQ content generation job failed: ${err.message}`,
-      details: { jobId: job?.id, campaignId: job?.data.campaignId, userId: job?.data.userId },
-    }).catch(() => {});
+  contentGenerationWorker.on("failed", (job, err) => {
+    void handleContentGenerationWorkerFailed(job, err).catch(() => {});
   });
 
   return contentGenerationWorker;
+}
+
+/**
+ * Content-generation worker `failed` listener body. Existing logging and
+ * warning-alert behavior is preserved; terminal failures additionally persist
+ * one durable queue_terminal_failures row, with persistence failures contained
+ * and escalated as a critical alert.
+ */
+export async function handleContentGenerationWorkerFailed(
+  job: Job<ContentGenerationJobData> | undefined,
+  err: Error
+): Promise<void> {
+  console.error(`[BullMQ] Content generation job ${job?.id} failed:`, err.message);
+  await createAlert({
+    severity: "warning",
+    category: "worker",
+    message: `BullMQ content generation job failed: ${err.message}`,
+    details: { jobId: job?.id, campaignId: job?.data.campaignId, userId: job?.data.userId },
+  }).catch(() => {});
+
+  await runContainedTerminalPersistence(
+    () => handleTerminalContentGenerationFailure({ job, error: err, failedAt: new Date() }),
+    { queueName: "content_generation", bullmqJobId: job?.id }
+  );
 }
 
 export function getPublishingWorker(): Worker | null {
@@ -236,6 +369,9 @@ export async function closePublishingQueue(): Promise<void> {
     await publishingWorker.close();
     publishingWorker = null;
   }
+}
+
+export async function closeContentGenerationQueue(): Promise<void> {
   if (contentGenerationQueue) {
     await contentGenerationQueue.close();
     contentGenerationQueue = null;
@@ -244,6 +380,9 @@ export async function closePublishingQueue(): Promise<void> {
     await contentGenerationWorker.close();
     contentGenerationWorker = null;
   }
+}
+
+export async function closeBullMqConnection(): Promise<void> {
   if (redisConnection) {
     await redisConnection.quit();
     redisConnection = null;

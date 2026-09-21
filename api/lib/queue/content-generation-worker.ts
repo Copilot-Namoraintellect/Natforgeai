@@ -19,3 +19,9 @@ export function startContentGenerationWorker() {
   console.log("[Content Generation Worker] Started");
   return worker;
 }
+
+export async function stopContentGenerationWorker() {
+  const { closeContentGenerationQueue } = await import("./bullmq");
+  await closeContentGenerationQueue();
+  console.log("[Content Generation Worker] Stopped");
+}
