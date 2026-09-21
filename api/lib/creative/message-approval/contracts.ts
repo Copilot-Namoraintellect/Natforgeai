@@ -8,26 +8,9 @@ export type CandidateSource =
   | "existing_approved"
   | "diagnostic_fixture";
 
-export interface BusinessDNASnapshot {
-  readonly snapshotId: string;
-  readonly businessId: number;
-  readonly version: number;
-  readonly evidenceHashSha256: string;
-  readonly capturedAtIso: string;
-  readonly businessName: string;
-  readonly industry: string;
-  readonly primaryOffering: string;
-  readonly productsAndServices: readonly string[];
-  readonly verifiedUseCases: readonly string[];
-  readonly targetCustomerSegments: readonly string[];
-  readonly customerPainPoints: readonly string[];
-  readonly supportedOutcomes: readonly string[];
-  readonly capabilities: readonly string[];
-  readonly approvedClaims: readonly string[];
-  readonly prohibitedClaims: readonly string[];
-  readonly brandLanguageConstraints: readonly string[];
-  readonly evidenceReferences: readonly string[];
-}
+// Canonical Business DNA contract is owned by the neutral BI module.
+import type { BusinessDNASnapshot } from "../../business-dna";
+export type { BusinessDNASnapshot } from "../../business-dna";
 
 export type CtaPolicy =
   | {
