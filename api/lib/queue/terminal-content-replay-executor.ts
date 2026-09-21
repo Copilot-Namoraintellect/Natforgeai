@@ -87,15 +87,17 @@ export class ContentReplayValidationError extends Error {
     | "binding_conflict"
     | "claim_rejected"
     | "claim_authority_violation";
+  readonly replayRequestId?: number;
 
   constructor(
     code: ContentReplayValidationError["code"],
     message: string,
-    public readonly replayRequestId?: number
+    replayRequestId?: number
   ) {
     super(message);
     this.name = "ContentReplayValidationError";
     this.code = code;
+    this.replayRequestId = replayRequestId;
   }
 }
 

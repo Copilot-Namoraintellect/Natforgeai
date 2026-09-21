@@ -25,7 +25,25 @@ import {
   userUsage,
   publishingQueue,
   socialIntegrations,
+  queueTerminalFailures,
+  queueReplayRequests,
 } from "@db/schema";
+import {
+  requestTerminalFailureReplay,
+  TerminalReplayInvalidTransitionError,
+  TerminalReplayKeyConflictError,
+  TerminalReplayRequestNotFoundError,
+  TerminalReplayTargetNotFoundError,
+} from "./lib/queue/terminal-replay";
+import {
+  executePublishingTerminalReplay,
+  PublishingReplayValidationError,
+} from "./lib/queue/terminal-replay-executor";
+import {
+  executeContentTerminalReplay,
+  ContentReplayValidationError,
+} from "./lib/queue/terminal-content-replay-executor";
+import { reconcileTerminalReplayBatch } from "./lib/queue/terminal-replay-reconciliation-batch";
 import { eq, desc, sql, count, and, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
@@ -35,6 +53,87 @@ function normalizeProductionMode(raw: string | undefined): DiagnosticProductionM
     return value as DiagnosticProductionMode;
   }
   return "unknown";
+}
+
+// ─── WBS9D4B: Terminal replay control plane ───
+// Control-plane adapter ONLY: all replay authority (D1 request, D2 execution,
+// D3 reconciliation) lives in the queue modules. The router reuses the
+// existing authenticated admin surface and adds a default-OFF kill switch
+// for mutating operations.
+
+function isTerminalReplayAdminEnabled(): boolean {
+  return process.env.TERMINAL_REPLAY_ADMIN_ENABLED === "true";
+}
+
+function requireTerminalReplayAdminEnabled(): void {
+  if (!isTerminalReplayAdminEnabled()) {
+    throw new TRPCError({
+      code: "SERVICE_UNAVAILABLE",
+      message: "Terminal replay administration is disabled.",
+    });
+  }
+}
+
+/**
+ * Bounded error mapping for the replay control plane: never leak raw
+ * exception text to the client; only known error authorities contribute a
+ * classification. Structured identifiers only in logs.
+ */
+function mapTerminalReplayError(
+  err: unknown,
+  adminUserId: number,
+  identifiers: { terminalFailureId?: number; replayRequestId?: number }
+): TRPCError {
+  const errorCode = (err as { code?: unknown } | null | undefined)?.code;
+  logError("[Admin] Terminal replay operation failed", {
+    event: "terminal_replay_error",
+    adminUserId,
+    terminalFailureId: identifiers.terminalFailureId ?? null,
+    replayRequestId: identifiers.replayRequestId ?? null,
+    errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+  });
+
+  if (err instanceof TerminalReplayTargetNotFoundError) {
+    return new TRPCError({ code: "NOT_FOUND", message: "Terminal failure not found." });
+  }
+  if (err instanceof TerminalReplayRequestNotFoundError) {
+    return new TRPCError({ code: "NOT_FOUND", message: "Replay request not found." });
+  }
+  if (err instanceof TerminalReplayKeyConflictError) {
+    return new TRPCError({ code: "CONFLICT", message: "Replay key conflict." });
+  }
+  if (err instanceof TerminalReplayInvalidTransitionError) {
+    return new TRPCError({ code: "CONFLICT", message: "Terminal replay conflict." });
+  }
+  if (err instanceof PublishingReplayValidationError) {
+    if (err.code === "operator_mismatch") {
+      return new TRPCError({ code: "FORBIDDEN", message: "Terminal replay operation forbidden." });
+    }
+    return new TRPCError({ code: "BAD_REQUEST", message: "Terminal replay operation failed." });
+  }
+  if (err instanceof ContentReplayValidationError) {
+    if (err.code === "operator_mismatch") {
+      return new TRPCError({ code: "FORBIDDEN", message: "Terminal replay operation forbidden." });
+    }
+    return new TRPCError({ code: "BAD_REQUEST", message: "Terminal replay operation failed." });
+  }
+  if (err instanceof TRPCError) {
+    const message =
+      err.code === "FORBIDDEN"
+        ? "Terminal replay operation forbidden."
+        : err.code === "NOT_FOUND"
+          ? "Replay resource not found."
+          : err.code === "CONFLICT"
+            ? "Terminal replay conflict."
+            : err.code === "BAD_REQUEST"
+              ? "Terminal replay operation failed."
+              : "Terminal replay operation failed.";
+    return new TRPCError({ code: err.code, message });
+  }
+  return new TRPCError({
+    code: "INTERNAL_SERVER_ERROR",
+    message: "Terminal replay operation failed.",
+  });
 }
 
 export const adminRouter = createRouter({
@@ -533,6 +632,183 @@ export const adminRouter = createRouter({
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Diagnostic authority execution failed.",
+        });
+      }
+    }),
+
+  // ─── WBS9D4B: Terminal Replay Control Plane ───
+
+  // READ ONLY: safe durable terminal-failure evidence for operator review.
+  // Not gated by the replay kill switch.
+  terminalQueueFailures: adminQuery
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(100).optional(),
+          queueName: z.enum(["publishing", "content_generation"]).optional(),
+          terminalReason: z.enum(["unrecoverable", "retries_exhausted"]).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ input }) => {
+      const db = getDb();
+      const limit = input?.limit ?? 50;
+      const conditions = [];
+      if (input?.queueName) {
+        conditions.push(eq(queueTerminalFailures.queueName, input.queueName));
+      }
+      if (input?.terminalReason) {
+        conditions.push(eq(queueTerminalFailures.terminalReason, input.terminalReason));
+      }
+      return db
+        .select({
+          id: queueTerminalFailures.id,
+          failureKey: queueTerminalFailures.failureKey,
+          queueName: queueTerminalFailures.queueName,
+          bullmqJobId: queueTerminalFailures.bullmqJobId,
+          terminalReason: queueTerminalFailures.terminalReason,
+          userId: queueTerminalFailures.userId,
+          campaignId: queueTerminalFailures.campaignId,
+          publishingQueueItemId: queueTerminalFailures.publishingQueueItemId,
+          agentRunId: queueTerminalFailures.agentRunId,
+          errorCode: queueTerminalFailures.errorCode,
+          failedAt: queueTerminalFailures.failedAt,
+          status: queueTerminalFailures.status,
+        })
+        .from(queueTerminalFailures)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .orderBy(desc(queueTerminalFailures.failedAt), desc(queueTerminalFailures.id))
+        .limit(limit);
+    }),
+
+  // D1 adapter: durable operator replay request. requestedByUserId always
+  // comes from the verified admin session; replayKey is the operator-supplied
+  // durable idempotency identity.
+  requestTerminalReplay: adminQuery
+    .input(
+      z.object({
+        terminalFailureId: z.number().int().positive(),
+        replayKey: z.string().trim().min(1).max(255),
+        reason: z.string().trim().min(1).max(1000),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      requireTerminalReplayAdminEnabled();
+      const adminUserId = ctx.user.id;
+      try {
+        const result = await requestTerminalFailureReplay({
+          terminalFailureId: input.terminalFailureId,
+          replayKey: input.replayKey,
+          requestedByUserId: adminUserId,
+          reason: input.reason,
+        });
+        logInfo("[Admin] Terminal replay requested", {
+          event: "terminal_replay_requested",
+          adminUserId,
+          terminalFailureId: input.terminalFailureId,
+          replayRequestId: result.record.id,
+          replayMode: result.record.replayMode,
+          alreadyRequested: result.alreadyRequested,
+        });
+        return {
+          replayRequestId: result.record.id,
+          terminalFailureId: result.record.terminalFailureId,
+          replayMode: result.record.replayMode,
+          status: result.record.status,
+          requestedByUserId: result.record.requestedByUserId,
+          alreadyRequested: result.alreadyRequested,
+          createdAt: result.record.createdAt,
+        };
+      } catch (err) {
+        throw mapTerminalReplayError(err, adminUserId, {
+          terminalFailureId: input.terminalFailureId,
+        });
+      }
+    }),
+
+  // D2 adapter: delegates to the queue-specific executor authority. The
+  // router performs no direct BullMQ operations.
+  executeTerminalReplay: adminQuery
+    .input(z.object({ replayRequestId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      requireTerminalReplayAdminEnabled();
+      const adminUserId = ctx.user.id;
+      const db = getDb();
+      const [request] = await db
+        .select({
+          id: queueReplayRequests.id,
+          replayMode: queueReplayRequests.replayMode,
+        })
+        .from(queueReplayRequests)
+        .where(eq(queueReplayRequests.id, input.replayRequestId))
+        .limit(1);
+      if (!request) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Replay request not found." });
+      }
+      try {
+        let result;
+        if (request.replayMode === "publishing_requeue") {
+          result = await executePublishingTerminalReplay({
+            replayRequestId: input.replayRequestId,
+            requestedByUserId: adminUserId,
+          });
+        } else if (request.replayMode === "content_domain_recovery") {
+          result = await executeContentTerminalReplay({
+            replayRequestId: input.replayRequestId,
+            requestedByUserId: adminUserId,
+          });
+        } else {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Terminal replay operation failed." });
+        }
+        logInfo("[Admin] Terminal replay executed", {
+          event: "terminal_replay_executed",
+          adminUserId,
+          replayRequestId: input.replayRequestId,
+          replayMode: request.replayMode,
+          outcome: result.outcome,
+        });
+        return result;
+      } catch (err) {
+        throw mapTerminalReplayError(err, adminUserId, {
+          replayRequestId: input.replayRequestId,
+        });
+      }
+    }),
+
+  // D3 adapter: one bounded reconciliation pass. Selection and outcome
+  // classification remain entirely inside D3B/D3A.
+  reconcileTerminalReplays: adminQuery
+    .input(
+      z.object({ limit: z.number().int().min(1).max(100).optional() }).optional()
+    )
+    .mutation(async ({ ctx, input }) => {
+      requireTerminalReplayAdminEnabled();
+      const adminUserId = ctx.user.id;
+      try {
+        const report = await reconcileTerminalReplayBatch(
+          input?.limit != null ? { limit: input.limit } : {}
+        );
+        logInfo("[Admin] Terminal replay reconciliation batch executed", {
+          event: "terminal_replay_reconciliation_batch",
+          adminUserId,
+          selectedCount: report.selectedCount,
+          attemptedCount: report.attemptedCount,
+          resolvedCount: report.resolvedCount,
+          failedCount: report.failedCount,
+          pendingCount: report.pendingCount,
+          errorCount: report.errorCount,
+        });
+        return report;
+      } catch (err) {
+        const errorCode = (err as { code?: unknown } | null | undefined)?.code;
+        logError("[Admin] Terminal replay reconciliation failed", {
+          event: "terminal_replay_reconciliation_error",
+          adminUserId,
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Terminal replay reconciliation failed.",
         });
       }
     }),

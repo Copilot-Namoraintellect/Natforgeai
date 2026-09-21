@@ -67,15 +67,17 @@ export class ReplayReconciliationInvariantError extends Error {
     | "domain_identity_mismatch"
     | "content_binding_missing"
     | "owner_token_fingerprint_mismatch";
+  readonly replayRequestId?: number;
 
   constructor(
     code: ReplayReconciliationInvariantError["code"],
     message: string,
-    public readonly replayRequestId?: number
+    replayRequestId?: number
   ) {
     super(message);
     this.name = "ReplayReconciliationInvariantError";
     this.code = code;
+    this.replayRequestId = replayRequestId;
   }
 }
 

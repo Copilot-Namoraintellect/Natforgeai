@@ -70,15 +70,17 @@ export class PublishingReplayValidationError extends Error {
     | "state_not_replayable"
     | "claim_rejected"
     | "claim_authority_violation";
+  readonly replayRequestId?: number;
 
   constructor(
     code: PublishingReplayValidationError["code"],
     message: string,
-    public readonly replayRequestId?: number
+    replayRequestId?: number
   ) {
     super(message);
     this.name = "PublishingReplayValidationError";
     this.code = code;
+    this.replayRequestId = replayRequestId;
   }
 }
 
