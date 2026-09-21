@@ -4,6 +4,11 @@ import { getDb } from "../../queries/connection";
 import { conversationThreads, conversationMessages, leads, leadActivities } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
+import { buildSensitiveReplyApprovalRequest } from "../engagement/sensitive-reply-approval";
+import {
+  createOrReuseSensitiveReplyApproval,
+  type SensitiveReplyApprovalExecutor,
+} from "../engagement/sensitive-reply-approval-store";
 
 const ReplySchema = z.object({
   reply: z.string(),
@@ -33,6 +38,7 @@ export async function generateReply({
   platform,
   businessContext,
   dedupKey,
+  approvalExecutor,
 }: {
   userId: number;
   campaignId: number | null;
@@ -47,6 +53,11 @@ export async function generateReply({
   };
   /** Event-scoped idempotency key; when set, the persisted AI reply is deduplicated per event. */
   dedupKey?: string;
+  /**
+   * Optional test seam for the sensitive-reply approval bridge; production
+   * callers omit this and the durable store uses its drizzle executor.
+   */
+  approvalExecutor?: SensitiveReplyApprovalExecutor;
 }) {
   const db = getDb();
 
@@ -186,6 +197,28 @@ Respond with structured data.`;
     }
   }
 
+  // Durable sensitive-reply approval bridge (WBS14B). Only escalated,
+  // event-scoped invocations create an approval: without a dedupKey there is
+  // no replay-safe approval identity (e.g. the manual runEngagementAgent
+  // path). The store keys on the WBS14A hashed idempotency key, so a webhook
+  // recovery replay reuses the same request instead of duplicating it. The
+  // proposed reply stays a proposal — zero outbound dispatch.
+  if (result.output.shouldEscalate && dedupKey) {
+    const approvalCommand = buildSensitiveReplyApprovalRequest({
+      userId,
+      campaignId,
+      threadId,
+      dedupKey,
+      proposedReply: result.output.reply,
+      escalationReason: result.output.escalationReason,
+      sentiment: result.output.sentiment,
+    });
+    await createOrReuseSensitiveReplyApproval(
+      approvalCommand,
+      approvalExecutor
+    );
+  }
+
   return result;
 }
 
@@ -197,6 +230,7 @@ export async function handleNewMessage({
   messageText,
   businessContext,
   dedupKey,
+  approvalExecutor,
 }: {
   userId: number;
   campaignId: number | null;
@@ -216,6 +250,8 @@ export async function handleNewMessage({
    * them even if the original attempt failed partway through.
    */
   dedupKey?: string;
+  /** Optional test seam forwarded to the sensitive-reply approval bridge. */
+  approvalExecutor?: SensitiveReplyApprovalExecutor;
 }) {
   const db = getDb();
 
@@ -278,6 +314,7 @@ export async function handleNewMessage({
     platform,
     businessContext,
     dedupKey,
+    approvalExecutor,
   });
 
   return { threadId: thread.id, result };

@@ -694,8 +694,23 @@ export const approvalRequests = mysqlTable("approval_requests", {
     .notNull(),
   approvedAt: timestamp("approvedAt"),
   rejectedAt: timestamp("rejectedAt"),
+  /**
+   * Durable replay authority for idempotent approval creation. For
+   * sensitive_reply approvals this is the WBS14A hashed event key (never the
+   * raw provider event key). Nullable; unique when present.
+   */
+  idempotencyKey: varchar("idempotencyKey", { length: 255 }),
+  /**
+   * Structured, domain-neutral lineage/metadata for the approval (e.g.
+   * sensitive_reply provenance: contract version, thread, sentiment).
+   */
+  context: json("context"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, (table) => ({
+  idempotencyKeyUnique: uniqueIndex("approval_requests_idempotency_key_idx").on(
+    table.idempotencyKey
+  ),
+}));
 
 export type ApprovalRequest = typeof approvalRequests.$inferSelect;
 
