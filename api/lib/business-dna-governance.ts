@@ -6,6 +6,7 @@ import {
   type BusinessDNASnapshot,
 } from "./business-dna";
 import {
+  BusinessDnaSnapshotConflictError,
   getBusinessDnaSnapshotBySnapshotId,
   persistBusinessDnaSnapshot,
   type BusinessDnaStoreDbExecutor,
@@ -171,10 +172,52 @@ export async function materializeGovernedBusinessDna(
   const clock = input.clock ?? (() => new Date());
   const capturedAtIso = clock().toISOString();
   const snapshot = buildCanonicalBusinessDnaSnapshot({ business, capturedAtIso });
-  const persisted = await persistBusinessDnaSnapshot({ snapshot, userId }, db);
-  return {
-    status: persisted.status === "inserted" ? "created" : "reused",
-    snapshot: persisted.snapshot,
-    readiness,
-  };
+  try {
+    const persisted = await persistBusinessDnaSnapshot({ snapshot, userId }, db);
+    return {
+      status: persisted.status === "inserted" ? "created" : "reused",
+      snapshot: persisted.snapshot,
+      readiness,
+    };
+  } catch (error) {
+    if (!(error instanceof BusinessDnaSnapshotConflictError)) {
+      throw error;
+    }
+
+    /*
+     * Two materializers can observe the same pre-commit state, derive the same
+     * evidence identity, and capture different wall-clock times. The store
+     * correctly rejects those canonical payloads as different.
+     *
+     * Resolve only that governance-level race by adopting the committed
+     * winner's capture time, then replay through the store again. The store's
+     * existing exact canonical comparison remains the authority: if anything
+     * other than capturedAtIso differs, this second persistence attempt still
+     * fails closed with BusinessDnaSnapshotConflictError.
+     */
+    const winner = await getBusinessDnaSnapshotBySnapshotId(
+      snapshot.snapshotId,
+      db
+    );
+
+    if (!winner) {
+      throw error;
+    }
+
+    const winnerAlignedSnapshot: BusinessDNASnapshot = {
+      ...snapshot,
+      capturedAtIso: winner.capturedAtIso,
+    };
+
+    const replayed = await persistBusinessDnaSnapshot(
+      { snapshot: winnerAlignedSnapshot, userId },
+      db
+    );
+
+    return {
+      status: "reused",
+      snapshot: replayed.snapshot,
+      readiness,
+    };
+  }
 }

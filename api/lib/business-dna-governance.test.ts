@@ -545,6 +545,167 @@ describe("materializeGovernedBusinessDna", () => {
     expect(clockB).toHaveBeenCalledTimes(0);
   });
 
+  it("converges concurrent same-evidence materializations with different clocks on one committed winner", async () => {
+    const clockA = vi.fn(CLOCK_A);
+    const clockB = vi.fn(CLOCK_B);
+
+    const base = makeGovernanceFake({
+      businesses: [completeBusinessRow()],
+    });
+
+    const baseExecutor = base.executor as any;
+
+    /*
+     * Force both governance-level snapshot lookups to observe the same
+     * pre-commit state before either materialization may continue.
+     */
+    let snapshotSelectCount = 0;
+
+    let releaseInitialSnapshotReads!: () => void;
+    const bothInitialSnapshotReadsSeen = new Promise<void>((resolve) => {
+      releaseInitialSnapshotReads = resolve;
+    });
+
+    /*
+     * Add the unique-snapshotId behaviour that the real database provides.
+     * The existing governance fake otherwise permits duplicate snapshotIds.
+     */
+    const committedSnapshotIds = new Set<string>();
+
+    const concurrentExecutor = {
+      select: vi.fn(() => {
+        const delegate = baseExecutor.select();
+
+        let isSnapshotRead = false;
+        let snapshotReadOrdinal = 0;
+
+        const chain: any = {
+          from(table: unknown) {
+            isSnapshotRead = table === businessDnaSnapshots;
+
+            if (isSnapshotRead) {
+              snapshotReadOrdinal = ++snapshotSelectCount;
+
+              if (snapshotReadOrdinal === 2) {
+                releaseInitialSnapshotReads();
+              }
+            }
+
+            delegate.from(table);
+            return chain;
+          },
+
+          where(condition: unknown) {
+            delegate.where(condition);
+            return chain;
+          },
+
+          orderBy(...orderBy: unknown[]) {
+            delegate.orderBy(...orderBy);
+            return chain;
+          },
+
+          limit(limit: number) {
+            delegate.limit(limit);
+            return chain;
+          },
+
+          then(
+            resolve: (value: unknown) => unknown,
+            reject?: (reason: unknown) => unknown
+          ) {
+            if (isSnapshotRead && snapshotReadOrdinal <= 2) {
+              return bothInitialSnapshotReadsSeen.then(
+                () => resolve([]),
+                reject
+              );
+            }
+
+            return delegate.then(resolve, reject);
+          },
+        };
+
+        return chain;
+      }),
+
+      insert: vi.fn((table: unknown) => {
+        const delegate = baseExecutor.insert(table);
+
+        return {
+          values: async (values: Record<string, unknown>) => {
+            if (table === businessDnaSnapshots) {
+              const snapshotId = String(values.snapshotId);
+
+              if (committedSnapshotIds.has(snapshotId)) {
+                const duplicate = Object.assign(
+                  new Error(
+                    `Duplicate entry '${snapshotId}' for key 'business_dna_snapshots.snapshotId'`
+                  ),
+                  {
+                    code: "ER_DUP_ENTRY",
+                    errno: 1062,
+                  }
+                );
+
+                throw duplicate;
+              }
+
+              committedSnapshotIds.add(snapshotId);
+            }
+
+            return delegate.values(values);
+          },
+        };
+      }),
+    } as unknown as BusinessDnaStoreDbExecutor;
+
+    const [first, second] = await Promise.all([
+      materializeGovernedBusinessDna({
+        userId: 7,
+        businessId: 30,
+        clock: clockA,
+        executor: concurrentExecutor,
+      }),
+
+      materializeGovernedBusinessDna({
+        userId: 7,
+        businessId: 30,
+        clock: clockB,
+        executor: concurrentExecutor,
+      }),
+    ]);
+
+    expect(
+      [first.status, second.status].sort()
+    ).toEqual(["created", "reused"]);
+
+    expect(clockA).toHaveBeenCalledTimes(1);
+    expect(clockB).toHaveBeenCalledTimes(1);
+
+    expect(first.snapshot.snapshotId).toBe(second.snapshot.snapshotId);
+    expect(first.snapshot).toEqual(second.snapshot);
+
+    expect(
+      new Set([
+        first.snapshot.capturedAtIso,
+        second.snapshot.capturedAtIso,
+      ]).size
+    ).toBe(1);
+
+    expect([
+      "2026-07-01T08:00:00.000Z",
+      "2026-09-15T12:30:00.000Z",
+    ]).toContain(first.snapshot.capturedAtIso);
+
+    expect(insertOps(base.recorded)).toHaveLength(1);
+
+    const committed = await getBusinessDnaSnapshotBySnapshotId(
+      first.snapshot.snapshotId,
+      concurrentExecutor
+    );
+
+    expect(committed).toEqual(first.snapshot);
+  });
   it("creates a new immutable identity when governed evidence changes", async () => {
     const { executor, recorded, updateBusiness } = makeGovernanceFake({
       businesses: [completeBusinessRow()],
