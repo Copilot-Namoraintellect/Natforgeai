@@ -29,15 +29,18 @@ vi.mock("./bullmq", async (importOriginal) => {
 });
 
 import {
+  TerminalReplayBindingConflictError,
   TerminalReplayInvalidTransitionError,
   TerminalReplayKeyConflictError,
   TerminalReplayTargetNotFoundError,
+  bindContentRecoveryClaim,
   claimTerminalReplayRequest,
   classifyTerminalReplay,
   markTerminalReplayEnqueued,
   markTerminalReplayFailed,
   markTerminalReplayResolved,
   requestTerminalFailureReplay,
+  rotateContentRecoveryClaimOwnerHash,
 } from "./terminal-replay";
 import type { TerminalReplayExecutor } from "./terminal-replay";
 import { schedulePublishingJob, scheduleContentGenerationJob } from "./bullmq";
@@ -75,30 +78,49 @@ function unwrapParam(value: any): any {
 function evalCond(cond: any, row: any): boolean {
   if (!cond || typeof cond !== "object") return true;
   const chunks: any[] = cond.queryChunks ?? [];
+  const predicates: Array<(r: any) => boolean> = [];
   let i = 0;
   while (i < chunks.length) {
     const chunk = chunks[i];
     if (chunk && Array.isArray(chunk.queryChunks)) {
-      if (!evalCond(chunk, row)) return false;
+      predicates.push((r) => evalCond(chunk, r));
       i += 1;
       continue;
     }
     if (chunk && typeof chunk === "object" && typeof chunk.name === "string" && chunk.table) {
       const opChunk = chunks[i + 1];
-      const op: string = String(opChunk?.value?.[0] ?? opChunk?.sql ?? "");
+      const op: string = String(opChunk?.value?.[0] ?? opChunk?.sql ?? "").toLowerCase();
+      if (op.includes("is not null")) {
+        predicates.push((r) => r[chunk.name] != null);
+        i += 2;
+        continue;
+      }
+      if (op.includes("is null")) {
+        predicates.push((r) => r[chunk.name] == null);
+        i += 2;
+        continue;
+      }
       const value = unwrapParam(chunks[i + 2]);
       const actual = row[chunk.name];
-      if (op.trim() === "=") {
-        if (actual !== value) return false;
-      } else if (op.includes("<>")) {
-        if (actual === value) return false;
+      if (op.includes("<>")) {
+        predicates.push((r) => r[chunk.name] !== value);
+      } else {
+        predicates.push((r) => r[chunk.name] === value);
       }
       i += 3;
       continue;
     }
     i += 1;
   }
-  return true;
+  // and()/or() join nested SQL chunks; distinguish by the raw join text.
+  const joinText = chunks
+    .filter((c) => typeof c?.value?.[0] === "string")
+    .map((c) => c.value[0])
+    .join(" ")
+    .toLowerCase();
+  return joinText.includes(" or ")
+    ? predicates.some((p) => p(row))
+    : predicates.every((p) => p(row));
 }
 
 function tableName(table: any): string {
@@ -669,5 +691,165 @@ describe("no queue side effects in this slice", () => {
 
     expect(schedulePublishingJob).not.toHaveBeenCalled();
     expect(scheduleContentGenerationJob).not.toHaveBeenCalled();
+  });
+});
+
+describe("active-claim release atomicity (durability correction)", () => {
+  it("A. claimed -> resolved: active-claim DELETE failure rolls back; request stays claimed, guard remains", async () => {
+    const { db, state } = createFakeDb([publishingFailure], {
+      failOn: { op: "delete", table: "queue_replay_active_claims" },
+    });
+    const { record } = await requestTerminalFailureReplay(replayInput(), db);
+    await claimTerminalReplayRequest(record.id, undefined, db);
+
+    await expect(markTerminalReplayResolved(record.id, undefined, db)).rejects.toThrow(
+      "injected delete failure"
+    );
+
+    expect(state.requests.get(record.id).status).toBe("claimed");
+    expect(state.activeClaims.has(publishingFailure.id)).toBe(true);
+  });
+
+  it("B. enqueued -> resolved: DELETE failure rolls back; request stays enqueued, guard remains", async () => {
+    const { db, state } = createFakeDb([publishingFailure], {
+      failOn: { op: "delete", table: "queue_replay_active_claims" },
+    });
+    const { record } = await requestTerminalFailureReplay(replayInput(), db);
+    await claimTerminalReplayRequest(record.id, undefined, db);
+    await markTerminalReplayEnqueued(record.id, { replayBullmqJobId: "publish-5" }, db);
+
+    await expect(markTerminalReplayResolved(record.id, undefined, db)).rejects.toThrow(
+      "injected delete failure"
+    );
+
+    expect(state.requests.get(record.id).status).toBe("enqueued");
+    expect(state.activeClaims.has(publishingFailure.id)).toBe(true);
+  });
+
+  it("C. claimed -> failed: DELETE failure rolls back; request stays claimed, guard remains", async () => {
+    const { db, state } = createFakeDb([publishingFailure], {
+      failOn: { op: "delete", table: "queue_replay_active_claims" },
+    });
+    const { record } = await requestTerminalFailureReplay(replayInput(), db);
+    await claimTerminalReplayRequest(record.id, undefined, db);
+
+    await expect(
+      markTerminalReplayFailed(record.id, { error: new Error("boom") }, db)
+    ).rejects.toThrow("injected delete failure");
+
+    expect(state.requests.get(record.id).status).toBe("claimed");
+    expect(state.activeClaims.has(publishingFailure.id)).toBe(true);
+  });
+
+  it("D. enqueued -> failed: DELETE failure rolls back; request stays enqueued, guard remains", async () => {
+    const { db, state } = createFakeDb([publishingFailure], {
+      failOn: { op: "delete", table: "queue_replay_active_claims" },
+    });
+    const { record } = await requestTerminalFailureReplay(replayInput(), db);
+    await claimTerminalReplayRequest(record.id, undefined, db);
+    await markTerminalReplayEnqueued(record.id, { replayBullmqJobId: "publish-5" }, db);
+
+    await expect(
+      markTerminalReplayFailed(record.id, { error: new Error("boom") }, db)
+    ).rejects.toThrow("injected delete failure");
+
+    expect(state.requests.get(record.id).status).toBe("enqueued");
+    expect(state.activeClaims.has(publishingFailure.id)).toBe(true);
+  });
+
+  it("E. requested -> failed still works when no active guard exists", async () => {
+    const { db, state } = createFakeDb([publishingFailure]);
+    const { record } = await requestTerminalFailureReplay(replayInput(), db);
+
+    const failed = await markTerminalReplayFailed(record.id, { error: new Error("operator cancel") }, db);
+
+    expect(failed.status).toBe("failed");
+    expect(state.activeClaims.has(publishingFailure.id)).toBe(false);
+  });
+});
+
+describe("rotateContentRecoveryClaimOwnerHash (guarded rotation authority)", () => {
+  async function boundRequest(db: TerminalReplayExecutor) {
+    const { record } = await requestTerminalFailureReplay(replayInput(), db);
+    await claimTerminalReplayRequest(record.id, undefined, db);
+    await bindContentRecoveryClaim(record.id, { claimId: 91, ownerTokenHash: "hash-A" }, db);
+    return record;
+  }
+
+  it("rotates hash under the full guarded WHERE; claim id preserved", async () => {
+    const { db, state } = createFakeDb([publishingFailure]);
+    const record = await boundRequest(db);
+
+    const result = await rotateContentRecoveryClaimOwnerHash(
+      {
+        replayRequestId: record.id,
+        claimId: 91,
+        expectedOwnerTokenHash: "hash-A",
+        nextOwnerTokenHash: "hash-B",
+      },
+      db
+    );
+
+    expect(result.rotated).toBe(true);
+    expect(state.requests.get(record.id).contentRecoveryClaimId).toBe(91);
+    expect(state.requests.get(record.id).contentRecoveryOwnerTokenHash).toBe("hash-B");
+  });
+
+  it("exact replay of an applied rotation is idempotent", async () => {
+    const { db } = createFakeDb([publishingFailure]);
+    const record = await boundRequest(db);
+    await rotateContentRecoveryClaimOwnerHash(
+      { replayRequestId: record.id, claimId: 91, expectedOwnerTokenHash: "hash-A", nextOwnerTokenHash: "hash-B" },
+      db
+    );
+
+    const replay = await rotateContentRecoveryClaimOwnerHash(
+      { replayRequestId: record.id, claimId: 91, expectedOwnerTokenHash: "hash-A", nextOwnerTokenHash: "hash-B" },
+      db
+    );
+
+    expect(replay.rotated).toBe(false);
+  });
+
+  it("same replay cannot rotate a different claim id", async () => {
+    const { db } = createFakeDb([publishingFailure]);
+    const record = await boundRequest(db);
+
+    await expect(
+      rotateContentRecoveryClaimOwnerHash(
+        { replayRequestId: record.id, claimId: 92, expectedOwnerTokenHash: "hash-A", nextOwnerTokenHash: "hash-B" },
+        db
+      )
+    ).rejects.toBeInstanceOf(TerminalReplayBindingConflictError);
+  });
+
+  it("concurrent incompatible rotations have a single winner; loser fails closed", async () => {
+    const { db } = createFakeDb([publishingFailure]);
+    const record = await boundRequest(db);
+
+    const winner = await rotateContentRecoveryClaimOwnerHash(
+      { replayRequestId: record.id, claimId: 91, expectedOwnerTokenHash: "hash-A", nextOwnerTokenHash: "hash-B" },
+      db
+    );
+    // A competing rotation from the same expected hash loses the race.
+    await expect(
+      rotateContentRecoveryClaimOwnerHash(
+        { replayRequestId: record.id, claimId: 91, expectedOwnerTokenHash: "hash-A", nextOwnerTokenHash: "hash-C" },
+        db
+      )
+    ).rejects.toBeInstanceOf(TerminalReplayBindingConflictError);
+    expect(winner.rotated).toBe(true);
+  });
+
+  it("rotation from a stale expected hash fails closed (no last-writer-wins)", async () => {
+    const { db } = createFakeDb([publishingFailure]);
+    const record = await boundRequest(db);
+
+    await expect(
+      rotateContentRecoveryClaimOwnerHash(
+        { replayRequestId: record.id, claimId: 91, expectedOwnerTokenHash: "hash-WRONG", nextOwnerTokenHash: "hash-B" },
+        db
+      )
+    ).rejects.toBeInstanceOf(TerminalReplayBindingConflictError);
   });
 });

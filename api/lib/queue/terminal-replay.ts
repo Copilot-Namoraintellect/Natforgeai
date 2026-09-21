@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { queueReplayActiveClaims, queueReplayRequests, queueTerminalFailures } from "@db/schema";
 import { getDb } from "../../queries/connection";
 import {
@@ -224,6 +224,10 @@ async function releaseActiveClaim(
   terminalFailureId: number,
   replayRequestId: number
 ): Promise<void> {
+  // No blanket catch: a genuine delete failure must propagate so the
+  // surrounding transaction rolls the terminal request transition back.
+  // "Zero rows deleted" is not an error (no active guard is expected on some
+  // paths, e.g. requested -> failed).
   await db
     .delete(queueReplayActiveClaims)
     .where(
@@ -231,8 +235,7 @@ async function releaseActiveClaim(
         eq(queueReplayActiveClaims.terminalFailureId, terminalFailureId),
         eq(queueReplayActiveClaims.replayRequestId, replayRequestId)
       )
-    )
-    .catch(() => {});
+    );
 }
 
 /**
@@ -405,4 +408,131 @@ export async function markTerminalReplayFailed(
     await releaseActiveClaim(tx, record.terminalFailureId, replayRequestId);
     return record;
   });
+}
+
+export class TerminalReplayBindingConflictError extends Error {
+  readonly replayRequestId: number;
+  constructor(replayRequestId: number) {
+    super(
+      `Replay request ${replayRequestId} is already bound to a different content-recovery claim`
+    );
+    this.name = "TerminalReplayBindingConflictError";
+    this.replayRequestId = replayRequestId;
+  }
+}
+
+/**
+ * Bounded durable binding helper (WBS9D2B): correlates a claimed replay
+ * request with the exact re-armed creative-generation claim.
+ *
+ * First exact binding wins; exact replay reuses it (idempotent). A different
+ * claim id or owner-token fingerprint fails closed. Only the SHA-256
+ * fingerprint of the ownerToken is persisted — never the raw token.
+ *
+ * Callers invoke this inside the same transaction as the claim re-arm so a
+ * crash can never leave a re-armed running claim without durable proof of
+ * which replay request owns it.
+ */
+export async function bindContentRecoveryClaim(
+  replayRequestId: number,
+  binding: { claimId: number; ownerTokenHash: string },
+  executor?: TerminalReplayExecutor
+): Promise<{ bound: boolean }> {
+  const db = resolveDb(executor);
+  const [header] = await db
+    .update(queueReplayRequests)
+    .set({
+      contentRecoveryClaimId: binding.claimId,
+      contentRecoveryOwnerTokenHash: binding.ownerTokenHash,
+      contentRecoveryPreparedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(queueReplayRequests.id, replayRequestId),
+        eq(queueReplayRequests.status, "claimed"),
+        or(
+          isNull(queueReplayRequests.contentRecoveryClaimId),
+          and(
+            eq(queueReplayRequests.contentRecoveryClaimId, binding.claimId),
+            eq(queueReplayRequests.contentRecoveryOwnerTokenHash, binding.ownerTokenHash)
+          )
+        )
+      )
+    );
+
+  if (Number((header as { affectedRows?: number }).affectedRows) === 1) {
+    return { bound: true };
+  }
+
+  const [current] = await db
+    .select()
+    .from(queueReplayRequests)
+    .where(eq(queueReplayRequests.id, replayRequestId))
+    .limit(1);
+  if (
+    current &&
+    current.contentRecoveryClaimId === binding.claimId &&
+    current.contentRecoveryOwnerTokenHash === binding.ownerTokenHash
+  ) {
+    return { bound: false };
+  }
+  throw new TerminalReplayBindingConflictError(replayRequestId);
+}
+
+/**
+ * Guarded owner-token-hash rotation (WBS9D2B correction): after the stale
+ * terminalization + re-arm of an expired replay-owned bound claim, the
+ * durable binding must move from the old fingerprint to the new one without
+ * ever last-writer-wins. The claim ID is never replaced. Only fingerprints
+ * are persisted — never a raw ownerToken.
+ *
+ * Callers invoke this inside the same transaction as the stale
+ * terminalization + re-arm so a crash can never leave the claim re-armed
+ * with a new token while the binding still carries the old hash (or vice
+ * versa).
+ */
+export async function rotateContentRecoveryClaimOwnerHash(
+  input: {
+    replayRequestId: number;
+    claimId: number;
+    expectedOwnerTokenHash: string;
+    nextOwnerTokenHash: string;
+    preparedAt?: Date;
+  },
+  executor?: TerminalReplayExecutor
+): Promise<{ rotated: boolean }> {
+  const db = resolveDb(executor);
+  const [header] = await db
+    .update(queueReplayRequests)
+    .set({
+      contentRecoveryOwnerTokenHash: input.nextOwnerTokenHash,
+      contentRecoveryPreparedAt: input.preparedAt ?? new Date(),
+    })
+    .where(
+      and(
+        eq(queueReplayRequests.id, input.replayRequestId),
+        eq(queueReplayRequests.status, "claimed"),
+        eq(queueReplayRequests.contentRecoveryClaimId, input.claimId),
+        eq(queueReplayRequests.contentRecoveryOwnerTokenHash, input.expectedOwnerTokenHash)
+      )
+    );
+
+  if (Number((header as { affectedRows?: number }).affectedRows) === 1) {
+    return { rotated: true };
+  }
+
+  const [current] = await db
+    .select()
+    .from(queueReplayRequests)
+    .where(eq(queueReplayRequests.id, input.replayRequestId))
+    .limit(1);
+  if (
+    current &&
+    current.contentRecoveryClaimId === input.claimId &&
+    current.contentRecoveryOwnerTokenHash === input.nextOwnerTokenHash
+  ) {
+    // Exact replay of an already-applied rotation.
+    return { rotated: false };
+  }
+  throw new TerminalReplayBindingConflictError(input.replayRequestId);
 }

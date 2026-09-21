@@ -1330,6 +1330,15 @@ export const queueReplayRequests = mysqlTable(
       .notNull(),
     replayMode: mysqlEnum("replayMode", ["publishing_requeue", "content_domain_recovery"]).notNull(),
     replayBullmqJobId: varchar("replayBullmqJobId", { length: 191 }),
+    // Durable content-recovery binding (WBS9D2B): correlates THIS replay
+    // request with the exact re-armed creative-generation claim. Only a
+    // SHA-256 fingerprint of the ownerToken is stored — never the raw token.
+    contentRecoveryClaimId: bigint("contentRecoveryClaimId", {
+      mode: "number",
+      unsigned: true,
+    }),
+    contentRecoveryOwnerTokenHash: varchar("contentRecoveryOwnerTokenHash", { length: 64 }),
+    contentRecoveryPreparedAt: timestamp("contentRecoveryPreparedAt"),
     claimedAt: timestamp("claimedAt"),
     enqueuedAt: timestamp("enqueuedAt"),
     resolvedAt: timestamp("resolvedAt"),

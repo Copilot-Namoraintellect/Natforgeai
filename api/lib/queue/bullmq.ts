@@ -83,6 +83,8 @@ export interface ContentGenerationJobData {
   regenerate: boolean;
   claimId?: number;
   ownerToken?: string;
+  /** Set only for deliberate controlled replays (WBS9D2): the replay request that owns this job. */
+  replayRequestId?: number;
 }
 
 export function toSafeBullMqJobId(value: string | number): string {
@@ -164,6 +166,47 @@ export async function inspectPublishingJob(jobId: string): Promise<PublishingJob
 /** Remove a publishing job by its deterministic id; no-op if it does not exist. */
 export async function removePublishingJobById(jobId: string): Promise<boolean> {
   const queue = getPublishingQueue();
+  const job = await queue.getJob(jobId);
+  if (!job) return false;
+  await job.remove();
+  return true;
+}
+
+export interface ContentGenerationJobInspection {
+  exists: boolean;
+  jobId: string;
+  /** BullMQ job state, e.g. failed/waiting/delayed/active/completed; null if unreadable. */
+  state: string | null;
+  data: ContentGenerationJobData | null;
+  timestamp: number | null;
+}
+
+/**
+ * Narrow inspection seam for controlled content terminal replay (WBS9D2B).
+ * Establishes job existence, identity and state so recovery can reconcile an
+ * existing deterministic job without touching live work it cannot prove.
+ */
+export async function inspectContentGenerationJob(
+  jobId: string
+): Promise<ContentGenerationJobInspection> {
+  const queue = getContentGenerationQueue();
+  const job = await queue.getJob(jobId);
+  if (!job) {
+    return { exists: false, jobId, state: null, data: null, timestamp: null };
+  }
+  const state = await job.getState().catch(() => null);
+  return {
+    exists: true,
+    jobId,
+    state,
+    data: (job.data as ContentGenerationJobData | undefined) ?? null,
+    timestamp: job.timestamp ?? null,
+  };
+}
+
+/** Remove a content-generation job by its deterministic id; no-op if absent. */
+export async function removeContentGenerationJobById(jobId: string): Promise<boolean> {
+  const queue = getContentGenerationQueue();
   const job = await queue.getJob(jobId);
   if (!job) return false;
   await job.remove();
