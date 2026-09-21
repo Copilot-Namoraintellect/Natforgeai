@@ -201,6 +201,39 @@ export const businesses = mysqlTable("businesses", {
 
 export type Business = typeof businesses.$inferSelect;
 
+// ─── Business DNA Snapshots (BI authority) ───
+// Immutable canonical BusinessDNASnapshot rows. Once inserted, the governed
+// snapshot JSON is the durable historical authority; it is never rebuilt from
+// the mutable businesses row.
+export const businessDnaSnapshots = mysqlTable(
+  "business_dna_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    snapshotId: varchar("snapshotId", { length: 128 }).notNull().unique(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    version: int("version").notNull(),
+    evidenceHashSha256: varchar("evidenceHashSha256", { length: 64 }).notNull(),
+    businessName: varchar("businessName", { length: 255 }).notNull(),
+    industry: varchar("industry", { length: 100 }).notNull(),
+    primaryOffering: text("primaryOffering").notNull(),
+    // Full canonical BusinessDNASnapshot payload (governed structured fields).
+    snapshot: json("snapshot").notNull(),
+    // Explicit caller-provided capture authority (never generated here).
+    capturedAt: timestamp("capturedAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    businessIdIdx: index("bdna_business_id_idx").on(table.businessId),
+    userIdIdx: index("bdna_user_id_idx").on(table.userId),
+    evidenceHashIdx: index("bdna_evidence_hash_idx").on(table.evidenceHashSha256),
+    capturedAtIdx: index("bdna_captured_at_idx").on(table.capturedAt),
+  })
+);
+
+export type BusinessDnaSnapshotRow = typeof businessDnaSnapshots.$inferSelect;
+export type InsertBusinessDnaSnapshotRow = typeof businessDnaSnapshots.$inferInsert;
+
 // ─── Campaigns ───
 export const campaigns = mysqlTable("campaigns", {
   id: serial("id").primaryKey(),
@@ -1206,6 +1239,69 @@ export const creditTransactions = mysqlTable("credit_transactions", {
 
 export type CreditTransaction = typeof creditTransactions.$inferSelect;
 
+// ─── Credit Reservations ───
+// Durable persistence for the governed reservation state machine defined in
+// api/lib/billing/credit-reservation.ts (WBS 4F / Wave 2 / WBS8A/B).
+// reserved -> settled | released; both terminal, mutually exclusive.
+export const creditReservations = mysqlTable(
+  "credit_reservations",
+  {
+    id: serial("id").primaryKey(),
+    // sha256 hex of the canonical identity payload; authoritative unique guard.
+    reservationId: varchar("reservationId", { length: 64 }).notNull().unique(),
+    // Reservation claim key; an external idempotency key wins when supplied.
+    idempotencyKey: varchar("idempotencyKey", { length: 255 }).notNull().unique(),
+    reservationReference: varchar("reservationReference", { length: 255 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    workflowOperationId: varchar("workflowOperationId", { length: 64 }),
+    workflowAttemptId: varchar("workflowAttemptId", { length: 64 }),
+    stageId: varchar("stageId", { length: 128 }),
+    artifactId: varchar("artifactId", { length: 128 }),
+    packageId: varchar("packageId", { length: 128 }),
+    agentType: varchar("agentType", { length: 64 }),
+    model: varchar("model", { length: 128 }),
+    provider: varchar("provider", { length: 64 }),
+    reservedAmount: int("reservedAmount").notNull(),
+    settledAmount: int("settledAmount"),
+    state: mysqlEnum("state", ["reserved", "settled", "released"])
+      .default("reserved")
+      .notNull(),
+    reason: text("reason").notNull(),
+    settleKey: varchar("settleKey", { length: 255 }),
+    releaseKey: varchar("releaseKey", { length: 255 }),
+    releaseReason: text("releaseReason"),
+    reservedAt: timestamp("reservedAt").defaultNow().notNull(),
+    settledAt: timestamp("settledAt"),
+    releasedAt: timestamp("releasedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    userCampaignIdx: index("cr_user_campaign_idx").on(table.userId, table.campaignId),
+    // Durable authority for the WBS8A rule that a user's natural reservation
+    // reference binds to exactly one reservation identity; the store rereads
+    // by this pair after a duplicate-key error instead of trusting any
+    // select-before-insert observation.
+    userReferenceUnique: uniqueIndex("cr_user_reference_idx").on(
+      table.userId,
+      table.reservationReference
+    ),
+    workflowIdx: index("cr_workflow_idx").on(
+      table.workflowOperationId,
+      table.workflowAttemptId
+    ),
+    stageIdx: index("cr_stage_idx").on(table.stageId),
+    stateIdx: index("cr_state_idx").on(table.state),
+  })
+);
+
+export type CreditReservationRecord = typeof creditReservations.$inferSelect;
+export type InsertCreditReservationRecord = typeof creditReservations.$inferInsert;
+
 // ─── Video Render Jobs ───
 export const videoRenderJobs = mysqlTable("video_render_jobs", {
   id: serial("id").primaryKey(),
@@ -1266,6 +1362,113 @@ export const twoFactorChallenges = mysqlTable("two_factor_challenges", {
 
 export type TwoFactorChallenge = typeof twoFactorChallenges.$inferSelect;
 
+// ─── Queue Terminal Failures ───
+// Durable dead-letter evidence for BullMQ jobs that reached a terminal state
+// (UnrecoverableError or exhausted retry attempts). Queue-level evidence only:
+// publishing_queue, agent_runs and creative claim records keep their own
+// recovery responsibilities.
+export const queueTerminalFailures = mysqlTable(
+  "queue_terminal_failures",
+  {
+    id: serial("id").primaryKey(),
+    failureKey: varchar("failureKey", { length: 255 }).notNull(),
+    queueName: mysqlEnum("queueName", ["publishing", "content_generation"]).notNull(),
+    bullmqJobId: varchar("bullmqJobId", { length: 191 }).notNull(),
+    terminalReason: mysqlEnum("terminalReason", ["unrecoverable", "retries_exhausted"])
+      .notNull(),
+    attemptsMade: int("attemptsMade").notNull(),
+    attemptsConfigured: int("attemptsConfigured").notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    publishingQueueItemId: bigint("publishingQueueItemId", {
+      mode: "number",
+      unsigned: true,
+    }),
+    agentRunId: bigint("agentRunId", { mode: "number", unsigned: true }),
+    errorName: varchar("errorName", { length: 128 }),
+    errorCode: varchar("errorCode", { length: 64 }),
+    errorSummary: text("errorSummary"),
+    failedAt: timestamp("failedAt").notNull(),
+    status: mysqlEnum("status", ["open"]).default("open").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    failureKeyUnique: uniqueIndex("qtf_failure_key_idx").on(table.failureKey),
+    queueJobIdx: index("qtf_queue_job_idx").on(table.queueName, table.bullmqJobId),
+    userIdIdx: index("qtf_user_id_idx").on(table.userId),
+    campaignIdIdx: index("qtf_campaign_id_idx").on(table.campaignId),
+    statusIdx: index("qtf_status_idx").on(table.status),
+    failedAtIdx: index("qtf_failed_at_idx").on(table.failedAt),
+  })
+);
+
+export type QueueTerminalFailure = typeof queueTerminalFailures.$inferSelect;
+
+// ─── Queue Replay Requests ───
+// Durable operator replay-request authority (WBS9D1). Records replay intent
+// only — no queue mutation happens in this slice; the queue-specific replay
+// executor arrives in WBS9D2. Immutable terminal-failure evidence above is
+// never updated by replay activity.
+export const queueReplayRequests = mysqlTable(
+  "queue_replay_requests",
+  {
+    id: serial("id").primaryKey(),
+    replayKey: varchar("replayKey", { length: 255 }).notNull(),
+    terminalFailureId: bigint("terminalFailureId", { mode: "number", unsigned: true }).notNull(),
+    failureKey: varchar("failureKey", { length: 255 }).notNull(),
+    queueName: mysqlEnum("queueName", ["publishing", "content_generation"]).notNull(),
+    originalBullmqJobId: varchar("originalBullmqJobId", { length: 191 }).notNull(),
+    requestedByUserId: bigint("requestedByUserId", { mode: "number", unsigned: true }).notNull(),
+    reason: text("reason"),
+    status: mysqlEnum("status", ["requested", "claimed", "enqueued", "resolved", "failed"])
+      .default("requested")
+      .notNull(),
+    replayMode: mysqlEnum("replayMode", ["publishing_requeue", "content_domain_recovery"]).notNull(),
+    replayBullmqJobId: varchar("replayBullmqJobId", { length: 191 }),
+    // Durable content-recovery binding (WBS9D2B): correlates THIS replay
+    // request with the exact re-armed creative-generation claim. Only a
+    // SHA-256 fingerprint of the ownerToken is stored — never the raw token.
+    contentRecoveryClaimId: bigint("contentRecoveryClaimId", {
+      mode: "number",
+      unsigned: true,
+    }),
+    contentRecoveryOwnerTokenHash: varchar("contentRecoveryOwnerTokenHash", { length: 64 }),
+    contentRecoveryPreparedAt: timestamp("contentRecoveryPreparedAt"),
+    claimedAt: timestamp("claimedAt"),
+    enqueuedAt: timestamp("enqueuedAt"),
+    resolvedAt: timestamp("resolvedAt"),
+    failedAt: timestamp("failedAt"),
+    lastErrorSummary: text("lastErrorSummary"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    replayKeyUnique: uniqueIndex("qrr_replay_key_idx").on(table.replayKey),
+    terminalFailureIdx: index("qrr_terminal_failure_idx").on(table.terminalFailureId),
+    failureKeyIdx: index("qrr_failure_key_idx").on(table.failureKey),
+    queueNameIdx: index("qrr_queue_name_idx").on(table.queueName),
+    statusIdx: index("qrr_status_idx").on(table.status),
+    requestedByIdx: index("qrr_requested_by_idx").on(table.requestedByUserId),
+  })
+);
+
+export type QueueReplayRequest = typeof queueReplayRequests.$inferSelect;
+
+// ─── Queue Replay Active Claims ───
+// Durable mutual-exclusion guard for replay claims. terminalFailureId ALONE
+// is the primary/unique authority: at most one replay request per terminal
+// failure may be actively claimed/enqueuing at a time, enforced by the
+// database unique constraint (not by pre-reads). Released when a request
+// resolves or fails.
+export const queueReplayActiveClaims = mysqlTable("queue_replay_active_claims", {
+  terminalFailureId: bigint("terminalFailureId", { mode: "number", unsigned: true }).primaryKey(),
+  replayRequestId: bigint("replayRequestId", { mode: "number", unsigned: true }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type QueueReplayActiveClaim = typeof queueReplayActiveClaims.$inferSelect;
+
 // ─── System Alerts ───
 export const systemAlerts = mysqlTable("system_alerts", {
   id: serial("id").primaryKey(),
@@ -1300,3 +1503,50 @@ export const systemSettings = mysqlTable("system_settings", {
 });
 
 export type SystemSetting = typeof systemSettings.$inferSelect;
+
+// ─── Audit Events ───
+// Durable WBS7B store for canonical WBS7A audit envelopes. Correlation
+// identifiers are searchable first-class columns so material decisions can be
+// reconstructed by lineage. No secrets or raw request bodies are stored; the
+// JSON metadata column only ever holds WBS7A-sanitized structured metadata.
+export const auditEvents = mysqlTable(
+  "audit_events",
+  {
+    id: serial("id").primaryKey(),
+    // SHA-256 of the canonical WBS7A envelope; unique so exact replay is
+    // idempotent at the database level.
+    eventFingerprint: varchar("eventFingerprint", { length: 64 }).notNull(),
+    schemaVersion: int("schemaVersion").notNull(),
+    eventType: varchar("eventType", { length: 64 }).notNull(),
+    // ISO 8601 from the event itself, stored verbatim as text so no timezone
+    // conversion can alter it; createdAt (below) records persistence time.
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    userId: int("userId").notNull(),
+    campaignId: int("campaignId"),
+    businessId: int("businessId"),
+    workflowOperationId: varchar("workflowOperationId", { length: 64 }),
+    workflowAttemptId: varchar("workflowAttemptId", { length: 64 }),
+    approvalRequestId: int("approvalRequestId"),
+    // Subject identifiers: the envelope allows string or numeric identifiers;
+    // they are normalized to text for a single searchable column.
+    artifactId: varchar("artifactId", { length: 128 }),
+    packageId: varchar("packageId", { length: 128 }),
+    contentId: varchar("contentId", { length: 128 }),
+    source: varchar("source", { length: 32 }).notNull(),
+    outcome: varchar("outcome", { length: 32 }).notNull(),
+    metadata: json("metadata").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventFingerprintUnique: uniqueIndex("ae_fingerprint_idx").on(table.eventFingerprint),
+    userIdx: index("ae_user_idx").on(table.userId),
+    campaignIdx: index("ae_campaign_idx").on(table.campaignId),
+    workflowOperationIdx: index("ae_workflow_operation_idx").on(table.workflowOperationId),
+    approvalRequestIdx: index("ae_approval_request_idx").on(table.approvalRequestId),
+    eventTypeIdx: index("ae_event_type_idx").on(table.eventType),
+    occurredAtIdx: index("ae_occurred_at_idx").on(table.occurredAt),
+  })
+);
+
+export type AuditEventRow = typeof auditEvents.$inferSelect;
+export type InsertAuditEventRow = typeof auditEvents.$inferInsert;

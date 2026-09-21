@@ -6,6 +6,8 @@ import { TRPCError } from "@trpc/server";
 import {
   buildWorkflowTransitionContext,
 } from "./post-live-lifecycle-anchor";
+import { createAuditEvent } from "../audit/audit-event";
+import { persistAuditEvent } from "../audit/audit-store";
 
 export type WorkflowState =
   | "business_onboarding"
@@ -125,54 +127,82 @@ export async function transitionCampaignState(
 ): Promise<WorkflowState> {
   const db = getDb();
 
-  const [campaign] = await db
-    .select()
-    .from(campaigns)
-    .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
-    .limit(1);
+  // The campaign read, the governed state mutation and the canonical
+  // workflow-transition audit evidence are one atomic database unit: if the
+  // campaign update fails no audit row is written, and if audit persistence
+  // fails the campaign mutation rolls back with it.
+  return db.transaction(async (tx) => {
+    const [campaign] = await tx
+      .select()
+      .from(campaigns)
+      .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
+      .limit(1);
 
-  if (!campaign) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
-  }
+    if (!campaign) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+    }
 
-  const currentState = campaign.workflowState as WorkflowState;
-  const nextState = resolveWorkflowTransition(currentState, action);
+    const currentState = campaign.workflowState as WorkflowState;
+    const nextState = resolveWorkflowTransition(currentState, action);
 
-  if (!nextState) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `Invalid transition: ${action} from ${currentState}`,
+    if (!nextState) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Invalid transition: ${action} from ${currentState}`,
+      });
+    }
+
+    const transitionAt =
+      new Date().toISOString();
+
+    const workflowContext =
+      buildWorkflowTransitionContext({
+        existingContext:
+          campaign.workflowContext,
+        currentState,
+        nextState,
+        action,
+        transitionAt,
+      });
+
+    await tx
+      .update(campaigns)
+      .set({
+        workflowState: nextState,
+        workflowContext:
+          workflowContext as any,
+      })
+      .where(
+        eq(
+          campaigns.id,
+          campaignId
+        )
+      );
+
+    // Audit occurredAt is exactly the transitionAt already written into
+    // workflowContext.lastTransition; no second clock read.
+    const occurredAt = (workflowContext as { lastTransition: { at: string } })
+      .lastTransition.at;
+
+    const auditEvent = createAuditEvent({
+      eventType: "workflow_transition",
+      occurredAt,
+      userId,
+      source: "workflow",
+      outcome: "succeeded",
+      campaignId,
+      businessId: campaign.businessId ?? null,
+      metadata: {
+        fromState: currentState,
+        toState: nextState,
+        action,
+      },
     });
-  }
 
-  const transitionAt =
-    new Date().toISOString();
+    await persistAuditEvent(auditEvent, tx);
 
-  const workflowContext =
-    buildWorkflowTransitionContext({
-      existingContext:
-        campaign.workflowContext,
-      currentState,
-      nextState,
-      action,
-      transitionAt,
-    });
-
-  await db
-    .update(campaigns)
-    .set({
-      workflowState: nextState,
-      workflowContext:
-        workflowContext as any,
-    })
-    .where(
-      eq(
-        campaigns.id,
-        campaignId
-      )
-    );
-
-  return nextState;
+    return nextState;
+  });
 }
 
 export async function getWorkflowState(campaignId: number, userId: number) {

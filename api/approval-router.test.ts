@@ -50,10 +50,12 @@ function createMockDb({
     updatedApprovals: [] as any[],
     updatedCampaigns: [] as any[],
     insertedApprovals: [] as any[],
+    transactions: 0,
+    committed: false,
+    rolledBack: false,
   };
 
-  const db = {
-    state,
+  const executor: any = {
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => {
         const name = getTableName(table);
@@ -87,10 +89,26 @@ function createMockDb({
           } else if (getTableName(table) === "campaigns") {
             state.updatedCampaigns.push(payload);
           }
-          return [];
+          return [{ affectedRows: 1 }];
         }),
       })),
     })),
+  };
+
+  const db: any = {
+    state,
+    ...executor,
+    transaction: async (cb: any) => {
+      state.transactions += 1;
+      try {
+        const result = await cb(executor);
+        state.committed = true;
+        return result;
+      } catch (err) {
+        state.rolledBack = true;
+        throw err;
+      }
+    },
   };
 
   return db;

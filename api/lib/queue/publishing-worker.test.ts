@@ -1,6 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { UnrecoverableError } from "bullmq";
-import { processPublishingJob } from "./publishing-worker";
 
 vi.mock("../workflow/publishing-runner", () => ({
   publishSinglePost: vi.fn(),
@@ -9,6 +7,24 @@ vi.mock("../workflow/publishing-runner", () => ({
 vi.mock("../../alerts", () => ({
   createAlert: vi.fn(async () => {}),
 }));
+
+vi.mock("./bullmq", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bullmq")>();
+  return {
+    ...actual,
+    closePublishingQueue: vi.fn(async () => {}),
+    closeContentGenerationQueue: vi.fn(async () => {}),
+    closeBullMqConnection: vi.fn(async () => {}),
+  };
+});
+
+import { UnrecoverableError } from "bullmq";
+import {
+  closeBullMqConnection,
+  closeContentGenerationQueue,
+  closePublishingQueue,
+} from "./bullmq";
+import { processPublishingJob, stopPublishingWorker } from "./publishing-worker";
 
 function makeJob(overrides: any = {}) {
   return {
@@ -66,5 +82,28 @@ describe("publishing-worker permanent vs transient failures", () => {
 
     await expect(processPublishingJob(makeJob())).rejects.toThrow("Safety check blocked");
     await expect(processPublishingJob(makeJob())).rejects.not.toBeInstanceOf(UnrecoverableError);
+  });
+});
+
+describe("publishing worker shutdown ownership", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("stop delegates only to the publishing close path", async () => {
+    await stopPublishingWorker();
+
+    expect(closePublishingQueue).toHaveBeenCalledTimes(1);
+    expect(closeContentGenerationQueue).not.toHaveBeenCalled();
+    expect(closeBullMqConnection).not.toHaveBeenCalled();
+  });
+
+  it("repeated stop calls resolve safely", async () => {
+    await stopPublishingWorker();
+    await stopPublishingWorker();
+
+    expect(closePublishingQueue).toHaveBeenCalledTimes(2);
+    expect(closeContentGenerationQueue).not.toHaveBeenCalled();
+    expect(closeBullMqConnection).not.toHaveBeenCalled();
   });
 });

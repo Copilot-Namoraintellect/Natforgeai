@@ -4,8 +4,32 @@
  */
 import { connectRedis, isRedisConfigured } from "./lib/redis";
 import { startPublishingWorker, stopPublishingWorker } from "./lib/queue/publishing-worker";
-import { startContentGenerationWorker } from "./lib/queue/content-generation-worker";
+import { startContentGenerationWorker, stopContentGenerationWorker } from "./lib/queue/content-generation-worker";
+import { closeBullMqConnection } from "./lib/queue/bullmq";
 import { env } from "./lib/env";
+
+let shutdownPromise: Promise<void> | null = null;
+
+function gracefulShutdown(): Promise<void> {
+  if (!shutdownPromise) {
+    shutdownPromise = (async () => {
+      await stopPublishingWorker();
+      await stopContentGenerationWorker();
+      await closeBullMqConnection();
+    })();
+  }
+  return shutdownPromise;
+}
+
+function handleShutdownSignal(signal: string) {
+  console.log(`[Worker] ${signal} received, shutting down...`);
+  gracefulShutdown()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error("[Worker] Shutdown failed:", err);
+      process.exit(1);
+    });
+}
 
 async function main() {
   if (!isRedisConfigured()) {
@@ -20,17 +44,8 @@ async function main() {
   startContentGenerationWorker();
 
   // Graceful shutdown
-  process.on("SIGINT", async () => {
-    console.log("[Worker] Shutting down...");
-    await stopPublishingWorker();
-    process.exit(0);
-  });
-
-  process.on("SIGTERM", async () => {
-    console.log("[Worker] Shutting down...");
-    await stopPublishingWorker();
-    process.exit(0);
-  });
+  process.on("SIGINT", () => handleShutdownSignal("SIGINT"));
+  process.on("SIGTERM", () => handleShutdownSignal("SIGTERM"));
 }
 
 main().catch((err) => {

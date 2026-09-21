@@ -73,7 +73,7 @@ function createMockDb({
   approvals?: Record<string, unknown>[];
 }) {
   const updateCalls: Array<{ table: string | undefined; set: Record<string, unknown> }> = [];
-  const db = {
+  const db: any = {
     updateCalls,
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => {
@@ -107,10 +107,11 @@ function createMockDb({
       set: vi.fn((data: Record<string, unknown>) => ({
         where: vi.fn(async () => {
           updateCalls.push({ table: getTableName(table), set: data });
-          return [];
+          return [{ affectedRows: 1 }];
         }),
       })),
     })),
+    transaction: async (cb: any) => cb(db),
   };
   return db;
 }
@@ -354,7 +355,7 @@ describe("publishSinglePost", () => {
     expect(result.error).toMatch(/launch approval is pending/i);
     expect(publishToFacebook).not.toHaveBeenCalled();
     expect(vi.mocked(deductCredits)).not.toHaveBeenCalled();
-    const queueUpdate = db.updateCalls.find((call) => call.table === "publishing_queue");
+    const queueUpdate = db.updateCalls.find((call: { table: string | undefined; set: Record<string, unknown> }) => call.table === "publishing_queue");
     expect(queueUpdate?.set.status).toBe("failed");
   });
 
@@ -376,7 +377,7 @@ describe("publishSinglePost", () => {
     expect(result.status).toBe("precondition_failed");
     expect(result.error).toMatch(/publication authority/i);
     expect(publishToFacebook).not.toHaveBeenCalled();
-    const queueUpdate = db.updateCalls.find((call) => call.table === "publishing_queue");
+    const queueUpdate = db.updateCalls.find((call: { table: string | undefined; set: Record<string, unknown> }) => call.table === "publishing_queue");
     expect(queueUpdate?.set.status).toBe("failed");
   });
 });
@@ -418,7 +419,7 @@ describe("finalizeCampaignPublishState publication lifecycle authority", () => {
     );
 
     const campaignUpdate = db.updateCalls.find(
-      (call) => call.table === "campaigns"
+      (call: { table: string | undefined; set: Record<string, unknown> }) => call.table === "campaigns"
     );
 
     expect(campaignUpdate?.set.status).toBe("active");
@@ -451,9 +452,108 @@ describe("finalizeCampaignPublishState publication lifecycle authority", () => {
     expect(transitionCampaignState).not.toHaveBeenCalled();
 
     const campaignUpdate = db.updateCalls.find(
-      (call) => call.table === "campaigns"
+      (call: { table: string | undefined; set: Record<string, unknown> }) => call.table === "campaigns"
     );
 
     expect(campaignUpdate).toBeUndefined();
+  });
+});
+
+// ─── WBS9D2A correction 1: legacy cron due-post predicate regression ───
+
+/** Minimal evaluator for the condition shape buildDuePostsCondition emits. */
+function evalDueCondition(cond: any, row: any): boolean {
+  if (!cond || typeof cond !== "object") return true;
+  const chunks: any[] = cond.queryChunks ?? [];
+  const predicates: Array<(r: any) => boolean> = [];
+  let i = 0;
+  while (i < chunks.length) {
+    const chunk = chunks[i];
+    if (chunk && Array.isArray(chunk.queryChunks)) {
+      predicates.push((r) => evalDueCondition(chunk, r));
+      i += 1;
+      continue;
+    }
+    if (chunk && typeof chunk === "object" && typeof chunk.name === "string" && chunk.table) {
+      const opChunk = chunks[i + 1];
+      const op: string = String(opChunk?.value?.[0] ?? opChunk?.sql ?? "").toLowerCase();
+      const param = chunks[i + 2];
+      const value = param && typeof param === "object" && "value" in param ? param.value : param;
+      if (op.includes("is not null")) {
+        predicates.push((r) => r[chunk.name] != null);
+        i += 2;
+        continue;
+      }
+      if (op.includes("is null")) {
+        predicates.push((r) => r[chunk.name] == null);
+        i += 2;
+        continue;
+      }
+      if (op.includes("<=")) {
+        predicates.push((r) => r[chunk.name] != null && r[chunk.name] <= value);
+        i += 3;
+        continue;
+      }
+      if (op.trim() === "=") {
+        predicates.push((r) => r[chunk.name] === value);
+        i += 3;
+        continue;
+      }
+      i += 3;
+      continue;
+    }
+    i += 1;
+  }
+  // and()/or() join identical chunk shapes; AND and OR both appear as nested
+  // SQL chunks. Distinguish by the raw join text between nested chunks.
+  const joinText = chunks
+    .filter((c) => typeof c?.value?.[0] === "string")
+    .map((c) => c.value[0])
+    .join(" ")
+    .toLowerCase();
+  const isOr = joinText.includes(" or ");
+  return isOr
+    ? predicates.some((p) => p(row))
+    : predicates.every((p) => p(row));
+}
+
+describe("buildDuePostsCondition (WBS9D2A legacy cron race correction)", () => {
+  const now = new Date("2026-06-29T12:00:00.000Z");
+  const past = new Date("2026-06-01T10:00:00.000Z");
+  const future = new Date("2027-01-01T10:00:00.000Z");
+
+  function isDue(row: { status: string; scheduledAt: Date | null; nextRetryAt: Date | null }) {
+    const cond = buildDuePostsConditionRef(now);
+    return evalDueCondition(cond, row);
+  }
+
+  // Bound after module import (file-level mocks are already active).
+  let buildDuePostsConditionRef: (now: Date) => any;
+  beforeEach(async () => {
+    ({ buildDuePostsCondition: buildDuePostsConditionRef } = await import("../publishing-runner"));
+  });
+
+  it("retrying + past scheduledAt + null nextRetryAt is NOT due (BullMQ-only row)", () => {
+    expect(isDue({ status: "retrying", scheduledAt: past, nextRetryAt: null })).toBe(false);
+  });
+
+  it("retrying + future nextRetryAt is not due", () => {
+    expect(isDue({ status: "retrying", scheduledAt: past, nextRetryAt: future })).toBe(false);
+  });
+
+  it("retrying + due nextRetryAt is due", () => {
+    expect(isDue({ status: "retrying", scheduledAt: future, nextRetryAt: past })).toBe(true);
+  });
+
+  it("approved + due scheduledAt remains due", () => {
+    expect(isDue({ status: "approved", scheduledAt: past, nextRetryAt: null })).toBe(true);
+  });
+
+  it("approved ignores nextRetryAt (future scheduledAt is not due)", () => {
+    expect(isDue({ status: "approved", scheduledAt: future, nextRetryAt: past })).toBe(false);
+  });
+
+  it("failed rows are never due via this predicate", () => {
+    expect(isDue({ status: "failed", scheduledAt: past, nextRetryAt: past })).toBe(false);
   });
 });

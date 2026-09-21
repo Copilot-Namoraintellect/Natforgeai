@@ -1,8 +1,10 @@
 import { getDb } from "../../queries/connection";
 import { publishingQueue, contentPosts, socialIntegrations, campaigns } from "@db/schema";
-import { eq, and, lte, or } from "drizzle-orm";
+import { eq, and, lte, or, isNotNull, type SQL } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { transitionCampaignState } from "./engine";
+import { createAuditEvent } from "../audit/audit-event";
+import { persistAuditEvent } from "../audit/audit-store";
 import {
   publishToFacebook,
   publishToInstagram,
@@ -21,6 +23,52 @@ import { ingestAudienceData } from "../audience/ingest";
 import { loadAndAssertPublicationReadiness } from "../creative/publication-readiness-service";
 
 const RETRY_DELAYS_MS = [60_000, 300_000, 900_000]; // 1min, 5min, 15min
+
+type PublicationAuditEventType = "publication_attempt" | "publication_success" | "publication_failure";
+type PublicationFailureStage = "billing" | "provider" | "runtime" | "precondition" | "integration" | "media";
+
+/**
+ * Build one canonical publication audit event. Only governed, non-sensitive
+ * facts are ever placed in metadata: no content body, caption, token,
+ * integration secret, provider response, or raw error text.
+ */
+function buildPublicationAuditEvent(input: {
+  eventType: PublicationAuditEventType;
+  occurredAt: string;
+  queueItem: {
+    id: number;
+    userId: number;
+    campaignId: number | null;
+    contentPostId: number | null;
+    platform: string;
+  };
+  businessId: number | null;
+  attemptOrdinal: number;
+  outcome: "succeeded" | "failed";
+  metadata: Record<string, unknown>;
+}) {
+  return createAuditEvent({
+    eventType: input.eventType,
+    occurredAt: input.occurredAt,
+    userId: input.queueItem.userId,
+    source: "workflow",
+    outcome: input.outcome,
+    campaignId: input.queueItem.campaignId ?? null,
+    businessId: input.businessId,
+    contentId: input.queueItem.contentPostId ?? null,
+    workflowOperationId: null,
+    workflowAttemptId: null,
+    approvalRequestId: null,
+    artifactId: null,
+    packageId: null,
+    metadata: {
+      queueItemId: input.queueItem.id,
+      platform: input.queueItem.platform,
+      attemptOrdinal: input.attemptOrdinal,
+      ...input.metadata,
+    },
+  });
+}
 
 /**
  * Run content safety check on a queue item and update its status.
@@ -212,19 +260,37 @@ export async function publishSinglePost(queueItemId: number) {
       const message = err instanceof TRPCError ? err.message : "Publication readiness check failed";
       // Phase 2B side-effect contract for a permanent readiness rejection:
       // - No external platform call, credit mutation, published/scheduled state,
-      //   campaign-live transition, or success audit has occurred yet.
+      //   campaign-live transition, or success audit has occurred yet, and no
+      //   publication_attempt is fabricated: the controlled-attempt boundary
+      //   was never reached.
       // - The only permitted mutation is an idempotent update of this queue row
       //   to failed/blocked with a safe reason, so the worker can surface an
       //   UnrecoverableError to BullMQ and stop retrying a non-transient failure.
-      await db
-        .update(publishingQueue)
-        .set({
-          status: "failed",
-          lastError: message,
-          retryCount: post.maxRetries || 3,
-          nextRetryAt: null,
-        })
-        .where(eq(publishingQueue.id, post.id));
+      //   It commits together with one canonical publication_failure event.
+      await db.transaction(async (tx) => {
+        await tx
+          .update(publishingQueue)
+          .set({
+            status: "failed",
+            lastError: message,
+            retryCount: post.maxRetries || 3,
+            nextRetryAt: null,
+          })
+          .where(eq(publishingQueue.id, post.id));
+
+        await persistAuditEvent(
+          buildPublicationAuditEvent({
+            eventType: "publication_failure",
+            occurredAt: new Date().toISOString(),
+            queueItem: post,
+            businessId: null,
+            attemptOrdinal: (post.retryCount || 0) + 1,
+            outcome: "failed",
+            metadata: { terminal: true, nextState: "failed", failureStage: "precondition" },
+          }),
+          tx
+        );
+      });
       return {
         id: post.id,
         status: "precondition_failed",
@@ -240,6 +306,11 @@ export async function publishSinglePost(queueItemId: number) {
   } catch {
     return { id: queueItemId, status: "rate_limited", error: "Publishing rate limit reached" };
   }
+
+  // Set when the provider reported success but local success evidence has
+  // not committed yet; the catch block must then propagate rather than
+  // fabricate a failure decision for an external effect that may exist.
+  let providerSucceeded = false;
 
   try {
     // Safety check first
@@ -332,15 +403,30 @@ export async function publishSinglePost(queueItemId: number) {
 
     if (!integration) {
       const error = `Admin setup required: no connected ${post.platform} account. Connect the platform in Settings > Integrations first.`;
-      await db
-        .update(publishingQueue)
-        .set({
-          status: "failed",
-          lastError: error,
-          retryCount: (post.retryCount || 0) + 1,
-          nextRetryAt: null,
-        })
-        .where(eq(publishingQueue.id, post.id));
+      await db.transaction(async (tx) => {
+        await tx
+          .update(publishingQueue)
+          .set({
+            status: "failed",
+            lastError: error,
+            retryCount: (post.retryCount || 0) + 1,
+            nextRetryAt: null,
+          })
+          .where(eq(publishingQueue.id, post.id));
+
+        await persistAuditEvent(
+          buildPublicationAuditEvent({
+            eventType: "publication_failure",
+            occurredAt: new Date().toISOString(),
+            queueItem: post,
+            businessId: null,
+            attemptOrdinal: (post.retryCount || 0) + 1,
+            outcome: "failed",
+            metadata: { terminal: true, nextState: "failed", failureStage: "integration" },
+          }),
+          tx
+        );
+      });
       return {
         id: post.id,
         status: "failed",
@@ -380,20 +466,64 @@ export async function publishSinglePost(queueItemId: number) {
 
       if (!publicImageUrl) {
         const error = "Facebook publishing failed: invalid image URL.";
-        await db
-          .update(publishingQueue)
-          .set({
-            status: "failed",
-            lastError: error,
-            retryCount: (post.retryCount || 0) + 1,
-            nextRetryAt: null,
-          })
-          .where(eq(publishingQueue.id, post.id));
+        await db.transaction(async (tx) => {
+          await tx
+            .update(publishingQueue)
+            .set({
+              status: "failed",
+              lastError: error,
+              retryCount: (post.retryCount || 0) + 1,
+              nextRetryAt: null,
+            })
+            .where(eq(publishingQueue.id, post.id));
+
+          await persistAuditEvent(
+            buildPublicationAuditEvent({
+              eventType: "publication_failure",
+              occurredAt: new Date().toISOString(),
+              queueItem: post,
+              businessId: null,
+              attemptOrdinal: (post.retryCount || 0) + 1,
+              outcome: "failed",
+              metadata: { terminal: true, nextState: "failed", failureStage: "media" },
+            }),
+            tx
+          );
+        });
         return { id: post.id, status: "failed", platform: post.platform, error };
       }
 
       payload.mediaUrls = [publicImageUrl];
     }
+
+    // ── Durable attempt evidence (WBS7C3) ─────────────────────────────
+    // Every gate establishing a genuine controlled publication attempt has
+    // now passed. Record publication_attempt BEFORE any credit mutation,
+    // credential decryption, or provider call, so a provider side effect can
+    // never occur without durable attempt evidence. If this persistence
+    // fails it flows to the governed runtime-failure path below: no credit
+    // mutation, no credential decryption, no provider call.
+    const attemptOrdinal = (post.retryCount || 0) + 1;
+    const [attemptCampaign] = post.campaignId
+      ? await db
+          .select()
+          .from(campaigns)
+          .where(and(eq(campaigns.id, post.campaignId), eq(campaigns.userId, post.userId)))
+          .limit(1)
+      : [null];
+    const publicationBusinessId = attemptCampaign?.businessId ?? null;
+
+    await persistAuditEvent(
+      buildPublicationAuditEvent({
+        eventType: "publication_attempt",
+        occurredAt: new Date().toISOString(),
+        queueItem: post,
+        businessId: publicationBusinessId,
+        attemptOrdinal,
+        outcome: "succeeded",
+        metadata: { queueStatusAtAttempt: post.status },
+      })
+    );
 
     // Deduct publishing credit before attempting publish
     // Skip deduction on retries — credits were already deducted on first attempt
@@ -489,20 +619,82 @@ export async function publishSinglePost(queueItemId: number) {
 
     // Update queue status
     if (publishResult.success) {
-      await db
-        .update(publishingQueue)
-        .set({
-          status: "published",
-          publishedAt: now,
-          externalPostId: publishResult.postId || null,
-          lastError: null,
-          retryCount: 0,
-          nextRetryAt: null,
-        })
-        .where(eq(publishingQueue.id, post.id));
+      // ONE publication-success timestamp shared by publishing_queue.publishedAt
+      // and the audit event occurredAt — no independent second clock read.
+      const publishedAt = new Date();
+      providerSucceeded = true;
+
+      await db.transaction(async (tx) => {
+        const updateResult = await tx
+          .update(publishingQueue)
+          .set({
+            status: "published",
+            publishedAt,
+            externalPostId: publishResult.postId || null,
+            lastError: null,
+            retryCount: 0,
+            nextRetryAt: null,
+          })
+          .where(
+            and(
+              eq(publishingQueue.id, post.id),
+              or(
+                eq(publishingQueue.status, "approved"),
+                eq(publishingQueue.status, "retrying")
+              )
+            )
+          );
+
+        // MySQL2 returns [ResultSetHeader, ...] where affectedRows is on the first element.
+        const affectedRows = (updateResult as any)?.[0]?.affectedRows ?? 0;
+        if (affectedRows === 0) {
+          // A concurrent worker may already have terminalised this row.
+          // Reread through the SAME tx and fail closed unless the durable
+          // state is a compatible published row (idempotent replay), which
+          // is then reconciled with its original success evidence.
+          const [current] = await tx
+            .select()
+            .from(publishingQueue)
+            .where(eq(publishingQueue.id, post.id))
+            .limit(1);
+          if (!current || current.status !== "published" || !current.publishedAt) {
+            throw new Error(
+              `Refusing to overwrite incompatible publishing_queue state for item ${post.id}: ${current?.status ?? "missing"}`
+            );
+          }
+          await persistAuditEvent(
+            buildPublicationAuditEvent({
+              eventType: "publication_success",
+              occurredAt: new Date(current.publishedAt as Date).toISOString(),
+              queueItem: post,
+              businessId: publicationBusinessId,
+              attemptOrdinal,
+              outcome: "succeeded",
+              metadata: { externalPostIdPresent: Boolean(current.externalPostId) },
+            }),
+            tx
+          );
+          return;
+        }
+
+        await persistAuditEvent(
+          buildPublicationAuditEvent({
+            eventType: "publication_success",
+            occurredAt: publishedAt.toISOString(),
+            queueItem: post,
+            businessId: publicationBusinessId,
+            attemptOrdinal,
+            outcome: "succeeded",
+            metadata: { externalPostIdPresent: Boolean(publishResult.postId) },
+          }),
+          tx
+        );
+      });
 
       // Finalize campaign/content-post state once this platform is live. This covers
       // both the pack-publish path and the per-platform approve-and-publish path.
+      // Runs only AFTER the success transaction commits; its go_live transition
+      // is audited by the workflow engine (WBS7C1), not here.
       await finalizeCampaignPublishState(post.campaignId).catch((err: any) => {
         console.error(
           `[Publishing Runner] finalizeCampaignPublishState failed for campaign ${post.campaignId}:`,
@@ -512,24 +704,45 @@ export async function publishSinglePost(queueItemId: number) {
 
       // Refresh permissioned audience data after a successful publish so that
       // engagement and performance signals can feed back into Audience Intelligence.
+      // Best-effort and post-commit: a failure here never erases durable success.
       ingestAudienceData({ userId: post.userId, businessId: null, campaignId: post.campaignId }).catch((err: any) => {
         console.error(`[Publishing Runner] Post-publish audience ingestion failed for campaign ${post.campaignId}:`, err.message);
       });
     } else {
-      // Retry logic
+      // Retry logic — the queue outcome mutation and one canonical
+      // publication_failure event commit or roll back together.
       const retryCount = (post.retryCount || 0) + 1;
       const maxRetries = post.maxRetries || 3;
+      const failureDecidedAt = new Date();
+      const failureStage: PublicationFailureStage = publishResult.error?.startsWith("Publishing blocked:")
+        ? "billing"
+        : "provider";
 
       if (retryCount >= maxRetries) {
-        await db
-          .update(publishingQueue)
-          .set({
-            status: "failed",
-            retryCount,
-            lastError: publishResult.error || "Unknown error",
-            nextRetryAt: null,
-          })
-          .where(eq(publishingQueue.id, post.id));
+        await db.transaction(async (tx) => {
+          await tx
+            .update(publishingQueue)
+            .set({
+              status: "failed",
+              retryCount,
+              lastError: publishResult.error || "Unknown error",
+              nextRetryAt: null,
+            })
+            .where(eq(publishingQueue.id, post.id));
+
+          await persistAuditEvent(
+            buildPublicationAuditEvent({
+              eventType: "publication_failure",
+              occurredAt: failureDecidedAt.toISOString(),
+              queueItem: post,
+              businessId: publicationBusinessId,
+              attemptOrdinal,
+              outcome: "failed",
+              metadata: { terminal: true, nextState: "failed", failureStage },
+            }),
+            tx
+          );
+        });
 
         await createAlert({
           severity: "warning",
@@ -541,15 +754,30 @@ export async function publishSinglePost(queueItemId: number) {
         const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
         const nextRetryAt = new Date(now.getTime() + delay);
 
-        await db
-          .update(publishingQueue)
-          .set({
-            status: "retrying",
-            retryCount,
-            lastError: publishResult.error || "Unknown error",
-            nextRetryAt,
-          })
-          .where(eq(publishingQueue.id, post.id));
+        await db.transaction(async (tx) => {
+          await tx
+            .update(publishingQueue)
+            .set({
+              status: "retrying",
+              retryCount,
+              lastError: publishResult.error || "Unknown error",
+              nextRetryAt,
+            })
+            .where(eq(publishingQueue.id, post.id));
+
+          await persistAuditEvent(
+            buildPublicationAuditEvent({
+              eventType: "publication_failure",
+              occurredAt: failureDecidedAt.toISOString(),
+              queueItem: post,
+              businessId: publicationBusinessId,
+              attemptOrdinal,
+              outcome: "failed",
+              metadata: { terminal: false, nextState: "retrying", failureStage },
+            }),
+            tx
+          );
+        });
       }
     }
 
@@ -561,19 +789,44 @@ export async function publishSinglePost(queueItemId: number) {
       postId: publishResult.postId,
     };
   } catch (error: any) {
+    if (providerSucceeded) {
+      // The provider reported success but the durable local success evidence
+      // could not be written. Propagate for later reconciliation: the
+      // external post may already exist, so the queue row must NOT be marked
+      // failed and no failure event may be fabricated.
+      throw error;
+    }
+
     const retryCount = (post.retryCount || 0) + 1;
     const maxRetries = post.maxRetries || 3;
+    const runtimeFailureAt = new Date().toISOString();
+    const runtimeOrdinal = (post.retryCount || 0) + 1;
 
     if (retryCount >= maxRetries) {
-      await db
-        .update(publishingQueue)
-        .set({
-          status: "failed",
-          retryCount,
-          lastError: error.message || "Unknown error",
-          nextRetryAt: null,
-        })
-        .where(eq(publishingQueue.id, post.id));
+      await db.transaction(async (tx) => {
+        await tx
+          .update(publishingQueue)
+          .set({
+            status: "failed",
+            retryCount,
+            lastError: error.message || "Unknown error",
+            nextRetryAt: null,
+          })
+          .where(eq(publishingQueue.id, post.id));
+
+        await persistAuditEvent(
+          buildPublicationAuditEvent({
+            eventType: "publication_failure",
+            occurredAt: runtimeFailureAt,
+            queueItem: post,
+            businessId: null,
+            attemptOrdinal: runtimeOrdinal,
+            outcome: "failed",
+            metadata: { terminal: true, nextState: "failed", failureStage: "runtime" },
+          }),
+          tx
+        );
+      });
 
       await createAlert({
         severity: "warning",
@@ -585,15 +838,30 @@ export async function publishSinglePost(queueItemId: number) {
       const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
       const nextRetryAt = new Date(now.getTime() + delay);
 
-      await db
-        .update(publishingQueue)
-        .set({
-          status: "retrying",
-          retryCount,
-          lastError: error.message || "Unknown error",
-          nextRetryAt,
-        })
-        .where(eq(publishingQueue.id, post.id));
+      await db.transaction(async (tx) => {
+        await tx
+          .update(publishingQueue)
+          .set({
+            status: "retrying",
+            retryCount,
+            lastError: error.message || "Unknown error",
+            nextRetryAt,
+          })
+          .where(eq(publishingQueue.id, post.id));
+
+        await persistAuditEvent(
+          buildPublicationAuditEvent({
+            eventType: "publication_failure",
+            occurredAt: runtimeFailureAt,
+            queueItem: post,
+            businessId: null,
+            attemptOrdinal: runtimeOrdinal,
+            outcome: "failed",
+            metadata: { terminal: false, nextState: "retrying", failureStage: "runtime" },
+          }),
+          tx
+        );
+      });
     }
 
     return {
@@ -609,6 +877,28 @@ export async function publishSinglePost(queueItemId: number) {
  * Publishes all due posts from the publishing queue.
  * Legacy cron-based approach — still available for manual triggers and dev fallback.
  */
+/**
+ * Due-post predicate for legacy cron selection.
+ *
+ * approved: eligible when scheduledAt <= now.
+ * retrying: eligible ONLY when nextRetryAt is non-null AND nextRetryAt <= now.
+ *           A null nextRetryAt therefore makes a re-armed row BullMQ-only —
+ *           legacy cron cannot race a deliberate controlled replay.
+ */
+export function buildDuePostsCondition(now: Date): SQL {
+  return or(
+    and(
+      eq(publishingQueue.status, "approved"),
+      lte(publishingQueue.scheduledAt, now)
+    ),
+    and(
+      eq(publishingQueue.status, "retrying"),
+      isNotNull(publishingQueue.nextRetryAt),
+      lte(publishingQueue.nextRetryAt, now)
+    )
+  )!;
+}
+
 export async function publishDuePosts() {
   const db = getDb();
   const now = new Date();
@@ -616,21 +906,7 @@ export async function publishDuePosts() {
   const duePosts = await db
     .select()
     .from(publishingQueue)
-    .where(
-      and(
-        or(
-          eq(publishingQueue.status, "approved"),
-          eq(publishingQueue.status, "retrying")
-        ),
-        or(
-          lte(publishingQueue.scheduledAt, now),
-          and(
-            eq(publishingQueue.status, "retrying"),
-            lte(publishingQueue.nextRetryAt, now)
-          )
-        )
-      )
-    );
+    .where(buildDuePostsCondition(now));
 
   const results = [];
   for (const post of duePosts) {
