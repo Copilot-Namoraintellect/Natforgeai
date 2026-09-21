@@ -6,6 +6,8 @@ import { eq, and, or, desc, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { onApprovalResolved } from "./lib/workflow/triggers";
 import { createApprovalRequest } from "./lib/workflow/engine";
+import { createAuditEvent } from "./lib/audit/audit-event";
+import { persistAuditEvent } from "./lib/audit/audit-store";
 import {
   getStrategyApprovalStatus,
   isLineageAuthoritative,
@@ -19,6 +21,20 @@ import {
   type LaunchApprovalLineage,
 } from "./lib/workflow/launch-approval";
 
+type ApprovalDb = ReturnType<typeof getDb>;
+
+/**
+ * Structural executor seam for approval decision work (WBS7C2). The default
+ * getDb() client and a Drizzle transaction callback client both satisfy this
+ * shape. Decision-flow call sites always pass their transaction executor so
+ * transaction-owned reads and writes never escape to the global connection.
+ */
+interface ApprovalDbExecutor {
+  select: ApprovalDb["select"];
+  insert: ApprovalDb["insert"];
+  update: ApprovalDb["update"];
+}
+
 /**
  * Validate that a pending strategy_review approval can still be authorised.
  * Authorisation requires a durable lineage in workflowContext that links the
@@ -26,14 +42,17 @@ import {
  * strategy is stale and approving it would ground creatives in an out-of-date
  * brief.
  */
-async function validateStrategyApprovalLineage(approval: {
-  id: number;
-  campaignId: number | null;
-  userId: number;
-}) {
+async function validateStrategyApprovalLineage(
+  approval: {
+    id: number;
+    campaignId: number | null;
+    userId: number;
+  },
+  executor: ApprovalDbExecutor
+) {
   if (!approval.campaignId) return;
 
-  const db = getDb();
+  const db = executor;
   const [campaign] = await db
     .select()
     .from(campaigns)
@@ -137,11 +156,14 @@ async function repairStaleApprovals(_userId: number) {
  * fingerprint. A mismatch means the request is stale: authorising it would
  * launch a campaign on an out-of-date brief.
  */
-async function validateLaunchApprovalLineage(approval: {
-  id: number;
-  campaignId: number | null;
-  userId: number;
-}) {
+async function validateLaunchApprovalLineage(
+  approval: {
+    id: number;
+    campaignId: number | null;
+    userId: number;
+  },
+  executor: ApprovalDbExecutor
+) {
   if (!approval.campaignId) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
@@ -149,7 +171,7 @@ async function validateLaunchApprovalLineage(approval: {
     });
   }
 
-  const db = getDb();
+  const db = executor;
   const [campaign] = await db
     .select()
     .from(campaigns)
@@ -202,9 +224,10 @@ async function persistLaunchApprovalLineage(
   existingContext: Record<string, unknown> | null | undefined,
   creativeBriefFingerprint: string,
   approvalRequestId: number,
-  status: LaunchApprovalLineage["status"]
+  status: LaunchApprovalLineage["status"],
+  executor: ApprovalDbExecutor
 ) {
-  const db = getDb();
+  const db = executor;
   await db
     .update(campaigns)
     .set({
@@ -226,11 +249,12 @@ async function persistLaunchApprovalLineage(
  */
 async function persistResolvedLaunchApprovalLineage(
   request: { id: number; campaignId: number | null; userId: number; approvalType: string },
-  decision: "approved" | "rejected"
+  decision: "approved" | "rejected",
+  executor: ApprovalDbExecutor
 ) {
   if (request.approvalType !== "campaign_launch" || !request.campaignId) return;
 
-  const db = getDb();
+  const db = executor;
   const [campaign] = await db
     .select()
     .from(campaigns)
@@ -248,7 +272,8 @@ async function persistResolvedLaunchApprovalLineage(
     (campaign.workflowContext || {}) as Record<string, unknown>,
     creativeBriefFingerprint,
     request.id,
-    decision
+    decision,
+    executor
   );
 }
 
@@ -362,7 +387,8 @@ async function repairMissingLaunchApproval(
         (campaign.workflowContext || {}) as Record<string, unknown>,
         fingerprint,
         latest.id,
-        "pending"
+        "pending",
+        db
       );
       console.log(`[ApprovalRepair] Linked pending launch approval ${latest.id} to current brief for campaign ${campaign.id}`);
     }
@@ -385,7 +411,8 @@ async function repairMissingLaunchApproval(
     (campaign.workflowContext || {}) as Record<string, unknown>,
     fingerprint,
     id,
-    "pending"
+    "pending",
+    db
   );
   console.log(`[ApprovalRepair] Recreated missing pending launch approval ${id} for campaign ${campaign.id}`);
 }
@@ -490,6 +517,209 @@ async function syncPendingApprovals(userId: number) {
   }
 }
 
+type ApprovalDecisionKind = "approve" | "reject" | "edit";
+
+interface ApprovalDecisionResult {
+  success: true;
+  campaignId: number | null;
+  approvalType: string;
+}
+
+/**
+ * Execute one explicit human approval decision as a single atomic database
+ * unit (WBS7C2): the authoritative approval-request terminal mutation, any
+ * campaign-launch lineage terminalisation, and exactly one canonical
+ * approval_resolved audit event all commit or roll back together.
+ *
+ * The terminal mutation is guarded (id + userId + status='pending') and
+ * verified by affected rows: exactly one competing decision can win, a loser
+ * fails closed after rereading through the same transaction, and an
+ * already-terminal human decision is never overwritten or re-audited.
+ *
+ * onApprovalResolved is scheduled only after the transaction commits; the
+ * audit event records the human decision, not downstream workflow outcome.
+ */
+async function executeApprovalDecision(
+  ctx: { user: { id: number } },
+  input: {
+    approvalId: number;
+    notes?: string;
+    editedPayload?: Record<string, unknown>;
+  },
+  kind: ApprovalDecisionKind
+): Promise<ApprovalDecisionResult> {
+  const db = getDb();
+
+  const decision = await db.transaction(async (tx) => {
+    const [request] = await tx
+      .select()
+      .from(approvalRequests)
+      .where(
+        and(
+          eq(approvalRequests.id, input.approvalId),
+          eq(approvalRequests.userId, ctx.user.id)
+        )
+      )
+      .limit(1);
+
+    if (!request) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found" });
+    }
+
+    if (request.status !== "pending") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Approval request is already ${request.status}`,
+      });
+    }
+
+    if (kind !== "reject" && request.approvalType === "strategy_review") {
+      await validateStrategyApprovalLineage(
+        {
+          id: request.id,
+          campaignId: request.campaignId,
+          userId: ctx.user.id,
+        },
+        tx
+      );
+    }
+
+    if (kind !== "reject" && request.approvalType === "campaign_launch") {
+      await validateLaunchApprovalLineage(
+        {
+          id: request.id,
+          campaignId: request.campaignId,
+          userId: ctx.user.id,
+        },
+        tx
+      );
+    }
+
+    // ONE decision timestamp, shared by the approval row and the audit event.
+    const decidedAt = new Date();
+
+    const setPayload =
+      kind === "approve"
+        ? {
+            status: "approved" as const,
+            approvedAt: decidedAt,
+            description: input.notes
+              ? `${request.description || ""}\n\nApproval notes: ${input.notes}`
+              : request.description,
+          }
+        : kind === "reject"
+          ? {
+              status: "rejected" as const,
+              rejectedAt: decidedAt,
+              description: input.notes
+                ? `${request.description || ""}\n\nRejection reason: ${input.notes}`
+                : request.description,
+            }
+          : {
+              status: "edited" as const,
+              approvedAt: decidedAt,
+              description: input.notes
+                ? `${request.description || ""}\n\nEdited by user: ${JSON.stringify(input.editedPayload)}\n\nNotes: ${input.notes}`
+                : `${request.description || ""}\n\nEdited by user: ${JSON.stringify(input.editedPayload)}`,
+            };
+
+    const updateResult = await tx
+      .update(approvalRequests)
+      .set(setPayload)
+      .where(
+        and(
+          eq(approvalRequests.id, input.approvalId),
+          eq(approvalRequests.userId, ctx.user.id),
+          eq(approvalRequests.status, "pending")
+        )
+      );
+
+    // MySQL2 returns [ResultSetHeader, ...] where affectedRows is on the first element.
+    const affectedRows = (updateResult as any)?.[0]?.affectedRows ?? 0;
+    if (affectedRows === 0) {
+      // A competing decision won the terminal mutation between the pre-check
+      // read and this write. Reread through the SAME tx, fail closed with the
+      // existing terminal/request semantics, and emit no audit evidence.
+      const [current] = await tx
+        .select()
+        .from(approvalRequests)
+        .where(
+          and(
+            eq(approvalRequests.id, input.approvalId),
+            eq(approvalRequests.userId, ctx.user.id)
+          )
+        )
+        .limit(1);
+      if (!current) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found" });
+      }
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Approval request is already ${current.status}`,
+      });
+    }
+
+    const semanticDecision = kind === "reject" ? "rejected" : "approved";
+
+    await persistResolvedLaunchApprovalLineage(request, semanticDecision, tx);
+
+    let businessId: number | null = null;
+    if (request.campaignId) {
+      const [campaign] = await tx
+        .select()
+        .from(campaigns)
+        .where(and(eq(campaigns.id, request.campaignId), eq(campaigns.userId, ctx.user.id)))
+        .limit(1);
+      businessId = campaign?.businessId ?? null;
+    }
+
+    const auditEvent = createAuditEvent({
+      eventType: "approval_resolved",
+      occurredAt: decidedAt.toISOString(),
+      userId: ctx.user.id,
+      source: "user",
+      outcome: "succeeded",
+      campaignId: request.campaignId,
+      businessId,
+      approvalRequestId: request.id,
+      workflowOperationId: null,
+      workflowAttemptId: null,
+      artifactId: null,
+      packageId: null,
+      contentId: null,
+      metadata: {
+        approvalType: request.approvalType,
+        decision: semanticDecision,
+        resolutionMode: kind === "edit" ? "edited" : "direct",
+      },
+    });
+
+    await persistAuditEvent(auditEvent, tx);
+
+    return {
+      success: true as const,
+      campaignId: request.campaignId,
+      approvalType: request.approvalType,
+    };
+  });
+
+  // Resume workflow through the trigger system — only after the decision
+  // transaction has committed, and fire asynchronously so the HTTP response
+  // returns immediately and does not wait for long-running agent chains.
+  Promise.resolve().then(() =>
+    onApprovalResolved(input.approvalId, kind === "reject" ? "rejected" : "approved", ctx.user.id).catch(
+      (err) => {
+        console.error(
+          `[Approval] Async workflow trigger failed for approval ${input.approvalId}:`,
+          err.message
+        );
+      }
+    )
+  );
+
+  return decision;
+}
+
 export const approvalRouter = createRouter({
   listApprovals: authedQuery
     .input(
@@ -534,68 +764,7 @@ export const approvalRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-
-      const [request] = await db
-        .select()
-        .from(approvalRequests)
-        .where(
-          and(
-            eq(approvalRequests.id, input.approvalId),
-            eq(approvalRequests.userId, ctx.user.id)
-          )
-        )
-        .limit(1);
-
-      if (!request) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found" });
-      }
-
-      if (request.status !== "pending") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Approval request is already ${request.status}`,
-        });
-      }
-
-      if (request.approvalType === "strategy_review") {
-        await validateStrategyApprovalLineage({
-          id: request.id,
-          campaignId: request.campaignId,
-          userId: ctx.user.id,
-        });
-      }
-
-      if (request.approvalType === "campaign_launch") {
-        await validateLaunchApprovalLineage({
-          id: request.id,
-          campaignId: request.campaignId,
-          userId: ctx.user.id,
-        });
-      }
-
-      await db
-        .update(approvalRequests)
-        .set({
-          status: "approved",
-          approvedAt: new Date(),
-          description: input.notes
-            ? `${request.description || ""}\n\nApproval notes: ${input.notes}`
-            : request.description,
-        })
-        .where(eq(approvalRequests.id, input.approvalId));
-
-      await persistResolvedLaunchApprovalLineage(request, "approved");
-
-      // Resume workflow through the trigger system — fire asynchronously so the HTTP
-      // response returns immediately and does not wait for long-running agent chains.
-      Promise.resolve().then(() =>
-        onApprovalResolved(input.approvalId, "approved", ctx.user.id).catch((err) => {
-          console.error(`[Approval] Async workflow trigger failed for approval ${input.approvalId}:`, err.message);
-        })
-      );
-
-      return { success: true, campaignId: request.campaignId, approvalType: request.approvalType };
+      return executeApprovalDecision(ctx, input, "approve");
     }),
 
   rejectAction: authedQuery
@@ -606,52 +775,7 @@ export const approvalRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-
-      const [request] = await db
-        .select()
-        .from(approvalRequests)
-        .where(
-          and(
-            eq(approvalRequests.id, input.approvalId),
-            eq(approvalRequests.userId, ctx.user.id)
-          )
-        )
-        .limit(1);
-
-      if (!request) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found" });
-      }
-
-      if (request.status !== "pending") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Approval request is already ${request.status}`,
-        });
-      }
-
-      await db
-        .update(approvalRequests)
-        .set({
-          status: "rejected",
-          rejectedAt: new Date(),
-          description: input.notes
-            ? `${request.description || ""}\n\nRejection reason: ${input.notes}`
-            : request.description,
-        })
-        .where(eq(approvalRequests.id, input.approvalId));
-
-      await persistResolvedLaunchApprovalLineage(request, "rejected");
-
-      // Resume workflow through the trigger system — fire asynchronously so the HTTP
-      // response returns immediately and does not wait for long-running agent chains.
-      Promise.resolve().then(() =>
-        onApprovalResolved(input.approvalId, "rejected", ctx.user.id).catch((err) => {
-          console.error(`[Approval] Async workflow trigger failed for approval ${input.approvalId}:`, err.message);
-        })
-      );
-
-      return { success: true, campaignId: request.campaignId, approvalType: request.approvalType };
+      return executeApprovalDecision(ctx, input, "reject");
     }),
 
   editAndApproveAction: authedQuery
@@ -663,67 +787,6 @@ export const approvalRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-
-      const [request] = await db
-        .select()
-        .from(approvalRequests)
-        .where(
-          and(
-            eq(approvalRequests.id, input.approvalId),
-            eq(approvalRequests.userId, ctx.user.id)
-          )
-        )
-        .limit(1);
-
-      if (!request) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found" });
-      }
-
-      if (request.status !== "pending") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Approval request is already ${request.status}`,
-        });
-      }
-
-      if (request.approvalType === "strategy_review") {
-        await validateStrategyApprovalLineage({
-          id: request.id,
-          campaignId: request.campaignId,
-          userId: ctx.user.id,
-        });
-      }
-
-      if (request.approvalType === "campaign_launch") {
-        await validateLaunchApprovalLineage({
-          id: request.id,
-          campaignId: request.campaignId,
-          userId: ctx.user.id,
-        });
-      }
-
-      await db
-        .update(approvalRequests)
-        .set({
-          status: "edited",
-          approvedAt: new Date(),
-          description: input.notes
-            ? `${request.description || ""}\n\nEdited by user: ${JSON.stringify(input.editedPayload)}\n\nNotes: ${input.notes}`
-            : `${request.description || ""}\n\nEdited by user: ${JSON.stringify(input.editedPayload)}`,
-        })
-        .where(eq(approvalRequests.id, input.approvalId));
-
-      await persistResolvedLaunchApprovalLineage(request, "approved");
-
-      // Resume workflow through the trigger system — fire asynchronously so the HTTP
-      // response returns immediately and does not wait for long-running agent chains.
-      Promise.resolve().then(() =>
-        onApprovalResolved(input.approvalId, "approved", ctx.user.id).catch((err) => {
-          console.error(`[Approval] Async workflow trigger failed for approval ${input.approvalId}:`, err.message);
-        })
-      );
-
-      return { success: true, campaignId: request.campaignId, approvalType: request.approvalType };
+      return executeApprovalDecision(ctx, input, "edit");
     }),
 });
