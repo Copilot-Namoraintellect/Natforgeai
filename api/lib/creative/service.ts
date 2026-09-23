@@ -52,6 +52,11 @@ import {
   type MessagePackSource,
 } from "./campaign-message-architect";
 import {
+  assertApprovedCopyMatchesEnvelope,
+  assertApprovedRenderCopyUnchanged,
+  type ApprovedCopyAuthority,
+} from "./approved-copy-authority";
+import {
   buildGroundedCreativeBrief,
   computeCreativeBriefFingerprint,
   isApprovedMessagePackCompatible,
@@ -605,6 +610,16 @@ export async function generateBasicDraftLeaflet({
 
     console.log(`[BasicDraftLeaflet] Generating draft | userId=${userId} | contentPostId=${contentPostId} | template=${selectedTemplate}`);
 
+    // WBS12C: a canary-approved pack is immutable copy authority even for the
+    // free draft path. When such a pack is present, verify it still hashes to
+    // its approved copy and let the approved headline take precedence over
+    // the derived offer line; packs without an envelope keep legacy behavior.
+    let approvedDraftHeadline = "";
+    if (draftApprovedMessagePack?.v2ApprovalEnvelope) {
+      assertApprovedCopyMatchesEnvelope(draftApprovedMessagePack);
+      approvedDraftHeadline = draftApprovedMessagePack.headline || "";
+    }
+
     const { buffer } = await generateFallbackLeafletImage({
       business,
       campaign,
@@ -614,7 +629,7 @@ export async function generateBasicDraftLeaflet({
       aspectRatio,
       offer: formattedOffer,
       cta: leafletCta,
-      headline: formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
+      headline: approvedDraftHeadline || formattedOffer || leafletHeadline || campaign.primaryOutcome || post?.title || business.name,
       subheadline: leafletSubheadline,
       serviceBullets,
       palette: brandPalette,
@@ -1388,6 +1403,14 @@ export async function generatePremiumLeaflet({
       cta = approvedMessagePack.cta || cta;
     }
 
+    // WBS12C: a pack carrying a V2 approval envelope is immutable copy
+    // authority. Capture and verify it here so a pack that drifted from its
+    // approved copy fails closed before any rendering or billing happens.
+    let approvedCopyAuthority: ApprovedCopyAuthority | null = null;
+    if (approvedMessagePack?.v2ApprovalEnvelope) {
+      approvedCopyAuthority = assertApprovedCopyMatchesEnvelope(approvedMessagePack);
+    }
+
     if (strongerBrandFit && env.openaiApiKey && refinementInstructionType !== "design_only") {
       try {
         const refined = await refineLeafletCopy({
@@ -1407,6 +1430,19 @@ export async function generatePremiumLeaflet({
       } catch (refineErr: any) {
         console.warn(`[PremiumLeaflet] Copy refinement failed, using original copy | error="${refineErr.message}"`);
       }
+    }
+
+    // WBS12C: after any post-approval refinement, the semantic copy about to
+    // be rendered must still be exactly the approved copy. Platform captions
+    // and derived formatting may still adapt, but headline/subheadline/body/
+    // CTA may not be rewritten after approval; fail closed instead of
+    // rendering divergent copy.
+    if (approvedMessagePack && approvedCopyAuthority) {
+      assertApprovedRenderCopyUnchanged({
+        renderCopy: { headline, subheadline, cta, services },
+        pack: approvedMessagePack,
+        authority: approvedCopyAuthority,
+      });
     }
 
     // Build the deterministic V2 brief if using the V2 renderer. The brief

@@ -43,6 +43,7 @@ import { adaptApprovedToCampaignMessagePack } from "./message-approval/compatibi
 import { type LegacyLoadedShadowContextInput } from "./message-approval/integration/legacy-shadow-context";
 import { buildMessageApprovalContextLock } from "./message-approval/context-lock";
 import { verifyCanaryApprovalProof } from "./message-approval/canary-proof";
+import { assertApprovedCopyMatchesEnvelope } from "./approved-copy-authority";
 import {
   computeCreativeBriefFingerprint,
   isApprovedMessagePackCompatible,
@@ -1484,6 +1485,15 @@ export async function saveApprovedMessagePack(
         message: "Generic message packs cannot be approved. Please regenerate with business-specific copy.",
       });
     }
+  }
+
+  // WBS12C: if the pack still carries a V2 approval envelope, its semantic
+  // copy must still hash to that envelope's approved copy. This closes the
+  // legacy-save hole where rewritten copy could silently keep a stale
+  // approval envelope. Canary saves were already proof-verified above; this
+  // re-check is pure and idempotent for both modes.
+  if (enriched.v2ApprovalEnvelope) {
+    assertApprovedCopyMatchesEnvelope(enriched);
   }
 
   const [{ insertId }] = await db.insert(campaignAssets).values({
