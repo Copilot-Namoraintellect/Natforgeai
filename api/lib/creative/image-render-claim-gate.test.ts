@@ -18,6 +18,7 @@ import {
   type ImageRenderClaimOwnerContext,
   type ImageRenderCoordinatorResult,
 } from "./image-render-claim-coordinator";
+import type { ImageRenderLineageInput } from "./image-render-lineage";
 
 // ─── Deterministic injected fakes ───
 //
@@ -855,5 +856,116 @@ describe("createDefaultImageRenderClaimGateDeps — dormant wiring", () => {
     expect(typeof deps.coordinatorDeps.lookupAttempt).toBe("function");
     expect(typeof deps.coordinatorDeps.acquireClaim).toBe("function");
     expect(typeof deps.coordinatorDeps.rearmFailedClaim).toBe("function");
+  });
+});
+
+
+describe("evaluateImageRenderClaimGate — production lineage (WBS12D)", () => {
+  function makeLineage(overrides: Record<string, unknown> = {}) {
+    return {
+      contentPostId: POST_A,
+      strategy: {
+        strategySnapshotId: "strategy_" + "a1".repeat(24),
+        strategyVersion: 3,
+        businessDnaSnapshotId: "dna_snapshot_0001",
+        strategyHashSha256: "ab".repeat(32),
+        strategyRunId: 41,
+        creativeBriefFingerprint: "brief-fingerprint-0001",
+        approvalRequestId: 99,
+      },
+      approvedCopy: {
+        copyHashSha256: "ef".repeat(32),
+        copySchemaVersion: "v2.1",
+        approvedRevisionId: "revision-0001",
+      },
+      ...overrides,
+    } as ImageRenderLineageInput;
+  }
+
+  function identityWithLineage(
+    input: ImageRenderClaimGateInput,
+    lineage: ImageRenderLineageInput | null | undefined
+  ) {
+    return deriveImageRenderAttemptIdentity({
+      userId: input.userId,
+      contentPostId: input.contentPostId,
+      attempt: {
+        ...input.intent,
+        clientAttemptId: input.clientAttemptId,
+        ...(lineage ? { lineage } : {}),
+      },
+    });
+  }
+
+  it("passes the lineage authority through to the coordinator input", async () => {
+    const lineage = makeLineage();
+    const input = makeInput({ lineage });
+    const identity = identityWithLineage(input, lineage);
+    const owner = Object.freeze({
+      claimId: 7,
+      ownerToken: input.ownerToken,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+    });
+    const { deps, coordinate } = makeDeps({
+      coordinate: { outcome: "acquired", owner },
+    });
+
+    const result = await evaluateImageRenderClaimGate(input, deps);
+
+    expect(result).toEqual({ status: "proceed", owner });
+    expect(coordinate).toHaveBeenCalledTimes(1);
+    const coordinatorInput = coordinate.mock.calls[0][0] as {
+      lineage?: ImageRenderLineageInput | null;
+    };
+    expect(coordinatorInput.lineage).toEqual(lineage);
+  });
+
+  it("resolves replay with the lineage-bound fingerprint", async () => {
+    const lineage = makeLineage();
+    const input = makeInput({ lineage });
+    const identity = identityWithLineage(input, lineage);
+    const { deps, getCompletedResult } = makeDeps({
+      coordinate: { outcome: "completed_replay_required" },
+      replay: { replayable: true, result: makeReplayResult() },
+    });
+
+    const result = await evaluateImageRenderClaimGate(input, deps);
+
+    expect(result.status).toBe("replay");
+    expect(getCompletedResult).toHaveBeenCalledTimes(1);
+    const lookupArgs = getCompletedResult.mock.calls[0][0] as {
+      requestAttemptKey: string;
+      intentFingerprint: string;
+    };
+    expect(lookupArgs.requestAttemptKey).toBe(identity.requestAttemptKey);
+    expect(lookupArgs.intentFingerprint).toBe(identity.intentFingerprint);
+    expect(lookupArgs.intentFingerprint).not.toBe(
+      identityWithLineage(input, null).intentFingerprint
+    );
+  });
+
+  it("maps a lineage-driven completed-result conflict to blocked intent_conflict", async () => {
+    const input = makeInput({ lineage: makeLineage() });
+    const { deps } = makeDeps({
+      coordinate: { outcome: "completed_replay_required" },
+      replay: { replayable: false, reason: "intent_conflict" },
+    });
+
+    const result = await evaluateImageRenderClaimGate(input, deps);
+
+    expect(result).toEqual({ status: "blocked", reason: "intent_conflict" });
+  });
+
+  it("rejects lineage scoped to a different post before any dependency call", async () => {
+    const input = makeInput({ lineage: makeLineage({ contentPostId: POST_B }) });
+    const { deps, coordinate, getCompletedResult } = makeDeps();
+
+    await expect(evaluateImageRenderClaimGate(input, deps)).rejects.toThrow(
+      /contentPostId/
+    );
+    expect(coordinate).not.toHaveBeenCalled();
+    expect(getCompletedResult).not.toHaveBeenCalled();
   });
 });

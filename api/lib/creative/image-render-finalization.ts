@@ -21,6 +21,11 @@ import {
   type TransitionImageRenderClaimResult,
 } from "./image-render-claim";
 import type { ImageRenderReplayResponse } from "./image-render-claim-gate";
+import {
+  assertValidImageRenderLineage,
+  buildPersistedImageRenderLineage,
+  type ImageRenderLineageInput,
+} from "./image-render-lineage";
 
 // ─── Dormant image-render finalization transaction coordinator (B2B-3C) ───
 //
@@ -57,6 +62,14 @@ import type { ImageRenderReplayResponse } from "./image-render-claim-gate";
 // Security: results expose only stable status/reason codes and the safe
 // eight-field replay projection. Owner tokens, attempt keys, fingerprints,
 // deduction keys, and raw database errors are never returned.
+//
+// Lineage (WBS12D): when the caller supplies the production lineage
+// authority, it is validated before any dependency call and persisted onto
+// the generated_images row under metadata.renderLineage. Claim-side lineage
+// enforcement needs no extra write here: the lineage fingerprint is bound
+// into the claim's intentFingerprint upstream, so the completion CAS and
+// idempotent replay already reject any result produced under different
+// approved authority (identity_mismatch / intent_conflict).
 
 export const IMAGE_RENDER_FINALIZATION_MAX_ATTEMPTS = 2;
 export const IMAGE_RENDER_FINALIZATION_MAX_AUTOMATIC_RETRIES = 1;
@@ -115,6 +128,17 @@ export interface ImageRenderFinalizationInput {
     isDraft: boolean;
     completedAt: Date;
   };
+  /**
+   * Production lineage authority (WBS12D) for this render. When supplied it
+   * is validated up front (fail closed) and persisted onto the
+   * generated_images row under the coordinator-owned metadata key
+   * `renderLineage`, so every finalized image retains its exact approved
+   * Strategy/copy lineage. `lineage.contentPostId` must equal
+   * `claim.contentPostId`. The lineage fingerprint is bound into the claim's
+   * intentFingerprint upstream, so completion under different authority is
+   * rejected by the claim CAS as identity_mismatch.
+   */
+  lineage?: ImageRenderLineageInput | null;
   /** generated_images row fields, following the legacy premium-service insert. */
   generatedImage: {
     campaignId: number | null;
@@ -373,6 +397,16 @@ function assertValidFinalizationInput(input: ImageRenderFinalizationInput): void
     });
   }
 
+  if (input.lineage) {
+    if (input.lineage.contentPostId !== claim.contentPostId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Invalid lineage: contentPostId does not match the claim",
+      });
+    }
+    assertValidImageRenderLineage(input.lineage);
+  }
+
   assertValidNonNegativeInt(charge.amount, "charge.amount");
   assertValidNonEmptyString(charge.description, "charge.description", 2048);
 
@@ -510,6 +544,11 @@ async function runFinalizationTransaction(
   const creditsCharged = charge.amount;
 
   // 1. Persist the generated image row (render + storage already succeeded).
+  //    When a production lineage authority is supplied, the coordinator
+  //    merges its canonical record under the `renderLineage` metadata key —
+  //    the row must retain its exact approved Strategy/copy lineage even if
+  //    the caller's metadata omitted it. The coordinator-owned record wins
+  //    over any caller-supplied `renderLineage` key.
   let generatedImageId: number;
   try {
     const [insertHeader] = await tx.insert(generatedImages).values({
@@ -526,7 +565,12 @@ async function runFinalizationTransaction(
       status: "completed",
       creditsCharged,
       providerCostUsd: generatedImage.providerCostUsd,
-      metadata: generatedImage.metadata,
+      metadata: input.lineage
+        ? {
+            ...generatedImage.metadata,
+            renderLineage: buildPersistedImageRenderLineage(input.lineage),
+          }
+        : generatedImage.metadata,
     });
     // Exact driver insertId — never a latest-image inference.
     generatedImageId = Number(insertHeader.insertId);

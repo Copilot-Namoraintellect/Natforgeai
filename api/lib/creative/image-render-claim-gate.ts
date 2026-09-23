@@ -14,6 +14,7 @@ import {
   type ImageRenderCoordinatorIntent,
   type ImageRenderCoordinatorResult,
 } from "./image-render-claim-coordinator";
+import type { ImageRenderLineageInput } from "./image-render-lineage";
 
 // ─── Dormant image-render claim replay gate (B2B-2B) ───
 //
@@ -65,6 +66,12 @@ export interface ImageRenderClaimGateInput {
   clientAttemptId: string;
   /** Complete material render intent — all ten B1 fields. */
   intent: ImageRenderClaimGateIntent;
+  /**
+   * Production lineage authority (WBS12D) bound into the attempt
+   * intentFingerprint before classification; a completed attempt under
+   * different authority is never replayed (intent_conflict).
+   */
+  lineage?: ImageRenderLineageInput | null;
   /** Ownership credential proposed by the future request owner. */
   ownerToken: string;
   /** Proposed lease expiry for the claim row (concrete Date only). */
@@ -236,7 +243,11 @@ export async function evaluateImageRenderClaimGate(
   const identity = deriveImageRenderAttemptIdentity({
     userId: input.userId,
     contentPostId: input.contentPostId,
-    attempt: { ...input.intent, clientAttemptId: input.clientAttemptId },
+    attempt: {
+      ...input.intent,
+      clientAttemptId: input.clientAttemptId,
+      lineage: input.lineage,
+    },
   });
 
   const coordinatorInput: ImageRenderCoordinatorInput = {
@@ -244,6 +255,7 @@ export async function evaluateImageRenderClaimGate(
     contentPostId: input.contentPostId,
     clientAttemptId: input.clientAttemptId,
     intent: input.intent,
+    lineage: input.lineage,
     ownerToken: input.ownerToken,
     leaseExpiresAt: input.leaseExpiresAt,
   };
