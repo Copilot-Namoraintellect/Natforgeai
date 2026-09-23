@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { attachCreativeGenerationOperationReference, acquireCreativeGenerationClaim, releaseClaimWithResult } from "./lib/creative/creative-generation-claim";
 import { getDb } from "./queries/connection";
 import { runCreativeAgent } from "./lib/agents/creative-agent";
+import { resolveImmutableCreativeStrategyInput } from "./lib/creative/strategy-snapshot-input";
 import { agentRouter } from "./agent-router";
 
 vi.mock("./queries/connection", () => ({
@@ -40,8 +41,45 @@ vi.mock("./lib/workflow/strategy-approval", () => ({
     isCurrent: true,
     hasApprovedStrategy: true,
     strategyGeneratedForCurrentBrief: true,
-    lineage: null,
+    lineage: {
+      creativeBriefFingerprint: "test-fingerprint",
+      strategyRunId: 501,
+      approvalRequestId: 77,
+      status: "approved",
+      strategySnapshotId: "strategy-snapshot-501",
+      strategyVersion: 1,
+      businessDnaSnapshotId: "bdna-snapshot-1",
+      strategyHashSha256: "a".repeat(64),
+    },
   })),
+}));
+
+const immutableStrategyInputFixture = vi.hoisted(() =>
+  Object.freeze({
+    authority: Object.freeze({
+      strategySnapshotId: "strategy-snapshot-501",
+      strategyVersion: 1,
+      businessDnaSnapshotId: "bdna-snapshot-1",
+      strategyHashSha256: "a".repeat(64),
+      strategyRunId: 501,
+      approvalRequestId: 77,
+      creativeBriefFingerprint: "test-fingerprint",
+    }),
+    snapshot: Object.freeze({
+      coreMessage: "Immutable core message",
+    }),
+    creativeContext: Object.freeze({
+      coreMessage: "Immutable core message",
+      valueProposition: "Immutable value proposition",
+      positioning: null,
+      campaignTheme: null,
+      personas: Object.freeze([{ name: "Immutable buyer" }]),
+    }),
+  })
+);
+
+vi.mock("./lib/creative/strategy-snapshot-input", () => ({
+  resolveImmutableCreativeStrategyInput: vi.fn(async () => immutableStrategyInputFixture),
 }));
 
 vi.mock("./lib/workflow/engine", () => ({
@@ -221,8 +259,26 @@ describe("agentRouter.runCreativeAgent", () => {
         userId: 18,
         campaignId: 28,
         generationOperation: { source: "agent", id: 1000 },
+        strategyInput: immutableStrategyInputFixture,
       })
     );
+
+    // The manual entry resolves the exact approved immutable Strategy
+    // authority and passes it to the Creative Agent unchanged.
+    expect(resolveImmutableCreativeStrategyInput).toHaveBeenCalledWith({
+      authority: {
+        strategySnapshotId: "strategy-snapshot-501",
+        strategyVersion: 1,
+        businessDnaSnapshotId: "bdna-snapshot-1",
+        strategyHashSha256: "a".repeat(64),
+        strategyRunId: 501,
+        approvalRequestId: 77,
+        creativeBriefFingerprint: "test-fingerprint",
+      },
+      userId: 18,
+      campaignId: 28,
+      businessId: 24,
+    });
 
     const operationInsert = db.state.insertedRows.find((r) => r.table === "agent_runs");
     expect(operationInsert).toBeTruthy();
@@ -829,6 +885,71 @@ describe("agentRouter.runCreativeAgent", () => {
 
     expect(runCreativeAgent).not.toHaveBeenCalled();
     expect(db.state.insertedRows.filter((r) => r.table === "agent_runs").length).toBe(0);
+  });
+
+  it("fails closed before claim, run or billing when the immutable Strategy snapshot is missing", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { agentRouter } = await import("./agent-router");
+
+    vi.mocked(resolveImmutableCreativeStrategyInput).mockRejectedValueOnce(
+      new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "Immutable Strategy snapshot authority failed (snapshot missing). Regenerate and approve the Strategy before creating content.",
+      })
+    );
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    await expect(caller.runCreativeAgent({ campaignId: 28 })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+    expect(db.state.insertedRows.length).toBe(0);
+  });
+
+  it("fails closed before claim, run or billing when the Strategy approval is no longer approved", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { runCreativeAgent } = await import("./lib/agents/creative-agent");
+    const { getStrategyApprovalStatus } = await import("./lib/workflow/strategy-approval");
+    const { agentRouter } = await import("./agent-router");
+
+    vi.mocked(getStrategyApprovalStatus).mockReturnValueOnce({
+      currentFingerprint: "test-fingerprint",
+      strategyFingerprint: "test-fingerprint",
+      approvedStrategyFingerprint: "test-fingerprint",
+      isCurrent: true,
+      hasApprovedStrategy: true,
+      strategyGeneratedForCurrentBrief: true,
+      lineage: {
+        creativeBriefFingerprint: "test-fingerprint",
+        strategyRunId: 501,
+        approvalRequestId: 77,
+        status: "pending",
+        strategySnapshotId: "strategy-snapshot-501",
+        strategyVersion: 1,
+        businessDnaSnapshotId: "bdna-snapshot-1",
+        strategyHashSha256: "a".repeat(64),
+      },
+    } as any);
+
+    const db = createMockDb();
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = agentRouter.createCaller(buildCtx());
+    await expect(caller.runCreativeAgent({ campaignId: 28 })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+    expect(resolveImmutableCreativeStrategyInput).not.toHaveBeenCalled();
+    expect(db.state.insertedRows.length).toBe(0);
   });
 
   it("does not release a terminal shortcut as completed when attachment fails", async () => {

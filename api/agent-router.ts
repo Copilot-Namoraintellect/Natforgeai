@@ -29,7 +29,7 @@ import { checkAudienceAgentAccess } from "./lib/audience/access";
 import { generateReply } from "./lib/agents/engagement-agent";
 import { generateFollowUpSequence, generateProposal, generateMeetingPrompt } from "./lib/agents/sales-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
-import { assertApprovedStrategySemanticallyValid } from "./lib/workflow/strategy-approval";
+import { resolveCreativeEntryStrategyAuthority } from "./lib/creative/creative-entry-authority";
 import { transitionCampaignState } from "./lib/workflow/engine";
 import { TRPCError } from "@trpc/server";
 import {
@@ -255,9 +255,14 @@ export const agentRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
 
-      // Every campaign-linked creative entry point must validate the approved
-      // strategy semantically before acquiring a claim or running the agent.
-      await assertApprovedStrategySemanticallyValid(campaign, ctx.user.id);
+      // Every campaign-linked creative entry point must resolve the approved
+      // immutable Strategy authority before acquiring a claim or running the
+      // agent. Fail closed before any provider spend, persistence or billing.
+      const immutableStrategyInput = await resolveCreativeEntryStrategyAuthority({
+        campaign,
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+      });
 
       // Authoritative atomic claim for this direct creative-agent call.
       const ownerToken = generateOwnerToken();
@@ -507,6 +512,7 @@ export const agentRouter = createRouter({
             userId: ctx.user.id,
             campaignId: input.campaignId,
             generationOperation: { source: "agent", id: operationRowId },
+            strategyInput: immutableStrategyInput,
             claimContext: heartbeatController,
             registry: workflowRegistry,
           });

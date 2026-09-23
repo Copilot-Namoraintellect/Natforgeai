@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildFailedCreativeMessage, groupCampaignActivity } from "../../../src/lib/agent-activity";
+import { hashStrategySnapshotPayload } from "../strategy/strategy-snapshot";
 
 vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
@@ -64,6 +65,56 @@ vi.mock("../creative/brief-grounding", () => ({
     businessType: "B2B",
   })),
 }));
+
+vi.mock("../strategy/strategy-snapshot-db-store", () => ({
+  getStrategySnapshotByStrategyRunId: vi.fn(),
+  getNextStrategySnapshotVersion: vi.fn(),
+}));
+
+const approvedStrategyPayload = {
+  coreMessage: "Immutable core message",
+  valueProposition: "Immutable value proposition",
+  positioning: "Immutable positioning",
+  campaignTheme: "Immutable theme",
+  personas: [{ name: "Immutable buyer" }],
+  creativeBriefFingerprint: "test-fingerprint",
+};
+
+const approvedStrategyHash = hashStrategySnapshotPayload(approvedStrategyPayload);
+
+// WBS11 immutable snapshot authority coordinates carried by an approved
+// strategy approval lineage. onStrategyApproved fixtures must include these
+// so the governed entry authority chain can resolve the exact snapshot.
+function approvedLineageAuthorityFields() {
+  return {
+    strategySnapshotId: "strategy-snapshot-10",
+    strategyVersion: 1,
+    businessDnaSnapshotId: "bdna-snapshot-7",
+    strategyHashSha256: approvedStrategyHash,
+  };
+}
+
+// Ownership of the persisted Strategy snapshot under test; individual tests
+// align this with the campaign/user they exercise.
+let snapshotOwnership = { userId: 42, campaignId: 29, businessId: 7 };
+
+function buildPersistedStrategySnapshot(strategyRunId: number) {
+  return {
+    id: 1,
+    snapshotId: "strategy-snapshot-10",
+    userId: snapshotOwnership.userId,
+    campaignId: snapshotOwnership.campaignId,
+    businessId: snapshotOwnership.businessId,
+    strategyRunId,
+    businessDnaSnapshotId: "bdna-snapshot-7",
+    version: 1,
+    creativeBriefFingerprint: "test-fingerprint",
+    strategyHashSha256: approvedStrategyHash,
+    snapshot: approvedStrategyPayload,
+    capturedAt: new Date("2026-01-01T00:00:00.000Z"),
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+  };
+}
 
 vi.mock("../creative/creative-generation-claim", () => ({
   generateOwnerToken: vi.fn(() => "test-owner-token"),
@@ -444,6 +495,16 @@ describe("onStrategyApproved", () => {
     const { canRunAutonomousWorkflow } = await import("../billing/cost-control");
     vi.mocked(canRunAutonomousWorkflow).mockResolvedValue({ allowed: true } as any);
 
+    // Default: the exact approved WBS11 Strategy snapshot exists and matches
+    // the approved lineage authority recorded on the campaign.
+    snapshotOwnership = { userId: 42, campaignId: 29, businessId: 7 };
+    const { getStrategySnapshotByStrategyRunId } = await import(
+      "../strategy/strategy-snapshot-db-store"
+    );
+    vi.mocked(getStrategySnapshotByStrategyRunId).mockImplementation(
+      async (strategyRunId: number) => buildPersistedStrategySnapshot(strategyRunId) as any
+    );
+
     const { runCreativeAgent } = await import("../agents/creative-agent");
     vi.mocked(runCreativeAgent).mockReset();
   });
@@ -491,6 +552,7 @@ describe("onStrategyApproved", () => {
             strategyRunId: 10,
             approvalRequestId: 555,
             status: "pending",
+            ...approvedLineageAuthorityFields(),
           },
         },
         platforms: "Instagram, Facebook",
@@ -506,6 +568,21 @@ describe("onStrategyApproved", () => {
         userId: 42,
         campaignId: 29,
         generationOperation: { source: "approval", id: 555 },
+        strategyInput: expect.objectContaining({
+          authority: {
+            strategySnapshotId: "strategy-snapshot-10",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-snapshot-7",
+            strategyHashSha256: approvedStrategyHash,
+            strategyRunId: 10,
+            approvalRequestId: 555,
+            creativeBriefFingerprint: "test-fingerprint",
+          },
+          creativeContext: expect.objectContaining({
+            coreMessage: "Immutable core message",
+            valueProposition: "Immutable value proposition",
+          }),
+        }),
       })
     );
   });
@@ -544,6 +621,7 @@ describe("onStrategyApproved", () => {
             strategyRunId: 10,
             approvalRequestId: 556,
             status: "pending",
+            ...approvedLineageAuthorityFields(),
           },
         },
       },
@@ -607,7 +685,7 @@ describe("onStrategyApproved", () => {
       campaign: {
         id: 30,
         userId: 22,
-        businessId: null,
+        businessId: 7,
         workflowState: "strategy_generated",
         workflowContext: {
           strategyApprovalLineage: {
@@ -615,11 +693,13 @@ describe("onStrategyApproved", () => {
             strategyRunId: 10,
             approvalRequestId: 36,
             status: "pending",
+            ...approvedLineageAuthorityFields(),
           },
         },
       },
     });
     vi.mocked(getDb).mockReturnValue(db as any);
+    snapshotOwnership = { userId: 22, campaignId: 30, businessId: 7 };
 
     const transitions: Record<string, Record<string, string>> = {
       strategy_generated: { approve_strategy: "strategy_approved" },
@@ -834,7 +914,7 @@ describe("onStrategyApproved", () => {
       campaign: {
         id: 30,
         userId: 22,
-        businessId: null,
+        businessId: 7,
         workflowState: "strategy_generated",
         workflowContext: {
           strategyApprovalLineage: {
@@ -842,6 +922,7 @@ describe("onStrategyApproved", () => {
             strategyRunId: 10,
             approvalRequestId: 36,
             status: "pending",
+            ...approvedLineageAuthorityFields(),
           },
         },
       },
@@ -886,7 +967,7 @@ describe("onStrategyApproved", () => {
       campaign: {
         id: 30,
         userId: 22,
-        businessId: null,
+        businessId: 7,
         workflowState: "strategy_generated",
         workflowContext: {
           strategyApprovalLineage: {
@@ -894,11 +975,13 @@ describe("onStrategyApproved", () => {
             strategyRunId: 10,
             approvalRequestId: 36,
             status: "pending",
+            ...approvedLineageAuthorityFields(),
           },
         },
       },
     });
     vi.mocked(getDb).mockReturnValue(db as any);
+    snapshotOwnership = { userId: 22, campaignId: 30, businessId: 7 };
 
     vi.mocked(acquireCreativeGenerationClaim).mockImplementation(async (args: any) => {
       const id = state.nextId.creative_generation_claims++;
@@ -996,7 +1079,7 @@ describe("onStrategyApproved", () => {
       campaign: {
         id: 30,
         userId: 22,
-        businessId: null,
+        businessId: 7,
         workflowState: "strategy_generated",
         workflowContext: {
           strategyApprovalLineage: {
@@ -1004,11 +1087,13 @@ describe("onStrategyApproved", () => {
             strategyRunId: 10,
             approvalRequestId: 36,
             status: "pending",
+            ...approvedLineageAuthorityFields(),
           },
         },
       },
     });
     vi.mocked(getDb).mockReturnValue(db as any);
+    snapshotOwnership = { userId: 22, campaignId: 30, businessId: 7 };
 
     vi.mocked(runCreativeAgent).mockResolvedValue({
       packRunId: 701,
@@ -1029,6 +1114,112 @@ describe("onStrategyApproved", () => {
         generationOperation: { source: "approval", id: 36 },
       })
     );
+  });
+
+  it("fails closed before claim, creative run or billing when the immutable Strategy snapshot is missing", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const { acquireCreativeGenerationClaim } = await import("../creative/creative-generation-claim");
+    const { getStrategySnapshotByStrategyRunId } = await import(
+      "../strategy/strategy-snapshot-db-store"
+    );
+    const { onStrategyApproved } = await import("./triggers");
+
+    vi.mocked(getStrategySnapshotByStrategyRunId).mockResolvedValue(null as any);
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [
+        {
+          id: 10,
+          userId: 22,
+          campaignId: 30,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+      ],
+      campaign: {
+        id: 30,
+        userId: 22,
+        businessId: 7,
+        workflowState: "strategy_generated",
+        workflowContext: {
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "test-fingerprint",
+            strategyRunId: 10,
+            approvalRequestId: 36,
+            status: "pending",
+            ...approvedLineageAuthorityFields(),
+          },
+        },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    snapshotOwnership = { userId: 22, campaignId: 30, businessId: 7 };
+
+    await onStrategyApproved(30, 22, 36);
+
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+    expect(state.agentRuns.filter((r: any) => r.agentType === "creative")).toHaveLength(0);
+    expect(state.creditTransactions).toHaveLength(0);
+  });
+
+  it("fails closed before claim, creative run or billing when the approved Strategy snapshot authority no longer matches", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { runCreativeAgent } = await import("../agents/creative-agent");
+    const { acquireCreativeGenerationClaim } = await import("../creative/creative-generation-claim");
+    const { getStrategySnapshotByStrategyRunId } = await import(
+      "../strategy/strategy-snapshot-db-store"
+    );
+    const { onStrategyApproved } = await import("./triggers");
+
+    // The persisted snapshot was superseded: its version no longer matches the
+    // approved lineage authority.
+    vi.mocked(getStrategySnapshotByStrategyRunId).mockImplementation(
+      async (strategyRunId: number) =>
+        ({
+          ...buildPersistedStrategySnapshot(strategyRunId),
+          version: 99,
+        }) as any
+    );
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [
+        {
+          id: 10,
+          userId: 22,
+          campaignId: 30,
+          agentType: "strategy",
+          status: "completed",
+          output: { creativeBriefFingerprint: "test-fingerprint" },
+        },
+      ],
+      campaign: {
+        id: 30,
+        userId: 22,
+        businessId: 7,
+        workflowState: "strategy_generated",
+        workflowContext: {
+          strategyApprovalLineage: {
+            creativeBriefFingerprint: "test-fingerprint",
+            strategyRunId: 10,
+            approvalRequestId: 36,
+            status: "pending",
+            ...approvedLineageAuthorityFields(),
+          },
+        },
+      },
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    snapshotOwnership = { userId: 22, campaignId: 30, businessId: 7 };
+
+    await onStrategyApproved(30, 22, 36);
+
+    expect(runCreativeAgent).not.toHaveBeenCalled();
+    expect(acquireCreativeGenerationClaim).not.toHaveBeenCalled();
+    expect(state.agentRuns.filter((r: any) => r.agentType === "creative")).toHaveLength(0);
+    expect(state.creditTransactions).toHaveLength(0);
   });
 
   it("skips generation when a running claim exists for the same approval", async () => {
@@ -1065,7 +1256,7 @@ describe("onStrategyApproved", () => {
       campaign: {
         id: 30,
         userId: 22,
-        businessId: null,
+        businessId: 7,
         workflowState: "strategy_generated",
         workflowContext: {
           strategyApprovalLineage: {
@@ -1073,6 +1264,7 @@ describe("onStrategyApproved", () => {
             strategyRunId: 10,
             approvalRequestId: 36,
             status: "pending",
+            ...approvedLineageAuthorityFields(),
           },
         },
       },
@@ -1152,7 +1344,7 @@ describe("onStrategyApproved", () => {
       campaign: {
         id: 30,
         userId: 22,
-        businessId: null,
+        businessId: 7,
         workflowState: "strategy_generated",
         workflowContext: {
           strategyApprovalLineage: {
@@ -1160,6 +1352,7 @@ describe("onStrategyApproved", () => {
             strategyRunId: 10,
             approvalRequestId: 36,
             status: "approved",
+            ...approvedLineageAuthorityFields(),
           },
           approvedStrategyFingerprint: "test-fingerprint",
         },
