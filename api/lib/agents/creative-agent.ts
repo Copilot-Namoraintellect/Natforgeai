@@ -26,6 +26,13 @@ import {
   type CampaignMessagePack,
   type ValidationContext,
 } from "../creative/campaign-message-architect";
+import { assertApprovedCopyMatchesEnvelope } from "../creative/approved-copy-authority";
+import {
+  buildPersistedCreativeArtifactLineage,
+  creativeArtifactApprovedCopyLineageFromEnvelope,
+  creativeArtifactStrategyLineageFromAuthority,
+  CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY,
+} from "../creative/artifact-lineage";
 import {
   ctaMatchesSelectedStage,
   normalizeCtaText,
@@ -1958,9 +1965,9 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     : "";
   const fallbackCta = masterPost?.cta || campaign.preferredCta || "Contact us";
 
-  for (const platform of selectedPlatforms) {
+  const resolvedAdaptations = selectedPlatforms.map((platform) => {
     const existing = adaptationsByPlatform.get(platform.toLowerCase());
-    const adaptation = existing || {
+    return existing || {
       platform,
       adaptedCaption: fallbackCaption,
       adaptedCta: fallbackCta,
@@ -1968,7 +1975,47 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       bestTimeToPost: "",
       formatNotes: `Fallback adaptation for ${platform}.`,
     };
+  });
 
+  // WBS12.3: platform caption adaptations derive from the approved semantic
+  // copy. When the approved pack carries a V2 envelope, prove the pack still
+  // hashes to it, require every adaptation CTA to remain bound to the
+  // approved CTA for its platform (platform-specific approved CTA when the
+  // approved copy carries one, otherwise the pack CTA), and persist lineage
+  // identifying the approved semantic source each adaptation derives from.
+  // Formatting-level caption changes stay free; semantic rewriting fails
+  // closed. Envelope-less packs keep legacy behavior unchanged.
+  const approvedEnvelope = approvedMessagePack?.v2ApprovalEnvelope ?? null;
+  let governedCaptionLineage: {
+    strategy: ReturnType<typeof creativeArtifactStrategyLineageFromAuthority>;
+    approvedCopy: ReturnType<typeof creativeArtifactApprovedCopyLineageFromEnvelope>;
+  } | null = null;
+  if (approvedMessagePack && approvedEnvelope) {
+    assertApprovedCopyMatchesEnvelope(approvedMessagePack);
+    for (const adaptation of resolvedAdaptations) {
+      const approvedPlatformCaption = (approvedMessagePack.platformCaptions || []).find(
+        (caption) =>
+          caption.platform.toLowerCase() ===
+          String(adaptation.platform || "").toLowerCase()
+      );
+      const approvedCta = approvedPlatformCaption?.cta || approvedMessagePack.cta;
+      if (normalizeCtaText(adaptation.adaptedCta) !== normalizeCtaText(approvedCta)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            `Platform caption for ${adaptation.platform} rewrites the approved CTA ` +
+            `("${adaptation.adaptedCta}" vs approved "${approvedCta}"). ` +
+            "Regenerate the pack or re-approve the Campaign Message Pack before distribution.",
+        });
+      }
+    }
+    governedCaptionLineage = {
+      strategy: creativeArtifactStrategyLineageFromAuthority(outputStrategyAuthority),
+      approvedCopy: creativeArtifactApprovedCopyLineageFromEnvelope(approvedEnvelope),
+    };
+  }
+
+  for (const adaptation of resolvedAdaptations) {
     try {
       await db.insert(campaignAssets).values({
         userId,
@@ -1984,6 +2031,18 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           bestTimeToPost: adaptation.bestTimeToPost,
           formatNotes: adaptation.formatNotes,
           ...outputStrategyAuthority,
+          ...(governedCaptionLineage
+            ? {
+                [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]:
+                  buildPersistedCreativeArtifactLineage({
+                    artifactKind: "platform_caption",
+                    platform: String(adaptation.platform),
+                    parent: { artifactKind: "message_pack" },
+                    strategy: governedCaptionLineage.strategy,
+                    approvedCopy: governedCaptionLineage.approvedCopy,
+                  }),
+              }
+            : null),
         } as any,
       });
       savedAssets++;
@@ -2018,6 +2077,21 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
             hashtags: p.hashtags,
           })),
           ...outputStrategyAuthority,
+          // WBS12.3: under V2 copy authority the hashtag set is a derived
+          // content variant of the approved message pack and carries the
+          // same lineage; envelope-less packs stay legacy-shaped.
+          ...(governedCaptionLineage
+            ? {
+                [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]:
+                  buildPersistedCreativeArtifactLineage({
+                    artifactKind: "hashtag_set",
+                    platform: null,
+                    parent: { artifactKind: "message_pack" },
+                    strategy: governedCaptionLineage.strategy,
+                    approvedCopy: governedCaptionLineage.approvedCopy,
+                  }),
+              }
+            : null),
         } as any,
       });
       savedAssets++;
