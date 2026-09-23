@@ -56,6 +56,13 @@ import {
   assertApprovedRenderCopyUnchanged,
   type ApprovedCopyAuthority,
 } from "./approved-copy-authority";
+import { buildCreativeStrategyAuthority } from "./strategy-authority";
+import { getStrategyApprovalStatus } from "../workflow/strategy-approval";
+import {
+  imageRenderApprovedCopyLineageFromPack,
+  imageRenderStrategyLineageFromAuthority,
+  type ImageRenderLineageInput,
+} from "./image-render-lineage";
 import {
   buildGroundedCreativeBrief,
   computeCreativeBriefFingerprint,
@@ -218,6 +225,59 @@ function getNextIterationNumber(postMeta: any, existingImages: any[]): number {
 function getCampaignFingerprint(campaign: any): string | undefined {
   if (!campaign?.id) return undefined;
   return computeCreativeBriefFingerprint(campaign);
+}
+
+// ─── WBS12D2: production image-render lineage construction ───
+//
+// Builds the exact lineage authority bound into the image-render claim gate
+// and finalization for one governed attempt. Strategy coordinates come from
+// the campaign's approved WBS11 lineage; approved-copy coordinates come from
+// the exact approved message pack's V2 envelope. When no approved Strategy
+// authority exists the render is not governed and lineage stays absent (the
+// WBS12D legacy-compatible path, byte-identical claim identity). A V2-approved
+// copy envelope without approved Strategy authority is an inconsistent
+// authority pair and fails closed instead of silently dropping the copy
+// authority from the lineage.
+
+function buildImageRenderLineageAuthority(input: {
+  campaign: unknown;
+  contentPostId: number;
+  approvedPack: CampaignMessagePack | null;
+}): ImageRenderLineageInput | null {
+  const { campaign, contentPostId, approvedPack } = input;
+  const strategyLineage = getStrategyApprovalStatus(campaign).lineage;
+
+  if (!strategyLineage || strategyLineage.status !== "approved") {
+    if (approvedPack?.v2ApprovalEnvelope) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "Approved copy envelope requires approved Strategy authority for image-render lineage.",
+      });
+    }
+    return null;
+  }
+
+  // Verify the pack still hashes to its envelope before any claim work, then
+  // project the verified copy authority onto the lineage coordinates through
+  // the single canonical adapter.
+  const copyAuthority = approvedPack?.v2ApprovalEnvelope
+    ? assertApprovedCopyMatchesEnvelope(approvedPack)
+    : null;
+
+  return {
+    contentPostId,
+    strategy: imageRenderStrategyLineageFromAuthority(
+      buildCreativeStrategyAuthority(strategyLineage)
+    ),
+    approvedCopy: copyAuthority
+      ? imageRenderApprovedCopyLineageFromPack({
+          copyHashSha256: copyAuthority.copyHashSha256,
+          approvedRevisionId: copyAuthority.approvedRevisionId,
+          copy: { copySchemaVersion: copyAuthority.copySchemaVersion },
+        })
+      : null,
+  };
 }
 
 function toJobStatus(status: ProviderStatus): "queued" | "rendering" | "completed" | "failed" | "cancelled" {
@@ -1036,6 +1096,9 @@ export async function generatePremiumLeaflet({
   let imageRenderClaimOwner: ImageRenderClaimOwnerContext | null = null;
   let imageRenderClaimTerminalHandled = false;
   let imageRenderClaimHeartbeat: ImageRenderClaimHeartbeatHandle | null = null;
+  // WBS12D2: the exact same lineage object is bound at acquisition and passed
+  // through to finalization, so both resolve to one lineage fingerprint.
+  let imageRenderLineage: ImageRenderLineageInput | null = null;
   if (imageRenderClaimsEffectiveMode === "on") {
     if (clientAttemptId === undefined || clientAttemptId === null) {
       throw new TRPCError({
@@ -1051,6 +1114,16 @@ export async function generatePremiumLeaflet({
     }
     const ownerToken = randomBytes(32).toString("hex");
     const leaseExpiresAt = new Date(Date.now() + IMAGE_RENDER_CLAIM_LEASE_MS);
+    // Governed lineage authority: Strategy coordinates from the campaign's
+    // approved lineage, approved-copy coordinates from the exact approved
+    // message pack envelope. Absent authority stays absent (legacy identity).
+    imageRenderLineage = buildImageRenderLineageAuthority({
+      campaign,
+      contentPostId: post.id,
+      approvedPack: post.campaignId
+        ? await loadApprovedMessagePack(post.campaignId)
+        : null,
+    });
     const gateResult = await activeImageRenderClaimOrchestration.evaluateGate(
       {
         userId,
@@ -1068,6 +1141,7 @@ export async function generatePremiumLeaflet({
           creativeType: creativeType ?? null,
           allowNoLogo: allowNoLogo === true,
         },
+        lineage: imageRenderLineage,
         ownerToken,
         leaseExpiresAt,
       },
@@ -1409,6 +1483,36 @@ export async function generatePremiumLeaflet({
     let approvedCopyAuthority: ApprovedCopyAuthority | null = null;
     if (approvedMessagePack?.v2ApprovalEnvelope) {
       approvedCopyAuthority = assertApprovedCopyMatchesEnvelope(approvedMessagePack);
+    }
+
+    // WBS12D2: the approved-copy authority resolved for rendering must be the
+    // same authority bound into the claim at acquisition. A pack change
+    // between acquisition and render resolution is an intent conflict: never
+    // render or finalize under divergent approved-copy authority. Runs only
+    // for governed attempts (a lineage authority was acquired).
+    if (imageRenderLineage) {
+      const acquiredCopyAuthority = imageRenderLineage.approvedCopy ?? null;
+      const resolvedCopyAuthority = approvedCopyAuthority
+        ? {
+            copyHashSha256: approvedCopyAuthority.copyHashSha256,
+            copySchemaVersion: approvedCopyAuthority.copySchemaVersion,
+            approvedRevisionId: approvedCopyAuthority.approvedRevisionId,
+          }
+        : null;
+      const copyAuthoritiesMatch =
+        (acquiredCopyAuthority === null && resolvedCopyAuthority === null) ||
+        (!!acquiredCopyAuthority &&
+          !!resolvedCopyAuthority &&
+          acquiredCopyAuthority.copyHashSha256 ===
+            resolvedCopyAuthority.copyHashSha256 &&
+          acquiredCopyAuthority.copySchemaVersion ===
+            resolvedCopyAuthority.copySchemaVersion &&
+          acquiredCopyAuthority.approvedRevisionId ===
+            resolvedCopyAuthority.approvedRevisionId);
+      if (!copyAuthoritiesMatch) {
+        await failOwnedClaimOnce();
+        throw new TRPCError({ code: "CONFLICT", message: "INTENT_CONFLICT" });
+      }
     }
 
     if (strongerBrandFit && env.openaiApiKey && refinementInstructionType !== "design_only") {
@@ -2041,6 +2145,10 @@ export async function generatePremiumLeaflet({
             isDraft: false,
             completedAt: new Date(),
           },
+          // WBS12D2: the exact lineage object bound at claim acquisition, so
+          // acquisition and finalization resolve to one lineage fingerprint
+          // and the persisted renderLineage matches the claim identity.
+          lineage: imageRenderLineage,
           generatedImage: {
             campaignId: post.campaignId ?? null,
             businessId: business.id ?? null,
