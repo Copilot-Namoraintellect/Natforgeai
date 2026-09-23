@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TRPCError } from "@trpc/server";
 import * as observerModule from "../../creative/contracts/observe-quality-authority";
+import type { CreativeStrategySnapshotInput } from "../../creative/strategy-snapshot-input";
 
 vi.mock("../runner", () => ({
   runAgent: vi.fn(),
@@ -50,9 +51,12 @@ interface MockDb {
   insert: (table: unknown) => { values: () => Promise<unknown> };
   update: () => { set: () => { where: () => Promise<unknown[]> } };
   delete: () => { where: () => Promise<unknown[]> };
+  insertedRows: Array<{ table: string; values: Record<string, unknown> }>;
 }
 
 function createMockDb({ insertShouldFail = false }: { insertShouldFail?: boolean } = {}): MockDb {
+  const insertedRows: Array<{ table: string; values: Record<string, unknown> }> = [];
+
   const whereResult = (table: unknown) => {
     const tableName = getTableName(table);
     let limitResult: unknown[] = [];
@@ -126,7 +130,10 @@ function createMockDb({ insertShouldFail = false }: { insertShouldFail?: boolean
     }
 
     return {
-      values: vi.fn(async () => [{ insertId: 123 }]),
+      values: vi.fn(async (values: Record<string, unknown>) => {
+        insertedRows.push({ table: tableName ?? "unknown", values });
+        return [{ insertId: 123 }];
+      }),
     };
   };
 
@@ -145,6 +152,7 @@ function createMockDb({ insertShouldFail = false }: { insertShouldFail?: boolean
     delete: vi.fn(() => ({
       where: vi.fn(async () => []),
     })) as unknown as MockDb["delete"],
+    insertedRows,
   };
 }
 
@@ -282,6 +290,30 @@ function mockRunAgentResponse(opts: { prompt: string }, runId: number): { runId:
 
 const testGenerationOperation = { source: "job" as const, id: 9999 };
 
+const testStrategyInput: CreativeStrategySnapshotInput = {
+  authority: {
+    strategySnapshotId: "strategy-snapshot-501",
+    strategyVersion: 1,
+    businessDnaSnapshotId: "bdna-snapshot-1",
+    strategyHashSha256: "a".repeat(64),
+    strategyRunId: 501,
+    approvalRequestId: 77,
+    creativeBriefFingerprint: "wbs12b3-brief-fingerprint",
+  },
+  snapshot: {
+    coreMessage: "Immutable core message",
+    valueProposition: "Immutable value proposition",
+    personas: [],
+  },
+  creativeContext: {
+    coreMessage: "Immutable core message",
+    valueProposition: "Immutable value proposition",
+    positioning: "Immutable positioning",
+    campaignTheme: "Immutable theme",
+    personas: [],
+  },
+};
+
 function approvedPack() {
   return {
     headline: "Payout platform for small businesses in Randburg",
@@ -325,7 +357,7 @@ describe("runCreativeAgent post-save failure handling", () => {
 
     let thrownError: unknown;
     try {
-      await runCreativeAgent({ userId: 18, campaignId: 28, generationOperation: testGenerationOperation });
+      await runCreativeAgent({ userId: 18, campaignId: 28, generationOperation: testGenerationOperation, strategyInput: testStrategyInput });
     } catch (err) {
       thrownError = err;
     }
@@ -350,7 +382,7 @@ describe("runCreativeAgent post-save failure handling", () => {
     vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
     vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 92));
 
-    const result = await runCreativeAgent({ userId: 18, campaignId: 28, generationOperation: testGenerationOperation });
+    const result = await runCreativeAgent({ userId: 18, campaignId: 28, generationOperation: testGenerationOperation, strategyInput: testStrategyInput });
 
     expect(result.savedPosts).toBe(2);
     expect(deductCredits).toHaveBeenCalledTimes(1);
@@ -389,7 +421,7 @@ describe("runCreativeAgent post-save failure handling", () => {
       .mockResolvedValueOnce({ runId: 300, output: lowQualityPack } as any)
       .mockResolvedValueOnce({ runId: 301, output: unusableRetryPack } as any);
 
-    await expect(runCreativeAgent({ userId: 18, campaignId: 28, generationOperation: testGenerationOperation })).rejects.toBeInstanceOf(TRPCError);
+    await expect(runCreativeAgent({ userId: 18, campaignId: 28, generationOperation: testGenerationOperation, strategyInput: testStrategyInput })).rejects.toBeInstanceOf(TRPCError);
 
     expect(ensureApprovedMessagePack).toHaveBeenCalledTimes(2);
     expect(vi.mocked(ensureApprovedMessagePack).mock.calls[1]?.[0]).toMatchObject({
@@ -431,7 +463,7 @@ describe("runCreativeAgent post-save failure handling", () => {
     } as any);
     vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 302));
 
-    const result = await runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation });
+    const result = await runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation, strategyInput: testStrategyInput });
 
     expect(result.savedPosts).toBe(2);
     expect(deductCredits).toHaveBeenCalledTimes(1);
@@ -483,7 +515,7 @@ describe("runCreativeAgent post-save failure handling", () => {
       .mockResolvedValueOnce({ runId: 410, output: lowQualityPack } as any)
       .mockResolvedValueOnce({ runId: 411, output: lowQualityPack } as any);
 
-    const result = await runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation });
+    const result = await runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation, strategyInput: testStrategyInput });
 
     const retryPrompt = vi.mocked(runAgent).mock.calls[1]?.[0]?.prompt || "";
     expect(retryPrompt).toContain("UPDATED APPROVED CAMPAIGN MESSAGE PACK");
@@ -536,7 +568,7 @@ describe("runCreativeAgent post-save failure handling", () => {
       .mockResolvedValueOnce({ runId: 510, output: lowQualityPack } as any)
       .mockResolvedValueOnce({ runId: 511, output: unusableRetryPack } as any);
 
-    await expect(runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation })).rejects.toBeInstanceOf(TRPCError);
+    await expect(runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation, strategyInput: testStrategyInput })).rejects.toBeInstanceOf(TRPCError);
 
     expect(saveApprovedMessagePack).toHaveBeenCalledTimes(1);
     expect(deductCredits).not.toHaveBeenCalled();
@@ -587,7 +619,7 @@ describe("runCreativeAgent post-save failure handling", () => {
       .mockResolvedValueOnce({ runId: 610, output: lowQualityPack } as any)
       .mockResolvedValueOnce({ runId: 611, output: lowQualityPack } as any);
 
-    const result = await runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation });
+    const result = await runCreativeAgent({ userId: 18, campaignId: 30, generationOperation: testGenerationOperation, strategyInput: testStrategyInput });
 
     expect(result.pack.socialPosts[0].hook).toBe(groundedRecoveryPack.headline);
     expect(result.pack.socialPosts[0].cta).toBe(groundedRecoveryPack.cta);
@@ -616,6 +648,7 @@ describe("runCreativeAgent generation-operation identity", () => {
       userId: 18,
       campaignId: 30,
       generationOperation: { source: "job", id: 12345 },
+      strategyInput: testStrategyInput,
     });
 
     expect(deductCredits).toHaveBeenCalledTimes(1);
@@ -639,11 +672,13 @@ describe("runCreativeAgent generation-operation identity", () => {
       userId: 18,
       campaignId: 30,
       generationOperation: { source: "job", id: 111 },
+      strategyInput: testStrategyInput,
     });
     await runCreativeAgent({
       userId: 18,
       campaignId: 30,
       generationOperation: { source: "job", id: 222 },
+      strategyInput: testStrategyInput,
     });
 
     const keys = vi.mocked(deductCredits).mock.calls.map((c) => c[0].idempotencyKey);
@@ -667,6 +702,7 @@ describe("runCreativeAgent generation-operation identity", () => {
       userId: 18,
       campaignId: 30,
       generationOperation: { source: "job", id: 555 },
+      strategyInput: testStrategyInput,
     });
 
     vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 901));
@@ -674,6 +710,7 @@ describe("runCreativeAgent generation-operation identity", () => {
       userId: 18,
       campaignId: 30,
       generationOperation: { source: "job", id: 555 },
+      strategyInput: testStrategyInput,
     });
 
     const keys = vi.mocked(deductCredits).mock.calls.map((c) => c[0].idempotencyKey);
@@ -762,6 +799,7 @@ describe("runCreativeAgent quality authority observation side effects", () => {
       userId: 18,
       campaignId: 28,
       generationOperation: testGenerationOperation,
+      strategyInput: testStrategyInput,
     });
     const offInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length;
     const offUpdateCount = (db.update as ReturnType<typeof vi.fn>).mock.calls.length;
@@ -773,6 +811,7 @@ describe("runCreativeAgent quality authority observation side effects", () => {
       userId: 18,
       campaignId: 28,
       generationOperation: testGenerationOperation,
+      strategyInput: testStrategyInput,
     });
     const observeInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length - offInsertCount;
     const observeUpdateCount = (db.update as ReturnType<typeof vi.fn>).mock.calls.length - offUpdateCount;
@@ -803,6 +842,7 @@ describe("runCreativeAgent quality authority observation side effects", () => {
       userId: 18,
       campaignId: 28,
       generationOperation: testGenerationOperation,
+      strategyInput: testStrategyInput,
     });
 
     expect(observeSpy).toHaveBeenCalledTimes(1);
@@ -826,9 +866,98 @@ describe("runCreativeAgent quality authority observation side effects", () => {
       userId: 18,
       campaignId: 28,
       generationOperation: testGenerationOperation,
+      strategyInput: testStrategyInput,
     });
 
     expect(observeSpy).toHaveBeenCalledTimes(1);
     expect(observeSpy.mock.results[0].value).toBeNull();
+  });
+});
+
+
+describe("runCreativeAgent immutable Strategy authority binding", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("binds all seven immutable Strategy authority coordinates to every persisted content post and campaign asset", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { ensureApprovedMessagePack } = await import("../../creative/campaign-message-architect");
+
+    const db = createMockDb({ insertShouldFail: false });
+    vi.mocked(getDb).mockReturnValue(db as unknown as ReturnType<typeof getDb>);
+    vi.mocked(ensureApprovedMessagePack).mockResolvedValue(approvedPack() as any);
+    vi.mocked(runAgent).mockImplementation(async (opts) => mockRunAgentResponse(opts, 1200));
+
+    const result = await runCreativeAgent({
+      userId: 18,
+      campaignId: 28,
+      generationOperation: testGenerationOperation,
+      strategyInput: testStrategyInput,
+    });
+
+    expect(result.savedPosts).toBe(2);
+
+    const contentPostRows = db.insertedRows.filter((r) => r.table === "content_posts");
+    const campaignAssetRows = db.insertedRows.filter((r) => r.table === "campaign_assets");
+    expect(contentPostRows.length).toBeGreaterThan(0);
+    expect(campaignAssetRows.length).toBeGreaterThan(0);
+
+    for (const row of [...contentPostRows, ...campaignAssetRows]) {
+      expect(row.values.metadata).toMatchObject(testStrategyInput.authority);
+    }
+
+    const masterPost = contentPostRows.find((r) => (r.values.metadata as any)?.assetKind === "master_campaign_post");
+    expect(masterPost).toBeDefined();
+    expect((masterPost!.values.metadata as any).creativeBriefFingerprint).toBe(
+      testStrategyInput.authority.creativeBriefFingerprint
+    );
+  });
+
+  it("fails closed before provider spend, persistence or billing when immutable Strategy authority is missing", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    const db = createMockDb({ insertShouldFail: false });
+    vi.mocked(getDb).mockReturnValue(db as unknown as ReturnType<typeof getDb>);
+
+    await expect(
+      runCreativeAgent({
+        userId: 18,
+        campaignId: 28,
+        generationOperation: testGenerationOperation,
+      })
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(db.update).not.toHaveBeenCalled();
+    expect(deductCredits).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for non-job entry points that cannot bind immutable Strategy authority", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../runner");
+    const { runCreativeAgent } = await import("../creative-agent");
+    const { deductCredits } = await import("../../billing/credit-engine");
+
+    const db = createMockDb({ insertShouldFail: false });
+    vi.mocked(getDb).mockReturnValue(db as unknown as ReturnType<typeof getDb>);
+
+    await expect(
+      runCreativeAgent({
+        userId: 18,
+        campaignId: 28,
+        generationOperation: { source: "agent", id: 4242 },
+      })
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(deductCredits).not.toHaveBeenCalled();
   });
 });

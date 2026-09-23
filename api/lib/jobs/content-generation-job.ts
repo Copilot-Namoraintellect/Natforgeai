@@ -344,6 +344,7 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
       userId: input.userId,
       campaignId: input.campaignId,
       generationOperation: { source: "job", id: input.jobId },
+      strategyInput: immutableStrategyInput,
       claimContext: heartbeatController,
       registry: workflowRegistry,
     });

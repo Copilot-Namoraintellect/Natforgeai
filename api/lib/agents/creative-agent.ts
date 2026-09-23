@@ -1,3 +1,12 @@
+import type {
+  CreativeStrategyAuthority,
+} from "../creative/strategy-authority";
+import type {
+  CreativeStrategySnapshotInput,
+} from "../creative/strategy-snapshot-input";
+import {
+  projectCampaignFromImmutableStrategy,
+} from "../creative/immutable-strategy-projection";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { runAgent } from "./runner";
@@ -894,6 +903,7 @@ export async function runCreativeAgent({
   campaignId,
   deleteExistingDrafts = true,
   generationOperation,
+  strategyInput,
   claimContext,
   registry: inputRegistry,
   operationType: inputOperationType,
@@ -902,11 +912,25 @@ export async function runCreativeAgent({
   campaignId: number;
   deleteExistingDrafts?: boolean;
   generationOperation: CreativeGenerationOperation;
+  strategyInput?: CreativeStrategySnapshotInput;
   claimContext?: CreativeGenerationClaimHeartbeatController;
   registry?: InMemoryWorkflowOperationRegistry;
   operationType?: WorkflowOperationType;
 }) {
   validateCreativeGenerationOperation(generationOperation);
+  // WBS12B3: every durable Creative output must carry the exact immutable
+  // Strategy authority. Fail closed before any provider spend, persistence or
+  // billing when that authority cannot be bound, regardless of entry point.
+  if (!strategyInput) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "Creative generation requires immutable Strategy snapshot authority. " +
+        "Regenerate and approve the Strategy before creating content.",
+    });
+  }
+  const outputStrategyAuthority: CreativeStrategyAuthority =
+    strategyInput.authority;
   const db = getDb();
 
   const workflowOperationSource: WorkflowOperationSource =
@@ -1009,7 +1033,20 @@ export async function runCreativeAgent({
 
   // Use the shared resolver so the current campaign brief is the source of truth
   // and historical workflowContext values cannot override it.
-  const brief = buildGroundedCreativeBrief({ campaign, business });
+  const campaignForCreative =
+    strategyInput
+      ? projectCampaignFromImmutableStrategy(
+          campaign,
+          strategyInput
+        )
+      : campaign;
+
+  const brief =
+    buildGroundedCreativeBrief({
+      campaign:
+        campaignForCreative,
+      business,
+    });
   const hasExplicitOffer = !!(brief.offerDetails && brief.offerDetails.trim().length > 0) || (offers && offers.length > 0);
 
   // Location/industry: current business profile first, historical workflowContext only as safe fallback.
@@ -1648,7 +1685,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           iterationNumber: nextIterationNumber,
           assetType,
           assetTier: "standard",
-          creativeBriefFingerprint: brief.fingerprint,
+          ...outputStrategyAuthority,
         },
       });
       savedPosts++;
@@ -1750,7 +1787,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           iterationNumber: nextIterationNumber,
           assetType,
           assetTier: "standard",
-          creativeBriefFingerprint: brief.fingerprint,
+          ...outputStrategyAuthority,
         } as any,
       });
       savedAssets++;
@@ -1859,7 +1896,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         status: "ready",
         metadata: {
           hooks: pack.hooks.map((h: any) => ({ text: h.text, angle: h.angle })),
-          creativeBriefFingerprint: brief.fingerprint,
+          ...outputStrategyAuthority,
         } as any,
       });
       savedAssets++;
@@ -1886,7 +1923,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         status: "ready",
         metadata: {
           ctaVariations: pack.ctaVariations.map((c: any) => ({ text: c.text, angle: c.angle })),
-          creativeBriefFingerprint: brief.fingerprint,
+          ...outputStrategyAuthority,
         } as any,
       });
       savedAssets++;
@@ -1946,7 +1983,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           adaptedHashtags: adaptation.adaptedHashtags,
           bestTimeToPost: adaptation.bestTimeToPost,
           formatNotes: adaptation.formatNotes,
-          creativeBriefFingerprint: brief.fingerprint,
+          ...outputStrategyAuthority,
         } as any,
       });
       savedAssets++;
@@ -1980,7 +2017,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
             platform: p.platform,
             hashtags: p.hashtags,
           })),
-          creativeBriefFingerprint: brief.fingerprint,
+          ...outputStrategyAuthority,
         } as any,
       });
       savedAssets++;

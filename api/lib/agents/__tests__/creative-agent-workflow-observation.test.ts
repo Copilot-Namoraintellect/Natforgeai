@@ -26,6 +26,30 @@ vi.mock("../../billing/cost-control", () => ({
 import { runAgent } from "../runner";
 import { getDb } from "../../../queries/connection";
 import { runCreativeAgent } from "../creative-agent";
+import type { CreativeStrategySnapshotInput } from "../../creative/strategy-snapshot-input";
+
+const testStrategyInput: CreativeStrategySnapshotInput = {
+  authority: {
+    strategySnapshotId: "strategy-snapshot-253",
+    strategyVersion: 2,
+    businessDnaSnapshotId: "bdna-snapshot-26",
+    strategyHashSha256: "b".repeat(64),
+    strategyRunId: 253,
+    approvalRequestId: 36,
+    creativeBriefFingerprint: "fp-253",
+  },
+  snapshot: {
+    coreMessage: "B2B payment orchestration",
+    personas: [{ name: "Operations Manager" }],
+  },
+  creativeContext: {
+    coreMessage: "B2B payment orchestration",
+    valueProposition: "Controlled payment orchestration",
+    positioning: "Immutable positioning",
+    campaignTheme: "Immutable theme",
+    personas: [{ name: "Operations Manager" }],
+  },
+};
 
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string | undefined;
@@ -298,6 +322,7 @@ describe("runCreativeAgent workflow observation integration", () => {
       userId: 22,
       campaignId: 30,
       generationOperation: { source: "job", id: 12345 },
+      strategyInput: testStrategyInput,
       registry,
     });
 
@@ -332,6 +357,7 @@ describe("runCreativeAgent workflow observation integration", () => {
       userId: 22,
       campaignId: 30,
       generationOperation: { source: "job", id: 12346 },
+      strategyInput: testStrategyInput,
       registry,
     });
 
