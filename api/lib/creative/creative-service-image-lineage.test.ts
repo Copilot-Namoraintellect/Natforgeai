@@ -724,8 +724,10 @@ describe("generatePremiumLeaflet — WBS12D2 image-render lineage activation", (
     expect(orchestration.finalize).not.toHaveBeenCalled();
     // The legacy idempotency block loads the approved pack itself; the
     // lineage-specific gate/finalization path added no extra pack read (the
-    // only call is that pre-existing one).
-    expect(architect.loadApprovedMessagePack).toHaveBeenCalledTimes(1);
+    // first call is that pre-existing one). The second read is the WBS12.3
+    // caption-pack governance resolving the same approved pack for its own
+    // authority chain — not render-lineage work.
+    expect(architect.loadApprovedMessagePack).toHaveBeenCalledTimes(2);
     // Legacy billing/persistence ran unchanged.
     expect(creditEngine.deductCredits).toHaveBeenCalledTimes(1);
     expect(mock.log.inserts.some((entry) => entry.table === "generated_images")).toBe(true);

@@ -53,10 +53,21 @@ import {
 } from "./campaign-message-architect";
 import {
   assertApprovedCopyMatchesEnvelope,
+  assertApprovedCopyMatchesStrategyAuthority,
   assertApprovedRenderCopyUnchanged,
   type ApprovedCopyAuthority,
 } from "./approved-copy-authority";
-import { buildCreativeStrategyAuthority } from "./strategy-authority";
+import {
+  buildCreativeStrategyAuthority,
+  captureApprovedCreativeStrategyAuthority,
+} from "./strategy-authority";
+import {
+  buildPersistedCreativeArtifactLineage,
+  creativeArtifactApprovedCopyLineageFromEnvelope,
+  creativeArtifactStrategyLineageFromAuthority,
+  CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY,
+  type CreativeArtifactPersistedLineage,
+} from "./artifact-lineage";
 import { getStrategyApprovalStatus } from "../workflow/strategy-approval";
 import {
   imageRenderApprovedCopyLineageFromPack,
@@ -80,7 +91,7 @@ import {
   getPremiumTemplateStatus,
   type PremiumTemplateId,
 } from "./template-catalogue";
-import { normalizeFunnelStage } from "./cta-utils";
+import { normalizeFunnelStage, normalizeCtaText } from "./cta-utils";
 import {
   createRenderedQualityObservationScope,
   observeRenderedQualityScope,
@@ -279,6 +290,143 @@ function buildImageRenderLineageAuthority(input: {
         })
       : null,
   };
+}
+
+// ─── WBS12.3: governed caption-pack lineage construction ───
+//
+// Every envelope-bearing caption pack preserves the same authority chain as
+// the durable artifacts it derives from:
+//
+//   Business DNA snapshot → Strategy snapshot → approved message_pack → caption_pack
+//
+// The approved message pack is the exact pack already authoritative for the
+// campaign (resolved by the caller through loadApprovedMessagePack). It must
+// still hash to its V2 approval envelope and bind to the campaign's approved
+// WBS11 Strategy authority — the same chain established for governed Creative
+// entry points; mutable campaign Strategy fields are never consulted as a
+// fallback. Any mismatch fails closed before provider spend or persistence.
+// Envelope-less campaigns carry no lineage and keep legacy behavior.
+
+interface GovernedCaptionPackAuthority {
+  readonly approvedPack: CampaignMessagePack;
+  readonly lineage: CreativeArtifactPersistedLineage;
+}
+
+function buildGovernedCaptionPackAuthority(input: {
+  approvedPack: CampaignMessagePack;
+  campaign: unknown;
+}): GovernedCaptionPackAuthority {
+  const { approvedPack, campaign } = input;
+
+  // Fails closed when the pack copy was rewritten after approval (hash
+  // mismatch) or the envelope coordinates are malformed.
+  const copyAuthority = assertApprovedCopyMatchesEnvelope(approvedPack);
+
+  // Fails closed when no approved WBS11 Strategy authority exists or it was
+  // captured for a different Strategy snapshot than the approved copy.
+  const strategyAuthority = captureApprovedCreativeStrategyAuthority(campaign);
+  assertApprovedCopyMatchesStrategyAuthority(copyAuthority, strategyAuthority);
+
+  const approvedCta =
+    typeof approvedPack.cta === "string" ? approvedPack.cta.trim() : "";
+  if (!approvedCta) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "Approved message pack carries no CTA to bind the caption pack to. " +
+        "Regenerate and re-approve the Campaign Message Pack before distribution.",
+    });
+  }
+
+  return {
+    approvedPack,
+    lineage: buildPersistedCreativeArtifactLineage({
+      artifactKind: "caption_pack",
+      // A caption pack spans every selected platform; it is not a single
+      // platform variant, so no platform coordinate is persisted.
+      platform: null,
+      parent: { artifactKind: "message_pack" },
+      strategy: creativeArtifactStrategyLineageFromAuthority(strategyAuthority),
+      approvedCopy: creativeArtifactApprovedCopyLineageFromEnvelope(
+        approvedPack.v2ApprovalEnvelope!
+      ),
+    }),
+  };
+}
+
+/**
+ * Approved CTA binding for one caption field: the platform-specific approved
+ * CTA when the approved copy carries one for that platform, otherwise the
+ * pack CTA. Mirrors the convention used for governed platform captions.
+ */
+function resolveApprovedCaptionCta(
+  approvedPack: CampaignMessagePack,
+  platform: string | null
+): string {
+  if (platform) {
+    const approvedPlatformCaption = (approvedPack.platformCaptions || []).find(
+      (caption) =>
+        typeof caption?.platform === "string" &&
+        caption.platform.trim().toLowerCase() === platform
+    );
+    if (approvedPlatformCaption?.cta?.trim()) {
+      return approvedPlatformCaption.cta;
+    }
+  }
+  return approvedPack.cta ?? "";
+}
+
+/**
+ * WBS12.3 semantic gate for an envelope-governed caption pack: the generated
+ * CTA semantics must remain bound to the approved message authority.
+ * Formatting/platform adaptation stays free (CTA phrase containment under the
+ * shared normalizeCtaText convention), while explicit CTA statements must
+ * normalize exactly to the approved CTA. Divergence fails closed before the
+ * caption pack is persisted.
+ */
+function assertCaptionPackBoundToApprovedCta(input: {
+  pack: CaptionPack;
+  approvedPack: CampaignMessagePack;
+}): void {
+  const { pack, approvedPack } = input;
+
+  const fail = (detail: string): never => {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        `Caption pack diverges from the approved message authority (${detail}). ` +
+        "Regenerate the caption pack or re-approve the Campaign Message Pack before distribution.",
+    });
+  };
+
+  const ctaFields: ReadonlyArray<{
+    label: string;
+    text: string;
+    platform: string | null;
+  }> = [
+    { label: "linkedinCaption", text: pack.linkedinCaption, platform: "linkedin" },
+    { label: "facebookCaption", text: pack.facebookCaption, platform: "facebook" },
+    { label: "instagramCaption", text: pack.instagramCaption, platform: "instagram" },
+    { label: "whatsappCaption", text: pack.whatsappCaption, platform: "whatsapp" },
+    { label: "emailBody", text: pack.emailBody, platform: null },
+    { label: "outreachDm", text: pack.outreachDm, platform: null },
+  ];
+
+  for (const field of ctaFields) {
+    const approvedCta = resolveApprovedCaptionCta(approvedPack, field.platform);
+    const normalizedApproved = normalizeCtaText(approvedCta);
+    if (!normalizedApproved) continue;
+    if (!normalizeCtaText(field.text).includes(normalizedApproved)) {
+      fail(`${field.label} rewrites the approved CTA "${approvedCta}"`);
+    }
+  }
+
+  const normalizedPackCta = normalizeCtaText(approvedPack.cta);
+  for (const variation of pack.ctaVariations ?? []) {
+    if (normalizeCtaText(variation) !== normalizedPackCta) {
+      fail(`ctaVariations entry "${variation}" rewrites the approved CTA "${approvedPack.cta}"`);
+    }
+  }
 }
 
 function toJobStatus(status: ProviderStatus): "queued" | "rendering" | "completed" | "failed" | "cancelled" {
@@ -2769,6 +2917,22 @@ export async function generateCaptionPack({
 
   const brief = buildGroundedCreativeBrief({ campaign, business });
 
+  // WBS12.3: when the exact approved message pack already authoritative for
+  // this campaign carries a V2 approval envelope, the caption pack is
+  // governed: resolve and verify the full authority chain now so any
+  // inconsistency fails closed before provider spend. Envelope-less packs
+  // (or campaigns without an approved pack) keep the legacy path untouched.
+  let governedCaptionPack: GovernedCaptionPackAuthority | null = null;
+  if (post.campaignId) {
+    const approvedPack = await loadApprovedMessagePack(post.campaignId);
+    if (approvedPack?.v2ApprovalEnvelope) {
+      governedCaptionPack = buildGovernedCaptionPackAuthority({
+        approvedPack,
+        campaign,
+      });
+    }
+  }
+
   const brandColors = (business.brandColors as string[] | undefined) || [];
 
   const postMeta = (post.metadata || {}) as any;
@@ -2783,7 +2947,12 @@ export async function generateCaptionPack({
 
   const formattedOffer = renderOffer(campaign.offerDetails, business.name);
   const leafletHeadline = offerToHeadline(campaign.offerDetails);
-    const normalizedCta = normalizeCtaWithContext(campaign.preferredCta || post.cta, undefined, {
+    // WBS12.3: under copy authority the approved pack CTA is the semantic
+    // authority for every generated caption; mutable campaign CTA fields are
+    // never consulted as a fallback. Legacy path keeps normalizeCtaWithContext.
+    const normalizedCta = governedCaptionPack
+    ? governedCaptionPack.approvedPack.cta
+    : normalizeCtaWithContext(campaign.preferredCta || post.cta, undefined, {
       preferredCta: campaign.preferredCta || campaign.ctaStrategy || null,
       objectiveOrStage: Array.isArray(campaign.funnelStages) && campaign.funnelStages.length > 0
         ? String((campaign.funnelStages as any[])[0]?.stage || campaign.goal || "")
@@ -2976,6 +3145,15 @@ OUTPUT FORMAT — return ONLY a single JSON object with these exact keys:
       throw new TRPCError({ code: "BAD_REQUEST", message: "Caption pack requires content post to belong to a campaign" });
     }
 
+    // WBS12.3: under copy authority the generated CTA semantics must remain
+    // bound to the approved message authority before anything is persisted.
+    if (governedCaptionPack) {
+      assertCaptionPackBoundToApprovedCta({
+        pack,
+        approvedPack: governedCaptionPack.approvedPack,
+      });
+    }
+
     await db.insert(campaignAssets).values({
       userId,
       campaignId: post.campaignId,
@@ -2998,12 +3176,24 @@ OUTPUT FORMAT — return ONLY a single JSON object with these exact keys:
         assetType: "caption_pack",
         assetTier: resolvedAssetTier,
         creativeBriefFingerprint: brief.fingerprint,
+        // WBS12.3: governed packs persist the canonical durable lineage under
+        // the shared metadata key; envelope-less packs stay legacy-shaped with
+        // no lineage key manufactured.
+        ...(governedCaptionPack
+          ? { [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]: governedCaptionPack.lineage }
+          : null),
       },
     });
 
     console.log(`[CreativeService] Caption pack stored | userId=${userId} | contentPostId=${contentPostId}`);
     return pack;
   } catch (err: any) {
+    // WBS12.3 governance failures (approved-copy tamper, Strategy/copy
+    // binding mismatch, CTA semantic divergence) fail closed and propagate;
+    // they are never downgraded to a retryable generation failure.
+    if (err instanceof TRPCError && err.code === "PRECONDITION_FAILED") {
+      throw err;
+    }
     console.error(`[CreativeService] Caption pack failed | userId=${userId} | contentPostId=${contentPostId} | error="${err.message}"`);
     return null;
   }
