@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { approvalRequests, campaigns, businesses, socialIntegrations, agentRuns } from "@db/schema";
+import { approvalRequests, campaigns, businesses, socialIntegrations, agentRuns, strategySnapshots } from "@db/schema";
 import { eq, and, or, desc, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { onApprovalResolved } from "./lib/workflow/triggers";
@@ -12,6 +12,7 @@ import {
   getStrategyApprovalStatus,
   isLineageAuthoritative,
   validateStrategyRunForCampaign,
+  isStrategySnapshotAuthorityMatch,
 } from "./lib/workflow/strategy-approval";
 import {
   getLaunchApprovalStatus,
@@ -117,6 +118,34 @@ async function validateStrategyApprovalLineage(
       code: "PRECONDITION_FAILED",
       message:
         "The strategy run linked to this approval request is missing or not complete. Regenerate the strategy for approval.",
+    });
+  }
+
+  const [strategySnapshot] = await db
+    .select()
+    .from(strategySnapshots)
+    .where(
+      eq(
+        strategySnapshots.strategyRunId,
+        status.lineage.strategyRunId
+      )
+    )
+    .limit(1);
+
+  if (
+    !strategySnapshot ||
+    !isStrategySnapshotAuthorityMatch(
+      status.lineage,
+      strategySnapshot,
+      approval.userId,
+      Number(approval.campaignId),
+      campaign.businessId
+    )
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "The strategy approval lineage does not match the immutable Strategy snapshot. Regenerate the strategy for approval.",
     });
   }
 

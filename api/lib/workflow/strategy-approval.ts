@@ -1,3 +1,4 @@
+import { getStrategySnapshotByStrategyRunId } from "../strategy/strategy-snapshot-db-store";
 import { buildGroundedCreativeBrief } from "../creative/brief-grounding";
 import { validateStrategyOutputAgainstCampaign } from "../agents/strategy-agent";
 import { getDb } from "../../queries/connection";
@@ -5,11 +6,22 @@ import { agentRuns } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
+export interface StrategyApprovalSnapshotAuthority {
+  strategySnapshotId: string;
+  strategyVersion: number;
+  businessDnaSnapshotId: string;
+  strategyHashSha256: string;
+}
+
 export interface StrategyApprovalLineage {
   /** Fingerprint of the campaign brief that produced the linked strategy. */
   creativeBriefFingerprint: string;
   /** ID of the strategy agent run that produced the strategy. */
   strategyRunId: number;
+  strategySnapshotId: string;
+  strategyVersion: number;
+  businessDnaSnapshotId: string;
+  strategyHashSha256: string;
   /** ID of the strategy_review approval request tied to that strategy run. */
   approvalRequestId: number;
   /** Terminal state of the lineage request. */
@@ -48,6 +60,24 @@ function readLineage(ctx: Record<string, unknown> | null | undefined): StrategyA
   const l = raw as Record<string, unknown>;
   const creativeBriefFingerprint = readContextString(l.creativeBriefFingerprint);
   const strategyRunId = typeof l.strategyRunId === "number" && Number.isFinite(l.strategyRunId) ? l.strategyRunId : null;
+  const strategySnapshotId =
+    readContextString(
+      l.strategySnapshotId
+    );
+  const strategyVersion =
+    typeof l.strategyVersion === "number" &&
+    Number.isInteger(l.strategyVersion) &&
+    l.strategyVersion > 0
+      ? l.strategyVersion
+      : null;
+  const businessDnaSnapshotId =
+    readContextString(
+      l.businessDnaSnapshotId
+    );
+  const strategyHashSha256 =
+    readContextString(
+      l.strategyHashSha256
+    );
   const approvalRequestId =
     typeof l.approvalRequestId === "number" && Number.isFinite(l.approvalRequestId) ? l.approvalRequestId : null;
   const status =
@@ -55,8 +85,29 @@ function readLineage(ctx: Record<string, unknown> | null | undefined): StrategyA
       ? (l.status as StrategyApprovalLineage["status"])
       : null;
 
-  if (!creativeBriefFingerprint || strategyRunId == null || approvalRequestId == null || !status) return null;
-  return { creativeBriefFingerprint, strategyRunId, approvalRequestId, status };
+  if (
+    !creativeBriefFingerprint ||
+    strategyRunId == null ||
+    !strategySnapshotId ||
+    strategyVersion == null ||
+    !businessDnaSnapshotId ||
+    !strategyHashSha256 ||
+    approvalRequestId == null ||
+    !status
+  ) {
+    return null;
+  }
+
+  return {
+    creativeBriefFingerprint,
+    strategyRunId,
+    strategySnapshotId,
+    strategyVersion,
+    businessDnaSnapshotId,
+    strategyHashSha256,
+    approvalRequestId,
+    status,
+  };
 }
 
 /**
@@ -121,9 +172,29 @@ export function buildStrategyApprovalLineage(
   creativeBriefFingerprint: string,
   strategyRunId: number,
   approvalRequestId: number,
-  status: StrategyApprovalLineage["status"] = "pending"
+  status: StrategyApprovalLineage["status"] = "pending",
+  snapshotAuthority?: StrategyApprovalSnapshotAuthority
 ): StrategyApprovalLineage {
-  return { creativeBriefFingerprint, strategyRunId, approvalRequestId, status };
+  if (!snapshotAuthority) {
+    throw new Error(
+      "Strategy approval lineage requires immutable Strategy snapshot authority."
+    );
+  }
+
+  return {
+    creativeBriefFingerprint,
+    strategyRunId,
+    strategySnapshotId:
+      snapshotAuthority.strategySnapshotId,
+    strategyVersion:
+      snapshotAuthority.strategyVersion,
+    businessDnaSnapshotId:
+      snapshotAuthority.businessDnaSnapshotId,
+    strategyHashSha256:
+      snapshotAuthority.strategyHashSha256,
+    approvalRequestId,
+    status,
+  };
 }
 
 /**
@@ -131,6 +202,47 @@ export function buildStrategyApprovalLineage(
  * and the supplied run/request IDs. This guards against approving a stale
  * request after the brief has been regenerated.
  */
+export function isStrategySnapshotAuthorityMatch(
+  lineage: StrategyApprovalLineage,
+  snapshot: {
+    snapshotId: string;
+    userId: number;
+    campaignId: number;
+    businessId: number;
+    strategyRunId: number;
+    businessDnaSnapshotId: string;
+    version: number;
+    creativeBriefFingerprint: string;
+    strategyHashSha256: string;
+  },
+  expectedUserId: number,
+  expectedCampaignId: number,
+  expectedBusinessId?: number | null
+): boolean {
+  return (
+    snapshot.snapshotId ===
+      lineage.strategySnapshotId &&
+    snapshot.strategyRunId ===
+      lineage.strategyRunId &&
+    snapshot.version ===
+      lineage.strategyVersion &&
+    snapshot.businessDnaSnapshotId ===
+      lineage.businessDnaSnapshotId &&
+    snapshot.strategyHashSha256 ===
+      lineage.strategyHashSha256 &&
+    snapshot.creativeBriefFingerprint ===
+      lineage.creativeBriefFingerprint &&
+    snapshot.userId === expectedUserId &&
+    snapshot.campaignId ===
+      expectedCampaignId &&
+    (
+      expectedBusinessId == null ||
+      snapshot.businessId ===
+        expectedBusinessId
+    )
+  );
+}
+
 export function isLineageAuthoritative(
   campaign: unknown,
   input: { strategyRunId?: number | null; approvalRequestId?: number | null },
@@ -215,6 +327,60 @@ export async function assertApprovedStrategySemanticallyValid(
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message: `The approved strategy no longer matches the current campaign brief: ${semantic.reason}. Regenerate the strategy for approval before creating content.`,
+    });
+  }
+
+  if (!status.lineage) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "The approved strategy is missing immutable snapshot lineage. Regenerate the strategy for approval before creating content.",
+    });
+  }
+
+  const campaignId =
+    Number(
+      (campaign as any)?.id
+    );
+
+  const businessId =
+    Number(
+      (campaign as any)?.businessId
+    );
+
+  if (
+    !Number.isInteger(campaignId) ||
+    campaignId <= 0
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "The approved strategy campaign authority is invalid. Regenerate the strategy for approval before creating content.",
+    });
+  }
+
+  const strategySnapshot =
+    await getStrategySnapshotByStrategyRunId(
+      status.lineage.strategyRunId
+    );
+
+  if (
+    !strategySnapshot ||
+    !isStrategySnapshotAuthorityMatch(
+      status.lineage,
+      strategySnapshot,
+      userId,
+      campaignId,
+      Number.isInteger(businessId) &&
+      businessId > 0
+        ? businessId
+        : null
+    )
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "The approved strategy no longer matches its immutable Strategy snapshot authority. Regenerate the strategy for approval before creating content.",
     });
   }
 }

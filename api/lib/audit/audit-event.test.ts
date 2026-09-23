@@ -51,6 +51,7 @@ describe("audit-event taxonomy", () => {
       "publication_failure",
       "engagement_escalation",
       "learning_record_creation",
+      "strategy_snapshot_materialized",
     ]);
   });
 

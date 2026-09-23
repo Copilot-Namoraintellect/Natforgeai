@@ -26,6 +26,7 @@ import { getEstimatedAgentCost } from "../billing/cost-tracker";
 import { defaultModel } from "./openai";
 import { calculateTokenCost } from "../billing/cost-tracker";
 import { emitAgentProviderAlert } from "./provider-error";
+import { materializeGovernedStrategySnapshot } from "../strategy/strategy-snapshot-materialization";
 
 function parseBudgetNumber(value: unknown): number {
   if (typeof value === "number") return value;
@@ -1518,7 +1519,18 @@ export async function runStrategyAgent({
     });
   }
 
-  // 6. Success: flat, backward-compatible output.
+  // 6. Establish immutable Strategy authority before mutable success projections.
+  const strategySnapshotAuthority =
+    await materializeGovernedStrategySnapshot({
+      userId,
+      campaignId,
+      businessId: Number(currentCampaign?.businessId),
+      strategyRunId: runId,
+      creativeBriefFingerprint: briefFingerprint,
+      snapshot: groundedOutput,
+    });
+
+  // 7. Success: flat, backward-compatible output.
   await db
     .update(agentRuns)
     .set({
@@ -1541,6 +1553,10 @@ export async function runStrategyAgent({
         strategyGeneratedAt: new Date().toISOString(),
         strategyRunId: runId,
         strategyFingerprint: briefFingerprint,
+        strategySnapshotId: strategySnapshotAuthority.snapshot.snapshotId,
+        strategyVersion: strategySnapshotAuthority.snapshot.version,
+        businessDnaSnapshotId: strategySnapshotAuthority.snapshot.businessDnaSnapshotId,
+        strategyHashSha256: strategySnapshotAuthority.snapshot.strategyHashSha256,
         positioning: groundedOutput.positioning,
         valueProposition: groundedOutput.valueProposition,
         coreMessage: groundedOutput.coreMessage,

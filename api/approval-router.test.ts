@@ -44,8 +44,46 @@ function createMockDb({
   } as any,
   approvals = [] as any[],
   agentRuns = [] as any[],
+  strategySnapshots = undefined as any[] | undefined,
   insertId = 555,
 } = {}) {
+  const resolvedStrategySnapshots =
+    strategySnapshots ??
+    agentRuns
+      .filter(
+        (run: any) =>
+          run?.agentType === "strategy"
+      )
+      .map(
+        (run: any) => ({
+          snapshotId:
+            "strategy-test-snapshot",
+          userId:
+            Number(run.userId),
+          campaignId:
+            Number(run.campaignId),
+          businessId:
+            Number(
+              campaign?.businessId ?? 1
+            ),
+          strategyRunId:
+            Number(run.id),
+          businessDnaSnapshotId:
+            "bdna-test-snapshot",
+          version: 1,
+          creativeBriefFingerprint:
+            run?.output?.creativeBriefFingerprint ??
+            "fp-current",
+          strategyHashSha256:
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          snapshot: {},
+          capturedAt:
+            new Date(
+              "2026-09-22T00:00:00.000Z"
+            ),
+        })
+      );
+
   const state = {
     updatedApprovals: [] as any[],
     updatedCampaigns: [] as any[],
@@ -60,7 +98,7 @@ function createMockDb({
       from: vi.fn((table: unknown) => {
         const name = getTableName(table);
         const result =
-          name === "approval_requests" ? approvals : name === "campaigns" ? [campaign] : name === "agent_runs" ? agentRuns : [];
+          name === "approval_requests" ? approvals : name === "campaigns" ? [campaign] : name === "agent_runs" ? agentRuns : name === "strategy_snapshots" ? resolvedStrategySnapshots : [];
         return {
           where: vi.fn(() => {
             const chainable = {
@@ -141,6 +179,10 @@ describe("approvalRouter.strategy_review lineage validation", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 10,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 1,
             status: "pending",
           },
@@ -190,6 +232,10 @@ describe("approvalRouter.strategy_review lineage validation", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-old",
             strategyRunId: 10,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 1,
             status: "pending",
           },
@@ -238,6 +284,10 @@ describe("approvalRouter.strategy_review lineage validation", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 10,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 1,
             status: "pending",
           },
@@ -286,6 +336,10 @@ describe("approvalRouter.strategy_review lineage validation", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 10,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 1,
             status: "pending",
           },
@@ -335,6 +389,10 @@ describe("approvalRouter.strategy_review lineage validation", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-old",
             strategyRunId: 10,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 33,
             status: "approved",
           },
@@ -391,6 +449,10 @@ describe("approvalRouter.strategy_review lineage validation", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 245,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 34,
             status: "pending",
           },

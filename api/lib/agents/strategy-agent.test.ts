@@ -48,6 +48,28 @@ vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
 }));
 
+vi.mock("../strategy/strategy-snapshot-materialization", () => ({
+  materializeGovernedStrategySnapshot: vi.fn(async (input: any) => ({
+    status: "inserted",
+    snapshot: {
+      snapshotId: `test-strategy-${input.strategyRunId}`,
+      userId: input.userId,
+      campaignId: input.campaignId,
+      businessId:
+        Number.isInteger(input.businessId) && input.businessId > 0
+          ? input.businessId
+          : 1,
+      strategyRunId: input.strategyRunId,
+      businessDnaSnapshotId: "test-bdna-snapshot",
+      version: 1,
+      creativeBriefFingerprint: input.creativeBriefFingerprint,
+      strategyHashSha256: "0".repeat(64),
+      snapshot: input.snapshot,
+      capturedAt: new Date("2026-09-22T00:00:00.000Z"),
+    },
+  })),
+}));
+
 vi.mock("./openai", () => ({
   defaultModel: { modelId: "gpt-4o-mini" },
 }));
