@@ -25,8 +25,11 @@
  *   rendered observation, never calls providers or the database, never reads
  *   clocks or randomness — identical inputs produce identical decisions.
  *
- * This module is intentionally not imported by any production path yet; the
- * owning stream wires it at the render-finalization seam.
+ * This module is wired into the production render lifecycle by
+ * `rendered-fidelity-production-gate.ts` (WBS12E3), which resolves the
+ * dedicated RENDERED_FIDELITY_GATE_MODE runtime mode and supplies the same
+ * approved authority state consumed by the rendered-quality observation
+ * scope.
  */
 
 import {

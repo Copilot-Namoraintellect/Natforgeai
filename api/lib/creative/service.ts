@@ -115,6 +115,7 @@ import {
   createImageRenderClaimHeartbeat,
   type ImageRenderClaimHeartbeatHandle,
 } from "./image-render-claim-heartbeat";
+import { evaluateRenderedFidelityProductionGate } from "./fidelity/rendered-fidelity-production-gate";
 
 // ─── Dormant image-render claim orchestration seams (B2B-3D) ───
 //
@@ -1960,6 +1961,86 @@ export async function generatePremiumLeaflet({
       }
     } else if (isV2Provider && !renderEvaluationStatus) {
       renderEvaluationStatus = "not_requested";
+    }
+
+    // WBS12E3: rendered semantic fidelity gate at the narrow post-render /
+    // pre-storage seam, before permanent storage, claim completion, and any
+    // billing. The observation uses the exact final rendered semantic values
+    // carried by renderReq (the same values persisted in metadata), and the
+    // approved headline comes from the exact approved message-pack authority
+    // selected for this request. Observe mode (the default) reports
+    // wouldBlock/reason codes and never blocks; enforce mode fails closed
+    // here and fails the owned claim exactly once — no retry, no second
+    // render or charge.
+    const renderedFidelityGate = evaluateRenderedFidelityProductionGate({
+      authority: buildPremiumV2QualityObservationInput({
+        userId,
+        post,
+        campaign,
+        business,
+        headline,
+        subheadline,
+        offer,
+        cta,
+        services,
+        workflowObservation: null,
+      }),
+      approvedHeadline: approvedMessagePack?.headline ?? null,
+      rendered: {
+        headline: renderReq.headline,
+        subheadline: renderReq.subheadline,
+        offer: renderReq.offer,
+        cta: renderReq.cta,
+        claims: renderReq.services,
+        contactDetails: [
+          renderReq.contact?.phone,
+          renderReq.contact?.whatsapp,
+          renderReq.contact?.website,
+          renderReq.contact?.email,
+          renderReq.contact?.location,
+        ].filter(
+          (value): value is string => typeof value === "string" && value.trim().length > 0
+        ),
+        businessName: renderReq.businessName,
+      },
+    });
+    if (renderedFidelityGate.status === "blocked") {
+      const message = `Premium leaflet failed rendered semantic fidelity gate: ${renderedFidelityGate.reasonCodes.join(", ")}`;
+      logError("[PremiumLeaflet] Rendered semantic fidelity gate blocked render", {
+        userId,
+        contentPostId,
+        reasonCodes: renderedFidelityGate.reasonCodes,
+        contractFingerprint: renderedFidelityGate.contractFingerprint,
+        evidenceSetFingerprint: renderedFidelityGate.evidenceSetFingerprint,
+        evaluatorVersion: renderedFidelityGate.evaluatorVersion,
+      });
+      await setPostImageStatus(contentPostId, { imageStatus: "failed", imageError: message });
+      await failOwnedClaimOnce();
+      return {
+        status: "failed",
+        jobId: renderResult.providerJobId || "",
+        errorMessage: message,
+        provider: templateRenderer.name,
+        providerJobId: renderResult.providerJobId,
+      };
+    }
+    if (
+      renderedFidelityGate.status === "observed" ||
+      renderedFidelityGate.status === "passed"
+    ) {
+      logInfo("[PremiumLeaflet] Rendered semantic fidelity evaluated", {
+        userId,
+        contentPostId,
+        mode: renderedFidelityGate.mode,
+        wouldBlock: renderedFidelityGate.wouldBlock,
+        reasonCodes: renderedFidelityGate.reasonCodes,
+        contractFingerprint: renderedFidelityGate.contractFingerprint,
+        evidenceSetFingerprint: renderedFidelityGate.evidenceSetFingerprint,
+        evaluatorVersion: renderedFidelityGate.evaluatorVersion,
+        ...(renderedFidelityGate.modeWarning
+          ? { modeWarning: renderedFidelityGate.modeWarning }
+          : {}),
+      });
     }
 
     const storagePrefix = {
