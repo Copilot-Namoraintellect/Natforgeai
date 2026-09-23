@@ -1,3 +1,11 @@
+import {
+  captureApprovedCreativeStrategyAuthority,
+  type CreativeStrategyAuthority,
+} from "../creative/strategy-authority";
+import {
+  resolveImmutableCreativeStrategyInput,
+  type CreativeStrategySnapshotInput,
+} from "../creative/strategy-snapshot-input";
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq } from "drizzle-orm";
 import { agentRuns, campaignAssets, campaigns, contentPosts } from "@db/schema";
@@ -123,8 +131,46 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
     .where(and(eq(campaigns.id, input.campaignId), eq(campaigns.userId, input.userId)))
     .limit(1);
 
+  let creativeStrategyAuthority: CreativeStrategyAuthority | null = null;
+  let immutableStrategyInput: CreativeStrategySnapshotInput | null = null;
+
   if (campaign) {
     await assertApprovedStrategySemanticallyValid(campaign, input.userId);
+
+    // WBS12A: capture the exact WBS11 snapshot/approval identity immediately
+    // after the fail-closed Strategy assertion and before this job is marked
+    // running. Every successful Creative job now retains this authority.
+    creativeStrategyAuthority =
+      captureApprovedCreativeStrategyAuthority(campaign);
+
+    const campaignBusinessId =
+      Number(campaign.businessId);
+
+    if (
+      !Number.isInteger(campaignBusinessId) ||
+      campaignBusinessId <= 0
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "Campaign is not linked to a business. Complete business onboarding first.",
+      });
+    }
+
+    // WBS12B1: Creative now resolves the exact immutable Strategy snapshot,
+    // verifies every authority coordinate and recomputes its payload hash
+    // before the content-generation job is allowed to start.
+    immutableStrategyInput =
+      await resolveImmutableCreativeStrategyInput({
+        authority:
+          creativeStrategyAuthority,
+        userId:
+          input.userId,
+        campaignId:
+          input.campaignId,
+        businessId:
+          campaignBusinessId,
+      });
   }
 
   await db
@@ -165,18 +211,36 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
       });
     }
 
-    const personas = campaign.personas as any[] | null | undefined;
+    if (!immutableStrategyInput) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "Creative generation is missing immutable Strategy snapshot authority. Regenerate and approve the Strategy before creating content.",
+      });
+    }
+
+    // Strategy-derived Creative context comes only from the immutable WBS11
+    // snapshot. Mutable campaign projections are no longer authority here.
+    const {
+      creativeContext,
+    } = immutableStrategyInput;
+
+    const personas =
+      creativeContext.personas;
+
     const hasCreativeContext =
-      campaign.coreMessage ||
-      (campaign.workflowContext as any)?.coreMessage ||
-      (campaign.workflowContext as any)?.valueProposition ||
-      (personas && Array.isArray(personas) && personas.length > 0);
+      creativeContext.coreMessage ||
+      creativeContext.valueProposition ||
+      (
+        Array.isArray(personas) &&
+        personas.length > 0
+      );
 
     if (!hasCreativeContext) {
       throw new TRPCError({
-        code: "BAD_REQUEST",
+        code: "PRECONDITION_FAILED",
         message:
-          "Campaign is missing creative context (core message, personas, or approved strategy). Generate and approve a strategy first.",
+          "The immutable approved Strategy snapshot is missing Creative context. Regenerate and approve the Strategy before creating content.",
       });
     }
 
@@ -235,6 +299,7 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
             postCount: existingPostCount,
             hasValidMessagePack,
             campaignId: input.campaignId,
+            strategyAuthority: creativeStrategyAuthority,
             jobType: "content_generation_job",
             durations,
           } as any,
@@ -336,6 +401,7 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
           postCount: creativeResult.savedPosts,
           savedAssets: creativeResult.savedAssets,
           creativeRunId: creativeResult.packRunId,
+          strategyAuthority: creativeStrategyAuthority,
           jobType: "content_generation_job",
           durations,
         } as any,
