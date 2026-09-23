@@ -50,6 +50,7 @@ vi.mock("../../env", () => ({
 }));
 
 import { runHybridPipeline } from "./hybrid-pipeline";
+import { VISUAL_QUALITY_GATE_MODE_ENV_VAR } from "../quality/visual-quality-gate-mode";
 
 function makeInput(overrides?: { sampleMode?: boolean }) {
   return {
@@ -201,6 +202,7 @@ function makeRejectingCritic(): any {
 describe("Hybrid pipeline orchestrator", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    delete process.env[VISUAL_QUALITY_GATE_MODE_ENV_VAR];
 
     mockPlanCreativeWithAI.mockResolvedValue({ value: makePlan(), usedOpenAI: true });
     mockGenerateBackground.mockResolvedValue(Buffer.from("background"));
@@ -739,5 +741,115 @@ describe("Hybrid pipeline orchestrator", () => {
     expect(result.metadata.finalDecision).toBe("hybrid_review_required");
     expect(result.visualDirection.serviceLayout).toBe("featured");
     expect(["balanced", "minimal"]).toContain(result.visualDirection.density);
+  });
+
+  describe("WBS12F3 visual quality gate", () => {
+    /**
+     * Plan with a low-contrast palette: the legacy premium contract never
+     * evaluates palette contrast, so it still passes with a green critic. The
+     * WBS12F gate scores readability_contrast deterministically from the
+     * palette (worst ratio < 3 → score 40 < 70) and fails on it.
+     */
+    function makeWeakContrastPlan() {
+      const plan = makePlan();
+      return {
+        ...plan,
+        brandKit: {
+          ...plan.brandKit,
+          accent: "#0047AB",
+          text: "#999999",
+        },
+      };
+    }
+
+    it("observe mode records a would-block decision in metadata without changing the premium decision", async () => {
+      mockPlanCreativeWithAI.mockResolvedValue({ value: makeWeakContrastPlan(), usedOpenAI: true });
+
+      const result = await runHybridPipeline(makeInput() as any);
+      expect(result.metadata.finalDecision).toBe("premium_ready");
+      expect(result.metadata.usedDeterministicFallback).toBe(false);
+      expect(result.metadata.safeToAutoPublish).toBe(true);
+      expect(result.metadata.safeToChargePremiumCredits).toBe(true);
+      expect(result.metadata.needsHumanReview).toBe(false);
+
+      expect(result.metadata.visualQualityGateMode).toBe("observe");
+      expect(result.metadata.visualQualityGateWouldBlock).toBe(true);
+      expect(result.metadata.visualQualityGateBlocked).toBe(false);
+      expect(result.metadata.visualQualityGateTotalScore as number).toBeGreaterThanOrEqual(85);
+      expect(result.metadata.visualQualityGateFailedDimensions).toEqual(["readability_contrast"]);
+      expect(result.metadata.visualQualityGateInsufficientDimensions).toEqual([]);
+    });
+
+    it("enforce mode downgrades a visual failure to human review and blocks publishing and charging", async () => {
+      process.env[VISUAL_QUALITY_GATE_MODE_ENV_VAR] = "enforce";
+      mockPlanCreativeWithAI.mockResolvedValue({ value: makeWeakContrastPlan(), usedOpenAI: true });
+
+      const result = await runHybridPipeline(makeInput() as any);
+      expect(result.metadata.finalDecision).toBe("hybrid_review_required");
+      expect(result.metadata.usedDeterministicFallback).toBe(false);
+      expect(result.metadata.safeToAutoPublish).toBe(false);
+      expect(result.metadata.safeToChargePremiumCredits).toBe(false);
+      expect(result.metadata.needsHumanReview).toBe(true);
+      expect(result.metadata.premiumDesignContractIssues?.some((i) => /Visual quality release gate blocked/.test(i))).toBe(true);
+
+      expect(result.metadata.visualQualityGateMode).toBe("enforce");
+      expect(result.metadata.visualQualityGateBlocked).toBe(true);
+      expect(result.metadata.visualQualityGateWouldBlock).toBe(true);
+      expect(result.metadata.visualQualityGateFailedDimensions).toEqual(["readability_contrast"]);
+    });
+
+    it("enforce mode with passing visual evidence keeps premium_ready semantics", async () => {
+      process.env[VISUAL_QUALITY_GATE_MODE_ENV_VAR] = "enforce";
+
+      const result = await runHybridPipeline(makeInput() as any);
+      expect(result.metadata.finalDecision).toBe("premium_ready");
+      expect(result.metadata.usedDeterministicFallback).toBe(false);
+      expect(result.metadata.safeToAutoPublish).toBe(true);
+      expect(result.metadata.safeToChargePremiumCredits).toBe(true);
+      expect(result.metadata.visualQualityGateMode).toBe("enforce");
+      expect(result.metadata.visualQualityGateBlocked).toBe(false);
+      expect(result.metadata.visualQualityGateWouldBlock).toBe(false);
+      expect(result.metadata.visualQualityGateFailedDimensions).toEqual([]);
+    });
+
+    it("enforce mode with an unavailable critic fails closed and records insufficient evidence on the fallback path", async () => {
+      process.env[VISUAL_QUALITY_GATE_MODE_ENV_VAR] = "enforce";
+      mockCritiqueRenderedLeaflet.mockResolvedValue({
+        scores: { brandFidelity: 50, readability: 50, premiumFeel: 50, visualHierarchy: 50, logoUsage: 50, CTAVisibility: 50, genericTemplateRisk: 50 },
+        passed: false,
+        unavailable: true,
+        quotaError: true,
+        criticalIssues: ["OpenAI quota error"],
+        improvementSuggestions: ["Re-render with deterministic fallback and queue for manual review."],
+        realLogoPresent: false,
+        logoMatchesBrand: false,
+        fallbackBadgeUsed: true,
+        logoDistortedOrCropped: false,
+        brandFidelityPassed: false,
+      });
+
+      const result = await runHybridPipeline(makeInput() as any);
+      expect(result.metadata.usedDeterministicFallback).toBe(true);
+      expect(result.metadata.finalDecision).toBe("hybrid_review_required");
+      expect(result.metadata.visualQualityGateMode).toBe("enforce");
+      expect(result.metadata.visualQualityGateBlocked).toBe(true);
+      expect(result.metadata.visualQualityGateWouldBlock).toBe(true);
+      expect(result.metadata.visualQualityGateTotalScore).toBeNull();
+      expect(result.metadata.visualQualityGateInsufficientDimensions).toEqual(
+        expect.arrayContaining(["visual_hierarchy", "layout_balance", "typography"])
+      );
+    });
+
+    it("does not change the openai call count in either gate mode", async () => {
+      mockPlanCreativeWithAI.mockResolvedValue({ value: makeWeakContrastPlan(), usedOpenAI: true });
+
+      await runHybridPipeline(makeInput() as any);
+      expect(mockCritiqueRenderedLeaflet).toHaveBeenCalledTimes(3);
+
+      process.env[VISUAL_QUALITY_GATE_MODE_ENV_VAR] = "enforce";
+      await runHybridPipeline(makeInput() as any);
+      expect(mockCritiqueRenderedLeaflet).toHaveBeenCalledTimes(6);
+      expect(mockGenerateBackground).toHaveBeenCalledTimes(2);
+    });
   });
 });

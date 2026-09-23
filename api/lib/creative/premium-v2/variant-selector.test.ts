@@ -22,6 +22,7 @@ vi.mock("./vision-critic", () => ({
 }));
 
 import { selectBestHybridVariant } from "./variant-selector";
+import { VISUAL_QUALITY_GATE_MODE_ENV_VAR } from "../quality/visual-quality-gate-mode";
 
 const business = {
   displayName: "Sparkle Cleaners",
@@ -142,6 +143,7 @@ describe("selectBestHybridVariant", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    delete process.env[VISUAL_QUALITY_GATE_MODE_ENV_VAR];
     mockGenerateBackground.mockResolvedValue(Buffer.from("background"));
     mockRenderHybridLeaflet.mockResolvedValue({
       buffer: await makeLeafletBuffer(),

@@ -42,6 +42,42 @@ import { selectBestHybridVariant } from "./variant-selector";
 import type { PremiumDesignContractResult } from "./premium-design-contract";
 import type { LayoutScoreResult } from "./layout-scoring";
 import { type LogoCropCriticResult } from "./vision-critic";
+import type { VisualQualityReleaseGateDecision } from "../quality/visual-quality-release-gate";
+
+/**
+ * Flatten a WBS12F visual-gate decision into the persisted metadata record.
+ * Absent when no gate decision was evaluated (e.g. deterministic fallback).
+ */
+function buildVisualGateMetadataRecord(
+  visualGate: VisualQualityReleaseGateDecision | null | undefined
+): Pick<
+  HybridPipelineMetadata,
+  | "visualQualityGateMode"
+  | "visualQualityGateBlocked"
+  | "visualQualityGateWouldBlock"
+  | "visualQualityGateTotalScore"
+  | "visualQualityGateFailedDimensions"
+  | "visualQualityGateInsufficientDimensions"
+> {
+  if (!visualGate) {
+    return {
+      visualQualityGateMode: undefined,
+      visualQualityGateBlocked: undefined,
+      visualQualityGateWouldBlock: undefined,
+      visualQualityGateTotalScore: undefined,
+      visualQualityGateFailedDimensions: undefined,
+      visualQualityGateInsufficientDimensions: undefined,
+    };
+  }
+  return {
+    visualQualityGateMode: visualGate.mode,
+    visualQualityGateBlocked: visualGate.blocked,
+    visualQualityGateWouldBlock: visualGate.wouldBlock,
+    visualQualityGateTotalScore: visualGate.totalScore,
+    visualQualityGateFailedDimensions: visualGate.failedDimensions.map((d) => d.dimensionId),
+    visualQualityGateInsufficientDimensions: visualGate.insufficientDimensions.slice(),
+  };
+}
 
 export async function runHybridPipeline(input: HybridPipelineInput): Promise<HybridPipelineResult> {
   if (!env.enableHybridLeafletPipeline || !env.openaiApiKey) {
@@ -122,6 +158,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
         lastRenderMetrics: best.metrics,
         lastContentFidelity: best.contentFidelity,
         lastCopyQuality: best.copyQuality,
+        visualGate: best.contract.visualGate,
       });
     }
 
@@ -182,6 +219,7 @@ export async function runHybridPipeline(input: HybridPipelineInput): Promise<Hyb
         lastContentFidelity: best.contentFidelity,
         lastCopyQuality: best.copyQuality,
         brandFidelity,
+        visualGate: best.contract.visualGate,
         finalDecisionOverride: contentIssue ? "content_review_required" : "fallback_used",
       });
     }
@@ -388,6 +426,8 @@ interface FallbackOptions {
   lastContentFidelity?: ContentFidelityResult;
   lastCopyQuality?: CopyQualityResult;
   brandFidelity?: BrandFidelityAdjudication;
+  /** WBS12F visual-gate decision evaluated for the rejected hybrid render, if any. */
+  visualGate?: VisualQualityReleaseGateDecision | null;
 }
 
 async function runDeterministicFallback(
@@ -559,6 +599,8 @@ async function runDeterministicFallback(
     brandScore: undefined,
     selectedVariantIndex: undefined,
     variantCount: undefined,
+    // WBS12F visual gate record for the rejected hybrid render, when evaluated.
+    ...buildVisualGateMetadataRecord(options.visualGate ?? null),
   };
 
   return {
@@ -701,6 +743,8 @@ function buildResult(
     safeToAutoPublish: contract?.safeToAutoPublish ?? false,
     safeToChargePremiumCredits: contract?.safeToChargePremiumCredits ?? false,
     needsHumanReview: contract?.needsHumanReview ?? false,
+    // WBS12F visual-quality release gate record
+    ...buildVisualGateMetadataRecord(contract?.visualGate ?? null),
     // Deterministic layout scoring
     layoutScore: layoutScores?.layoutScore,
     ctaDominanceScore: layoutScores?.ctaDominanceScore,
