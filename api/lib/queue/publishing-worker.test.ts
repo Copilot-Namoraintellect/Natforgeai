@@ -237,6 +237,30 @@ describe("publishing-worker permanent vs transient failures", () => {
     await expect(processPublishingJob(makeJob())).rejects.toThrow("Safety check blocked");
     await expect(processPublishingJob(makeJob())).rejects.not.toBeInstanceOf(UnrecoverableError);
   });
+
+  it("maps a recovery-terminal result to UnrecoverableError so BullMQ never blind-retries it", async () => {
+    const { publishSinglePost } = await import("../workflow/publishing-runner");
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 1,
+      status: "failed",
+      platform: "Instagram",
+      error: "Publication credential failure: reconnect the integration to recover.",
+      unrecoverable: true,
+    });
+
+    await expect(processPublishingJob(makeJob())).rejects.toBeInstanceOf(UnrecoverableError);
+  });
+
+  it("keeps a policy-retryable retrying outcome as a completed job (no blind BullMQ retry)", async () => {
+    const { publishSinglePost } = await import("../workflow/publishing-runner");
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 1,
+      status: "retrying",
+      platform: "Instagram",
+    });
+
+    await expect(processPublishingJob(makeJob())).resolves.toBeUndefined();
+  });
 });
 
 describe("publishing worker durable publish-package reload (WBS13.4)", () => {

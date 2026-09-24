@@ -661,7 +661,7 @@ describe("publishSinglePost — governed publish-package → adapter seam (WBS13
     expect(retryUpdate?.set.lastError).toBe("fetch failed");
   });
 
-  it("maps a terminal provider failure into the runner's terminal failure semantics", async () => {
+  it("maps a provider auth failure into the runner's reconnect-terminal semantics (no blind retry)", async () => {
     const { getDb } = await import("../../../queries/connection");
     const { publishToFacebook } = await import("../../integrations/platforms");
     const { createAlert } = await import("../../alerts");
@@ -684,16 +684,20 @@ describe("publishSinglePost — governed publish-package → adapter seam (WBS13
 
     const result = await publishSinglePost(1, { publishPackage: buildGovernedPackage("facebook") });
 
+    // WBS13.8: auth failures are reconnect-terminal for automatic retry. The
+    // retry budget is deliberately untouched (fail-fast authority failures
+    // never consume meaningless retries) and no escalation alert is raised.
     expect(result.status).toBe("failed");
+    expect(result.unrecoverable).toBe(true);
     expect(result.error).toBe("Invalid token");
     const failedUpdate = db.updateCalls.find(
       (call: { table: string | undefined; set: Record<string, unknown> }) =>
         call.table === "publishing_queue" && call.set.status === "failed"
     );
-    expect(failedUpdate?.set.retryCount).toBe(3);
+    expect(failedUpdate?.set.retryCount).toBe(2);
     expect(failedUpdate?.set.lastError).toBe("Invalid token");
     expect(failedUpdate?.set.nextRetryAt).toBeNull();
-    expect(createAlert).toHaveBeenCalledTimes(1);
+    expect(createAlert).not.toHaveBeenCalled();
   });
 
   it("fails closed before any adapter or provider call when the package destination diverges from the resolved integration", async () => {
@@ -752,7 +756,7 @@ describe("publishSinglePost — governed publish-package → adapter seam (WBS13
     });
 
     expect(result.status).toBe("precondition_failed");
-    expect(result.error).toContain("destination platform facebook does not match");
+    expect(result.error).toContain("does not match the queue platform facebook");
     expect(fake.publish).not.toHaveBeenCalled();
     expect(publishToFacebook).not.toHaveBeenCalled();
   });
@@ -783,7 +787,10 @@ describe("publishSinglePost — governed publish-package → adapter seam (WBS13
     const result = await publishSinglePost(1, { publishPackage: tampered, adapterRegistry: registry });
 
     expect(result.status).toBe("precondition_failed");
-    expect(result.error).toContain("fingerprint mismatch");
+    // The canonical validator's deterministic domain order proves the
+    // queue↔package binding (queue domain) before the package-intactness
+    // domain, so the tampered campaign coordinate is the first failure.
+    expect(result.error).toContain("does not match the publishing queue item");
     expect(fake.publish).not.toHaveBeenCalled();
     expect(publishToFacebook).not.toHaveBeenCalled();
   });

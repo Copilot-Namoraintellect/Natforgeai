@@ -27,7 +27,10 @@ export async function processPublishingJob(job: Job<PublishingJobData>): Promise
 
   // Permanent readiness failures (missing/stale output, approval pending,
   // failed/cancelled/generating output) are not transient and must not be retried.
-  if (result.status === "precondition_failed") {
+  if (result.status === "precondition_failed" || result.unrecoverable) {
+    // WBS13.8: recovery-policy terminal decisions (reconnect, provider
+    // rejection, escalation, approval blocks) are unrecoverable for automatic
+    // worker retry; only policy-retryable outcomes stay BullMQ-retryable.
     throw new UnrecoverableError(result.error || `Publishing blocked: ${result.status}`);
   }
 

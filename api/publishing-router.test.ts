@@ -602,3 +602,166 @@ describe("publishingRouter.ownership Phase 2B gate", () => {
     await expect(caller.publishPost({ queueId: 17 })).rejects.toThrow(/not found|campaign/i);
   });
 });
+
+describe("publishingRouter scheduling authority (WBS13.2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("persists the canonical UTC instant and schedules BullMQ with the same instant", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { isBullMQAvailable, schedulePublishingJob } = await import("./lib/queue/bullmq");
+    const { publishingRouter } = await import("./publishing-router");
+    vi.mocked(isBullMQAvailable).mockReturnValue(true);
+
+    const oneOffPost = {
+      id: 300,
+      userId: 18,
+      campaignId: null,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {},
+    };
+
+    const db = buildMockDb({ contentPosts: [oneOffPost] });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = publishingRouter.createCaller(buildCtx());
+    const result = await caller.createPublishingQueue({
+      campaignId: 0,
+      posts: [
+        {
+          contentPostId: 300,
+          platform: "Instagram",
+          scheduledAt: "2026-12-01T10:00:00+02:00",
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    const inserted = db._insertedRows.publishing_queue[0] as Record<string, unknown>;
+    // The declared +02:00 wall time resolves to one canonical UTC instant,
+    // persisted on the row and handed to BullMQ unchanged.
+    expect((inserted.scheduledAt as Date).toISOString()).toBe("2026-12-01T08:00:00.000Z");
+    expect(schedulePublishingJob).toHaveBeenCalledWith(123, 18, "Instagram", inserted.scheduledAt);
+  });
+
+  it("keeps immediate publication when no schedule is declared", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { schedulePublishingJob } = await import("./lib/queue/bullmq");
+    const { publishingRouter } = await import("./publishing-router");
+
+    const oneOffPost = {
+      id: 300,
+      userId: 18,
+      campaignId: null,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {},
+    };
+
+    const db = buildMockDb({ contentPosts: [oneOffPost] });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = publishingRouter.createCaller(buildCtx());
+    const result = await caller.createPublishingQueue({
+      campaignId: 0,
+      posts: [{ contentPostId: 300, platform: "Instagram" }],
+    });
+
+    expect(result.success).toBe(true);
+    expect((db._insertedRows.publishing_queue[0] as Record<string, unknown>).scheduledAt).toBeNull();
+    expect(schedulePublishingJob).not.toHaveBeenCalled();
+  });
+
+  it("rejects an offset-less declared instant before any queue row is inserted", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishingRouter } = await import("./publishing-router");
+
+    const oneOffPost = {
+      id: 300,
+      userId: 18,
+      campaignId: null,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {},
+    };
+
+    const db = buildMockDb({ contentPosts: [oneOffPost] });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = publishingRouter.createCaller(buildCtx());
+    await expect(
+      caller.createPublishingQueue({
+        campaignId: 0,
+        posts: [{ contentPostId: 300, platform: "Instagram", scheduledAt: "2026-12-01T10:00:00" }],
+      })
+    ).rejects.toThrow(/explicit Z or ±hh:mm offset/);
+
+    expect(db._insertedRows.publishing_queue).toBeUndefined();
+  });
+
+  it("rejects a past declared instant before any queue row is inserted", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishingRouter } = await import("./publishing-router");
+
+    const oneOffPost = {
+      id: 300,
+      userId: 18,
+      campaignId: null,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {},
+    };
+
+    const db = buildMockDb({ contentPosts: [oneOffPost] });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = publishingRouter.createCaller(buildCtx());
+    await expect(
+      caller.createPublishingQueue({
+        campaignId: 0,
+        posts: [
+          { contentPostId: 300, platform: "Instagram", scheduledAt: "2020-01-01T00:00:00Z" },
+        ],
+      })
+    ).rejects.toThrow(/not-before publication policy|in the past/i);
+
+    expect(db._insertedRows.publishing_queue).toBeUndefined();
+  });
+
+  it("approvePost schedules BullMQ with the canonical instant persisted on the row", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { isBullMQAvailable, schedulePublishingJob } = await import("./lib/queue/bullmq");
+    const { publishingRouter } = await import("./publishing-router");
+    vi.mocked(isBullMQAvailable).mockReturnValue(true);
+
+    const scheduledQueue = {
+      id: 20,
+      userId: 18,
+      campaignId: 0,
+      contentPostId: null,
+      platform: "Instagram",
+      status: "pending_approval",
+      scheduledAt: new Date("2026-12-01T08:00:00.000Z"),
+    };
+
+    const db = buildMockDb({ publishingQueue: [scheduledQueue] });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = publishingRouter.createCaller(buildCtx());
+    const result = await caller.approvePost({ queueId: 20 });
+
+    expect(result.success).toBe(true);
+    expect(schedulePublishingJob).toHaveBeenCalledWith(
+      20,
+      18,
+      "Instagram",
+      new Date("2026-12-01T08:00:00.000Z")
+    );
+  });
+});

@@ -4,6 +4,7 @@ import { getDb } from "../../queries/connection";
 import { campaigns, contentPosts, publishingQueue, approvalRequests } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { checkContentSafety } from "../safety/checker";
+import { resolvePublicationSchedule } from "../publish/publication-schedule";
 
 const PublishingScheduleSchema = z.object({
   schedule: z.array(
@@ -90,6 +91,17 @@ Respond with structured data containing the schedule.`;
     const post = posts.find((p) => p.id === item.contentPostId);
     const content = `${post?.hook || ""}\n${post?.caption || ""}\n${post?.cta || ""}`.trim();
 
+    // WBS13.2: the declared schedule resolves through the canonical schedule
+    // authority BEFORE the queue row is inserted. Explicit-offset instants
+    // only — server-local implicit Date parsing is never used for a governed
+    // scheduled publication — and the resolved canonical UTC instant is what
+    // is persisted.
+    const schedule = resolvePublicationSchedule({
+      mode: "scheduled",
+      scheduledAtUtc: item.scheduledAt,
+    });
+    const canonicalScheduledAt = new Date(schedule.scheduledAtUtcMillis!);
+
     // Run content safety check (bundled into distribution agent cost)
     const safety = await checkContentSafety(content, {
       brandTone: (campaign.workflowContext as any)?.brandTone,
@@ -121,7 +133,7 @@ Respond with structured data containing the schedule.`;
       campaignId,
       contentPostId: item.contentPostId,
       platform: item.platform,
-      scheduledAt: new Date(item.scheduledAt),
+      scheduledAt: canonicalScheduledAt,
       status,
       approvalRequired,
       safetyStatus: safety.riskLevel,

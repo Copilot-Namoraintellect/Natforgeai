@@ -301,7 +301,8 @@ describe("publishSinglePost", () => {
 
     const result = await publishSinglePost(1);
 
-    expect(result.status).toBe("failed");
+    expect(result.status).toBe("precondition_failed");
+    expect(result.unrecoverable).toBe(true);
     expect(result.error).toContain("no connected facebook account");
     expect(publishToFacebook).not.toHaveBeenCalled();
   });
@@ -329,8 +330,9 @@ describe("publishSinglePost", () => {
 
     const result = await publishSinglePost(1);
 
-    expect(result.status).toBe("failed");
-    expect(result.error).toContain("invalid image URL");
+    expect(result.status).toBe("precondition_failed");
+    expect(result.unrecoverable).toBe(true);
+    expect(result.error).toContain("invalid media URL");
     expect(publishToFacebook).not.toHaveBeenCalled();
   });
 
@@ -351,12 +353,14 @@ describe("publishSinglePost", () => {
 
     const result = await publishSinglePost(1);
 
-    expect(result.status).toBe("precondition_failed");
+    // The recovery policy routes an approval-authority block to
+    // pending_approval (awaiting a human decision), never to the provider.
+    expect(result.status).toBe("pending_approval");
     expect(result.error).toMatch(/launch approval is pending/i);
     expect(publishToFacebook).not.toHaveBeenCalled();
     expect(vi.mocked(deductCredits)).not.toHaveBeenCalled();
     const queueUpdate = db.updateCalls.find((call: { table: string | undefined; set: Record<string, unknown> }) => call.table === "publishing_queue");
-    expect(queueUpdate?.set.status).toBe("failed");
+    expect(queueUpdate?.set.status).toBe("pending_approval");
   });
 
   it("fails closed for standalone content without explicit publication authority", async () => {
@@ -374,11 +378,13 @@ describe("publishSinglePost", () => {
 
     const result = await publishSinglePost(1);
 
-    expect(result.status).toBe("precondition_failed");
+    // Missing publication authority is an approval-authority block: parked
+    // pending_approval (never publishes without an explicit human decision).
+    expect(result.status).toBe("pending_approval");
     expect(result.error).toMatch(/publication authority/i);
     expect(publishToFacebook).not.toHaveBeenCalled();
     const queueUpdate = db.updateCalls.find((call: { table: string | undefined; set: Record<string, unknown> }) => call.table === "publishing_queue");
-    expect(queueUpdate?.set.status).toBe("failed");
+    expect(queueUpdate?.set.status).toBe("pending_approval");
   });
 });
 
