@@ -44,6 +44,19 @@ const AUTO_PUBLISH_PLATFORMS = new Set([
   "email",
 ]);
 
+/**
+ * Approval-authority keys inside content_posts.metadata. They may only be
+ * written by content.approve or by the semantic-edit void in content.update;
+ * arbitrary metadata passthrough is stripped of these keys so downstream
+ * editing cannot mint or restore approval (WBS12.9).
+ */
+const APPROVAL_AUTHORITY_METADATA_KEYS = [
+  "approved",
+  "approvedAt",
+  "approvalVoidedAt",
+  "approvalVoidedReason",
+] as const;
+
 function toDisplayPlatformName(platform: string): string {
   if (!platform) return platform;
   return platform.charAt(0).toUpperCase() + platform.slice(1).toLowerCase();
@@ -635,9 +648,71 @@ export const contentRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const { id, scheduledFor, metadata, ...data } = input;
+
+      const [post] = await db
+        .select()
+        .from(contentPosts)
+        .where(
+          and(eq(contentPosts.id, id), eq(contentPosts.userId, ctx.user.id))
+        )
+        .limit(1);
+
       const updateData: any = { ...data };
       if (scheduledFor) updateData.scheduledFor = new Date(scheduledFor);
-      if (metadata !== undefined) updateData.metadata = metadata;
+
+      // WBS12.9 approved-copy integrity: an approved artifact must never be
+      // silently mutated and continue to be treated as approved. Semantic copy
+      // fields are the columns that carry copy authority; hashtags are derived
+      // formatting (free to adapt without reapproval, mirroring the
+      // approved-copy authority model), and title/platform/status/schedule are
+      // presentation or routing attributes.
+      const SEMANTIC_COPY_FIELDS = [
+        "hook",
+        "caption",
+        "cta",
+        "headline",
+        "body",
+      ] as const;
+      let semanticCopyEdited = false;
+      if (post) {
+        for (const field of SEMANTIC_COPY_FIELDS) {
+          const nextValue = (data as Record<string, unknown>)[field];
+          if (nextValue === undefined) continue;
+          if (String(nextValue ?? "") !== String((post as any)[field] ?? "")) {
+            semanticCopyEdited = true;
+            break;
+          }
+        }
+      }
+
+      const currentMetadata = (post?.metadata || {}) as Record<string, unknown>;
+      const voidsApproval =
+        !!post && semanticCopyEdited && currentMetadata.approved === true;
+
+      if (metadata !== undefined || voidsApproval) {
+        // Approval authority keys are owned by content.approve (and the
+        // semantic-edit void below): arbitrary metadata passthrough must not
+        // mint, restore, or erase approval state. Metadata is merged over the
+        // current row so governance lineage survives partial updates.
+        const safeIncomingMetadata: Record<string, unknown> = {
+          ...(metadata ?? {}),
+        };
+        for (const key of APPROVAL_AUTHORITY_METADATA_KEYS) {
+          delete safeIncomingMetadata[key];
+        }
+        const nextMetadata: Record<string, unknown> = {
+          ...currentMetadata,
+          ...safeIncomingMetadata,
+        };
+        if (voidsApproval) {
+          nextMetadata.approved = false;
+          nextMetadata.approvalVoidedAt = new Date().toISOString();
+          nextMetadata.approvalVoidedReason =
+            "semantic_copy_edit_requires_reapproval";
+        }
+        updateData.metadata = nextMetadata;
+      }
+
       await db
         .update(contentPosts)
         .set(updateData)

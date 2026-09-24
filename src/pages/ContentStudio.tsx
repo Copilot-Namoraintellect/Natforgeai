@@ -67,6 +67,8 @@ import {
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { PremiumTemplateGallery } from "@/components/content/PremiumTemplateGallery";
 import type { GalleryTemplate } from "@/components/content/PremiumTemplateGallery";
+import { CreativeGovernanceBadge } from "@/components/content/CreativeGovernanceBadge";
+import { buildCreativeGovernanceView, formatGovernanceParent } from "@/lib/content-studio/governance";
 import { toast } from "sonner";
 import { formatContentGenerationError } from "@/lib/content-generation-errors";
 import { getStrategyActionDecision } from "@/lib/content-studio/logic";
@@ -1871,6 +1873,8 @@ Include:
     );
     const latestAssetMeta = (latestReadyImageAsset?.metadata as any) || {};
     const displayMeta = { ...metadata, ...latestAssetMeta };
+    const governanceView = buildCreativeGovernanceView({ metadata: displayMeta });
+    const governanceParentLabel = formatGovernanceParent(governanceView.parent);
 
     const imageUrl =
       displayMeta?.imageUrl ||
@@ -2674,6 +2678,22 @@ Include:
                     </p>
                   </div>
                 )}
+                {(governanceView.governed || governanceView.approvalState === "reapproval_required") && (
+                  <div className="space-y-1">
+                    <span className="text-xs text-slate-500">Governance</span>
+                    <div className="flex flex-col items-start gap-1">
+                      <CreativeGovernanceBadge view={governanceView} />
+                      {governanceParentLabel && (
+                        <span className="text-[10px] text-slate-500">
+                          Derived from {governanceParentLabel}
+                          {governanceView.approvedRevisionId
+                            ? ` · Approved copy revision ${governanceView.approvedRevisionId}`
+                            : ""}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -3040,6 +3060,7 @@ Include:
             <CardTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
               <MessageCircle className="w-5 h-5 text-purple-600" />
               Caption Pack
+              <CreativeGovernanceBadge view={buildCreativeGovernanceView(asset)} showLegacy />
             </CardTitle>
             <div className="flex gap-2">
               <Button
@@ -3346,6 +3367,9 @@ Include:
                   Approved
                 </Badge>
               )}
+              {!approved && (
+                <CreativeGovernanceBadge view={buildCreativeGovernanceView(content)} />
+              )}
               {(() => {
                 const publishStatus = getContentPublishStatus(content.id);
                 if (!publishStatus) return null;
@@ -3498,6 +3522,7 @@ Include:
                 Stale
               </Badge>
             )}
+            <CreativeGovernanceBadge view={buildCreativeGovernanceView(asset)} showLegacy />
             {asset.status && (
               <Badge variant="outline" className="text-[10px] h-5">
                 {asset.status}

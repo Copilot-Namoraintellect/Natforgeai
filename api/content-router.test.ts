@@ -2496,3 +2496,231 @@ describe("contentRouter.ownership Phase 2B gate", () => {
     await expect(caller.markAsManuallyPosted({ id: 500 })).rejects.toThrow(/not found/i);
   });
 });
+
+
+describe("contentRouter.update WBS12.9 approved-copy integrity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function approvedPost(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 300,
+      userId: 18,
+      campaignId: 28,
+      type: "social_post",
+      platform: "instagram",
+      status: "draft",
+      title: "Spring promo",
+      hook: "Tired of waiting?",
+      caption: "Original caption",
+      cta: "Book now",
+      headline: null,
+      body: null,
+      hashtags: "#spring",
+      metadata: {
+        approved: true,
+        approvedAt: "2026-05-20T10:00:00.000Z",
+      },
+      ...overrides,
+    };
+  }
+
+  function lastContentPostsSet(mockDb: ReturnType<typeof createMockDb>) {
+    const spy = mockDb.updateSetByTableName.get("content_posts");
+    expect(spy).toHaveBeenCalled();
+    return spy!.mock.calls[spy!.mock.calls.length - 1][0] as Record<string, unknown>;
+  }
+
+  it("voids approval when a semantic copy field is edited on an approved post", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({ posts: [approvedPost()] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.update({ id: 300, caption: "Rewritten caption" });
+
+    expect(result.success).toBe(true);
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.caption).toBe("Rewritten caption");
+    const metadata = setArgs.metadata as Record<string, unknown>;
+    expect(metadata.approved).toBe(false);
+    expect(metadata.approvalVoidedReason).toBe("semantic_copy_edit_requires_reapproval");
+    expect(typeof metadata.approvalVoidedAt).toBe("string");
+    // Prior approval history is retained for audit, not treated as current.
+    expect(metadata.approvedAt).toBe("2026-05-20T10:00:00.000Z");
+  });
+
+  it.each(["hook", "caption", "cta", "headline", "body"] as const)(
+    "voids approval when %s changes on an approved post",
+    async (field) => {
+      const { getDb } = await import("./queries/connection");
+      const { contentRouter } = await import("./content-router");
+
+      const mockDb = createMockDb({ posts: [approvedPost()] });
+      vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+      const caller = contentRouter.createCaller(buildCtx());
+      await caller.update({ id: 300, [field]: `new ${field} value` });
+
+      const metadata = lastContentPostsSet(mockDb).metadata as Record<string, unknown>;
+      expect(metadata.approved).toBe(false);
+      expect(metadata.approvalVoidedReason).toBe("semantic_copy_edit_requires_reapproval");
+    }
+  );
+
+  it("preserves approval for formatting-only edits (hashtags) on an approved post", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({ posts: [approvedPost()] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({ id: 300, hashtags: "#spring #promo #new" });
+
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.hashtags).toBe("#spring #promo #new");
+    // No metadata write at all: approval row state is untouched.
+    expect(setArgs.metadata).toBeUndefined();
+  });
+
+  it("preserves approval for scheduling updates on an approved post (core workflow)", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({ posts: [approvedPost()] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({
+      id: 300,
+      status: "scheduled",
+      scheduledFor: "2026-06-01T09:00:00.000Z",
+    });
+
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.status).toBe("scheduled");
+    expect(setArgs.metadata).toBeUndefined();
+    expect(setArgs).not.toHaveProperty("hook");
+    expect(setArgs).not.toHaveProperty("caption");
+  });
+
+  it("does not mint approval state when an unapproved legacy post is edited", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const legacyPost = approvedPost({
+      metadata: { generationRunId: "run-legacy" },
+    });
+    const mockDb = createMockDb({ posts: [legacyPost] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({ id: 300, caption: "Edited legacy caption" });
+
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.caption).toBe("Edited legacy caption");
+    expect(setArgs.metadata).toBeUndefined();
+  });
+
+  it("strips approval-authority keys from arbitrary metadata passthrough", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const legacyPost = approvedPost({ metadata: { note: "keep-me" } });
+    const mockDb = createMockDb({ posts: [legacyPost] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({
+      id: 300,
+      metadata: { approved: true, approvedAt: "2026-01-01T00:00:00.000Z", note: "updated" },
+    });
+
+    const metadata = lastContentPostsSet(mockDb).metadata as Record<string, unknown>;
+    expect(metadata.note).toBe("updated");
+    expect(metadata.approved).toBeUndefined();
+    expect(metadata.approvedAt).toBeUndefined();
+  });
+
+  it("merges metadata so governance lineage survives partial updates", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const governedPost = approvedPost({
+      metadata: {
+        approved: false,
+        creativeArtifactLineage: {
+          lineageSchemaVersion: 1,
+          artifactKind: "platform_caption",
+          parent: { artifactKind: "message_pack", artifactId: null },
+          lineageFingerprintSha256: "abc123",
+        },
+      },
+    });
+    const mockDb = createMockDb({ posts: [governedPost] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({ id: 300, title: "Renamed only", metadata: { reviewNote: "checked" } });
+
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.title).toBe("Renamed only");
+    const metadata = setArgs.metadata as Record<string, unknown>;
+    const lineage = metadata.creativeArtifactLineage as Record<string, unknown>;
+    expect(lineage.artifactKind).toBe("platform_caption");
+    expect(lineage.lineageFingerprintSha256).toBe("abc123");
+    expect(metadata.reviewNote).toBe("checked");
+    expect(metadata.approved).toBe(false);
+  });
+
+  it("records a no-change semantic field as non-voiding", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({ posts: [approvedPost()] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({ id: 300, caption: "Original caption" });
+
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.metadata).toBeUndefined();
+  });
+});
+
+describe("contentRouter.approve WBS12.9", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("marks a content post as approved and keeps the approval authority keys", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const post = {
+      id: 301,
+      userId: 18,
+      campaignId: 28,
+      type: "social_post",
+      status: "draft",
+      metadata: { generationRunId: "run-9" },
+    };
+    const mockDb = createMockDb({ posts: [post] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.approve({ id: 301 });
+
+    expect(result.success).toBe(true);
+    const spy = mockDb.updateSetByTableName.get("content_posts");
+    expect(spy).toHaveBeenCalledTimes(1);
+    const metadata = spy!.mock.calls[0][0] as { metadata: Record<string, unknown> };
+    expect(metadata.metadata.approved).toBe(true);
+    expect(typeof metadata.metadata.approvedAt).toBe("string");
+    expect(metadata.metadata.generationRunId).toBe("run-9");
+  });
+});
