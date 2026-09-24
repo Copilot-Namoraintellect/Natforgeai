@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations, approvalRequests, agentRuns, businesses } from "@db/schema";
+import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations, approvalRequests, agentRuns, businesses, generatedImages } from "@db/schema";
 import { eq, and, or, desc, count, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { env } from "./lib/env";
@@ -32,6 +32,12 @@ import {
   buildLaunchApprovalLineage,
   isLaunchApprovalEvidenceUsable,
 } from "./lib/workflow/launch-approval";
+import { captureApprovedCreativeStrategyAuthority } from "./lib/creative/strategy-authority";
+import { loadApprovedMessagePack } from "./lib/creative/campaign-message-architect";
+import {
+  buildPublishPackage,
+  type PublishPackage,
+} from "./lib/publish/publish-package-builder";
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
@@ -86,6 +92,62 @@ function isApprovedImageReadySocialPost(post: any): boolean {
   if (meta.imageStatus !== "ready") return false;
   if (!meta.imageUrl) return false;
   return true;
+}
+
+/**
+ * WBS13.1: resolve the visual artifact identity for the media Distribution
+ * will actually publish. Only image media participates in the adapter payload
+ * today; when the image was produced by a governed render, its durable render
+ * lineage is carried into the package so changed image lineage is detectable.
+ * Artifacts without governed lineage stay explicitly legacy-shaped.
+ */
+async function resolveVisualArtifactIdentity(
+  db: any,
+  userId: number,
+  post: any,
+  postMeta: Record<string, any>
+): Promise<Record<string, unknown> | null> {
+  const imageUrl =
+    typeof postMeta?.imageUrl === "string" && postMeta.imageUrl
+      ? postMeta.imageUrl
+      : typeof post?.imageUrl === "string" && post.imageUrl
+        ? post.imageUrl
+        : null;
+  if (!imageUrl) return null;
+
+  let generatedAssetId: number | null = null;
+  let renderLineage: unknown = null;
+  try {
+    const [imageRow] = await db
+      .select()
+      .from(generatedImages)
+      .where(
+        and(
+          eq(generatedImages.userId, userId),
+          eq(generatedImages.contentPostId, post.id),
+          eq(generatedImages.status, "completed" as any)
+        )
+      )
+      .orderBy(desc(generatedImages.createdAt))
+      .limit(1);
+    const lineage = (imageRow?.metadata as any)?.renderLineage ?? null;
+    if (lineage && typeof lineage.lineageFingerprintSha256 === "string") {
+      renderLineage = lineage;
+      generatedAssetId = typeof imageRow.id === "number" ? imageRow.id : null;
+    }
+  } catch (err: any) {
+    logError("[PublishCampaignPack] visual render lineage lookup failed; treating visual as legacy", {
+      contentPostId: post.id,
+      error: err?.message,
+    });
+  }
+
+  return {
+    mediaKind: "image",
+    generatedAssetId,
+    mediaUrl: imageUrl,
+    renderLineage,
+  };
 }
 
 function mapGenerationStatus(status: string | null | undefined): "queued" | "processing" | "completed" | "failed" | "preparing" {
@@ -1191,6 +1253,65 @@ export const contentRouter = createRouter({
         }
       }
 
+      // ─── WBS13.1: immutable publish-package identity coordinates ───
+      // Gather the governed Creative authority coordinates once per campaign.
+      // Anything that lacks durable governed lineage is classified legacy by
+      // the package builder — lineage is never manufactured here.
+      const wbs11StrategyAuthority = (() => {
+        try {
+          return captureApprovedCreativeStrategyAuthority(campaign);
+        } catch {
+          return null;
+        }
+      })();
+
+      let governingMessagePack: Awaited<ReturnType<typeof loadApprovedMessagePack>> = null;
+      try {
+        governingMessagePack = await loadApprovedMessagePack(input.campaignId);
+      } catch (err: any) {
+        // Tampered/unverifiable message-pack lineage fails closed for copy
+        // coordinates; the caption artifact's own lineage remains the
+        // authority for the caption binding.
+        logError("[PublishCampaignPack] Governing message pack re-verification failed", {
+          campaignId: input.campaignId,
+          error: err?.message,
+        });
+        governingMessagePack = null;
+      }
+
+      // Mirror findCaptionPackRecord: newest caption_pack / caption_adaptation
+      // asset is the governing caption artifact.
+      const captionArtifactRecord = [...captionPacks, ...adaptations].sort(
+        (a, b) =>
+          new Date((b as any).createdAt || 0).getTime() - new Date((a as any).createdAt || 0).getTime()
+      )[0] ?? null;
+      const captionArtifactBinding = captionArtifactRecord
+        ? {
+            artifactId: (captionArtifactRecord as any).id ?? null,
+            artifactKind:
+              (captionArtifactRecord as any).assetType === "caption_adaptation"
+                ? "platform_caption"
+                : "caption_pack",
+            lineage:
+              ((captionArtifactRecord as any).metadata as any)?.creativeArtifactLineage ?? null,
+          }
+        : null;
+
+      const captionLineage = captionArtifactBinding?.lineage as any;
+      const packageStrategyAuthority =
+        wbs11StrategyAuthority ?? captionLineage?.strategy ?? null;
+      const packageApprovedCopy =
+        (governingMessagePack?.creativeArtifactLineage as any)?.approvedCopy ??
+        captionLineage?.approvedCopy ??
+        null;
+      const launchApprovalRequestId = (() => {
+        try {
+          return getLaunchApprovalStatus(campaign).lineage?.approvalRequestId ?? null;
+        } catch {
+          return null;
+        }
+      })();
+
       // Approve all unapproved, non-published posts
       for (const post of posts) {
         const meta = (post.metadata || {}) as any;
@@ -1407,7 +1528,13 @@ export const contentRouter = createRouter({
         status: string;
         postId?: string;
         error?: string;
+        publishPackageId?: string | null;
+        publishPackageFingerprint?: string | null;
+        publishPackageClassification?: string | null;
       }> = [];
+
+      // WBS13.1: one visual artifact identity lookup per selected content post.
+      const visualArtifactByPostId = new Map<number, Record<string, unknown> | null>();
 
       for (const platform of publishablePlatforms) {
         const integration = integrations.find((i) => i.platform === platform);
@@ -1611,8 +1738,78 @@ export const contentRouter = createRouter({
           }
         }
 
-        // Attempt immediate publish for low-risk, ready items
-        const publishResult = await publishSinglePost(queueItemId);
+        // ─── WBS13.1: build the immutable publish package for this handoff ───
+        // Pure, deterministic construction from the gathered governed
+        // coordinates — no provider or network call. Classification is
+        // explicit: anything without durable lineage is legacy, never
+        // pretended governed. Construction fails closed on mismatched parent
+        // authorities; the platform is then failed rather than published.
+        let visualArtifact = visualArtifactByPostId.get(post.id);
+        if (visualArtifact === undefined) {
+          visualArtifact = await resolveVisualArtifactIdentity(db, ctx.user.id, post, postMeta);
+          visualArtifactByPostId.set(post.id, visualArtifact);
+        }
+
+        const frozenText = `${post.hook || ""}\n\n${post.caption || ""}\n\n${post.cta || ""}`.trim();
+        const frozenMediaUrl =
+          typeof postMeta?.imageUrl === "string" && postMeta.imageUrl
+            ? postMeta.imageUrl
+            : typeof (post as any)?.imageUrl === "string" && (post as any).imageUrl
+              ? (post as any).imageUrl
+              : null;
+
+        let publishPackage: PublishPackage | null = null;
+        try {
+          publishPackage = buildPublishPackage({
+            campaignId: input.campaignId,
+            userId: ctx.user.id,
+            businessId: campaignBusinessId,
+            destination: { platform, integrationId: integration.id },
+            intent: { mode: "immediate" },
+            strategyAuthority: packageStrategyAuthority,
+            approvedCopy: packageApprovedCopy,
+            selectedContent: {
+              contentPostId: post.id,
+              artifactKind: "content_post",
+              lineage: postMeta?.creativeArtifactLineage ?? null,
+            },
+            captionArtifact: captionArtifactBinding,
+            visualArtifact,
+            evidence: { launchApprovalRequestId },
+            payload: {
+              text: frozenText,
+              mediaUrls: frozenMediaUrl ? [frozenMediaUrl] : [],
+              mediaType: frozenMediaUrl ? "image" : null,
+            },
+            createdAtIso: new Date().toISOString(),
+          });
+        } catch (err: any) {
+          const message = err instanceof TRPCError ? err.message : "Publish package construction failed";
+          logError("[PublishCampaignPack] Publish package construction failed closed", {
+            campaignId: input.campaignId,
+            platform,
+            queueItemId,
+            error: message,
+          });
+          await db
+            .update(publishingQueue)
+            .set({ status: "failed", lastError: message, nextRetryAt: null })
+            .where(eq(publishingQueue.id, queueItemId));
+          results.push({
+            platform,
+            queueItemId,
+            status: "failed",
+            error: message,
+            publishPackageId: null,
+            publishPackageFingerprint: null,
+            publishPackageClassification: null,
+          });
+          continue;
+        }
+
+        // Attempt immediate publish for low-risk, ready items. The frozen
+        // package is the authoritative handoff consumed by the runner.
+        const publishResult = await publishSinglePost(queueItemId, { publishPackage });
 
         logInfo("[PublishCampaignPack] Publish attempt completed", {
           campaignId: input.campaignId,
@@ -1632,6 +1829,9 @@ export const contentRouter = createRouter({
           status: publishResult.status,
           postId: publishResult.postId,
           error: publishResult.error,
+          publishPackageId: publishPackage.packageId,
+          publishPackageFingerprint: publishPackage.packageFingerprintSha256,
+          publishPackageClassification: publishPackage.classification,
         });
       }
 

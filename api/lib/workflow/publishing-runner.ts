@@ -21,6 +21,12 @@ import { createAlert } from "../alerts";
 import { rateLimitUser } from "../rate-limiter";
 import { ingestAudienceData } from "../audience/ingest";
 import { loadAndAssertPublicationReadiness } from "../creative/publication-readiness-service";
+import {
+  assertPublishPackageMatchesQueueItem,
+  assertPublishPackagePayloadCurrent,
+  publishPackageToAdapterPayload,
+  type PublishPackage,
+} from "../publish/publish-package-builder";
 
 const RETRY_DELAYS_MS = [60_000, 300_000, 900_000]; // 1min, 5min, 15min
 
@@ -68,6 +74,54 @@ function buildPublicationAuditEvent(input: {
       ...input.metadata,
     },
   });
+}
+
+/**
+ * Durable fail-closed precondition path for a queue item whose publication
+ * authority checks failed before any side effect. The only permitted mutation
+ * is an idempotent update of this queue row to failed/blocked with a safe
+ * reason, committed together with one canonical publication_failure event, so
+ * the worker can surface an UnrecoverableError and stop retrying a
+ * non-transient failure.
+ */
+async function failQueueItemPrecondition(
+  post: {
+    id: number;
+    userId: number;
+    campaignId: number | null;
+    contentPostId: number | null;
+    platform: string;
+    retryCount?: number | null;
+    maxRetries?: number | null;
+  },
+  message: string
+): Promise<{ id: number; status: string; platform: string; error: string }> {
+  const db = getDb();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(publishingQueue)
+      .set({
+        status: "failed",
+        lastError: message,
+        retryCount: post.maxRetries || 3,
+        nextRetryAt: null,
+      })
+      .where(eq(publishingQueue.id, post.id));
+
+    await persistAuditEvent(
+      buildPublicationAuditEvent({
+        eventType: "publication_failure",
+        occurredAt: new Date().toISOString(),
+        queueItem: post,
+        businessId: null,
+        attemptOrdinal: (post.retryCount || 0) + 1,
+        outcome: "failed",
+        metadata: { terminal: true, nextState: "failed", failureStage: "precondition" },
+      }),
+      tx
+    );
+  });
+  return { id: post.id, status: "precondition_failed", platform: post.platform, error: message };
 }
 
 /**
@@ -216,7 +270,10 @@ export async function finalizeCampaignPublishState(campaignId: number | null | u
  * Publish a single queue item.
  * Used by both the cron runner and BullMQ worker.
  */
-export async function publishSinglePost(queueItemId: number) {
+export async function publishSinglePost(
+  queueItemId: number,
+  options?: { publishPackage?: PublishPackage }
+) {
   const db = getDb();
   const now = new Date();
 
@@ -264,39 +321,26 @@ export async function publishSinglePost(queueItemId: number) {
       //   publication_attempt is fabricated: the controlled-attempt boundary
       //   was never reached.
       // - The only permitted mutation is an idempotent update of this queue row
-      //   to failed/blocked with a safe reason, so the worker can surface an
-      //   UnrecoverableError to BullMQ and stop retrying a non-transient failure.
-      //   It commits together with one canonical publication_failure event.
-      await db.transaction(async (tx) => {
-        await tx
-          .update(publishingQueue)
-          .set({
-            status: "failed",
-            lastError: message,
-            retryCount: post.maxRetries || 3,
-            nextRetryAt: null,
-          })
-          .where(eq(publishingQueue.id, post.id));
+      //   to failed/blocked with a safe reason, committed with one canonical
+      //   publication_failure event (see failQueueItemPrecondition).
+      return failQueueItemPrecondition(post, message);
+    }
+  }
 
-        await persistAuditEvent(
-          buildPublicationAuditEvent({
-            eventType: "publication_failure",
-            occurredAt: new Date().toISOString(),
-            queueItem: post,
-            businessId: null,
-            attemptOrdinal: (post.retryCount || 0) + 1,
-            outcome: "failed",
-            metadata: { terminal: true, nextState: "failed", failureStage: "precondition" },
-          }),
-          tx
-        );
-      });
-      return {
-        id: post.id,
-        status: "precondition_failed",
-        platform: post.platform,
-        error: message,
-      };
+  // WBS13.1: immutable publish-package consumption. When publication
+  // preparation hands off a frozen package, it becomes the authoritative
+  // payload source. A package that does not match this queue item, or whose
+  // frozen payload the live content row no longer composes to, fails closed
+  // on the same durable precondition path as readiness — never publish from
+  // stale or mismatched lineage.
+  const frozenPackage = options?.publishPackage ?? null;
+  if (frozenPackage && contentPost) {
+    try {
+      assertPublishPackageMatchesQueueItem(frozenPackage, post);
+      assertPublishPackagePayloadCurrent(frozenPackage, contentPost);
+    } catch (err: any) {
+      const message = err instanceof TRPCError ? err.message : "Publish package conflict check failed";
+      return failQueueItemPrecondition(post, message);
     }
   }
 
@@ -435,17 +479,23 @@ export async function publishSinglePost(queueItemId: number) {
       };
     }
 
-    // Build content payload
+    // Build content payload. WBS13.1: when an immutable publish package was
+    // handed off by publication preparation, its frozen payload is the
+    // authoritative source — Distribution must not reconstruct meaning from
+    // mutable campaign/business rows at execution time. The legacy path
+    // (cron/worker items without a package) keeps composing from the live row.
     const imageUrl: string | undefined =
       postMeta?.imageUrl || (contentPost as any)?.imageUrl || undefined;
 
-    const payload = contentPost
-      ? {
-          text: `${contentPost.hook || ""}\n\n${contentPost.caption || ""}\n\n${contentPost.cta || ""}`.trim(),
-          mediaUrls: imageUrl ? [imageUrl] : undefined,
-          mediaType: imageUrl ? ("image" as const) : undefined,
-        }
-      : null;
+    const payload = frozenPackage
+      ? publishPackageToAdapterPayload(frozenPackage)
+      : contentPost
+        ? {
+            text: `${contentPost.hook || ""}\n\n${contentPost.caption || ""}\n\n${contentPost.cta || ""}`.trim(),
+            mediaUrls: imageUrl ? [imageUrl] : undefined,
+            mediaType: imageUrl ? ("image" as const) : undefined,
+          }
+        : null;
 
     // For Facebook, validate/normalize the media URL before charging credits
     if (post.platform === "facebook" && payload?.mediaUrls?.[0]) {
