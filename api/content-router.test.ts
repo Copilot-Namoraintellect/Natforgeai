@@ -1152,9 +1152,143 @@ describe("contentRouter.publishCampaignPack", () => {
     expect(result.results.find((r) => r.platform === "instagram")?.error).toMatch(/Strategy authority/);
     expect(publishSinglePost).not.toHaveBeenCalled();
 
-    const queueUpdateSpy = mockDb.updateSetByTableName.get("publishing_queue");
-    expect(queueUpdateSpy).toBeDefined();
-    expect(queueUpdateSpy!.mock.calls[0][0].status).toBe("failed");
+    // WBS13.4: package construction failed BEFORE any queue insert, so no
+    // executable governed row ever existed. The failure evidence row is
+    // inserted directly in a non-executable failed state with NO governed
+    // metadata — it stays legacy forever.
+    const insertValuesSpy = mockDb.insertValuesByTableName.get("publishing_queue");
+    expect(insertValuesSpy).toHaveBeenCalledTimes(1);
+    const inserted = insertValuesSpy!.mock.calls[0][0];
+    expect(inserted.status).toBe("failed");
+    expect(inserted.metadata).toBeUndefined();
+    expect(mockDb.updateSetByTableName.get("publishing_queue")).toBeUndefined();
+  });
+
+  it("persists the durable publish package atomically with the governed queue insert", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+    const {
+      QUEUE_PUBLISH_PACKAGE_METADATA_KEY,
+      QUEUE_PUBLISH_PACKAGE_REQUIRED_METADATA_KEY,
+      loadPersistedPublishPackage,
+    } = await import("./lib/publish/publish-package-queue-store");
+
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 123,
+      status: "published",
+      platform: "instagram",
+      postId: "ext-125",
+    } as any);
+
+    const mockDb = createMockDb({
+      campaign: baseCampaign,
+      posts: [basePost],
+      integrations: [baseIntegration],
+      assets: [captionAsset],
+      queue: [],
+      approvals: [baseApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.publishCampaignPack({ campaignId: 28 });
+
+    // Exactly ONE queue insert — the row and its package persist together
+    // (no duplicate persistence, no separate package write).
+    const insertValuesSpy = mockDb.insertValuesByTableName.get("publishing_queue");
+    expect(insertValuesSpy).toHaveBeenCalledTimes(1);
+    const inserted = insertValuesSpy!.mock.calls[0][0];
+    expect(inserted).toMatchObject({
+      userId: 18,
+      campaignId: 28,
+      contentPostId: 125,
+      integrationId: 7,
+      platform: "instagram",
+      status: "approved",
+    });
+    expect(inserted.metadata[QUEUE_PUBLISH_PACKAGE_REQUIRED_METADATA_KEY]).toBe(true);
+    const envelope = inserted.metadata[QUEUE_PUBLISH_PACKAGE_METADATA_KEY];
+    expect(envelope.kind).toBe("publish_package");
+    expect(envelope.schemaVersion).toBe(1);
+
+    // The durable package round-trips exactly to the package handed to the runner.
+    const handedPackage = vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage!;
+    expect(envelope.publishPackage.packageId).toBe(handedPackage.packageId);
+    const reloaded = loadPersistedPublishPackage(inserted.metadata);
+    expect(reloaded).toEqual(handedPackage);
+    expect(reloaded!.packageFingerprintSha256).toBe(handedPackage.packageFingerprintSha256);
+    expect(reloaded!.payload).toEqual(handedPackage.payload);
+
+    // Persistence precedes execution: the durable insert lands before the
+    // runner is invoked.
+    expect(insertValuesSpy!.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(publishSinglePost).mock.invocationCallOrder[0]
+    );
+  });
+
+  it("persists the package onto a reused approved queue row so worker/cron retries reload it", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+    const { loadPersistedPublishPackage } = await import(
+      "./lib/publish/publish-package-queue-store"
+    );
+
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 77,
+      status: "published",
+      platform: "instagram",
+      postId: "ext-77",
+    } as any);
+
+    const mockDb = createMockDb({
+      campaign: baseCampaign,
+      posts: [basePost],
+      integrations: [baseIntegration],
+      assets: [captionAsset],
+      queue: [
+        {
+          id: 77,
+          userId: 18,
+          campaignId: 28,
+          contentPostId: 125,
+          integrationId: 7,
+          platform: "instagram",
+          status: "approved",
+          approvalRequired: false,
+          retryCount: 0,
+          maxRetries: 3,
+          scheduledAt: null,
+          nextRetryAt: null,
+          metadata: null,
+        },
+      ],
+      approvals: [baseApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.publishCampaignPack({ campaignId: 28 });
+
+    const entry = result.results.find((r) => r.platform === "instagram");
+    expect(entry?.status).toBe("published");
+    expect(entry?.queueItemId).toBe(77);
+
+    // No new queue row — the reused row gets a metadata-only update.
+    expect(mockDb.insertValuesByTableName.get("publishing_queue")).toBeUndefined();
+    const updateSpy = mockDb.updateSetByTableName.get("publishing_queue");
+    expect(updateSpy).toBeDefined();
+    const setPayload = updateSpy!.mock.calls[0][0];
+    expect(Object.keys(setPayload)).toEqual(["metadata"]);
+
+    const handedPackage = vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage!;
+    const reloaded = loadPersistedPublishPackage(setPayload.metadata);
+    expect(reloaded).toEqual(handedPackage);
+    expect(publishSinglePost).toHaveBeenCalledWith(
+      77,
+      expect.objectContaining({ publishPackage: expect.any(Object) })
+    );
   });
 
   it("marks content for manual posting when no connected platform exists", async () => {
@@ -1246,6 +1380,8 @@ describe("contentRouter.publishCampaignPack", () => {
     const inserted = insertValuesSpy!.mock.calls[0][0];
     expect(inserted.status).toBe("failed");
     expect(inserted.lastError).toContain("Instagram publishing is not ready");
+    // Integration-unready rows are created legacy — no governed marker.
+    expect(inserted.metadata).toBeUndefined();
   });
 
   it("Campaign #23 regression: connected Facebook and Instagram integrations produce non-empty publishablePlatforms", async () => {

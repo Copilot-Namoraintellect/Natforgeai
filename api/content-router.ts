@@ -38,6 +38,10 @@ import {
   buildPublishPackage,
   type PublishPackage,
 } from "./lib/publish/publish-package-builder";
+import {
+  serializePublishPackageForQueue,
+  type QueuePublishPackageMetadata,
+} from "./lib/publish/publish-package-queue-store";
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
@@ -1693,49 +1697,45 @@ export const contentRouter = createRouter({
               "Instagram publishing is not ready. Ensure your Facebook Page has a linked Instagram professional account and that the Instagram content publishing permission is granted.";
           }
 
-          // Create publishing queue item for every publishable content post / platform.
-          const [queueResult] = await db.insert(publishingQueue).values({
-            userId: ctx.user.id,
-            campaignId: input.campaignId,
-            contentPostId: post.id,
-            integrationId: integration.id,
-            platform,
-            status: initialStatus,
-            lastError: queueError ?? null,
-            approvalRequired: initialStatus === "pending_approval",
-            scheduledAt: null,
-          });
-          queueItemId = Number(queueResult.insertId);
+          if (initialStatus === "failed" || initialStatus === "pending_approval") {
+            // Non-executable rows never carry a governed package; they stay
+            // legacy (metadata null) exactly as before this feature.
+            const [queueResult] = await db.insert(publishingQueue).values({
+              userId: ctx.user.id,
+              campaignId: input.campaignId,
+              contentPostId: post.id,
+              integrationId: integration.id,
+              platform,
+              status: initialStatus,
+              lastError: queueError ?? null,
+              approvalRequired: initialStatus === "pending_approval",
+              scheduledAt: null,
+            });
+            queueItemId = Number(queueResult.insertId);
 
-          logInfo("[PublishCampaignPack] Created queue item", {
-            campaignId: input.campaignId,
-            platform,
-            contentPostId: post.id,
-            queueItemId,
-            integrationId: integration.id,
-            status: initialStatus,
-            pageId: platform === "facebook" ? integration.pageId : undefined,
-          });
+            logInfo("[PublishCampaignPack] Created queue item", {
+              campaignId: input.campaignId,
+              platform,
+              contentPostId: post.id,
+              queueItemId,
+              integrationId: integration.id,
+              status: initialStatus,
+              pageId: platform === "facebook" ? integration.pageId : undefined,
+            });
 
-          if (initialStatus === "failed") {
             results.push({
               platform,
               queueItemId,
-              status: "failed",
+              status: initialStatus,
               error: queueError,
             });
             continue;
           }
 
-          if (initialStatus === "pending_approval") {
-            results.push({
-              platform,
-              queueItemId,
-              status: "pending_approval",
-              error: queueError,
-            });
-            continue;
-          }
+          // WBS13.4: an approved row is GOVERNED, so its immutable package is
+          // built BEFORE the queue insert and persisted in the SAME INSERT
+          // below — there is never a governed queue row without its durable
+          // package. queueItemId is assigned by that atomic insert.
         }
 
         // ─── WBS13.1: build the immutable publish package for this handoff ───
@@ -1759,6 +1759,7 @@ export const contentRouter = createRouter({
               : null;
 
         let publishPackage: PublishPackage | null = null;
+        let serializedQueuePackage: QueuePublishPackageMetadata | null = null;
         try {
           publishPackage = buildPublishPackage({
             campaignId: input.campaignId,
@@ -1783,21 +1784,44 @@ export const contentRouter = createRouter({
             },
             createdAtIso: new Date().toISOString(),
           });
+          // WBS13.4: the exact immutable package, integrity-verified, in its
+          // canonical durable envelope — ready to persist with the row.
+          serializedQueuePackage = serializePublishPackageForQueue(publishPackage);
         } catch (err: any) {
           const message = err instanceof TRPCError ? err.message : "Publish package construction failed";
+          let failedQueueItemId: number;
+          if (existingQueue) {
+            failedQueueItemId = existingQueue.id;
+            await db
+              .update(publishingQueue)
+              .set({ status: "failed", lastError: message, nextRetryAt: null })
+              .where(eq(publishingQueue.id, existingQueue.id));
+          } else {
+            // No executable governed row may exist without its package: the
+            // failed row is persisted WITHOUT the governed marker, so it stays
+            // legacy and can never execute governed.
+            const [failedQueueResult] = await db.insert(publishingQueue).values({
+              userId: ctx.user.id,
+              campaignId: input.campaignId,
+              contentPostId: post.id,
+              integrationId: integration.id,
+              platform,
+              status: "failed",
+              lastError: message,
+              approvalRequired: false,
+              scheduledAt: null,
+            });
+            failedQueueItemId = Number(failedQueueResult.insertId);
+          }
           logError("[PublishCampaignPack] Publish package construction failed closed", {
             campaignId: input.campaignId,
             platform,
-            queueItemId,
+            queueItemId: failedQueueItemId,
             error: message,
           });
-          await db
-            .update(publishingQueue)
-            .set({ status: "failed", lastError: message, nextRetryAt: null })
-            .where(eq(publishingQueue.id, queueItemId));
           results.push({
             platform,
-            queueItemId,
+            queueItemId: failedQueueItemId,
             status: "failed",
             error: message,
             publishPackageId: null,
@@ -1807,14 +1831,55 @@ export const contentRouter = createRouter({
           continue;
         }
 
+        // WBS13.4: persist the durable package BEFORE any execution.
+        //  - new row: ONE atomic INSERT of row + package metadata;
+        //  - reused approved/retrying row: metadata UPDATE only (Drizzle .set
+        //    touches no other column), so later worker/cron retries reload
+        //    this exact package instead of rebuilding from mutable rows.
+        let effectiveQueueItemId: number;
+        if (!existingQueue) {
+          const [queueResult] = await db.insert(publishingQueue).values({
+            userId: ctx.user.id,
+            campaignId: input.campaignId,
+            contentPostId: post.id,
+            integrationId: integration.id,
+            platform,
+            status: "approved",
+            lastError: null,
+            approvalRequired: false,
+            scheduledAt: null,
+            metadata: serializedQueuePackage,
+          });
+          effectiveQueueItemId = Number(queueResult.insertId);
+          queueItemId = effectiveQueueItemId;
+
+          logInfo("[PublishCampaignPack] Created queue item", {
+            campaignId: input.campaignId,
+            platform,
+            contentPostId: post.id,
+            queueItemId: effectiveQueueItemId,
+            integrationId: integration.id,
+            status: "approved",
+            pageId: platform === "facebook" ? integration.pageId : undefined,
+          });
+        } else {
+          effectiveQueueItemId = existingQueue.id;
+          if (existingQueue.status === "approved" || existingQueue.status === "retrying") {
+            await db
+              .update(publishingQueue)
+              .set({ metadata: serializedQueuePackage })
+              .where(eq(publishingQueue.id, existingQueue.id));
+          }
+        }
+
         // Attempt immediate publish for low-risk, ready items. The frozen
         // package is the authoritative handoff consumed by the runner.
-        const publishResult = await publishSinglePost(queueItemId, { publishPackage });
+        const publishResult = await publishSinglePost(effectiveQueueItemId, { publishPackage });
 
         logInfo("[PublishCampaignPack] Publish attempt completed", {
           campaignId: input.campaignId,
           platform,
-          queueItemId,
+          queueItemId: effectiveQueueItemId,
           integrationId: integration.id,
           pageId: platform === "facebook" ? integration.pageId : undefined,
           status: publishResult.status,
@@ -1825,7 +1890,7 @@ export const contentRouter = createRouter({
 
         results.push({
           platform,
-          queueItemId,
+          queueItemId: effectiveQueueItemId,
           status: publishResult.status,
           postId: publishResult.postId,
           error: publishResult.error,

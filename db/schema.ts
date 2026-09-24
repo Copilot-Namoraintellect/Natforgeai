@@ -816,6 +816,11 @@ export const publishingQueue = mysqlTable("publishing_queue", {
   // Content safety
   safetyStatus: mysqlEnum("safetyStatus", ["pending", "low", "medium", "high"]),
   safetyReasons: json("safetyReasons"),
+  // Durable governance storage (WBS13.4): governed rows persist the immutable
+  // PublishPackage envelope here (see api/lib/publish/publish-package-queue-store.ts).
+  // Legacy rows keep metadata null. Updates on this row must preserve the
+  // publishPackage keys — they are governance state, not scratch metadata.
+  metadata: json("metadata"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 

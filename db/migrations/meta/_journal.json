@@ -183,6 +183,13 @@
       "when": 1790110564144,
       "tag": "0025_empty_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1790265928597,
+      "tag": "0026_add_publishing_queue_metadata",
+      "breakpoints": true
     }
   ]
 }

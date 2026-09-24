@@ -32,6 +32,7 @@ import {
   createPlatformAdapterRegistry,
   type PlatformAdapterRegistry,
 } from "../integrations/adapters/adapter-registry";
+import { resolveQueuePublishPackagePlan } from "../publish/publish-package-queue-persistence";
 import {
   normalizeAdapterError,
   type AdapterProviderError,
@@ -1221,7 +1222,25 @@ export async function publishDuePosts() {
 
   const results = [];
   for (const post of duePosts) {
-    const result = await publishSinglePost(post.id);
+    // WBS13.4: reload the exact persisted publish package for this durable
+    // queue row through the same loader the BullMQ worker uses. Governed rows
+    // execute the persisted package; legacy rows keep the established
+    // no-package call; a governed row with a missing or tampered package has
+    // already been failed closed durably by the shared plan loader.
+    const plan = await resolveQueuePublishPackagePlan(post);
+    if (plan.kind === "fail_closed") {
+      results.push({
+        id: post.id,
+        status: "precondition_failed",
+        platform: post.platform,
+        error: plan.reason,
+      });
+      continue;
+    }
+    const result =
+      plan.kind === "governed"
+        ? await publishSinglePost(post.id, { publishPackage: plan.publishPackage })
+        : await publishSinglePost(post.id);
     results.push(result);
   }
 

@@ -11,6 +11,10 @@ import {
   type PublishPackage,
   type PublishPackageBuildInput,
 } from "../../publish/publish-package-builder";
+import {
+  QUEUE_PUBLISH_PACKAGE_REQUIRED_METADATA_KEY,
+  serializePublishPackageForQueue,
+} from "../../publish/publish-package-queue-store";
 import { deriveCreativeArtifactLineageFingerprint } from "../../creative/artifact-lineage";
 
 vi.mock("../../../queries/connection", () => ({
@@ -782,5 +786,203 @@ describe("publishSinglePost — governed publish-package → adapter seam (WBS13
     expect(result.error).toContain("fingerprint mismatch");
     expect(fake.publish).not.toHaveBeenCalled();
     expect(publishToFacebook).not.toHaveBeenCalled();
+  });
+});
+
+
+// ─── WBS13.4: durable publish-package reload across process boundaries ───
+
+function dbRoundTrip<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function persistedMetadataFor(pkg: PublishPackage) {
+  return dbRoundTrip(serializePublishPackageForQueue(pkg));
+}
+
+describe("publishDuePosts — durable package reload through the shared loader (WBS13.4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reloads the persisted governed package from the durable queue row and publishes from it", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishDuePosts } = await import("../publishing-runner");
+    const pkg = buildGovernedPackage("facebook");
+
+    vi.mocked(publishToFacebook).mockResolvedValue({
+      success: true,
+      postId: "fb_cron_1",
+      url: "https://facebook.com/fb_cron_1",
+    });
+
+    const db = createMockDb({
+      queueItem: queueItemFor("facebook", { metadata: persistedMetadataFor(pkg) }),
+      contentPost: governedContentPost(),
+      integration: facebookIntegration,
+      campaign: readyCampaignWithApprovedLineage,
+      business: readyBusiness,
+      approvals: [approvedLaunchApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const results = await publishDuePosts();
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe("published");
+    // The package consumed by the cron path is the persisted one.
+    expect(results[0].publishPackageId).toBe(pkg.packageId);
+    expect(results[0].packageFingerprintSha256).toBe(pkg.packageFingerprintSha256);
+    expect(results[0].publishPackageClassification).toBe("governed");
+    expect(publishToFacebook).toHaveBeenCalledTimes(1);
+    expect(publishToFacebook).toHaveBeenCalledWith(
+      "decrypted:page-token-encrypted",
+      "830205703508466",
+      expect.objectContaining({ text: GOVERNED_TEXT })
+    );
+    expect(publishedQueueUpdate(db)?.set.externalPostId).toBe("fb_cron_1");
+  });
+
+  it("keeps legacy due rows on the existing no-package path without fabricating a package", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishDuePosts } = await import("../publishing-runner");
+
+    vi.mocked(publishToFacebook).mockResolvedValue({
+      success: true,
+      postId: "ext-legacy",
+      url: "https://facebook.com/ext-legacy",
+    });
+
+    const db = createMockDb({
+      queueItem: queueItemFor("facebook"), // metadata undefined → legacy
+      contentPost: governedContentPost(),
+      integration: facebookIntegration,
+      campaign: readyCampaignWithApprovedLineage,
+      business: readyBusiness,
+      approvals: [approvedLaunchApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const results = await publishDuePosts();
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe("published");
+    // No package identity is fabricated or attached on the legacy path.
+    expect(results[0].publishPackageId).toBeUndefined();
+    expect(results[0].packageFingerprintSha256).toBeUndefined();
+    expect(publishToFacebook).toHaveBeenCalledTimes(1);
+    expect(publishedQueueUpdate(db)?.set.externalPostId).toBe("ext-legacy");
+  });
+
+  it("fails closed before any provider call when a governed-marked due row has no persisted package", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishDuePosts } = await import("../publishing-runner");
+
+    const db = createMockDb({
+      queueItem: queueItemFor("facebook", {
+        metadata: { [QUEUE_PUBLISH_PACKAGE_REQUIRED_METADATA_KEY]: true },
+      }),
+      contentPost: governedContentPost(),
+      integration: facebookIntegration,
+      campaign: readyCampaignWithApprovedLineage,
+      business: readyBusiness,
+      approvals: [approvedLaunchApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const results = await publishDuePosts();
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe("precondition_failed");
+    expect(results[0].error).toMatch(/marked governed/i);
+    expect(publishToFacebook).not.toHaveBeenCalled();
+    // Durable fail-closed mark on the row, metadata column untouched.
+    const failedUpdate = db.updateCalls.find(
+      (call: { table: string | undefined; set: Record<string, unknown> }) =>
+        call.table === "publishing_queue" && call.set.status === "failed"
+    );
+    expect(failedUpdate).toBeDefined();
+    expect(failedUpdate?.set).not.toHaveProperty("metadata");
+  });
+});
+
+describe("queue lifecycle updates preserve the durable package metadata (WBS13.4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("provider retry transitions never write the metadata column", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishSinglePost } = await import("../publishing-runner");
+
+    vi.mocked(publishToFacebook).mockResolvedValue({ success: false, error: "fetch failed" });
+
+    const db = createMockDb({
+      queueItem: queueItemFor("facebook", {
+        metadata: persistedMetadataFor(buildGovernedPackage("facebook")),
+      }),
+      contentPost: governedContentPost(),
+      integration: facebookIntegration,
+      campaign: readyCampaignWithApprovedLineage,
+      business: readyBusiness,
+      approvals: [approvedLaunchApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const result = await publishSinglePost(1, { publishPackage: buildGovernedPackage("facebook") });
+
+    expect(result.status).toBe("retrying");
+    const queueUpdates = db.updateCalls.filter(
+      (call: { table: string | undefined }) => call.table === "publishing_queue"
+    );
+    expect(queueUpdates.length).toBeGreaterThan(0);
+    expect(queueUpdates.some((c: { set: Record<string, unknown> }) => c.set.status === "retrying")).toBe(true);
+    for (const call of queueUpdates) {
+      expect(call.set).not.toHaveProperty("metadata");
+    }
+  });
+
+  it("safety refresh and success transitions never write the metadata column", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishSinglePost } = await import("../publishing-runner");
+
+    vi.mocked(publishToFacebook).mockResolvedValue({
+      success: true,
+      postId: "fb_safe_1",
+      url: "https://facebook.com/fb_safe_1",
+    });
+
+    const db = createMockDb({
+      queueItem: queueItemFor("facebook", {
+        safetyStatus: null, // forces the safety-refresh update path
+        metadata: persistedMetadataFor(buildGovernedPackage("facebook")),
+      }),
+      contentPost: governedContentPost(),
+      integration: facebookIntegration,
+      campaign: readyCampaignWithApprovedLineage,
+      business: readyBusiness,
+      approvals: [approvedLaunchApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const result = await publishSinglePost(1, { publishPackage: buildGovernedPackage("facebook") });
+
+    expect(result.status).toBe("published");
+    const queueUpdates = db.updateCalls.filter(
+      (call: { table: string | undefined }) => call.table === "publishing_queue"
+    );
+    // Safety refresh + published transition both happened.
+    expect(
+      queueUpdates.some((c: { set: Record<string, unknown> }) => c.set.safetyStatus === "low")
+    ).toBe(true);
+    expect(publishedQueueUpdate(db)).toBeDefined();
+    for (const call of queueUpdates) {
+      expect(call.set).not.toHaveProperty("metadata");
+    }
   });
 });
