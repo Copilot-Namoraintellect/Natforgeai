@@ -214,6 +214,39 @@ describe("creative artifact lineage", () => {
     ).toThrowError(/expected an object/);
   });
 
+  it("accepts the WBS12.5/WBS12.6 video/script and non-social format kinds", () => {
+    const kinds = [
+      "video_script",
+      "email_copy",
+      "whatsapp_copy",
+      "ad_copy",
+      "carousel_ad",
+      "launch_pack",
+    ] as const;
+
+    for (const artifactKind of kinds) {
+      const normalized = normalizeCreativeArtifactLineage({
+        artifactKind,
+        platform: null,
+        parent: { artifactKind: "message_pack" },
+        strategy: creativeArtifactStrategyLineageFromAuthority(buildStrategyAuthority()),
+        approvedCopy: creativeArtifactApprovedCopyLineageFromEnvelope(buildEnvelope()),
+      });
+      expect(normalized.artifactKind).toBe(artifactKind);
+      expect(() =>
+        assertPersistedCreativeArtifactLineageIntact(
+          buildPersistedCreativeArtifactLineage({
+            artifactKind,
+            platform: null,
+            parent: { artifactKind: "message_pack" },
+            strategy: creativeArtifactStrategyLineageFromAuthority(buildStrategyAuthority()),
+            approvedCopy: creativeArtifactApprovedCopyLineageFromEnvelope(buildEnvelope()),
+          })
+        )
+      ).not.toThrow();
+    }
+  });
+
   it("allows null strategy/approvedCopy for envelope-less legacy artifacts", () => {
     const normalized = normalizeCreativeArtifactLineage({
       artifactKind: "message_pack",

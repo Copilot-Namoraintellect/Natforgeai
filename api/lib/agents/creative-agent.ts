@@ -26,13 +26,15 @@ import {
   type CampaignMessagePack,
   type ValidationContext,
 } from "../creative/campaign-message-architect";
-import { assertApprovedCopyMatchesEnvelope } from "../creative/approved-copy-authority";
 import {
   buildPersistedCreativeArtifactLineage,
-  creativeArtifactApprovedCopyLineageFromEnvelope,
-  creativeArtifactStrategyLineageFromAuthority,
   CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY,
 } from "../creative/artifact-lineage";
+import {
+  assertFormatCtaBoundToApprovedCopy,
+  buildGovernedFormatArtifactLineage,
+  resolveGovernedFormatLineageCoordinates,
+} from "../creative/format-artifact-lineage";
 import {
   ctaMatchesSelectedStage,
   normalizeCtaText,
@@ -618,6 +620,60 @@ function validatePackAgainstArchitect(
   };
 }
 
+function hasMeaningfulText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * Non-CTA semantic text from the WBS12.5/WBS12.6 derivative formats (video
+ * scenes, carousel slides, ad variations, WhatsApp promos, email campaign,
+ * launch sequence). Scanned by the quality gate so invented offers and
+ * generic claims cannot slip into a channel script silently; CTA fields are
+ * governed separately by the approved-copy binding check.
+ */
+function collectDerivativeFormatText(pack: any): string[] {
+  const text: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value === "string" && value.trim().length > 0) text.push(value);
+  };
+
+  for (const video of Array.isArray(pack?.videoConcepts) ? pack.videoConcepts : []) {
+    for (const scene of Array.isArray(video?.scenes) ? video.scenes : []) {
+      push(scene?.visualDescription);
+      push(scene?.voiceoverScript);
+      push(scene?.onScreenText);
+    }
+  }
+  for (const carousel of Array.isArray(pack?.carouselAds) ? pack.carouselAds : []) {
+    push(carousel?.hook);
+    for (const slide of Array.isArray(carousel?.slides) ? carousel.slides : []) {
+      push(slide?.headline);
+      push(slide?.bodyText);
+    }
+  }
+  for (const ad of Array.isArray(pack?.adCopyVariations) ? pack.adCopyVariations : []) {
+    push(ad?.headline);
+    push(ad?.primaryText);
+  }
+  for (const promo of Array.isArray(pack?.whatsAppPromos) ? pack.whatsAppPromos : []) {
+    push(promo?.message);
+    push(promo?.followUp);
+  }
+  if (pack?.emailCampaign) {
+    push(pack.emailCampaign.subjectLine);
+    push(pack.emailCampaign.preheader);
+    push(pack.emailCampaign.body);
+  }
+  if (pack?.launchSequence) {
+    for (const step of Array.isArray(pack.launchSequence.sequenceSteps)
+      ? pack.launchSequence.sequenceSteps
+      : []) {
+      push(step?.message);
+    }
+  }
+  return text;
+}
+
 function assessPackQuality(
   pack: any,
   hasExplicitOffer: boolean,
@@ -651,6 +707,7 @@ function assessPackQuality(
     video?.hook || "",
     video?.openingHook3Sec || "",
     video?.cta || "",
+    ...collectDerivativeFormatText(pack),
   ]
     .join(" ")
     .toLowerCase();
@@ -1640,6 +1697,148 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
   ].filter((n) => typeof n === "number") as number[];
   const nextIterationNumber = allExistingIterations.length > 0 ? Math.max(...allExistingIterations) + 1 : 1;
 
+  // Ensure every selected campaign platform has an adaptation before any
+  // governed artifact is validated or persisted.
+  const selectedPlatforms = (campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn")
+    .split(/[,;]+/)
+    .map((p: string) => p.trim())
+    .filter(Boolean);
+
+  const adaptationsByPlatform = new Map<string, any>();
+  for (const adaptation of pack.platformAdaptations || []) {
+    if (adaptation.platform) {
+      adaptationsByPlatform.set(adaptation.platform.toLowerCase(), adaptation);
+    }
+  }
+
+  const masterPost = pack.socialPosts[0];
+  const fallbackCaption = masterPost
+    ? `${masterPost.hook}\n\n${masterPost.caption}`
+    : "";
+  const fallbackCta = masterPost?.cta || campaign.preferredCta || "Contact us";
+
+  const resolvedAdaptations = selectedPlatforms.map((platform) => {
+    const existing = adaptationsByPlatform.get(platform.toLowerCase());
+    return existing || {
+      platform,
+      adaptedCaption: fallbackCaption,
+      adaptedCta: fallbackCta,
+      adaptedHashtags: masterPost?.hashtags || [],
+      bestTimeToPost: "",
+      formatNotes: `Fallback adaptation for ${platform}.`,
+    };
+  });
+
+  // WBS12.5/WBS12.6: video/script and non-social semantic formats derive from
+  // the approved message pack. When the approved pack carries a V2 envelope,
+  // prove the pack still hashes to it, require every governed artifact CTA to
+  // remain bound to the approved CTA (per-platform for platform captions), and
+  // resolve the lineage coordinates identifying the approved semantic source.
+  // Formatting and tone adaptation stay free; semantic CTA rewriting fails
+  // closed here, before any governed artifact is persisted. Envelope-less
+  // packs keep legacy behaviour and never fabricate lineage.
+  const formatLineageCoords = resolveGovernedFormatLineageCoordinates(
+    approvedMessagePack,
+    outputStrategyAuthority
+  );
+  // Normalisation turns a missing email/launch sequence into an empty
+  // placeholder object; placeholders carry no semantic content and stay
+  // ungoverned instead of failing closed or fabricating lineage.
+  const emailCampaignPresent =
+    hasMeaningfulText(pack.emailCampaign?.subjectLine) ||
+    hasMeaningfulText(pack.emailCampaign?.body);
+  const launchSequencePresent =
+    hasMeaningfulText(pack.launchSequence?.title) ||
+    (Array.isArray(pack.launchSequence?.sequenceSteps)
+      ? pack.launchSequence.sequenceSteps.some(
+          (step: any) => hasMeaningfulText(step?.message) || hasMeaningfulText(step?.cta)
+        )
+      : false);
+
+  if (formatLineageCoords) {
+    const approvedCta = approvedMessagePack.cta;
+
+    if (pack.videoConcepts.length > 0) {
+      const video = pack.videoConcepts[0];
+      assertFormatCtaBoundToApprovedCopy({
+        artifactKind: "video_script",
+        label: `video_script for ${video.platform}`,
+        artifactCta: video.cta,
+        approvedCta,
+      });
+    }
+
+    if (pack.carouselAds.length > 0) {
+      const carousel = pack.carouselAds[0];
+      assertFormatCtaBoundToApprovedCopy({
+        artifactKind: "carousel_ad",
+        label: `carousel_ad for ${carousel.platform}`,
+        artifactCta: carousel.overallCta,
+        approvedCta,
+      });
+    }
+
+    for (const ad of pack.adCopyVariations) {
+      assertFormatCtaBoundToApprovedCopy({
+        artifactKind: "ad_copy",
+        label: `ad_copy variation "${ad.variantName}"`,
+        artifactCta: ad.cta,
+        approvedCta,
+      });
+    }
+
+    if (pack.whatsAppPromos.length > 0) {
+      const whatsAppPromo = pack.whatsAppPromos[0];
+      assertFormatCtaBoundToApprovedCopy({
+        artifactKind: "whatsapp_copy",
+        label: "whatsapp_copy promo",
+        artifactCta: whatsAppPromo.cta,
+        approvedCta,
+      });
+    }
+
+    if (emailCampaignPresent) {
+      assertFormatCtaBoundToApprovedCopy({
+        artifactKind: "email_copy",
+        label: "email_copy campaign",
+        artifactCta: pack.emailCampaign.cta,
+        approvedCta,
+      });
+    }
+
+    if (launchSequencePresent) {
+      for (const step of pack.launchSequence.sequenceSteps) {
+        assertFormatCtaBoundToApprovedCopy({
+          artifactKind: "launch_pack",
+          label: `launch_pack step ${step.stepNumber}`,
+          artifactCta: step.cta,
+          approvedCta,
+        });
+      }
+    }
+
+    // WBS12.3: platform caption adaptations stay bound to the approved CTA
+    // for their platform (platform-specific approved CTA when the approved
+    // copy carries one, otherwise the pack CTA).
+    for (const adaptation of resolvedAdaptations) {
+      const approvedPlatformCaption = (approvedMessagePack.platformCaptions || []).find(
+        (caption) =>
+          caption.platform.toLowerCase() ===
+          String(adaptation.platform || "").toLowerCase()
+      );
+      const approvedPlatformCta = approvedPlatformCaption?.cta || approvedCta;
+      if (normalizeCtaText(adaptation.adaptedCta) !== normalizeCtaText(approvedPlatformCta)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            `Platform caption for ${adaptation.platform} rewrites the approved CTA ` +
+            `("${adaptation.adaptedCta}" vs approved "${approvedPlatformCta}"). ` +
+            "Regenerate the pack or re-approve the Campaign Message Pack before distribution.",
+        });
+      }
+    }
+  }
+
   // We intentionally defer old-draft cleanup until new content is safely saved.
 
   let savedPosts = 0;
@@ -1745,6 +1944,19 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         voiceoverScript: video.voiceoverScript,
         thumbnailPrompt: video.thumbnailPrompt,
         message: "Master Video Ad — Render to generate a playable MP4.",
+        // WBS12.5: the governed video script carries deterministic authority
+        // lineage back to the approved message pack; envelope-less packs stay
+        // legacy-shaped.
+        ...(formatLineageCoords
+          ? {
+              [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]:
+                buildGovernedFormatArtifactLineage(
+                  "video_script",
+                  video.platform,
+                  formatLineageCoords
+                ),
+            }
+          : null),
       },
       "video_concept"
     );
@@ -1827,6 +2039,16 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         targetPersona: carousel.targetPersona,
         funnelStage: carousel.funnelStage,
         benefitSequence: carousel.benefitSequence,
+        ...(formatLineageCoords
+          ? {
+              [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]:
+                buildGovernedFormatArtifactLineage(
+                  "carousel_ad",
+                  carousel.platform,
+                  formatLineageCoords
+                ),
+            }
+          : null),
       }
     );
   }
@@ -1846,6 +2068,18 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           platform: ad.platform,
           funnelStage: ad.funnelStage,
         })),
+        // WBS12.6: grouped ad variants span platforms, so the lineage carries
+        // no single platform; the approved message pack remains the parent.
+        ...(formatLineageCoords
+          ? {
+              [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]:
+                buildGovernedFormatArtifactLineage(
+                  "ad_copy",
+                  null,
+                  formatLineageCoords
+                ),
+            }
+          : null),
       }
     );
   }
@@ -1861,6 +2095,16 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         followUp: wa.followUp,
         cta: wa.cta,
         tone: wa.tone,
+        ...(formatLineageCoords
+          ? {
+              [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]:
+                buildGovernedFormatArtifactLineage(
+                  "whatsapp_copy",
+                  "whatsapp",
+                  formatLineageCoords
+                ),
+            }
+          : null),
       }
     );
   }
@@ -1877,6 +2121,16 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         cta: pack.emailCampaign.cta,
         tone: pack.emailCampaign.tone,
         segment: pack.emailCampaign.segment,
+        ...(formatLineageCoords && emailCampaignPresent
+          ? {
+              [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]:
+                buildGovernedFormatArtifactLineage(
+                  "email_copy",
+                  "email",
+                  formatLineageCoords
+                ),
+            }
+          : null),
       }
     );
   }
@@ -1888,6 +2142,16 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
       "launch_pack",
       {
         sequenceSteps: pack.launchSequence.sequenceSteps,
+        ...(formatLineageCoords && launchSequencePresent
+          ? {
+              [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]:
+                buildGovernedFormatArtifactLineage(
+                  "launch_pack",
+                  null,
+                  formatLineageCoords
+                ),
+            }
+          : null),
       }
     );
   }
@@ -1946,75 +2210,9 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     }
   }
 
-  // Ensure every selected campaign platform has an adaptation
-  const selectedPlatforms = (campaign.platforms || "Instagram, Facebook, TikTok, LinkedIn")
-    .split(/[,;]+/)
-    .map((p: string) => p.trim())
-    .filter(Boolean);
-
-  const adaptationsByPlatform = new Map<string, any>();
-  for (const adaptation of pack.platformAdaptations || []) {
-    if (adaptation.platform) {
-      adaptationsByPlatform.set(adaptation.platform.toLowerCase(), adaptation);
-    }
-  }
-
-  const masterPost = pack.socialPosts[0];
-  const fallbackCaption = masterPost
-    ? `${masterPost.hook}\n\n${masterPost.caption}`
-    : "";
-  const fallbackCta = masterPost?.cta || campaign.preferredCta || "Contact us";
-
-  const resolvedAdaptations = selectedPlatforms.map((platform) => {
-    const existing = adaptationsByPlatform.get(platform.toLowerCase());
-    return existing || {
-      platform,
-      adaptedCaption: fallbackCaption,
-      adaptedCta: fallbackCta,
-      adaptedHashtags: masterPost?.hashtags || [],
-      bestTimeToPost: "",
-      formatNotes: `Fallback adaptation for ${platform}.`,
-    };
-  });
-
-  // WBS12.3: platform caption adaptations derive from the approved semantic
-  // copy. When the approved pack carries a V2 envelope, prove the pack still
-  // hashes to it, require every adaptation CTA to remain bound to the
-  // approved CTA for its platform (platform-specific approved CTA when the
-  // approved copy carries one, otherwise the pack CTA), and persist lineage
-  // identifying the approved semantic source each adaptation derives from.
-  // Formatting-level caption changes stay free; semantic rewriting fails
-  // closed. Envelope-less packs keep legacy behavior unchanged.
-  const approvedEnvelope = approvedMessagePack?.v2ApprovalEnvelope ?? null;
-  let governedCaptionLineage: {
-    strategy: ReturnType<typeof creativeArtifactStrategyLineageFromAuthority>;
-    approvedCopy: ReturnType<typeof creativeArtifactApprovedCopyLineageFromEnvelope>;
-  } | null = null;
-  if (approvedMessagePack && approvedEnvelope) {
-    assertApprovedCopyMatchesEnvelope(approvedMessagePack);
-    for (const adaptation of resolvedAdaptations) {
-      const approvedPlatformCaption = (approvedMessagePack.platformCaptions || []).find(
-        (caption) =>
-          caption.platform.toLowerCase() ===
-          String(adaptation.platform || "").toLowerCase()
-      );
-      const approvedCta = approvedPlatformCaption?.cta || approvedMessagePack.cta;
-      if (normalizeCtaText(adaptation.adaptedCta) !== normalizeCtaText(approvedCta)) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message:
-            `Platform caption for ${adaptation.platform} rewrites the approved CTA ` +
-            `("${adaptation.adaptedCta}" vs approved "${approvedCta}"). ` +
-            "Regenerate the pack or re-approve the Campaign Message Pack before distribution.",
-        });
-      }
-    }
-    governedCaptionLineage = {
-      strategy: creativeArtifactStrategyLineageFromAuthority(outputStrategyAuthority),
-      approvedCopy: creativeArtifactApprovedCopyLineageFromEnvelope(approvedEnvelope),
-    };
-  }
-
+  // WBS12.3: persist platform caption adaptations. CTA binding and lineage
+  // coordinates were already resolved and validated above, before any
+  // governed artifact is persisted.
   for (const adaptation of resolvedAdaptations) {
     try {
       await db.insert(campaignAssets).values({
@@ -2031,15 +2229,15 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           bestTimeToPost: adaptation.bestTimeToPost,
           formatNotes: adaptation.formatNotes,
           ...outputStrategyAuthority,
-          ...(governedCaptionLineage
+          ...(formatLineageCoords
             ? {
                 [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]:
                   buildPersistedCreativeArtifactLineage({
                     artifactKind: "platform_caption",
                     platform: String(adaptation.platform),
                     parent: { artifactKind: "message_pack" },
-                    strategy: governedCaptionLineage.strategy,
-                    approvedCopy: governedCaptionLineage.approvedCopy,
+                    strategy: formatLineageCoords.strategy,
+                    approvedCopy: formatLineageCoords.approvedCopy,
                   }),
               }
             : null),
@@ -2080,15 +2278,15 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
           // WBS12.3: under V2 copy authority the hashtag set is a derived
           // content variant of the approved message pack and carries the
           // same lineage; envelope-less packs stay legacy-shaped.
-          ...(governedCaptionLineage
+          ...(formatLineageCoords
             ? {
                 [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]:
                   buildPersistedCreativeArtifactLineage({
                     artifactKind: "hashtag_set",
                     platform: null,
                     parent: { artifactKind: "message_pack" },
-                    strategy: governedCaptionLineage.strategy,
-                    approvedCopy: governedCaptionLineage.approvedCopy,
+                    strategy: formatLineageCoords.strategy,
+                    approvedCopy: formatLineageCoords.approvedCopy,
                   }),
               }
             : null),

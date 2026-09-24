@@ -15,8 +15,11 @@ import type { V2ApprovalEnvelope } from "./message-approval/contracts";
 //
 // Covered artifact kinds: message_pack (the approved semantic copy itself),
 // platform captions (caption_adaptation rows), hashtag sets and caption packs
-// (derived content variants). The module is deliberately pure: it re-derives
-// deterministic hashes from data it is handed and never touches the database.
+// (derived content variants), plus the WBS12.5/WBS12.6 video/script and
+// non-social semantic formats (video scripts, email copy, WhatsApp/direct-
+// message copy, advertising copy/ad variants, carousel ads and launch packs).
+// The module is deliberately pure: it re-derives deterministic hashes from
+// data it is handed and never touches the database.
 //
 // Persistence note: lineage records are written into the existing metadata
 // JSON of the durable row (campaign_assets.metadata under the
@@ -40,7 +43,13 @@ export type CreativeArtifactKind =
   | "message_pack"
   | "platform_caption"
   | "hashtag_set"
-  | "caption_pack";
+  | "caption_pack"
+  | "video_script"
+  | "email_copy"
+  | "whatsapp_copy"
+  | "ad_copy"
+  | "carousel_ad"
+  | "launch_pack";
 
 // ─── Input contract ───
 
@@ -175,6 +184,12 @@ function normalizeArtifactKind(value: unknown): CreativeArtifactKind {
     "platform_caption",
     "hashtag_set",
     "caption_pack",
+    "video_script",
+    "email_copy",
+    "whatsapp_copy",
+    "ad_copy",
+    "carousel_ad",
+    "launch_pack",
   ];
   if (typeof value !== "string" || !kinds.includes(value as CreativeArtifactKind)) {
     failClosed(
