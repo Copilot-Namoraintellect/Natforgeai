@@ -21,14 +21,46 @@ import { createAlert } from "../alerts";
 import { rateLimitUser } from "../rate-limiter";
 import { ingestAudienceData } from "../audience/ingest";
 import { loadAndAssertPublicationReadiness } from "../creative/publication-readiness-service";
+import { assertPersistedPublishPackageIntact } from "../publish/publish-package-contract";
 import {
   assertPublishPackageMatchesQueueItem,
   assertPublishPackagePayloadCurrent,
-  publishPackageToAdapterPayload,
   type PublishPackage,
 } from "../publish/publish-package-builder";
+import { publishPackageToAuthoritativeInput } from "../publish/publish-package-adapter-input";
+import {
+  createPlatformAdapterRegistry,
+  type PlatformAdapterRegistry,
+} from "../integrations/adapters/adapter-registry";
+import {
+  normalizeAdapterError,
+  type AdapterProviderError,
+  type AuthoritativePublicationInput,
+  type PlatformAdapter,
+  type PublicationOperationIdentity,
+} from "../integrations/adapters/platform-adapter";
+import type {
+  FacebookAdapterDestination,
+  InstagramAdapterDestination,
+  LinkedInAdapterDestination,
+  TwitterAdapterDestination,
+} from "../integrations/adapters";
 
 const RETRY_DELAYS_MS = [60_000, 300_000, 900_000]; // 1min, 5min, 15min
+
+/**
+ * The single governed adapter boundary used when an immutable publish package
+ * is consumed. Adapters delegate submission to the existing provider functions
+ * in ../integrations/platforms, so the established provider seam (and its
+ * test mocks) is preserved end to end. Created lazily on first governed use so
+ * merely importing the runner never instantiates adapters.
+ */
+let defaultPlatformAdapterRegistry: PlatformAdapterRegistry | null = null;
+
+function getDefaultPlatformAdapterRegistry(): PlatformAdapterRegistry {
+  defaultPlatformAdapterRegistry ??= createPlatformAdapterRegistry();
+  return defaultPlatformAdapterRegistry;
+}
 
 type PublicationAuditEventType = "publication_attempt" | "publication_success" | "publication_failure";
 type PublicationFailureStage = "billing" | "provider" | "runtime" | "precondition" | "integration" | "media";
@@ -52,6 +84,8 @@ function buildPublicationAuditEvent(input: {
   attemptOrdinal: number;
   outcome: "succeeded" | "failed";
   metadata: Record<string, unknown>;
+  /** Governed publish-package correlation; null on the legacy path. */
+  publishPackageId?: string | null;
 }) {
   return createAuditEvent({
     eventType: input.eventType,
@@ -66,7 +100,7 @@ function buildPublicationAuditEvent(input: {
     workflowAttemptId: null,
     approvalRequestId: null,
     artifactId: null,
-    packageId: null,
+    packageId: input.publishPackageId ?? null,
     metadata: {
       queueItemId: input.queueItem.id,
       platform: input.queueItem.platform,
@@ -94,7 +128,8 @@ async function failQueueItemPrecondition(
     retryCount?: number | null;
     maxRetries?: number | null;
   },
-  message: string
+  message: string,
+  publishPackageId: string | null = null
 ): Promise<{ id: number; status: string; platform: string; error: string }> {
   const db = getDb();
   await db.transaction(async (tx) => {
@@ -117,11 +152,155 @@ async function failQueueItemPrecondition(
         attemptOrdinal: (post.retryCount || 0) + 1,
         outcome: "failed",
         metadata: { terminal: true, nextState: "failed", failureStage: "precondition" },
+        publishPackageId,
       }),
       tx
     );
   });
   return { id: post.id, status: "precondition_failed", platform: post.platform, error: message };
+}
+
+// ─── Governed package → adapter publication seam (WBS13 convergence) ───
+//
+// When an immutable publish package is consumed, the package payload is the
+// semantic source of truth and the platform adapter is the last transport
+// seam before the provider. The helpers below only translate: they never
+// reconstruct copy, never reread mutable rows, and delegate submission to the
+// existing provider functions bound inside the adapters.
+
+type AnyAdapterDestination =
+  | FacebookAdapterDestination
+  | InstagramAdapterDestination
+  | LinkedInAdapterDestination
+  | TwitterAdapterDestination;
+
+/**
+ * The registry resolves to a union of concrete adapters; the destination is
+ * built per platform to match. Method-syntax signatures are bivariant, so the
+ * union binds cleanly to this transport-only view.
+ */
+type GovernedAdapterView = PlatformAdapter<AnyAdapterDestination, unknown>;
+
+function isAdapterProviderError(error: unknown): error is AdapterProviderError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message: unknown }).message === "string" &&
+    "category" in error &&
+    "retryable" in error
+  );
+}
+
+/**
+ * Build the adapter destination (already-decrypted credentials + routing)
+ * from the resolved social_integrations row, mirroring the exact credential
+ * derivation the legacy direct-provider branch uses. The governed path fails
+ * closed before any provider call when the destination cannot be constructed.
+ */
+function buildAdapterDestination(
+  platform: string,
+  integration: typeof socialIntegrations.$inferSelect,
+  accessToken: string
+): { destination: AnyAdapterDestination } | { error: string } {
+  switch (platform) {
+    case "facebook":
+      return {
+        destination: {
+          accessToken: integration.pageAccessTokenEncrypted
+            ? decryptToken(integration.pageAccessTokenEncrypted)
+            : accessToken,
+          pageId: integration.pageId || integration.accountName || "me",
+        },
+      };
+    case "instagram": {
+      if (!integration.instagramBusinessAccountId || !integration.pageAccessTokenEncrypted) {
+        return {
+          error:
+            "Instagram publishing is not ready. Reconnect Meta and ensure a linked Instagram professional account exists.",
+        };
+      }
+      return {
+        destination: {
+          accessToken: decryptToken(integration.pageAccessTokenEncrypted),
+          instagramBusinessAccountId: integration.instagramBusinessAccountId,
+        },
+      };
+    }
+    case "linkedin":
+      return {
+        destination: {
+          accessToken,
+          organizationId: integration.accountName || "",
+        },
+      };
+    case "twitter":
+      return { destination: { accessToken } };
+    default:
+      return { error: `Platform ${platform} not supported` };
+  }
+}
+
+/**
+ * Publish one already-validated governed package through the adapter
+ * boundary. Resolves exactly one adapter, performs exactly one provider
+ * submission, and maps the normalized receipt/error back onto the runner's
+ * established publishResult shape so retry/failure semantics are unchanged.
+ */
+async function publishThroughGovernedAdapter(input: {
+  registry: PlatformAdapterRegistry;
+  governedInput: AuthoritativePublicationInput;
+  platform: string;
+  integration: typeof socialIntegrations.$inferSelect;
+  accessToken: string;
+}): Promise<{ success: boolean; postId?: string; url?: string; error?: string }> {
+  const { platform, integration, accessToken, governedInput } = input;
+  const operation: PublicationOperationIdentity = governedInput;
+
+  try {
+    const adapter = input.registry.resolve(platform) as GovernedAdapterView;
+
+    const inputValidation = adapter.validateInput(governedInput);
+    if (!inputValidation.ok) {
+      return {
+        success: false,
+        error: `Publication input validation failed: ${inputValidation.issues
+          .map((issue) => `${issue.code} (${issue.message})`)
+          .join("; ")}`,
+      };
+    }
+
+    const destinationResult = buildAdapterDestination(platform, integration, accessToken);
+    if ("error" in destinationResult) {
+      return { success: false, error: destinationResult.error };
+    }
+    const destination = destinationResult.destination;
+
+    const destinationValidation = adapter.validateDestination(destination);
+    if (!destinationValidation.ok) {
+      return {
+        success: false,
+        error: `Publication destination validation failed: ${destinationValidation.issues
+          .map((issue) => `${issue.code} (${issue.message})`)
+          .join("; ")}`,
+      };
+    }
+
+    // Deterministic request construction; assertTransportFidelity inside the
+    // adapter proves the transported text is the authoritative text.
+    const request = adapter.buildProviderRequest(governedInput, destination);
+
+    const receipt = await adapter.publish(request, destination, operation);
+    return { success: true, postId: receipt.externalPostId, url: receipt.externalUrl };
+  } catch (error: unknown) {
+    // Adapters and the registry already reject/throw normalized
+    // AdapterProviderError shapes; anything else is normalized here so the
+    // runner's existing failure handling sees one stable message.
+    const normalized = isAdapterProviderError(error)
+      ? error
+      : normalizeAdapterError(platform, error, operation);
+    return { success: false, error: normalized.message };
+  }
 }
 
 /**
@@ -269,11 +448,34 @@ export async function finalizeCampaignPublishState(campaignId: number | null | u
 /**
  * Publish a single queue item.
  * Used by both the cron runner and BullMQ worker.
+ *
+ * The optional publish-package correlation fields are populated only when an
+ * immutable publish package was consumed for this attempt; the legacy
+ * no-package path leaves them undefined.
  */
+export interface PublishSinglePostResult {
+  id: number;
+  status: string;
+  platform?: string;
+  error?: string;
+  postId?: string;
+  publishPackageId?: string;
+  packageFingerprintSha256?: string;
+  publishPackageClassification?: string;
+}
+
 export async function publishSinglePost(
   queueItemId: number,
-  options?: { publishPackage?: PublishPackage }
-) {
+  options?: {
+    publishPackage?: PublishPackage;
+    /**
+     * Internal injection seam for the governed adapter boundary. Production
+     * callers omit this; the runner uses the default registry whose adapters
+     * delegate to the existing provider functions.
+     */
+    adapterRegistry?: PlatformAdapterRegistry;
+  }
+): Promise<PublishSinglePostResult> {
   const db = getDb();
   const now = new Date();
 
@@ -336,11 +538,12 @@ export async function publishSinglePost(
   const frozenPackage = options?.publishPackage ?? null;
   if (frozenPackage && contentPost) {
     try {
+      assertPersistedPublishPackageIntact(frozenPackage);
       assertPublishPackageMatchesQueueItem(frozenPackage, post);
       assertPublishPackagePayloadCurrent(frozenPackage, contentPost);
     } catch (err: any) {
       const message = err instanceof TRPCError ? err.message : "Publish package conflict check failed";
-      return failQueueItemPrecondition(post, message);
+      return failQueueItemPrecondition(post, message, frozenPackage?.packageId ?? null);
     }
   }
 
@@ -479,16 +682,48 @@ export async function publishSinglePost(
       };
     }
 
-    // Build content payload. WBS13.1: when an immutable publish package was
-    // handed off by publication preparation, its frozen payload is the
-    // authoritative source — Distribution must not reconstruct meaning from
-    // mutable campaign/business rows at execution time. The legacy path
+    // WBS13 destination authority: a governed package may only publish through
+    // the destination it was built and queue-validated for. A mutable queue or
+    // platform field must never silently redirect it to another account, so a
+    // resolved integration that diverges from the pinned package destination
+    // fails closed on the durable precondition path — before payload build,
+    // credit deduction, decryption of credentials, and any provider call.
+    if (frozenPackage) {
+      const packagePlatform = frozenPackage.identity.destination.platform;
+      const integrationPlatform = String(integration.platform || "").trim().toLowerCase();
+      if (integrationPlatform !== packagePlatform) {
+        return failQueueItemPrecondition(
+          post,
+          `Publish package destination platform ${packagePlatform} does not match the resolved integration platform ${integrationPlatform}`,
+          frozenPackage.packageId
+        );
+      }
+      const pinnedIntegrationId = frozenPackage.identity.destination.integrationId;
+      if (pinnedIntegrationId !== null && integration.id !== pinnedIntegrationId) {
+        return failQueueItemPrecondition(
+          post,
+          `Publish package is bound to integration ${pinnedIntegrationId}, but the queue item resolved integration ${integration.id}`,
+          frozenPackage.packageId
+        );
+      }
+    }
+
+    // Build content payload. WBS13.1/WBS13 convergence: when an immutable
+    // publish package was handed off by publication preparation, its frozen
+    // payload is the authoritative source — Distribution must not reconstruct
+    // meaning from mutable campaign/business rows at execution time. The
+    // governed mapping (package + queue identity → AuthoritativePublicationInput)
+    // is the single seam into the platform adapter boundary. The legacy path
     // (cron/worker items without a package) keeps composing from the live row.
     const imageUrl: string | undefined =
       postMeta?.imageUrl || (contentPost as any)?.imageUrl || undefined;
 
-    const payload = frozenPackage
-      ? publishPackageToAdapterPayload(frozenPackage)
+    const governedInput = frozenPackage
+      ? publishPackageToAuthoritativeInput(frozenPackage, post.id)
+      : null;
+
+    const payload = governedInput
+      ? governedInput.content
       : contentPost
         ? {
             text: `${contentPost.hook || ""}\n\n${contentPost.caption || ""}\n\n${contentPost.cta || ""}`.trim(),
@@ -572,6 +807,7 @@ export async function publishSinglePost(
         attemptOrdinal,
         outcome: "succeeded",
         metadata: { queueStatusAtAttempt: post.status },
+        publishPackageId: frozenPackage?.packageId ?? null,
       })
     );
 
@@ -609,6 +845,18 @@ export async function publishSinglePost(
         hasPageAccessToken: post.platform === "facebook" ? !!integration.pageAccessTokenEncrypted : undefined,
       });
 
+      if (governedInput) {
+        // Governed package path (WBS13 convergence): exactly one adapter
+        // resolution and exactly one provider submission through the adapter
+        // boundary. The legacy direct-provider switch below must not also run.
+        publishResult = await publishThroughGovernedAdapter({
+          registry: options?.adapterRegistry ?? getDefaultPlatformAdapterRegistry(),
+          governedInput,
+          platform: post.platform,
+          integration,
+          accessToken,
+        });
+      } else {
       switch (post.platform) {
         case "facebook": {
           const pageToken = integration.pageAccessTokenEncrypted
@@ -664,6 +912,7 @@ export async function publishSinglePost(
           break;
         default:
           publishResult = { success: false, error: `Platform ${post.platform} not supported` };
+      }
       }
     }
 
@@ -721,6 +970,7 @@ export async function publishSinglePost(
               attemptOrdinal,
               outcome: "succeeded",
               metadata: { externalPostIdPresent: Boolean(current.externalPostId) },
+              publishPackageId: frozenPackage?.packageId ?? null,
             }),
             tx
           );
@@ -736,6 +986,7 @@ export async function publishSinglePost(
             attemptOrdinal,
             outcome: "succeeded",
             metadata: { externalPostIdPresent: Boolean(publishResult.postId) },
+            publishPackageId: frozenPackage?.packageId ?? null,
           }),
           tx
         );
@@ -789,6 +1040,7 @@ export async function publishSinglePost(
               attemptOrdinal,
               outcome: "failed",
               metadata: { terminal: true, nextState: "failed", failureStage },
+              publishPackageId: frozenPackage?.packageId ?? null,
             }),
             tx
           );
@@ -824,6 +1076,7 @@ export async function publishSinglePost(
               attemptOrdinal,
               outcome: "failed",
               metadata: { terminal: false, nextState: "retrying", failureStage },
+              publishPackageId: frozenPackage?.packageId ?? null,
             }),
             tx
           );
@@ -837,6 +1090,9 @@ export async function publishSinglePost(
       platform: post.platform,
       error: publishResult.error,
       postId: publishResult.postId,
+      publishPackageId: frozenPackage ? frozenPackage.packageId : undefined,
+      packageFingerprintSha256: frozenPackage ? frozenPackage.packageFingerprintSha256 : undefined,
+      publishPackageClassification: frozenPackage ? frozenPackage.classification : undefined,
     };
   } catch (error: any) {
     if (providerSucceeded) {
@@ -873,6 +1129,7 @@ export async function publishSinglePost(
             attemptOrdinal: runtimeOrdinal,
             outcome: "failed",
             metadata: { terminal: true, nextState: "failed", failureStage: "runtime" },
+            publishPackageId: frozenPackage?.packageId ?? null,
           }),
           tx
         );
@@ -908,6 +1165,7 @@ export async function publishSinglePost(
             attemptOrdinal: runtimeOrdinal,
             outcome: "failed",
             metadata: { terminal: false, nextState: "retrying", failureStage: "runtime" },
+            publishPackageId: frozenPackage?.packageId ?? null,
           }),
           tx
         );
@@ -919,6 +1177,9 @@ export async function publishSinglePost(
       status: retryCount >= maxRetries ? "failed" : "retrying",
       error: error.message,
       platform: post.platform,
+      publishPackageId: frozenPackage ? frozenPackage.packageId : undefined,
+      packageFingerprintSha256: frozenPackage ? frozenPackage.packageFingerprintSha256 : undefined,
+      publishPackageClassification: frozenPackage ? frozenPackage.classification : undefined,
     };
   }
 }
