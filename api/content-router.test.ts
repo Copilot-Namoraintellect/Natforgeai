@@ -835,6 +835,10 @@ describe("contentRouter.generateForCampaign", () => {
             strategyApprovalLineage: {
               creativeBriefFingerprint: "test-fingerprint-ready",
               strategyRunId: 245,
+              strategySnapshotId: "snap-1",
+              strategyVersion: 1,
+              businessDnaSnapshotId: "bdna-1",
+              strategyHashSha256: "ab".repeat(32),
               approvalRequestId: 34,
               status: "approved",
             },
