@@ -272,6 +272,7 @@ interface MockDbConfig {
   assets?: Record<string, unknown>[];
   approvals?: Record<string, unknown>[];
   agentRunsRows?: Record<string, unknown>[];
+  generatedImages?: Record<string, unknown>[];
   insertId?: number;
 }
 
@@ -284,6 +285,7 @@ function createMockDb({
   assets = [],
   approvals = [],
   agentRunsRows = [],
+  generatedImages = [],
   insertId = 123,
 }: MockDbConfig = {}): MockDb & {
   insertValuesSpies: Map<unknown, ReturnType<typeof vi.fn>>;
@@ -338,6 +340,8 @@ function createMockDb({
       limitResult = approvals;
     } else if (tableName === "agent_runs") {
       limitResult = agentRunsRows;
+    } else if (tableName === "generated_images") {
+      limitResult = generatedImages;
     }
 
     const parsed = condition ? parseWhereCondition(condition) : null;
@@ -891,6 +895,9 @@ describe("contentRouter.publishCampaignPack", () => {
     type: "social_post",
     platform: "Instagram",
     status: "draft",
+    hook: "Save time every week",
+    caption: "AI-powered marketing for small business",
+    cta: "Get started today",
     metadata: {
       approved: true,
       assetKind: "master_campaign_post",
@@ -972,7 +979,316 @@ describe("contentRouter.publishCampaignPack", () => {
       status: "approved",
     });
 
-    expect(publishSinglePost).toHaveBeenCalledWith(123);
+    expect(publishSinglePost).toHaveBeenCalledWith(
+      123,
+      expect.objectContaining({
+        publishPackage: expect.objectContaining({
+          packageId: expect.stringMatching(/^ppv1-/),
+          packageFingerprintSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+          classification: "legacy",
+        }),
+      })
+    );
+  });
+
+  it("surfaces the immutable publish package identity in publish results", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 123,
+      status: "published",
+      platform: "instagram",
+      postId: "ext-125",
+    } as any);
+
+    const mockDb = createMockDb({
+      campaign: baseCampaign,
+      posts: [basePost],
+      integrations: [baseIntegration],
+      assets: [captionAsset],
+      queue: [],
+      approvals: [baseApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.publishCampaignPack({ campaignId: 28 });
+
+    // Ungoverned fixtures (no durable artifact lineage anywhere) must be
+    // classified legacy explicitly — never silently governed.
+    const entry = result.results.find((r) => r.platform === "instagram");
+    expect(entry?.publishPackageClassification).toBe("legacy");
+    expect(entry?.publishPackageId).toEqual(expect.stringMatching(/^ppv1-/));
+    expect(entry?.publishPackageFingerprint).toEqual(expect.stringMatching(/^[0-9a-f]{64}$/));
+
+    const handedPackage = vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage!;
+    expect(handedPackage).toBeDefined();
+    expect(handedPackage.identity.selectedContent.artifactId).toBe(125);
+    expect(handedPackage.identity.destination.platform).toBe("instagram");
+    expect(handedPackage.payload.text).toBe("Save time every week\n\nAI-powered marketing for small business\n\nGet started today");
+    expect(handedPackage.payload.mediaUrls).toEqual(["https://example.com/master-image.png"]);
+    expect(Object.isFrozen(handedPackage)).toBe(true);
+  });
+
+  it("fails the platform closed when governed caption lineage mismatches the package Strategy authority", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { getStrategyApprovalStatus } = await import("./lib/workflow/strategy-approval");
+    const { contentRouter } = await import("./content-router");
+    const { deriveCreativeArtifactLineageFingerprint } = await import("./lib/creative/artifact-lineage");
+
+    const APPROVED_COPY = {
+      copyHashSha256: "ef".repeat(32),
+      copySchemaVersion: "v2",
+      approvedRevisionId: "rev-1",
+      assessmentHashSha256: "12".repeat(32),
+      contextLockId: "ctx-1",
+    };
+    const packageStrategy = {
+      creativeBriefFingerprint: "test-fingerprint-ready",
+      approvalRequestId: 2,
+      status: "approved" as const,
+      strategyRunId: 42,
+      strategySnapshotId: "snap-1",
+      strategyVersion: 1,
+      businessDnaSnapshotId: "bdna-1",
+      strategyHashSha256: "ab".repeat(32),
+    };
+    vi.mocked(getStrategyApprovalStatus).mockReturnValueOnce({
+      currentFingerprint: "test-fingerprint-ready",
+      strategyFingerprint: "test-fingerprint-ready",
+      approvedStrategyFingerprint: "test-fingerprint-ready",
+      isCurrent: true,
+      hasApprovedStrategy: true,
+      strategyGeneratedForCurrentBrief: true,
+      lineage: packageStrategy,
+    } as any);
+
+    const captionLineageFor = (strategy: typeof packageStrategy) => ({
+      lineageSchemaVersion: 1,
+      artifactKind: "caption_pack",
+      platform: null,
+      parent: null,
+      lineageFingerprintSha256: deriveCreativeArtifactLineageFingerprint({
+        artifactKind: "caption_pack",
+        platform: null,
+        parent: null,
+        strategy,
+        approvedCopy: APPROVED_COPY,
+      }),
+      strategy,
+      approvedCopy: APPROVED_COPY,
+    });
+
+    // Fully governed fixture: durable lineage on the selected post, the
+    // caption pack, and the rendered image — all bound to packageStrategy.
+    const governedPost = {
+      ...basePost,
+      metadata: {
+        ...basePost.metadata,
+        creativeArtifactLineage: {
+          lineageSchemaVersion: 1,
+          artifactKind: "content_post",
+          artifactId: 125,
+          lineageFingerprintSha256: "34".repeat(32),
+          strategy: packageStrategy,
+          approvedCopy: APPROVED_COPY,
+        },
+      },
+    };
+
+    // Caption pack lineage is internally consistent but bound to a DIFFERENT
+    // Strategy authority than the campaign's approved WBS11 authority.
+    const foreignStrategy = { ...packageStrategy, strategyHashSha256: "cd".repeat(32) };
+
+    const mockDb = createMockDb({
+      campaign: baseCampaign,
+      posts: [governedPost],
+      integrations: [baseIntegration],
+      assets: [
+        {
+          id: 5,
+          userId: 18,
+          campaignId: 28,
+          assetType: "caption_pack",
+          metadata: {
+            creativeBriefFingerprint: "test-fingerprint-ready",
+            creativeArtifactLineage: captionLineageFor(foreignStrategy),
+          },
+        },
+      ],
+      queue: [],
+      approvals: [baseApproval],
+      generatedImages: [
+        {
+          id: 55,
+          userId: 18,
+          campaignId: 28,
+          contentPostId: 125,
+          status: "completed",
+          metadata: {
+            renderLineage: {
+              lineageSchemaVersion: 1,
+              contentPostId: 125,
+              lineageFingerprintSha256: "56".repeat(32),
+              strategy: packageStrategy,
+              approvedCopy: APPROVED_COPY,
+            },
+          },
+        },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.publishCampaignPack({ campaignId: 28 });
+
+    // Fail closed: the platform is failed, not published from mismatched lineage.
+    expect(result.publishedCount).toBe(0);
+    expect(result.failedCount).toBe(1);
+    expect(result.results.find((r) => r.platform === "instagram")?.status).toBe("failed");
+    expect(result.results.find((r) => r.platform === "instagram")?.error).toMatch(/Strategy authority/);
+    expect(publishSinglePost).not.toHaveBeenCalled();
+
+    // WBS13.4: package construction failed BEFORE any queue insert, so no
+    // executable governed row ever existed. The failure evidence row is
+    // inserted directly in a non-executable failed state with NO governed
+    // metadata — it stays legacy forever.
+    const insertValuesSpy = mockDb.insertValuesByTableName.get("publishing_queue");
+    expect(insertValuesSpy).toHaveBeenCalledTimes(1);
+    const inserted = insertValuesSpy!.mock.calls[0][0];
+    expect(inserted.status).toBe("failed");
+    expect(inserted.metadata).toBeUndefined();
+    expect(mockDb.updateSetByTableName.get("publishing_queue")).toBeUndefined();
+  });
+
+  it("persists the durable publish package atomically with the governed queue insert", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+    const {
+      QUEUE_PUBLISH_PACKAGE_METADATA_KEY,
+      QUEUE_PUBLISH_PACKAGE_REQUIRED_METADATA_KEY,
+      loadPersistedPublishPackage,
+    } = await import("./lib/publish/publish-package-queue-store");
+
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 123,
+      status: "published",
+      platform: "instagram",
+      postId: "ext-125",
+    } as any);
+
+    const mockDb = createMockDb({
+      campaign: baseCampaign,
+      posts: [basePost],
+      integrations: [baseIntegration],
+      assets: [captionAsset],
+      queue: [],
+      approvals: [baseApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.publishCampaignPack({ campaignId: 28 });
+
+    // Exactly ONE queue insert — the row and its package persist together
+    // (no duplicate persistence, no separate package write).
+    const insertValuesSpy = mockDb.insertValuesByTableName.get("publishing_queue");
+    expect(insertValuesSpy).toHaveBeenCalledTimes(1);
+    const inserted = insertValuesSpy!.mock.calls[0][0];
+    expect(inserted).toMatchObject({
+      userId: 18,
+      campaignId: 28,
+      contentPostId: 125,
+      integrationId: 7,
+      platform: "instagram",
+      status: "approved",
+    });
+    expect(inserted.metadata[QUEUE_PUBLISH_PACKAGE_REQUIRED_METADATA_KEY]).toBe(true);
+    const envelope = inserted.metadata[QUEUE_PUBLISH_PACKAGE_METADATA_KEY];
+    expect(envelope.kind).toBe("publish_package");
+    expect(envelope.schemaVersion).toBe(1);
+
+    // The durable package round-trips exactly to the package handed to the runner.
+    const handedPackage = vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage!;
+    expect(envelope.publishPackage.packageId).toBe(handedPackage.packageId);
+    const reloaded = loadPersistedPublishPackage(inserted.metadata);
+    expect(reloaded).toEqual(handedPackage);
+    expect(reloaded!.packageFingerprintSha256).toBe(handedPackage.packageFingerprintSha256);
+    expect(reloaded!.payload).toEqual(handedPackage.payload);
+
+    // Persistence precedes execution: the durable insert lands before the
+    // runner is invoked.
+    expect(insertValuesSpy!.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(publishSinglePost).mock.invocationCallOrder[0]
+    );
+  });
+
+  it("persists the package onto a reused approved queue row so worker/cron retries reload it", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { publishSinglePost } = await import("./lib/workflow/publishing-runner");
+    const { contentRouter } = await import("./content-router");
+    const { loadPersistedPublishPackage } = await import(
+      "./lib/publish/publish-package-queue-store"
+    );
+
+    vi.mocked(publishSinglePost).mockResolvedValue({
+      id: 77,
+      status: "published",
+      platform: "instagram",
+      postId: "ext-77",
+    } as any);
+
+    const mockDb = createMockDb({
+      campaign: baseCampaign,
+      posts: [basePost],
+      integrations: [baseIntegration],
+      assets: [captionAsset],
+      queue: [
+        {
+          id: 77,
+          userId: 18,
+          campaignId: 28,
+          contentPostId: 125,
+          integrationId: 7,
+          platform: "instagram",
+          status: "approved",
+          approvalRequired: false,
+          retryCount: 0,
+          maxRetries: 3,
+          scheduledAt: null,
+          nextRetryAt: null,
+          metadata: null,
+        },
+      ],
+      approvals: [baseApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.publishCampaignPack({ campaignId: 28 });
+
+    const entry = result.results.find((r) => r.platform === "instagram");
+    expect(entry?.status).toBe("published");
+    expect(entry?.queueItemId).toBe(77);
+
+    // No new queue row — the reused row gets a metadata-only update.
+    expect(mockDb.insertValuesByTableName.get("publishing_queue")).toBeUndefined();
+    const updateSpy = mockDb.updateSetByTableName.get("publishing_queue");
+    expect(updateSpy).toBeDefined();
+    const setPayload = updateSpy!.mock.calls[0][0];
+    expect(Object.keys(setPayload)).toEqual(["metadata"]);
+
+    const handedPackage = vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage!;
+    const reloaded = loadPersistedPublishPackage(setPayload.metadata);
+    expect(reloaded).toEqual(handedPackage);
+    expect(publishSinglePost).toHaveBeenCalledWith(
+      77,
+      expect.objectContaining({ publishPackage: expect.any(Object) })
+    );
   });
 
   it("marks content for manual posting when no connected platform exists", async () => {
@@ -1064,6 +1380,8 @@ describe("contentRouter.publishCampaignPack", () => {
     const inserted = insertValuesSpy!.mock.calls[0][0];
     expect(inserted.status).toBe("failed");
     expect(inserted.lastError).toContain("Instagram publishing is not ready");
+    // Integration-unready rows are created legacy — no governed marker.
+    expect(inserted.metadata).toBeUndefined();
   });
 
   it("Campaign #23 regression: connected Facebook and Instagram integrations produce non-empty publishablePlatforms", async () => {
@@ -1107,6 +1425,9 @@ describe("contentRouter.publishCampaignPack", () => {
       type: "social_post",
       platform: "Instagram",
       status: "draft",
+      hook: "Newmarket launch",
+      caption: "Visit us at 3@1 Newmarket",
+      cta: "Learn more",
       metadata: {
         approved: true,
         assetKind: "master_campaign_post",
@@ -2494,5 +2815,233 @@ describe("contentRouter.ownership Phase 2B gate", () => {
 
     const caller = contentRouter.createCaller(buildCtx(18));
     await expect(caller.markAsManuallyPosted({ id: 500 })).rejects.toThrow(/not found/i);
+  });
+});
+
+
+describe("contentRouter.update WBS12.9 approved-copy integrity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function approvedPost(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 300,
+      userId: 18,
+      campaignId: 28,
+      type: "social_post",
+      platform: "instagram",
+      status: "draft",
+      title: "Spring promo",
+      hook: "Tired of waiting?",
+      caption: "Original caption",
+      cta: "Book now",
+      headline: null,
+      body: null,
+      hashtags: "#spring",
+      metadata: {
+        approved: true,
+        approvedAt: "2026-05-20T10:00:00.000Z",
+      },
+      ...overrides,
+    };
+  }
+
+  function lastContentPostsSet(mockDb: ReturnType<typeof createMockDb>) {
+    const spy = mockDb.updateSetByTableName.get("content_posts");
+    expect(spy).toHaveBeenCalled();
+    return spy!.mock.calls[spy!.mock.calls.length - 1][0] as Record<string, unknown>;
+  }
+
+  it("voids approval when a semantic copy field is edited on an approved post", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({ posts: [approvedPost()] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.update({ id: 300, caption: "Rewritten caption" });
+
+    expect(result.success).toBe(true);
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.caption).toBe("Rewritten caption");
+    const metadata = setArgs.metadata as Record<string, unknown>;
+    expect(metadata.approved).toBe(false);
+    expect(metadata.approvalVoidedReason).toBe("semantic_copy_edit_requires_reapproval");
+    expect(typeof metadata.approvalVoidedAt).toBe("string");
+    // Prior approval history is retained for audit, not treated as current.
+    expect(metadata.approvedAt).toBe("2026-05-20T10:00:00.000Z");
+  });
+
+  it.each(["hook", "caption", "cta", "headline", "body"] as const)(
+    "voids approval when %s changes on an approved post",
+    async (field) => {
+      const { getDb } = await import("./queries/connection");
+      const { contentRouter } = await import("./content-router");
+
+      const mockDb = createMockDb({ posts: [approvedPost()] });
+      vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+      const caller = contentRouter.createCaller(buildCtx());
+      await caller.update({ id: 300, [field]: `new ${field} value` });
+
+      const metadata = lastContentPostsSet(mockDb).metadata as Record<string, unknown>;
+      expect(metadata.approved).toBe(false);
+      expect(metadata.approvalVoidedReason).toBe("semantic_copy_edit_requires_reapproval");
+    }
+  );
+
+  it("preserves approval for formatting-only edits (hashtags) on an approved post", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({ posts: [approvedPost()] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({ id: 300, hashtags: "#spring #promo #new" });
+
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.hashtags).toBe("#spring #promo #new");
+    // No metadata write at all: approval row state is untouched.
+    expect(setArgs.metadata).toBeUndefined();
+  });
+
+  it("preserves approval for scheduling updates on an approved post (core workflow)", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({ posts: [approvedPost()] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({
+      id: 300,
+      status: "scheduled",
+      scheduledFor: "2026-06-01T09:00:00.000Z",
+    });
+
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.status).toBe("scheduled");
+    expect(setArgs.metadata).toBeUndefined();
+    expect(setArgs).not.toHaveProperty("hook");
+    expect(setArgs).not.toHaveProperty("caption");
+  });
+
+  it("does not mint approval state when an unapproved legacy post is edited", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const legacyPost = approvedPost({
+      metadata: { generationRunId: "run-legacy" },
+    });
+    const mockDb = createMockDb({ posts: [legacyPost] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({ id: 300, caption: "Edited legacy caption" });
+
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.caption).toBe("Edited legacy caption");
+    expect(setArgs.metadata).toBeUndefined();
+  });
+
+  it("strips approval-authority keys from arbitrary metadata passthrough", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const legacyPost = approvedPost({ metadata: { note: "keep-me" } });
+    const mockDb = createMockDb({ posts: [legacyPost] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({
+      id: 300,
+      metadata: { approved: true, approvedAt: "2026-01-01T00:00:00.000Z", note: "updated" },
+    });
+
+    const metadata = lastContentPostsSet(mockDb).metadata as Record<string, unknown>;
+    expect(metadata.note).toBe("updated");
+    expect(metadata.approved).toBeUndefined();
+    expect(metadata.approvedAt).toBeUndefined();
+  });
+
+  it("merges metadata so governance lineage survives partial updates", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const governedPost = approvedPost({
+      metadata: {
+        approved: false,
+        creativeArtifactLineage: {
+          lineageSchemaVersion: 1,
+          artifactKind: "platform_caption",
+          parent: { artifactKind: "message_pack", artifactId: null },
+          lineageFingerprintSha256: "abc123",
+        },
+      },
+    });
+    const mockDb = createMockDb({ posts: [governedPost] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({ id: 300, title: "Renamed only", metadata: { reviewNote: "checked" } });
+
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.title).toBe("Renamed only");
+    const metadata = setArgs.metadata as Record<string, unknown>;
+    const lineage = metadata.creativeArtifactLineage as Record<string, unknown>;
+    expect(lineage.artifactKind).toBe("platform_caption");
+    expect(lineage.lineageFingerprintSha256).toBe("abc123");
+    expect(metadata.reviewNote).toBe("checked");
+    expect(metadata.approved).toBe(false);
+  });
+
+  it("records a no-change semantic field as non-voiding", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const mockDb = createMockDb({ posts: [approvedPost()] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    await caller.update({ id: 300, caption: "Original caption" });
+
+    const setArgs = lastContentPostsSet(mockDb);
+    expect(setArgs.metadata).toBeUndefined();
+  });
+});
+
+describe("contentRouter.approve WBS12.9", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("marks a content post as approved and keeps the approval authority keys", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { contentRouter } = await import("./content-router");
+
+    const post = {
+      id: 301,
+      userId: 18,
+      campaignId: 28,
+      type: "social_post",
+      status: "draft",
+      metadata: { generationRunId: "run-9" },
+    };
+    const mockDb = createMockDb({ posts: [post] });
+    vi.mocked(getDb).mockReturnValue(mockDb as unknown as ReturnType<typeof getDb>);
+
+    const caller = contentRouter.createCaller(buildCtx());
+    const result = await caller.approve({ id: 301 });
+
+    expect(result.success).toBe(true);
+    const spy = mockDb.updateSetByTableName.get("content_posts");
+    expect(spy).toHaveBeenCalledTimes(1);
+    const metadata = spy!.mock.calls[0][0] as { metadata: Record<string, unknown> };
+    expect(metadata.metadata.approved).toBe(true);
+    expect(typeof metadata.metadata.approvedAt).toBe("string");
+    expect(metadata.metadata.generationRunId).toBe("run-9");
   });
 });

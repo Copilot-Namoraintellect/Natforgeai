@@ -41,6 +41,57 @@ vi.mock("../creative/creative-generation-claim", () => ({
 vi.mock("../workflow/strategy-approval", () => ({
   isApprovedStrategyCurrent: vi.fn(() => true),
   assertApprovedStrategySemanticallyValid: vi.fn(async () => undefined),
+  getStrategyApprovalStatus: vi.fn(() => ({
+    currentFingerprint: "wbs12a-test-fingerprint",
+    approvedFingerprint: "wbs12a-test-fingerprint",
+    hasApprovedStrategy: true,
+    isCurrent: true,
+    lineage: {
+      creativeBriefFingerprint: "wbs12a-test-fingerprint",
+      strategyRunId: 501,
+      approvalRequestId: 77,
+      status: "approved",
+      strategySnapshotId: "strategy-snapshot-501",
+      strategyVersion: 1,
+      businessDnaSnapshotId: "bdna-snapshot-1",
+      strategyHashSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    },
+  })),}));
+vi.mock("../creative/strategy-snapshot-input", () => ({
+  resolveImmutableCreativeStrategyInput: vi.fn(
+    async () => ({
+      authority: {
+        strategySnapshotId: "strategy-snapshot-501",
+        strategyVersion: 1,
+        businessDnaSnapshotId: "bdna-snapshot-1",
+        strategyHashSha256:
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        strategyRunId: 501,
+        approvalRequestId: 77,
+        creativeBriefFingerprint: "wbs12a-test-fingerprint",
+      },
+      snapshot: {
+        coreMessage: "Immutable test core message",
+        valueProposition: "Immutable test value proposition",
+        personas: [
+          {
+            name: "Immutable test buyer",
+          },
+        ],
+      },
+      creativeContext: {
+        coreMessage: "Immutable test core message",
+        valueProposition: "Immutable test value proposition",
+        positioning: "Immutable test positioning",
+        campaignTheme: "Immutable test theme",
+        personas: [
+          {
+            name: "Immutable test buyer",
+          },
+        ],
+      },
+    })
+  ),
 }));
 
 function getTableName(table: unknown): string | undefined {

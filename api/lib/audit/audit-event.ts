@@ -42,6 +42,8 @@ export const AUDIT_EVENT_TYPES = [
   "publication_failure",
   "engagement_escalation",
   "learning_record_creation",
+  "strategy_snapshot_materialized",
+  "learning_promotion_resolved",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
@@ -54,6 +56,7 @@ export const AUDIT_EVENT_SOURCES = [
   "workflow",
   "scheduler",
   "external",
+  "strategy",
 ] as const;
 
 export type AuditEventSource = (typeof AUDIT_EVENT_SOURCES)[number];

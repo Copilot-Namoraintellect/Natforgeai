@@ -21,6 +21,7 @@ import { billingRouter } from "./billing-router";
 import { healthRouter } from "./health-router";
 import { videoRouter } from "./video-router";
 import { learningRouter } from "./learning-router";
+import { learningPromotionRouter } from "./learning-promotion-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -67,6 +68,7 @@ export const appRouter = createRouter({
   health: healthRouter,
   video: videoRouter,
   learning: learningRouter,
+  learningPromotion: learningPromotionRouter,
 });
 
 export type AppRouter = typeof appRouter;

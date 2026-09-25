@@ -24,6 +24,7 @@ import {
   type ImageRenderClaimDbExecutor,
 } from "./image-render-claim";
 import { imageRenderClaims, generatedImages } from "@db/schema";
+import type { ImageRenderLineageInput } from "./image-render-lineage";
 
 const TABLE_TAGS = new Map<unknown, string>([
   [imageRenderClaims, "image_render_claims"],
@@ -3352,5 +3353,298 @@ describe("terminalizeStaleImageRenderClaim (Slice C3)", () => {
     expect(result).toEqual({ terminalized: true });
     expect(row.status).toBe("failed");
     expect(mockGetDb).not.toHaveBeenCalled();
+  });
+});
+
+
+// ─── WBS12D: production lineage authority binding ───
+//
+// The lineage fingerprint is bound into intentFingerprint, so claim
+// acquisition, completion CAS, rearm and idempotent replay all compare the
+// approved Strategy/copy authority and fail closed on any mismatch — an
+// image produced for different authority can never attach or replay.
+
+function makeLineage(contentPostId = 13, overrides: Record<string, unknown> = {}) {
+  return {
+    contentPostId,
+    strategy: {
+      strategySnapshotId: "strategy_" + "a1".repeat(24),
+      strategyVersion: 3,
+      businessDnaSnapshotId: "dna_snapshot_0001",
+      strategyHashSha256: "ab".repeat(32),
+      strategyRunId: 41,
+      creativeBriefFingerprint: "brief-fingerprint-0001",
+      approvalRequestId: 99,
+    },
+    approvedCopy: {
+      copyHashSha256: "ef".repeat(32),
+      copySchemaVersion: "v2.1",
+      approvedRevisionId: "revision-0001",
+    },
+    ...overrides,
+  } as ImageRenderLineageInput;
+}
+
+describe("lineage authority binding (WBS12D)", () => {
+  let state: FakeDbState;
+
+  function deriveWithLineage(
+    lineage: ImageRenderLineageInput | null | undefined,
+    overrides: Record<string, unknown> = {}
+  ) {
+    return deriveImageRenderAttemptIdentity({
+      userId: 7,
+      contentPostId: 13,
+      attempt: {
+        clientAttemptId: "attempt-token-1",
+        ...(lineage ? { lineage } : {}),
+        ...overrides,
+      },
+    });
+  }
+
+  function seedClaim(
+    identity: ReturnType<typeof deriveWithLineage>,
+    overrides: Record<string, unknown> = {}
+  ) {
+    const now = new Date("2026-05-01T00:00:00.000Z");
+    const row: Record<string, unknown> = {
+      id: state.rows.length + 1,
+      userId: 7,
+      contentPostId: 13,
+      activeClaimKey: "active:7:post:13:image",
+      ownerToken: makeOwnerToken(1),
+      status: "running",
+      leaseExpiresAt: FUTURE_LEASE,
+      createdAt: now,
+      updatedAt: now,
+      requestAttemptKey: identity.requestAttemptKey,
+      intentFingerprint: identity.intentFingerprint,
+      deductionKey: identity.deductionKey,
+      deductionRecorded: false,
+      generatedImageId: null,
+      resultImageUrl: null,
+      resultProvider: null,
+      resultProviderJobId: null,
+      resultCreditsCharged: null,
+      resultQualityTier: null,
+      resultQualityLabel: null,
+      resultIsDraft: null,
+      completedAt: null,
+      ...overrides,
+    };
+    state.rows.push(row);
+    return row;
+  }
+
+  beforeEach(() => {
+    const fake = createFakeDb();
+    state = fake.state;
+    mockGetDb.mockReturnValue(fake.db);
+  });
+
+  it("keeps legacy fingerprints bit-identical when lineage is absent", () => {
+    const legacy = deriveAttempt(7, 13, "attempt-token-1");
+    const withoutLineage = deriveWithLineage(null);
+    const withUndefinedLineage = deriveWithLineage(undefined);
+    expect(withoutLineage.intentFingerprint).toBe(legacy.intentFingerprint);
+    expect(withUndefinedLineage.intentFingerprint).toBe(legacy.intentFingerprint);
+  });
+
+  it("binds lineage into intentFingerprint while leaving the attempt keys unchanged", () => {
+    const lineageIdentity = deriveWithLineage(makeLineage());
+    const legacy = deriveAttempt(7, 13, "attempt-token-1");
+    expect(lineageIdentity.intentFingerprint).not.toBe(legacy.intentFingerprint);
+    expect(lineageIdentity.intentFingerprint).toMatch(HEX64);
+    expect(lineageIdentity.requestAttemptKey).toBe(legacy.requestAttemptKey);
+    expect(lineageIdentity.deductionKey).toBe(legacy.deductionKey);
+  });
+
+  it("changes intentFingerprint when any lineage authority coordinate changes", () => {
+    const base = deriveWithLineage(makeLineage());
+    const variants = [
+      makeLineage(13, {
+        strategy: { ...makeLineage().strategy, strategyVersion: 4 },
+      }),
+      makeLineage(13, {
+        strategy: { ...makeLineage().strategy, strategyHashSha256: "cd".repeat(32) },
+      }),
+      makeLineage(13, {
+        approvedCopy: {
+          ...makeLineage().approvedCopy!,
+          copyHashSha256: "12".repeat(32),
+        },
+      }),
+      makeLineage(13, { approvedCopy: null }),
+    ];
+    for (const variant of variants) {
+      expect(deriveWithLineage(variant).intentFingerprint).not.toBe(
+        base.intentFingerprint
+      );
+    }
+  });
+
+  it("rejects lineage scoped to a different content post", () => {
+    expect(() => deriveWithLineage(makeLineage(14))).toThrow(/contentPostId/);
+  });
+
+  it("rejects malformed lineage before any persistence", () => {
+    const malformed = makeLineage(13, {
+      strategy: { ...makeLineage().strategy, strategyHashSha256: "not-a-hash" },
+    });
+    expect(() => deriveWithLineage(malformed)).toThrow(/Invalid lineage/);
+  });
+
+  it("acquires a claim whose stored fingerprint binds the lineage authority", async () => {
+    const identity = deriveWithLineage(makeLineage());
+
+    const claim = requireAcquired(
+      await acquireImageRenderClaim({
+        userId: 7,
+        contentPostId: 13,
+        ownerToken: makeOwnerToken(1),
+        leaseExpiresAt: FUTURE_LEASE,
+        identity: {
+          clientAttemptId: "attempt-token-1",
+          lineage: makeLineage(),
+        },
+      })
+    );
+
+    expect(claim.intentFingerprint).toBe(identity.intentFingerprint);
+    expect(claim.intentFingerprint).not.toBe(deriveAttempt().intentFingerprint);
+  });
+
+  it("fails completion closed when the supplied fingerprint was derived from different lineage", async () => {
+    const lineageIdentity = deriveWithLineage(makeLineage());
+    const staleLineageIdentity = deriveWithLineage(
+      makeLineage(13, {
+        strategy: { ...makeLineage().strategy, strategyVersion: 4 },
+      })
+    );
+    seedClaim(lineageIdentity);
+
+    const result = await completeImageRenderClaimWithResult({
+      claimId: 1,
+      ownerToken: makeOwnerToken(1),
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: staleLineageIdentity.requestAttemptKey,
+      intentFingerprint: staleLineageIdentity.intentFingerprint,
+      deductionKey: staleLineageIdentity.deductionKey,
+      result: makeResult(),
+    });
+
+    expect(result).toEqual({ completed: false, reason: "identity_mismatch" });
+    const stored = state.rows[0];
+    expect(stored.status).toBe("running");
+    expect(stored.generatedImageId).toBeNull();
+    expect(stored.resultImageUrl).toBeNull();
+  });
+
+  it("completes with result when the lineage-bound fingerprint matches exactly", async () => {
+    const lineageIdentity = deriveWithLineage(makeLineage());
+    seedClaim(lineageIdentity);
+
+    const result = await completeImageRenderClaimWithResult({
+      claimId: 1,
+      ownerToken: makeOwnerToken(1),
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: lineageIdentity.requestAttemptKey,
+      intentFingerprint: lineageIdentity.intentFingerprint,
+      deductionKey: lineageIdentity.deductionKey,
+      result: makeResult(),
+    });
+
+    expect(result.completed).toBe(true);
+    expect(state.rows[0].generatedImageId).toBe(5000);
+  });
+
+  it("replays only for the exact lineage-bound fingerprint and rejects stale lineage", async () => {
+    const lineageIdentity = deriveWithLineage(makeLineage());
+    const staleLineageIdentity = deriveWithLineage(
+      makeLineage(13, {
+        approvedCopy: {
+          ...makeLineage().approvedCopy!,
+          copyHashSha256: "12".repeat(32),
+        },
+      })
+    );
+    seedClaim(lineageIdentity, {
+      activeClaimKey: null,
+      status: "completed",
+      deductionRecorded: true,
+      generatedImageId: 5000,
+      resultImageUrl: makeResult().imageUrl,
+      resultProvider: "v2",
+      resultProviderJobId: "premium-v2-123",
+      resultCreditsCharged: 12,
+      resultQualityTier: "premium",
+      resultQualityLabel: "Premium Marketing Leaflet",
+      resultIsDraft: false,
+      completedAt: RESULT_COMPLETED_AT,
+    });
+    state.rows.push({
+      id: 5000,
+      userId: 7,
+      contentPostId: 13,
+      url: makeResult().imageUrl,
+      status: "completed",
+      __table: "generated_images",
+    });
+
+    const replayable = await getCompletedImageRenderResult({
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: lineageIdentity.requestAttemptKey,
+      intentFingerprint: lineageIdentity.intentFingerprint,
+    });
+    expect(replayable.replayable).toBe(true);
+
+    const staleReplay = await getCompletedImageRenderResult({
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: staleLineageIdentity.requestAttemptKey,
+      intentFingerprint: staleLineageIdentity.intentFingerprint,
+    });
+    expect(staleReplay).toEqual({ replayable: false, reason: "intent_conflict" });
+  });
+
+  it("rearms only when the lineage-bound fingerprint matches and rejects stale lineage", async () => {
+    const lineageIdentity = deriveWithLineage(makeLineage());
+    const staleLineageIdentity = deriveWithLineage(
+      makeLineage(13, {
+        strategy: { ...makeLineage().strategy, strategyRunId: 42 },
+      })
+    );
+    seedClaim(lineageIdentity, {
+      status: "failed",
+      activeClaimKey: null,
+    });
+
+    const staleRearm = await rearmFailedImageRenderClaim({
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: staleLineageIdentity.requestAttemptKey,
+      intentFingerprint: staleLineageIdentity.intentFingerprint,
+      ownerToken: makeOwnerToken(2),
+      leaseExpiresAt: FUTURE_LEASE,
+    });
+    expect(staleRearm).toEqual({ rearmed: false, reason: "intent_conflict" });
+    expect(state.rows[0].status).toBe("failed");
+
+    const rearm = await rearmFailedImageRenderClaim({
+      userId: 7,
+      contentPostId: 13,
+      requestAttemptKey: lineageIdentity.requestAttemptKey,
+      intentFingerprint: lineageIdentity.intentFingerprint,
+      ownerToken: makeOwnerToken(2),
+      leaseExpiresAt: FUTURE_LEASE,
+    });
+    expect(rearm.rearmed).toBe(true);
+    if (rearm.rearmed) {
+      expect(rearm.claim.status).toBe("running");
+    }
   });
 });

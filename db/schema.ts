@@ -234,6 +234,40 @@ export const businessDnaSnapshots = mysqlTable(
 export type BusinessDnaSnapshotRow = typeof businessDnaSnapshots.$inferSelect;
 export type InsertBusinessDnaSnapshotRow = typeof businessDnaSnapshots.$inferInsert;
 
+export const strategySnapshots = mysqlTable(
+  "strategy_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    snapshotId: varchar("snapshotId", { length: 128 }).notNull().unique(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    strategyRunId: bigint("strategyRunId", { mode: "number", unsigned: true }).notNull().unique(),
+    businessDnaSnapshotId: varchar("businessDnaSnapshotId", { length: 128 }).notNull(),
+    version: int("version").notNull(),
+    creativeBriefFingerprint: varchar("creativeBriefFingerprint", { length: 128 }).notNull(),
+    strategyHashSha256: varchar("strategyHashSha256", { length: 64 }).notNull(),
+    snapshot: json("snapshot").notNull(),
+    capturedAt: timestamp("capturedAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    campaignIdIdx: index("strategy_snapshot_campaign_id_idx").on(table.campaignId),
+    businessIdIdx: index("strategy_snapshot_business_id_idx").on(table.businessId),
+    businessDnaSnapshotIdIdx: index("strategy_snapshot_bdna_snapshot_id_idx").on(
+      table.businessDnaSnapshotId
+    ),
+    strategyHashIdx: index("strategy_snapshot_hash_idx").on(table.strategyHashSha256),
+    campaignVersionUniqueIdx: uniqueIndex("strategy_snapshot_campaign_version_uidx").on(
+      table.campaignId,
+      table.version
+    ),
+  })
+);
+
+export type StrategySnapshotRow = typeof strategySnapshots.$inferSelect;
+export type InsertStrategySnapshotRow = typeof strategySnapshots.$inferInsert;
+
 // ─── Campaigns ───
 export const campaigns = mysqlTable("campaigns", {
   id: serial("id").primaryKey(),
@@ -782,6 +816,11 @@ export const publishingQueue = mysqlTable("publishing_queue", {
   // Content safety
   safetyStatus: mysqlEnum("safetyStatus", ["pending", "low", "medium", "high"]),
   safetyReasons: json("safetyReasons"),
+  // Durable governance storage (WBS13.4): governed rows persist the immutable
+  // PublishPackage envelope here (see api/lib/publish/publish-package-queue-store.ts).
+  // Legacy rows keep metadata null. Updates on this row must preserve the
+  // publishPackage keys — they are governance state, not scratch metadata.
+  metadata: json("metadata"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 

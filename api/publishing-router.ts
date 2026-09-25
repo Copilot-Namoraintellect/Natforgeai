@@ -11,6 +11,10 @@ import { env } from "./lib/env";
 import { publishToFacebook } from "./lib/integrations/platforms";
 import { decryptToken } from "./lib/crypto";
 import { loadAndAssertCampaignPublicationReadiness, loadAndAssertPublicationReadiness } from "./lib/creative/publication-readiness-service";
+import {
+  publicationScheduleFromQueueRow,
+  resolvePublicationSchedule,
+} from "./lib/publish/publication-schedule";
 
 export const publishingRouter = createRouter({
   createPublishingQueue: authedQuery
@@ -58,12 +62,22 @@ export const publishingRouter = createRouter({
       }
 
       for (const post of input.posts) {
+        // WBS13.2: the schedule authority resolves the declared schedule to one
+        // canonical UTC instant BEFORE any queue row exists. Malformed,
+        // offset-less (server-local dependent), or past instants fail closed
+        // here; the same canonical instant is persisted and handed to BullMQ.
+        const schedule = post.scheduledAt
+          ? resolvePublicationSchedule({ mode: "scheduled", scheduledAtUtc: post.scheduledAt })
+          : resolvePublicationSchedule({ mode: "immediate" });
+        const canonicalScheduledAt =
+          schedule.mode === "scheduled" ? new Date(schedule.scheduledAtUtcMillis) : null;
+
         const [result] = await db.insert(publishingQueue).values({
           userId: ctx.user.id,
           campaignId: input.campaignId,
           contentPostId: post.contentPostId ?? null,
           platform: post.platform,
-          scheduledAt: post.scheduledAt ? new Date(post.scheduledAt) : null,
+          scheduledAt: canonicalScheduledAt,
           status: post.approvalRequired ? "pending_approval" : "approved",
           approvalRequired: post.approvalRequired,
         });
@@ -71,13 +85,13 @@ export const publishingRouter = createRouter({
         createdIds.push(queueItemId);
 
         // Schedule BullMQ job for approved posts
-        if (!post.approvalRequired && post.scheduledAt && isBullMQAvailable()) {
+        if (!post.approvalRequired && canonicalScheduledAt && isBullMQAvailable()) {
           try {
             await schedulePublishingJob(
               queueItemId,
               ctx.user.id,
               post.platform,
-              new Date(post.scheduledAt)
+              canonicalScheduledAt
             );
           } catch (err: any) {
             console.error(`[Publishing] Failed to schedule BullMQ job for ${queueItemId}:`, err.message);
@@ -139,13 +153,16 @@ export const publishingRouter = createRouter({
         .where(eq(publishingQueue.id, input.queueId));
 
       // Schedule BullMQ job if scheduledAt is set
-      if (item.scheduledAt && isBullMQAvailable()) {
+      const canonicalScheduledMillis = publicationScheduleFromQueueRow(item).scheduledAtUtcMillis;
+      if (canonicalScheduledMillis !== null && isBullMQAvailable()) {
         try {
+          // WBS13.2: the persisted queue row is the schedule authority's
+          // durable form; the same canonical instant drives the BullMQ delay.
           await schedulePublishingJob(
             item.id,
             item.userId,
             item.platform,
-            new Date(item.scheduledAt)
+            new Date(canonicalScheduledMillis)
           );
         } catch (err: any) {
           console.error(`[Publishing] Failed to schedule BullMQ job for ${item.id}:`, err.message);

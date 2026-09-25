@@ -236,6 +236,19 @@ export const imageRouter = createRouter({
         )
         .limit(1);
 
+      // WBS12.4 authority closure: this endpoint is the legacy external-worker
+      // completion path for image.create job rows only (contentPostId IS NULL,
+      // pending at creation). Post-linked rows are draft/premium artifacts
+      // persisted completed by their generation flows — governed rows carry
+      // claim/finalization lineage — and must never be rewritten here: a
+      // post-hoc url/status swap would sever the render↔authority binding.
+      if (existing && existing.contentPostId != null) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Post-linked image rows are governed generation artifacts and cannot be modified through the legacy worker endpoint.",
+        });
+      }
+
       await db
         .update(generatedImages)
         .set(data)
@@ -470,7 +483,13 @@ export const imageRouter = createRouter({
         .where(
           and(
             eq(generatedImages.id, input.generatedImageId),
-            eq(generatedImages.userId, ctx.user.id)
+            eq(generatedImages.userId, ctx.user.id),
+            // WBS12.4 authority closure: an approvable version must be a
+            // version OF this post. Rows without a post link (legacy
+            // image.create/image.update worker jobs) or linked to another
+            // post carry no approved-intent relationship to this content and
+            // can never become its ready Creative image.
+            eq(generatedImages.contentPostId, input.contentPostId)
           )
         )
         .limit(1);
@@ -490,6 +509,23 @@ export const imageRouter = createRouter({
       const existingMeta = typeof post.metadata === "string" ? JSON.parse(post.metadata || "{}") : (post.metadata || {});
       const imageMeta = typeof image.metadata === "string" ? JSON.parse(image.metadata || "{}") : (image.metadata || {});
 
+      // WBS12.4 authority closure: the ready image and the post's
+      // creative-brief fingerprint must describe the SAME render. Every
+      // production render path persists its brief fingerprint on the image
+      // row — top-level for draft/claims-OFF legacy rows, under
+      // metadata.renderLineage.strategy for governed claim/finalization rows.
+      // Rebind the post fingerprint to the approved version's own
+      // fingerprint so an older version can never become publish-ready under
+      // a newer render's currency; when the row carries no fingerprint the
+      // key is dropped (undefined is omitted by JSON.stringify) and the
+      // publication-readiness gate fails closed instead of lending the
+      // previous image's authority to an unprovenanced one.
+      const approvedBriefFingerprint =
+        (typeof imageMeta.creativeBriefFingerprint === "string" && imageMeta.creativeBriefFingerprint.trim()) ||
+        (typeof imageMeta.renderLineage?.strategy?.creativeBriefFingerprint === "string" &&
+          imageMeta.renderLineage.strategy.creativeBriefFingerprint.trim()) ||
+        undefined;
+
       await db
         .update(contentPosts)
         .set({
@@ -501,6 +537,7 @@ export const imageRouter = createRouter({
             imageCurrentVersionId: image.id,
             versionApprovedAt: new Date().toISOString(),
             imageQualityScore: imageMeta.qualityScore ?? imageMeta.imageQualityScore ?? existingMeta.imageQualityScore,
+            creativeBriefFingerprint: approvedBriefFingerprint,
           }),
           updatedAt: new Date(),
         })

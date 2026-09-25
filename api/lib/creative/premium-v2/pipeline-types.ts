@@ -290,6 +290,14 @@ export interface HybridPipelineMetadata {
   safeToAutoPublish?: boolean;
   safeToChargePremiumCredits?: boolean;
   needsHumanReview?: boolean;
+  // WBS12F visual-quality release gate record (hybrid renders only; absent on
+  // deterministic fallback outputs, which are never premium-ready anyway).
+  visualQualityGateMode?: "observe" | "enforce";
+  visualQualityGateBlocked?: boolean;
+  visualQualityGateWouldBlock?: boolean;
+  visualQualityGateTotalScore?: number | null;
+  visualQualityGateFailedDimensions?: string[];
+  visualQualityGateInsufficientDimensions?: string[];
   // Deterministic layout scoring
   layoutScore?: number;
   ctaDominanceScore?: number;

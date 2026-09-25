@@ -1,7 +1,13 @@
 import { getDb } from "../../queries/connection";
-import { publishingQueue, contentPosts, socialIntegrations, campaigns } from "@db/schema";
+import {
+  publishingQueue,
+  contentPosts,
+  socialIntegrations,
+  campaigns,
+  businesses,
+  approvalRequests,
+} from "@db/schema";
 import { eq, and, lte, or, isNotNull, type SQL } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
 import { transitionCampaignState } from "./engine";
 import { createAuditEvent } from "../audit/audit-event";
 import { persistAuditEvent } from "../audit/audit-store";
@@ -20,9 +26,72 @@ import { deductCredits } from "../billing/credit-engine";
 import { createAlert } from "../alerts";
 import { rateLimitUser } from "../rate-limiter";
 import { ingestAudienceData } from "../audience/ingest";
-import { loadAndAssertPublicationReadiness } from "../creative/publication-readiness-service";
+import {
+  assertPublicationScheduleMatchesPackageIntent,
+  publicationScheduleFromQueueRow,
+} from "../publish/publication-schedule";
+import {
+  validatePrePublishReadiness,
+  type PrePublishValidationIssue,
+} from "../publish/pre-publish-validation";
+import {
+  buildPublicationOperationState,
+  resolvePublicationExecutionDisposition,
+} from "../publish/publication-idempotency";
+import {
+  loadPublicationReceiptForQueueItem,
+  persistPublicationReceipt,
+} from "../publish/publication-receipt-store";
+import { buildLegacyReceiptFromQueueSuccess, buildPublicationReceipt } from "../publish/publication-receipt";
+import {
+  buildPublicationRecoveryEvent,
+  decidePublicationRecovery,
+  type PublicationPreconditionKind,
+  type PublicationRecoveryDecision,
+} from "../publish/publication-recovery-policy";
+import { publishPackageToAuthoritativeInput } from "../publish/publish-package-adapter-input";
+import type { PublishPackage } from "../publish/publish-package-builder";
+import {
+  createPlatformAdapterRegistry,
+  type PlatformAdapterRegistry,
+} from "../integrations/adapters/adapter-registry";
+import { resolveQueuePublishPackagePlan } from "../publish/publish-package-queue-persistence";
+import {
+  classifyProviderErrorMessage,
+  derivePublicationOperationId,
+  normalizeAdapterError,
+  type AdapterProviderError,
+  type AuthoritativePublicationInput,
+  type NormalizedPublicationReceipt,
+  type PlatformAdapter,
+  type PublicationOperationIdentity,
+} from "../integrations/adapters/platform-adapter";
+import type {
+  FacebookAdapterDestination,
+  InstagramAdapterDestination,
+  LinkedInAdapterDestination,
+  TwitterAdapterDestination,
+} from "../integrations/adapters";
 
-const RETRY_DELAYS_MS = [60_000, 300_000, 900_000]; // 1min, 5min, 15min
+/**
+ * The governed publishing retry schedule is owned by the canonical recovery
+ * policy (publication-recovery-policy.ts: PUBLICATION_RETRY_DELAYS_MS); the
+ * BullMQ queue options mirror it. No second retry schedule lives here.
+ */
+
+/**
+ * The single governed adapter boundary used when an immutable publish package
+ * is consumed. Adapters delegate submission to the existing provider functions
+ * in ../integrations/platforms, so the established provider seam (and its
+ * test mocks) is preserved end to end. Created lazily on first governed use so
+ * merely importing the runner never instantiates adapters.
+ */
+let defaultPlatformAdapterRegistry: PlatformAdapterRegistry | null = null;
+
+function getDefaultPlatformAdapterRegistry(): PlatformAdapterRegistry {
+  defaultPlatformAdapterRegistry ??= createPlatformAdapterRegistry();
+  return defaultPlatformAdapterRegistry;
+}
 
 type PublicationAuditEventType = "publication_attempt" | "publication_success" | "publication_failure";
 type PublicationFailureStage = "billing" | "provider" | "runtime" | "precondition" | "integration" | "media";
@@ -46,6 +115,8 @@ function buildPublicationAuditEvent(input: {
   attemptOrdinal: number;
   outcome: "succeeded" | "failed";
   metadata: Record<string, unknown>;
+  /** Governed publish-package correlation; null on the legacy path. */
+  publishPackageId?: string | null;
 }) {
   return createAuditEvent({
     eventType: input.eventType,
@@ -60,7 +131,7 @@ function buildPublicationAuditEvent(input: {
     workflowAttemptId: null,
     approvalRequestId: null,
     artifactId: null,
-    packageId: null,
+    packageId: input.publishPackageId ?? null,
     metadata: {
       queueItemId: input.queueItem.id,
       platform: input.queueItem.platform,
@@ -68,6 +139,424 @@ function buildPublicationAuditEvent(input: {
       ...input.metadata,
     },
   });
+}
+
+/**
+ * Durable fail-closed path for a queue item whose canonical pre-publish
+ * validation (WBS13.5) failed before any side effect, or whose persisted
+ * package schedule intent cannot be reconciled with the queue row (WBS13.2).
+ * The recovery policy (WBS13.8) owns the terminal decision: authority failures
+ * never consume retry budget, and an approval-authority block routes the row
+ * to pending_approval instead of fabricating a failure. The only permitted
+ * mutation is an idempotent update of this queue row plus one canonical
+ * publication_failure event (and the canonical recovery-decision event),
+ * committed together, so the worker can surface an UnrecoverableError and
+ * stop retrying a non-transient failure.
+ */
+async function failQueueItemPrecondition(
+  post: {
+    id: number;
+    userId: number;
+    campaignId: number | null;
+    contentPostId: number | null;
+    platform: string;
+    retryCount?: number | null;
+    maxRetries?: number | null;
+  },
+  issue: Pick<PrePublishValidationIssue, "message" | "failureStage" | "code">,
+  publishPackageId: string | null = null
+): Promise<{ id: number; status: string; platform: string; error: string; unrecoverable: boolean }> {
+  const db = getDb();
+  const decision = decidePublicationRecovery({
+    stage: issue.failureStage,
+    preconditionKind:
+      issue.failureStage === "precondition" ? preconditionKindOf(issue.code) : undefined,
+    now: new Date(),
+    retryCount: post.retryCount || 0,
+    maxRetries: post.maxRetries || 3,
+  });
+  await db.transaction(async (tx) => {
+    await tx
+      .update(publishingQueue)
+      .set({
+        status: decision.terminalStatus!,
+        lastError: issue.message,
+        retryCount: decision.nextRetryCount,
+        nextRetryAt: null,
+      })
+      .where(eq(publishingQueue.id, post.id));
+
+    await persistAuditEvent(
+      buildPublicationAuditEvent({
+        eventType: "publication_failure",
+        occurredAt: decision.decidedAt.toISOString(),
+        queueItem: post,
+        businessId: null,
+        attemptOrdinal: (post.retryCount || 0) + 1,
+        outcome: "failed",
+        metadata: {
+          terminal: true,
+          nextState: decision.terminalStatus,
+          failureStage: issue.failureStage,
+          ...publicationRecoveryMetadata(decision, null),
+        },
+        publishPackageId,
+      }),
+      tx
+    );
+  });
+  return {
+    id: post.id,
+    status:
+      decision.terminalStatus === "pending_approval" ? "pending_approval" : "precondition_failed",
+    platform: post.platform,
+    error: issue.message,
+    unrecoverable: true,
+  };
+}
+
+/** Map a canonical validator code onto the recovery policy's precondition kinds. */
+function preconditionKindOf(code: string): PublicationPreconditionKind {
+  switch (code) {
+    case "launch_approval_missing":
+    case "publication_authority_missing":
+      return "approval_authority";
+    case "package_not_intact":
+    case "package_classification_unrecognized":
+    case "package_not_governed":
+      return "package_integrity";
+    case "package_payload_not_current":
+      return "package_freshness";
+    case "queue_package_mismatch":
+      return "destination_mismatch";
+    default:
+      return "readiness";
+  }
+}
+
+/**
+ * Canonical WBS13.8 recovery-decision metadata, merged into the existing
+ * publication_failure audit event (the audit event vocabulary is unchanged).
+ * The normalized recovery event is built by the policy module; the runner
+ * embeds its decision fields so the durable failure evidence records WHY the
+ * queue landed where it did, without a second audit event.
+ */
+function publicationRecoveryMetadata(
+  decision: PublicationRecoveryDecision,
+  providerErrorCode: string | null
+): Record<string, unknown> {
+  const recoveryEvent = buildPublicationRecoveryEvent({ decision, providerErrorCode });
+  const {
+    mutationAuthorized: _mutationAuthorized,
+    eventType: _eventType,
+    occurredAt: _occurredAt,
+    queueItemId: _queueItemId,
+    platform: _platform,
+    failureStage: _failureStage,
+    ...metadata
+  } = recoveryEvent;
+  return metadata;
+}
+
+// ─── Governed package → adapter publication seam (WBS13 convergence) ───
+//
+// When an immutable publish package is consumed, the package payload is the
+// semantic source of truth and the platform adapter is the last transport
+// seam before the provider. The helpers below only translate: they never
+// reconstruct copy, never reread mutable rows, and delegate submission to the
+// existing provider functions bound inside the adapters.
+
+type AnyAdapterDestination =
+  | FacebookAdapterDestination
+  | InstagramAdapterDestination
+  | LinkedInAdapterDestination
+  | TwitterAdapterDestination;
+
+/**
+ * The registry resolves to a union of concrete adapters; the destination is
+ * built per platform to match. Method-syntax signatures are bivariant, so the
+ * union binds cleanly to this transport-only view.
+ */
+type GovernedAdapterView = PlatformAdapter<AnyAdapterDestination, unknown>;
+
+function isAdapterProviderError(error: unknown): error is AdapterProviderError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message: unknown }).message === "string" &&
+    "category" in error &&
+    "retryable" in error
+  );
+}
+
+/**
+ * Build the adapter destination (already-decrypted credentials + routing)
+ * from the resolved social_integrations row, mirroring the exact credential
+ * derivation the legacy direct-provider branch uses. The governed path fails
+ * closed before any provider call when the destination cannot be constructed.
+ */
+function buildAdapterDestination(
+  platform: string,
+  integration: typeof socialIntegrations.$inferSelect,
+  accessToken: string
+): { destination: AnyAdapterDestination } | { error: string } {
+  switch (platform) {
+    case "facebook":
+      return {
+        destination: {
+          accessToken: integration.pageAccessTokenEncrypted
+            ? decryptToken(integration.pageAccessTokenEncrypted)
+            : accessToken,
+          pageId: integration.pageId || integration.accountName || "me",
+        },
+      };
+    case "instagram": {
+      if (!integration.instagramBusinessAccountId || !integration.pageAccessTokenEncrypted) {
+        return {
+          error:
+            "Instagram publishing is not ready. Reconnect Meta and ensure a linked Instagram professional account exists.",
+        };
+      }
+      return {
+        destination: {
+          accessToken: decryptToken(integration.pageAccessTokenEncrypted),
+          instagramBusinessAccountId: integration.instagramBusinessAccountId,
+        },
+      };
+    }
+    case "linkedin":
+      return {
+        destination: {
+          accessToken,
+          organizationId: integration.accountName || "",
+        },
+      };
+    case "twitter":
+      return { destination: { accessToken } };
+    default:
+      return { error: `Platform ${platform} not supported` };
+  }
+}
+
+/**
+ * Publish one already-validated governed package through the adapter
+ * boundary. Resolves exactly one adapter, performs exactly one provider
+ * submission, and maps the normalized receipt/error back onto the runner's
+ * established publishResult shape so retry/failure semantics are unchanged.
+ * The normalized provider artifacts travel with the result so the canonical
+ * receipt (WBS13.7) and the recovery policy (WBS13.8) consume the adapter
+ * boundary's own normalization instead of re-classifying anything.
+ */
+async function publishThroughGovernedAdapter(input: {
+  registry: PlatformAdapterRegistry;
+  governedInput: AuthoritativePublicationInput;
+  platform: string;
+  integration: typeof socialIntegrations.$inferSelect;
+  accessToken: string;
+}): Promise<{
+  success: boolean;
+  postId?: string;
+  url?: string;
+  error?: string;
+  normalizedReceipt?: NormalizedPublicationReceipt;
+  providerError?: AdapterProviderError;
+}> {
+  const { platform, integration, accessToken, governedInput } = input;
+  const operation: PublicationOperationIdentity = governedInput;
+
+  try {
+    const adapter = input.registry.resolve(platform) as GovernedAdapterView;
+
+    const inputValidation = adapter.validateInput(governedInput);
+    if (!inputValidation.ok) {
+      return {
+        success: false,
+        error: `Publication input validation failed: ${inputValidation.issues
+          .map((issue) => `${issue.code} (${issue.message})`)
+          .join("; ")}`,
+      };
+    }
+
+    const destinationResult = buildAdapterDestination(platform, integration, accessToken);
+    if ("error" in destinationResult) {
+      return { success: false, error: destinationResult.error };
+    }
+    const destination = destinationResult.destination;
+
+    const destinationValidation = adapter.validateDestination(destination);
+    if (!destinationValidation.ok) {
+      return {
+        success: false,
+        error: `Publication destination validation failed: ${destinationValidation.issues
+          .map((issue) => `${issue.code} (${issue.message})`)
+          .join("; ")}`,
+      };
+    }
+
+    // Deterministic request construction; assertTransportFidelity inside the
+    // adapter proves the transported text is the authoritative text.
+    const request = adapter.buildProviderRequest(governedInput, destination);
+
+    const receipt = await adapter.publish(request, destination, operation);
+    return {
+      success: true,
+      postId: receipt.externalPostId,
+      url: receipt.externalUrl,
+      normalizedReceipt: receipt,
+    };
+  } catch (error: unknown) {
+    // Adapters and the registry already reject/throw normalized
+    // AdapterProviderError shapes; anything else is normalized here so the
+    // runner's existing failure handling sees one stable message.
+    const normalized = isAdapterProviderError(error)
+      ? error
+      : normalizeAdapterError(platform, error, operation);
+    return { success: false, error: normalized.message, providerError: normalized };
+  }
+}
+
+/**
+ * WBS13.6 disposition for one queue item: load the durable canonical receipt
+ * (when any), bind the expected governed package, and project the durable
+ * queue row onto the pure idempotency authority. Throws only when durable
+ * evidence is malformed — the caller fails closed.
+ */
+async function resolveExecutionDisposition(
+  post: {
+    id: number;
+    userId: number;
+    platform: string;
+    status: string;
+    retryCount: number | null;
+    maxRetries: number | null;
+    nextRetryAt: Date | null;
+    externalPostId: string | null;
+    publishedAt: Date | null;
+  },
+  frozenPackage: PublishPackage | null
+): Promise<import("../publish/publication-idempotency").PublicationExecutionDisposition> {
+  const db = getDb();
+  const receipt = await loadPublicationReceiptForQueueItem({
+    queueItemId: post.id,
+    userId: post.userId,
+    executor: db,
+  });
+  return resolvePublicationExecutionDisposition(
+    buildPublicationOperationState({
+      queue: post,
+      receipt,
+      expectedPackage: frozenPackage
+        ? {
+            publishPackageId: frozenPackage.packageId,
+            packageFingerprintSha256: frozenPackage.packageFingerprintSha256,
+          }
+        : null,
+      openAttemptOrdinal: null,
+    })
+  );
+}
+
+/**
+ * Impure loader for the canonical validator's approval domain: the campaign,
+ * its business, and the campaign's approval rows. Returns nulls when the item
+ * is not campaign-linked; the validator reports the missing authority itself.
+ */
+async function loadPublicationAuthorityRows(
+  db: ReturnType<typeof getDb>,
+  post: { userId: number; campaignId: number | null },
+  contentPost: { campaignId?: number | null } | null
+): Promise<[unknown, unknown, number | null, unknown[]]> {
+  const campaignId = contentPost?.campaignId ?? post.campaignId;
+  if (!campaignId) {
+    return [null, null, null, []];
+  }
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, post.userId)))
+    .limit(1);
+  if (!campaign) {
+    return [null, null, null, []];
+  }
+  let business: unknown = null;
+  if (campaign.businessId) {
+    [business] = await db
+      .select()
+      .from(businesses)
+      .where(eq(businesses.id, campaign.businessId))
+      .limit(1);
+  }
+  const approvals = await db
+    .select()
+    .from(approvalRequests)
+    .where(and(eq(approvalRequests.userId, post.userId), eq(approvalRequests.campaignId, campaignId)));
+  return [campaign, business, campaign.businessId ?? null, approvals];
+}
+
+/**
+ * Apply one canonical recovery decision (WBS13.8) to the durable queue state:
+ * the queue row update, one canonical publication_failure event and the
+ * canonical publication_recovery_decision event commit or roll back together.
+ * Escalation alerts fire exactly once, only when the policy demands it.
+ */
+async function persistAttemptFailure(input: {
+  post: {
+    id: number;
+    userId: number;
+    campaignId: number | null;
+    contentPostId: number | null;
+    platform: string;
+  };
+  businessId: number | null;
+  attemptOrdinal: number;
+  decision: PublicationRecoveryDecision;
+  error: string;
+  publishPackageId: string | null;
+  providerErrorCode?: string | null;
+  alertMessage: string;
+}): Promise<void> {
+  const db = getDb();
+  const { decision } = input;
+  await db.transaction(async (tx) => {
+    await tx
+      .update(publishingQueue)
+      .set({
+        status: decision.terminal ? decision.terminalStatus! : "retrying",
+        retryCount: decision.nextRetryCount,
+        lastError: input.error,
+        nextRetryAt: decision.nextRetryAt,
+      })
+      .where(eq(publishingQueue.id, input.post.id));
+
+    await persistAuditEvent(
+      buildPublicationAuditEvent({
+        eventType: "publication_failure",
+        occurredAt: decision.decidedAt.toISOString(),
+        queueItem: input.post,
+        businessId: input.businessId,
+        attemptOrdinal: input.attemptOrdinal,
+        outcome: "failed",
+        metadata: {
+          terminal: decision.terminal,
+          nextState: decision.terminal ? decision.terminalStatus : "retrying",
+          failureStage: decision.failureStage,
+          ...publicationRecoveryMetadata(decision, input.providerErrorCode ?? null),
+        },
+        publishPackageId: input.publishPackageId,
+      }),
+      tx
+    );
+  });
+
+  if (decision.escalationRequired) {
+    await createAlert({
+      severity: "warning",
+      category: "publishing",
+      message: input.alertMessage,
+      details: { queueItemId: input.post.id, platform: input.post.platform, error: input.error },
+    });
+  }
 }
 
 /**
@@ -215,27 +704,56 @@ export async function finalizeCampaignPublishState(campaignId: number | null | u
 /**
  * Publish a single queue item.
  * Used by both the cron runner and BullMQ worker.
+ *
+ * The optional publish-package correlation fields are populated only when an
+ * immutable publish package was consumed for this attempt; the legacy
+ * no-package path leaves them undefined.
  */
-export async function publishSinglePost(queueItemId: number) {
-  const db = getDb();
-  const now = new Date();
+export interface PublishSinglePostResult {
+  id: number;
+  status: string;
+  platform?: string;
+  error?: string;
+  postId?: string;
+  publishPackageId?: string;
+  packageFingerprintSha256?: string;
+  publishPackageClassification?: string;
+  /**
+   * True when the canonical recovery policy (WBS13.8) decided this failure is
+   * not eligible for automatic retry (terminal/reconnect/approval/escalation).
+   * The BullMQ worker maps this to UnrecoverableError so durable-terminal
+   * outcomes are never blindly re-driven.
+   */
+  unrecoverable?: boolean;
+}
 
-  const [post] = await db
+export async function publishSinglePost(
+  queueItemId: number,
+  options?: {
+    publishPackage?: PublishPackage;
+    /**
+     * Internal injection seam for the governed adapter boundary. Production
+     * callers omit this; the runner uses the default registry whose adapters
+     * delegate to the existing provider functions.
+     */
+    adapterRegistry?: PlatformAdapterRegistry;
+  }
+): Promise<PublishSinglePostResult> {
+  const db = getDb();
+
+  const [loadedPost] = await db
     .select()
     .from(publishingQueue)
     .where(eq(publishingQueue.id, queueItemId))
     .limit(1);
 
-  if (!post) {
+  if (!loadedPost) {
     return { id: queueItemId, status: "not_found", error: "Queue item not found" };
   }
+  let post = loadedPost;
 
-  // Only process approved or retrying items
-  if (post.status !== "approved" && post.status !== "retrying") {
-    return { id: queueItemId, status: post.status, error: "Not ready for publishing" };
-  }
-
-  // Load content post early so the Phase 2B readiness gate runs before any side effect.
+  // Load content post early so the canonical validator can prove payload
+  // currentness against the live row before any side effect.
   const [contentPost] = post.contentPostId
     ? await db
         .select()
@@ -244,59 +762,77 @@ export async function publishSinglePost(queueItemId: number) {
         .limit(1)
     : [null];
 
-  // Publication-authority gate for every content-bound item, before any side
-  // effect: campaign-linked content requires the campaign_launch approval;
-  // standalone content has no authority model and fails closed.
-  if (contentPost) {
-    try {
-      await loadAndAssertPublicationReadiness({
-        db,
-        userId: post.userId,
-        campaignId: contentPost.campaignId ?? null,
-        selectedOutput: { record: contentPost, type: "content_post" },
-        requireLaunchApproval: true,
-      });
-    } catch (err: any) {
-      const message = err instanceof TRPCError ? err.message : "Publication readiness check failed";
-      // Phase 2B side-effect contract for a permanent readiness rejection:
-      // - No external platform call, credit mutation, published/scheduled state,
-      //   campaign-live transition, or success audit has occurred yet, and no
-      //   publication_attempt is fabricated: the controlled-attempt boundary
-      //   was never reached.
-      // - The only permitted mutation is an idempotent update of this queue row
-      //   to failed/blocked with a safe reason, so the worker can surface an
-      //   UnrecoverableError to BullMQ and stop retrying a non-transient failure.
-      //   It commits together with one canonical publication_failure event.
-      await db.transaction(async (tx) => {
-        await tx
-          .update(publishingQueue)
-          .set({
-            status: "failed",
-            lastError: message,
-            retryCount: post.maxRetries || 3,
-            nextRetryAt: null,
-          })
-          .where(eq(publishingQueue.id, post.id));
+  const frozenPackage = options?.publishPackage ?? null;
 
-        await persistAuditEvent(
-          buildPublicationAuditEvent({
-            eventType: "publication_failure",
-            occurredAt: new Date().toISOString(),
-            queueItem: post,
-            businessId: null,
-            attemptOrdinal: (post.retryCount || 0) + 1,
-            outcome: "failed",
-            metadata: { terminal: true, nextState: "failed", failureStage: "precondition" },
-          }),
-          tx
-        );
-      });
-      return {
-        id: post.id,
-        status: "precondition_failed",
-        platform: post.platform,
-        error: message,
-      };
+  // ── WBS13.6 idempotency disposition ──────────────────────────────────
+  // Consulted before any provider invocation: a durable success replays from
+  // the stored canonical receipt (zero provider calls), terminal states never
+  // reach the provider, and only execute/retry dispositions proceed. The
+  // governed package binding correlates the attempt so a prior success that
+  // belongs to a different package is never borrowed.
+  let disposition: import("../publish/publication-idempotency").PublicationExecutionDisposition;
+  try {
+    disposition = await resolveExecutionDisposition(post, frozenPackage);
+  } catch (err: any) {
+    // Durable operation state is contradictory or malformed: fail closed.
+    const message =
+      err instanceof Error ? err.message : "Publication operation state failed closed";
+    return { id: post.id, status: "precondition_failed", platform: post.platform, error: message };
+  }
+
+  if (disposition.outcome === "replay_success") {
+    // The stored canonical receipt answers this retry; no provider call, no
+    // duplicate external post, no duplicate success evidence.
+    return {
+      id: post.id,
+      status: "published",
+      platform: post.platform,
+      postId: disposition.receipt.externalPostId ?? undefined,
+      publishPackageId: disposition.receipt.publishPackageId ?? undefined,
+      packageFingerprintSha256: disposition.receipt.packageFingerprintSha256 ?? undefined,
+      publishPackageClassification: disposition.receipt.classification,
+    };
+  }
+
+  if (disposition.outcome === "terminal") {
+    if (disposition.reason === "not_ready" || disposition.reason === "already_terminal") {
+      // Established runner convention: non-actionable/terminal rows are
+      // reported without mutating their durable state.
+      return { id: post.id, status: post.status, error: disposition.message };
+    }
+    // attempts_exhausted / package_mismatch / receipt_state_drift: fail closed
+    // without a provider call and without touching durable success state.
+    return {
+      id: post.id,
+      status: "precondition_failed",
+      platform: post.platform,
+      error: disposition.message,
+      unrecoverable: true,
+      publishPackageId: frozenPackage ? frozenPackage.packageId : undefined,
+      packageFingerprintSha256: frozenPackage ? frozenPackage.packageFingerprintSha256 : undefined,
+      publishPackageClassification: frozenPackage ? frozenPackage.classification : undefined,
+    };
+  }
+
+  // ── WBS13.2 schedule authority: package intent ↔ queue row ───────────
+  // Where a governed package is consumed, its declared schedule intent must
+  // correspond to the same canonical schedule persisted on the queue row.
+  // (Package intactness/binding/currentness are owned by the canonical
+  // validator below; the schedule↔intent proof is the schedule authority's.)
+  if (frozenPackage) {
+    try {
+      assertPublicationScheduleMatchesPackageIntent(
+        publicationScheduleFromQueueRow(post),
+        frozenPackage.identity.intent
+      );
+    } catch (err: any) {
+      const message =
+        err instanceof Error ? err.message : "Publish package schedule intent conflict check failed";
+      return failQueueItemPrecondition(
+        post,
+        { code: "queue_package_mismatch", failureStage: "precondition", message },
+        frozenPackage.packageId
+      );
     }
   }
 
@@ -313,7 +849,10 @@ export async function publishSinglePost(queueItemId: number) {
   let providerSucceeded = false;
 
   try {
-    // Safety check first
+    // Safety EXECUTION/refresh is an impure pre-step owned by the runner: the
+    // canonical validator only governs the persisted safetyStatus. The
+    // publish/no-publish decision itself flows through
+    // validatePrePublishReadiness below.
     if (!post.safetyStatus) {
       await runSafetyCheckOnQueueItem(post.id);
       const [refreshed] = await db
@@ -324,44 +863,7 @@ export async function publishSinglePost(queueItemId: number) {
       if (!refreshed) {
         return { id: post.id, status: "not_found", error: "Queue item disappeared after safety check" };
       }
-
-      if (refreshed.safetyStatus === "high") {
-        await db
-          .update(publishingQueue)
-          .set({
-            status: "safety_blocked",
-            lastError: "Content safety check failed: high risk",
-          })
-          .where(eq(publishingQueue.id, post.id));
-        return { id: post.id, status: "safety_blocked", platform: post.platform, error: "High risk content blocked by safety check" };
-      }
-
-      // Medium-risk content normally requires approval. If the item has already
-      // been explicitly approved (e.g. through the approval/retry flow), trust
-      // that decision and allow publishing to proceed.
-      if (refreshed.safetyStatus === "medium" && refreshed.status !== "approved") {
-        await db
-          .update(publishingQueue)
-          .set({
-            status: "pending_approval",
-            approvalRequired: true,
-            lastError: "Content safety check flagged medium risk; awaiting approval",
-          })
-          .where(eq(publishingQueue.id, post.id));
-        return { id: post.id, status: "pending_approval", platform: post.platform, error: "Medium risk content requires approval" };
-      }
-    } else if (post.safetyStatus === "high") {
-      await db
-        .update(publishingQueue)
-        .set({ status: "safety_blocked" })
-        .where(eq(publishingQueue.id, post.id));
-      return { id: post.id, status: "safety_blocked", platform: post.platform };
-    } else if (post.safetyStatus === "medium" && post.status !== "approved") {
-      await db
-        .update(publishingQueue)
-        .set({ status: "pending_approval", approvalRequired: true })
-        .where(eq(publishingQueue.id, post.id));
-      return { id: post.id, status: "pending_approval", platform: post.platform };
+      post = refreshed;
     }
 
     // Content post was loaded before the readiness gate; reuse it here.
@@ -399,53 +901,108 @@ export async function publishSinglePost(queueItemId: number) {
       integration = byPlatform;
     }
 
-    let publishResult: { success: boolean; postId?: string; url?: string; error?: string } = { success: false };
+    let publishResult: {
+      success: boolean;
+      postId?: string;
+      url?: string;
+      error?: string;
+      normalizedReceipt?: NormalizedPublicationReceipt;
+      providerError?: AdapterProviderError;
+    } = { success: false };
 
-    if (!integration) {
-      const error = `Admin setup required: no connected ${post.platform} account. Connect the platform in Settings > Integrations first.`;
-      await db.transaction(async (tx) => {
-        await tx
-          .update(publishingQueue)
-          .set({
-            status: "failed",
-            lastError: error,
-            retryCount: (post.retryCount || 0) + 1,
-            nextRetryAt: null,
-          })
-          .where(eq(publishingQueue.id, post.id));
+    // ── Canonical pre-publish validation (WBS13.5) ───────────────────────
+    // The validator owns the governed publish/no-publish decision over the
+    // already-loaded projections. Impure pre-steps (safety refresh,
+    // integration/campaign loading) stay with the runner; the queue,
+    // approval, package, safety, integration, credential and media domains
+    // evaluate in one deterministic order, and the first failing domain is
+    // the only outcome.
+    const [validationCampaign, validationBusiness, publicationBusinessId, validationApprovals] =
+      await loadPublicationAuthorityRows(db, post, contentPost);
 
-        await persistAuditEvent(
-          buildPublicationAuditEvent({
-            eventType: "publication_failure",
-            occurredAt: new Date().toISOString(),
-            queueItem: post,
-            businessId: null,
-            attemptOrdinal: (post.retryCount || 0) + 1,
-            outcome: "failed",
-            metadata: { terminal: true, nextState: "failed", failureStage: "integration" },
-          }),
-          tx
-        );
-      });
-      return {
+    const readiness = validatePrePublishReadiness({
+      queueItem: {
         id: post.id,
-        status: "failed",
+        userId: post.userId,
+        campaignId: post.campaignId,
+        contentPostId: post.contentPostId,
         platform: post.platform,
-        error,
-      };
+        integrationId: post.integrationId ?? null,
+        status: post.status,
+        safetyStatus: post.safetyStatus ?? null,
+      },
+      contentPost,
+      publishPackage: frozenPackage,
+      integration: integration
+        ? {
+            id: integration.id,
+            userId: integration.userId,
+            businessId: integration.businessId ?? null,
+            platform: integration.platform,
+            status: integration.status,
+            accountName: integration.accountName ?? null,
+            accessTokenEncrypted: integration.accessTokenEncrypted ?? null,
+            pageAccessTokenEncrypted: integration.pageAccessTokenEncrypted ?? null,
+            instagramBusinessAccountId: integration.instagramBusinessAccountId ?? null,
+          }
+        : null,
+      campaign: validationCampaign,
+      business: validationBusiness,
+      approvals: validationApprovals,
+      publicAppUrl: env.publicAppUrl,
+    });
+
+    if (!readiness.ready) {
+      const first = readiness.firstFailure!;
+      // Safety governance keeps its established queue semantics: a plain row
+      // update with no fabricated publication outcome and no audit event.
+      if (first.domain === "safety" && first.code === "safety_high_blocked") {
+        await db
+          .update(publishingQueue)
+          .set({ status: "safety_blocked", lastError: first.message })
+          .where(eq(publishingQueue.id, post.id));
+        return { id: post.id, status: "safety_blocked", platform: post.platform, error: first.message };
+      }
+      if (first.domain === "safety" && first.code === "safety_medium_requires_approval") {
+        await db
+          .update(publishingQueue)
+          .set({ status: "pending_approval", approvalRequired: true, lastError: first.message })
+          .where(eq(publishingQueue.id, post.id));
+        return { id: post.id, status: "pending_approval", platform: post.platform, error: first.message };
+      }
+      // Every other domain fails closed on the durable precondition path; the
+      // recovery policy decides the terminal shape (failed, or pending_approval
+      // for an approval-authority block).
+      return failQueueItemPrecondition(
+        post,
+        { code: first.code, failureStage: first.failureStage, message: first.message },
+        frozenPackage?.packageId ?? null
+      );
     }
 
-    // Build content payload
+    // Build content payload. WBS13.1/WBS13 convergence: when an immutable
+    // publish package was handed off by publication preparation, its frozen
+    // payload is the authoritative source — Distribution must not reconstruct
+    // meaning from mutable campaign/business rows at execution time. The
+    // governed mapping (package + queue identity → AuthoritativePublicationInput)
+    // is the single seam into the platform adapter boundary. The legacy path
+    // (cron/worker items without a package) keeps composing from the live row.
     const imageUrl: string | undefined =
       postMeta?.imageUrl || (contentPost as any)?.imageUrl || undefined;
 
-    const payload = contentPost
-      ? {
-          text: `${contentPost.hook || ""}\n\n${contentPost.caption || ""}\n\n${contentPost.cta || ""}`.trim(),
-          mediaUrls: imageUrl ? [imageUrl] : undefined,
-          mediaType: imageUrl ? ("image" as const) : undefined,
-        }
+    const governedInput = frozenPackage
+      ? publishPackageToAuthoritativeInput(frozenPackage, post.id)
       : null;
+
+    const payload = governedInput
+      ? governedInput.content
+      : contentPost
+        ? {
+            text: `${contentPost.hook || ""}\n\n${contentPost.caption || ""}\n\n${contentPost.cta || ""}`.trim(),
+            mediaUrls: imageUrl ? [imageUrl] : undefined,
+            mediaType: imageUrl ? ("image" as const) : undefined,
+          }
+        : null;
 
     // For Facebook, validate/normalize the media URL before charging credits
     if (post.platform === "facebook" && payload?.mediaUrls?.[0]) {
@@ -465,32 +1022,18 @@ export async function publishSinglePost(queueItemId: number) {
       });
 
       if (!publicImageUrl) {
-        const error = "Facebook publishing failed: invalid image URL.";
-        await db.transaction(async (tx) => {
-          await tx
-            .update(publishingQueue)
-            .set({
-              status: "failed",
-              lastError: error,
-              retryCount: (post.retryCount || 0) + 1,
-              nextRetryAt: null,
-            })
-            .where(eq(publishingQueue.id, post.id));
-
-          await persistAuditEvent(
-            buildPublicationAuditEvent({
-              eventType: "publication_failure",
-              occurredAt: new Date().toISOString(),
-              queueItem: post,
-              businessId: null,
-              attemptOrdinal: (post.retryCount || 0) + 1,
-              outcome: "failed",
-              metadata: { terminal: true, nextState: "failed", failureStage: "media" },
-            }),
-            tx
-          );
-        });
-        return { id: post.id, status: "failed", platform: post.platform, error };
+        // Unreachable when the canonical validator passed (it applies the
+        // same resolvePublicImageUrl proof); retained as a fail-closed guard
+        // that routes through the same durable precondition path.
+        return failQueueItemPrecondition(
+          post,
+          {
+            code: "media_url_invalid",
+            failureStage: "media",
+            message: "Facebook publishing failed: invalid image URL.",
+          },
+          frozenPackage?.packageId ?? null
+        );
       }
 
       payload.mediaUrls = [publicImageUrl];
@@ -498,20 +1041,13 @@ export async function publishSinglePost(queueItemId: number) {
 
     // ── Durable attempt evidence (WBS7C3) ─────────────────────────────
     // Every gate establishing a genuine controlled publication attempt has
-    // now passed. Record publication_attempt BEFORE any credit mutation,
-    // credential decryption, or provider call, so a provider side effect can
-    // never occur without durable attempt evidence. If this persistence
-    // fails it flows to the governed runtime-failure path below: no credit
-    // mutation, no credential decryption, no provider call.
+    // now passed (disposition → canonical validation → rate limit). Record
+    // publication_attempt BEFORE any credit mutation, credential decryption,
+    // or provider call, so a provider side effect can never occur without
+    // durable attempt evidence. If this persistence fails it flows to the
+    // governed runtime-failure path below: no credit mutation, no credential
+    // decryption, no provider call.
     const attemptOrdinal = (post.retryCount || 0) + 1;
-    const [attemptCampaign] = post.campaignId
-      ? await db
-          .select()
-          .from(campaigns)
-          .where(and(eq(campaigns.id, post.campaignId), eq(campaigns.userId, post.userId)))
-          .limit(1)
-      : [null];
-    const publicationBusinessId = attemptCampaign?.businessId ?? null;
 
     await persistAuditEvent(
       buildPublicationAuditEvent({
@@ -522,6 +1058,7 @@ export async function publishSinglePost(queueItemId: number) {
         attemptOrdinal,
         outcome: "succeeded",
         metadata: { queueStatusAtAttempt: post.status },
+        publishPackageId: frozenPackage?.packageId ?? null,
       })
     );
 
@@ -559,6 +1096,18 @@ export async function publishSinglePost(queueItemId: number) {
         hasPageAccessToken: post.platform === "facebook" ? !!integration.pageAccessTokenEncrypted : undefined,
       });
 
+      if (governedInput) {
+        // Governed package path (WBS13 convergence): exactly one adapter
+        // resolution and exactly one provider submission through the adapter
+        // boundary. The legacy direct-provider switch below must not also run.
+        publishResult = await publishThroughGovernedAdapter({
+          registry: options?.adapterRegistry ?? getDefaultPlatformAdapterRegistry(),
+          governedInput,
+          platform: post.platform,
+          integration,
+          accessToken,
+        });
+      } else {
       switch (post.platform) {
         case "facebook": {
           const pageToken = integration.pageAccessTokenEncrypted
@@ -615,14 +1164,37 @@ export async function publishSinglePost(queueItemId: number) {
         default:
           publishResult = { success: false, error: `Platform ${post.platform} not supported` };
       }
+      }
     }
 
     // Update queue status
     if (publishResult.success) {
-      // ONE publication-success timestamp shared by publishing_queue.publishedAt
-      // and the audit event occurredAt — no independent second clock read.
+      // ONE publication-success timestamp shared by publishing_queue.publishedAt,
+      // the canonical receipt, and the success audit occurrence — no
+      // independent second clock read.
       const publishedAt = new Date();
+      const publishedAtIso = publishedAt.toISOString();
       providerSucceeded = true;
+
+      const normalizedReceipt: NormalizedPublicationReceipt = publishResult.normalizedReceipt ?? {
+        platform: post.platform,
+        operationId: derivePublicationOperationId({ platform: post.platform, queueItemId: post.id }),
+        status: "published",
+        externalPostId: publishResult.postId,
+        externalUrl: publishResult.url,
+      };
+
+      // WBS13.7: build the canonical receipt from the normalized provider
+      // result before any durable write. The consumed governed package (when
+      // any) is tamper-checked inside the builder; legacy successes produce
+      // an honest legacy receipt with null package correlation.
+      const publicationReceipt = buildPublicationReceipt({
+        normalized: normalizedReceipt,
+        queueItemId: post.id,
+        platform: post.platform,
+        publishedAtIso,
+        publishPackage: frozenPackage,
+      });
 
       await db.transaction(async (tx) => {
         const updateResult = await tx
@@ -630,7 +1202,7 @@ export async function publishSinglePost(queueItemId: number) {
           .set({
             status: "published",
             publishedAt,
-            externalPostId: publishResult.postId || null,
+            externalPostId: publicationReceipt.externalPostId,
             lastError: null,
             retryCount: 0,
             nextRetryAt: null,
@@ -651,7 +1223,8 @@ export async function publishSinglePost(queueItemId: number) {
           // A concurrent worker may already have terminalised this row.
           // Reread through the SAME tx and fail closed unless the durable
           // state is a compatible published row (idempotent replay), which
-          // is then reconciled with its original success evidence.
+          // is then reconciled with its original canonical receipt — never a
+          // duplicate incompatible success event.
           const [current] = await tx
             .select()
             .from(publishingQueue)
@@ -662,32 +1235,50 @@ export async function publishSinglePost(queueItemId: number) {
               `Refusing to overwrite incompatible publishing_queue state for item ${post.id}: ${current?.status ?? "missing"}`
             );
           }
-          await persistAuditEvent(
-            buildPublicationAuditEvent({
-              eventType: "publication_success",
-              occurredAt: new Date(current.publishedAt as Date).toISOString(),
-              queueItem: post,
+          const storedReceipt = await loadPublicationReceiptForQueueItem({
+            queueItemId: post.id,
+            userId: post.userId,
+            executor: tx,
+          });
+          const reconciledReceipt =
+            storedReceipt ??
+            buildLegacyReceiptFromQueueSuccess({
+              queueItemId: post.id,
+              platform: post.platform,
+              status: current.status,
+              externalPostId: current.externalPostId,
+              publishedAt: current.publishedAt,
+            });
+          if (!reconciledReceipt) {
+            throw new Error(
+              `Durable published state for item ${post.id} could not produce a canonical receipt; failing closed.`
+            );
+          }
+          await persistPublicationReceipt(
+            {
+              receipt: reconciledReceipt,
+              userId: post.userId,
+              campaignId: post.campaignId,
               businessId: publicationBusinessId,
-              attemptOrdinal,
-              outcome: "succeeded",
-              metadata: { externalPostIdPresent: Boolean(current.externalPostId) },
-            }),
-            tx
+              contentId: post.contentPostId,
+              executor: tx,
+            }
           );
           return;
         }
 
-        await persistAuditEvent(
-          buildPublicationAuditEvent({
-            eventType: "publication_success",
-            occurredAt: publishedAt.toISOString(),
-            queueItem: post,
+        // Queue success state and the canonical receipt commit in the SAME
+        // transaction; the receipt event is the single durable
+        // publication_success evidence (no duplicate success audit).
+        await persistPublicationReceipt(
+          {
+            receipt: publicationReceipt,
+            userId: post.userId,
+            campaignId: post.campaignId,
             businessId: publicationBusinessId,
-            attemptOrdinal,
-            outcome: "succeeded",
-            metadata: { externalPostIdPresent: Boolean(publishResult.postId) },
-          }),
-          tx
+            contentId: post.contentPostId,
+            executor: tx,
+          }
         );
       });
 
@@ -708,86 +1299,69 @@ export async function publishSinglePost(queueItemId: number) {
       ingestAudienceData({ userId: post.userId, businessId: null, campaignId: post.campaignId }).catch((err: any) => {
         console.error(`[Publishing Runner] Post-publish audience ingestion failed for campaign ${post.campaignId}:`, err.message);
       });
+
+      return {
+        id: post.id,
+        status: "published",
+        platform: post.platform,
+        postId: publishResult.postId,
+        publishPackageId: frozenPackage ? frozenPackage.packageId : undefined,
+        packageFingerprintSha256: frozenPackage ? frozenPackage.packageFingerprintSha256 : undefined,
+        publishPackageClassification: frozenPackage ? frozenPackage.classification : undefined,
+      };
     } else {
-      // Retry logic — the queue outcome mutation and one canonical
-      // publication_failure event commit or roll back together.
-      const retryCount = (post.retryCount || 0) + 1;
-      const maxRetries = post.maxRetries || 3;
+      // WBS13.8: the recovery policy owns the retry/terminal decision. The
+      // queue outcome mutation, one canonical publication_failure event and
+      // the canonical recovery-decision event commit or roll back together;
+      // escalation alerts fire exactly once for exhausted budgets.
       const failureDecidedAt = new Date();
       const failureStage: PublicationFailureStage = publishResult.error?.startsWith("Publishing blocked:")
         ? "billing"
         : "provider";
+      const providerClassification = publishResult.providerError
+        ? {
+            category: publishResult.providerError.category,
+            code: publishResult.providerError.code,
+            retryable: publishResult.providerError.retryable,
+          }
+        : classifyProviderErrorMessage(publishResult.error || "Unknown error");
+      const decision = decidePublicationRecovery({
+        stage: failureStage,
+        now: failureDecidedAt,
+        retryCount: post.retryCount || 0,
+        maxRetries: post.maxRetries || 3,
+        provider: failureStage === "provider" ? providerClassification : null,
+      });
 
-      if (retryCount >= maxRetries) {
-        await db.transaction(async (tx) => {
-          await tx
-            .update(publishingQueue)
-            .set({
-              status: "failed",
-              retryCount,
-              lastError: publishResult.error || "Unknown error",
-              nextRetryAt: null,
-            })
-            .where(eq(publishingQueue.id, post.id));
+      await persistAttemptFailure({
+        post,
+        businessId: publicationBusinessId,
+        attemptOrdinal,
+        decision,
+        error: publishResult.error || "Unknown error",
+        publishPackageId: frozenPackage?.packageId ?? null,
+        providerErrorCode:
+          publishResult.providerError?.code ??
+          (failureStage === "provider" ? providerClassification.code : null),
+        alertMessage: `Publishing failed after ${decision.maxRetries} attempts for ${post.platform}`,
+      });
 
-          await persistAuditEvent(
-            buildPublicationAuditEvent({
-              eventType: "publication_failure",
-              occurredAt: failureDecidedAt.toISOString(),
-              queueItem: post,
-              businessId: publicationBusinessId,
-              attemptOrdinal,
-              outcome: "failed",
-              metadata: { terminal: true, nextState: "failed", failureStage },
-            }),
-            tx
-          );
-        });
-
-        await createAlert({
-          severity: "warning",
-          category: "publishing",
-          message: `Publishing failed after ${maxRetries} retries for ${post.platform}`,
-          details: { queueItemId: post.id, platform: post.platform, error: publishResult.error },
-        });
-      } else {
-        const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-        const nextRetryAt = new Date(now.getTime() + delay);
-
-        await db.transaction(async (tx) => {
-          await tx
-            .update(publishingQueue)
-            .set({
-              status: "retrying",
-              retryCount,
-              lastError: publishResult.error || "Unknown error",
-              nextRetryAt,
-            })
-            .where(eq(publishingQueue.id, post.id));
-
-          await persistAuditEvent(
-            buildPublicationAuditEvent({
-              eventType: "publication_failure",
-              occurredAt: failureDecidedAt.toISOString(),
-              queueItem: post,
-              businessId: publicationBusinessId,
-              attemptOrdinal,
-              outcome: "failed",
-              metadata: { terminal: false, nextState: "retrying", failureStage },
-            }),
-            tx
-          );
-        });
-      }
+      return {
+        id: post.id,
+        status: decision.terminal
+          ? decision.terminalStatus === "pending_approval"
+            ? "pending_approval"
+            : "failed"
+          : "retrying",
+        platform: post.platform,
+        error: publishResult.error,
+        postId: publishResult.postId,
+        unrecoverable: decision.terminal,
+        publishPackageId: frozenPackage ? frozenPackage.packageId : undefined,
+        packageFingerprintSha256: frozenPackage ? frozenPackage.packageFingerprintSha256 : undefined,
+        publishPackageClassification: frozenPackage ? frozenPackage.classification : undefined,
+      };
     }
-
-    return {
-      id: post.id,
-      status: publishResult.success ? "published" : (post.retryCount || 0) + 1 >= (post.maxRetries || 3) ? "failed" : "retrying",
-      platform: post.platform,
-      error: publishResult.error,
-      postId: publishResult.postId,
-    };
   } catch (error: any) {
     if (providerSucceeded) {
       // The provider reported success but the durable local success evidence
@@ -797,78 +1371,45 @@ export async function publishSinglePost(queueItemId: number) {
       throw error;
     }
 
-    const retryCount = (post.retryCount || 0) + 1;
-    const maxRetries = post.maxRetries || 3;
-    const runtimeFailureAt = new Date().toISOString();
-    const runtimeOrdinal = (post.retryCount || 0) + 1;
+    const runtimeFailureAt = new Date();
+    const message = error instanceof Error ? error.message || "Unknown error" : "Unknown error";
+    const classification = classifyProviderErrorMessage(message);
+    const decision = decidePublicationRecovery({
+      stage: "runtime",
+      now: runtimeFailureAt,
+      retryCount: post.retryCount || 0,
+      maxRetries: post.maxRetries || 3,
+      provider: {
+        category: classification.category,
+        code: classification.code,
+        retryable: classification.retryable,
+      },
+    });
 
-    if (retryCount >= maxRetries) {
-      await db.transaction(async (tx) => {
-        await tx
-          .update(publishingQueue)
-          .set({
-            status: "failed",
-            retryCount,
-            lastError: error.message || "Unknown error",
-            nextRetryAt: null,
-          })
-          .where(eq(publishingQueue.id, post.id));
-
-        await persistAuditEvent(
-          buildPublicationAuditEvent({
-            eventType: "publication_failure",
-            occurredAt: runtimeFailureAt,
-            queueItem: post,
-            businessId: null,
-            attemptOrdinal: runtimeOrdinal,
-            outcome: "failed",
-            metadata: { terminal: true, nextState: "failed", failureStage: "runtime" },
-          }),
-          tx
-        );
-      });
-
-      await createAlert({
-        severity: "warning",
-        category: "publishing",
-        message: `Publishing crashed after ${maxRetries} retries for ${post.platform}`,
-        details: { queueItemId: post.id, platform: post.platform, error: error.message },
-      });
-    } else {
-      const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-      const nextRetryAt = new Date(now.getTime() + delay);
-
-      await db.transaction(async (tx) => {
-        await tx
-          .update(publishingQueue)
-          .set({
-            status: "retrying",
-            retryCount,
-            lastError: error.message || "Unknown error",
-            nextRetryAt,
-          })
-          .where(eq(publishingQueue.id, post.id));
-
-        await persistAuditEvent(
-          buildPublicationAuditEvent({
-            eventType: "publication_failure",
-            occurredAt: runtimeFailureAt,
-            queueItem: post,
-            businessId: null,
-            attemptOrdinal: runtimeOrdinal,
-            outcome: "failed",
-            metadata: { terminal: false, nextState: "retrying", failureStage: "runtime" },
-          }),
-          tx
-        );
-      });
-    }
+    await persistAttemptFailure({
+      post,
+      businessId: null,
+      attemptOrdinal: (post.retryCount || 0) + 1,
+      decision,
+      error: message,
+      publishPackageId: frozenPackage?.packageId ?? null,
+      providerErrorCode: classification.code,
+      alertMessage: `Publishing crashed after ${decision.maxRetries} attempts for ${post.platform}`,
+    });
 
     return {
       id: post.id,
-      status: retryCount >= maxRetries ? "failed" : "retrying",
-      error: error.message,
+      status: decision.terminal
+        ? decision.terminalStatus === "pending_approval"
+          ? "pending_approval"
+          : "failed"
+        : "retrying",
+      error: message,
       platform: post.platform,
+      unrecoverable: decision.terminal,
+      publishPackageId: frozenPackage ? frozenPackage.packageId : undefined,
+      packageFingerprintSha256: frozenPackage ? frozenPackage.packageFingerprintSha256 : undefined,
+      publishPackageClassification: frozenPackage ? frozenPackage.classification : undefined,
     };
   }
 }
@@ -910,7 +1451,25 @@ export async function publishDuePosts() {
 
   const results = [];
   for (const post of duePosts) {
-    const result = await publishSinglePost(post.id);
+    // WBS13.4: reload the exact persisted publish package for this durable
+    // queue row through the same loader the BullMQ worker uses. Governed rows
+    // execute the persisted package; legacy rows keep the established
+    // no-package call; a governed row with a missing or tampered package has
+    // already been failed closed durably by the shared plan loader.
+    const plan = await resolveQueuePublishPackagePlan(post);
+    if (plan.kind === "fail_closed") {
+      results.push({
+        id: post.id,
+        status: "precondition_failed",
+        platform: post.platform,
+        error: plan.reason,
+      });
+      continue;
+    }
+    const result =
+      plan.kind === "governed"
+        ? await publishSinglePost(post.id, { publishPackage: plan.publishPackage })
+        : await publishSinglePost(post.id);
     results.push(result);
   }
 

@@ -31,6 +31,8 @@ import {
   LEARNING_ENGINE_NAME,
   LEARNING_EVALUATION_VERSION,
 } from "./contracts/learning-config";
+import type { LearningCycleAuthorityProvenance } from "./contracts/learning-cycle-contract";
+import type { StrategyKpiEvaluation } from "./kpi/strategy-kpi-assessment";
 import {
   normaliseObservations,
   toISODate,
@@ -59,14 +61,20 @@ export interface LearningRecordView {
   windowStart: string;
   windowEnd: string;
   objectiveSummary: string;
-  kpiAssessment: KpiAssessment;
+  /**
+   * learning-v1 records carry the Phase 1 KpiAssessment; learning-v2 (WBS15
+   * cycle) records carry the Strategy-bound KPI evaluation. Both are bound
+   * verbatim in the persisted JSON column.
+   */
+  kpiAssessment: KpiAssessment | StrategyKpiEvaluation;
   performanceFacts: PerformanceFact[];
   positivePatterns: Pattern[];
   negativePatterns: Pattern[];
   confidence: ConfidenceLevel;
   evidence: EvidenceItem[];
   recommendedAdjustments: RecommendedAdjustment[];
-  governance: { autoApply: false; requiresApproval: true; phase: 1 };
+  /** phase 1 = Phase 1 engine, phase 2 = WBS15 governed cycle. Pins never change. */
+  governance: { autoApply: false; requiresApproval: true; phase: number };
   sourceObservations: PerformanceObservation[];
   normalisationIssues: NormaliseResult["issues"];
   provenance: {
@@ -75,6 +83,8 @@ export interface LearningRecordView {
     trigger: "manual" | "api";
     inputDigest: string;
     evaluatedAt: string;
+    /** Present only on learning-v2 records: the WBS15 authority lineage. */
+    wbs15?: LearningCycleAuthorityProvenance;
   };
   status: string;
   evaluatedAt: string;
@@ -131,7 +141,7 @@ function buildIdempotencyKey(
   return `lr:${campaignId}:${evaluationVersion}:${windowStart}:${windowEnd}`;
 }
 
-function buildInputDigest(input: {
+export function buildInputDigest(input: {
   evaluationVersion: string;
   windowStart: string;
   windowEnd: string;

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations, approvalRequests, agentRuns, businesses } from "@db/schema";
+import { contentPosts, campaigns, campaignAssets, publishingQueue, socialIntegrations, approvalRequests, agentRuns, businesses, generatedImages } from "@db/schema";
 import { eq, and, or, desc, count, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { env } from "./lib/env";
@@ -32,6 +32,16 @@ import {
   buildLaunchApprovalLineage,
   isLaunchApprovalEvidenceUsable,
 } from "./lib/workflow/launch-approval";
+import { captureApprovedCreativeStrategyAuthority } from "./lib/creative/strategy-authority";
+import { loadApprovedMessagePack } from "./lib/creative/campaign-message-architect";
+import {
+  buildPublishPackage,
+  type PublishPackage,
+} from "./lib/publish/publish-package-builder";
+import {
+  serializePublishPackageForQueue,
+  type QueuePublishPackageMetadata,
+} from "./lib/publish/publish-package-queue-store";
 
 type PlatformPublishStatus = "connected" | "not_connected" | "manual" | "not_supported";
 
@@ -43,6 +53,19 @@ const AUTO_PUBLISH_PLATFORMS = new Set([
   "tiktok",
   "email",
 ]);
+
+/**
+ * Approval-authority keys inside content_posts.metadata. They may only be
+ * written by content.approve or by the semantic-edit void in content.update;
+ * arbitrary metadata passthrough is stripped of these keys so downstream
+ * editing cannot mint or restore approval (WBS12.9).
+ */
+const APPROVAL_AUTHORITY_METADATA_KEYS = [
+  "approved",
+  "approvedAt",
+  "approvalVoidedAt",
+  "approvalVoidedReason",
+] as const;
 
 function toDisplayPlatformName(platform: string): string {
   if (!platform) return platform;
@@ -73,6 +96,62 @@ function isApprovedImageReadySocialPost(post: any): boolean {
   if (meta.imageStatus !== "ready") return false;
   if (!meta.imageUrl) return false;
   return true;
+}
+
+/**
+ * WBS13.1: resolve the visual artifact identity for the media Distribution
+ * will actually publish. Only image media participates in the adapter payload
+ * today; when the image was produced by a governed render, its durable render
+ * lineage is carried into the package so changed image lineage is detectable.
+ * Artifacts without governed lineage stay explicitly legacy-shaped.
+ */
+async function resolveVisualArtifactIdentity(
+  db: any,
+  userId: number,
+  post: any,
+  postMeta: Record<string, any>
+): Promise<Record<string, unknown> | null> {
+  const imageUrl =
+    typeof postMeta?.imageUrl === "string" && postMeta.imageUrl
+      ? postMeta.imageUrl
+      : typeof post?.imageUrl === "string" && post.imageUrl
+        ? post.imageUrl
+        : null;
+  if (!imageUrl) return null;
+
+  let generatedAssetId: number | null = null;
+  let renderLineage: unknown = null;
+  try {
+    const [imageRow] = await db
+      .select()
+      .from(generatedImages)
+      .where(
+        and(
+          eq(generatedImages.userId, userId),
+          eq(generatedImages.contentPostId, post.id),
+          eq(generatedImages.status, "completed" as any)
+        )
+      )
+      .orderBy(desc(generatedImages.createdAt))
+      .limit(1);
+    const lineage = (imageRow?.metadata as any)?.renderLineage ?? null;
+    if (lineage && typeof lineage.lineageFingerprintSha256 === "string") {
+      renderLineage = lineage;
+      generatedAssetId = typeof imageRow.id === "number" ? imageRow.id : null;
+    }
+  } catch (err: any) {
+    logError("[PublishCampaignPack] visual render lineage lookup failed; treating visual as legacy", {
+      contentPostId: post.id,
+      error: err?.message,
+    });
+  }
+
+  return {
+    mediaKind: "image",
+    generatedAssetId,
+    mediaUrl: imageUrl,
+    renderLineage,
+  };
 }
 
 function mapGenerationStatus(status: string | null | undefined): "queued" | "processing" | "completed" | "failed" | "preparing" {
@@ -635,9 +714,71 @@ export const contentRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const { id, scheduledFor, metadata, ...data } = input;
+
+      const [post] = await db
+        .select()
+        .from(contentPosts)
+        .where(
+          and(eq(contentPosts.id, id), eq(contentPosts.userId, ctx.user.id))
+        )
+        .limit(1);
+
       const updateData: any = { ...data };
       if (scheduledFor) updateData.scheduledFor = new Date(scheduledFor);
-      if (metadata !== undefined) updateData.metadata = metadata;
+
+      // WBS12.9 approved-copy integrity: an approved artifact must never be
+      // silently mutated and continue to be treated as approved. Semantic copy
+      // fields are the columns that carry copy authority; hashtags are derived
+      // formatting (free to adapt without reapproval, mirroring the
+      // approved-copy authority model), and title/platform/status/schedule are
+      // presentation or routing attributes.
+      const SEMANTIC_COPY_FIELDS = [
+        "hook",
+        "caption",
+        "cta",
+        "headline",
+        "body",
+      ] as const;
+      let semanticCopyEdited = false;
+      if (post) {
+        for (const field of SEMANTIC_COPY_FIELDS) {
+          const nextValue = (data as Record<string, unknown>)[field];
+          if (nextValue === undefined) continue;
+          if (String(nextValue ?? "") !== String((post as any)[field] ?? "")) {
+            semanticCopyEdited = true;
+            break;
+          }
+        }
+      }
+
+      const currentMetadata = (post?.metadata || {}) as Record<string, unknown>;
+      const voidsApproval =
+        !!post && semanticCopyEdited && currentMetadata.approved === true;
+
+      if (metadata !== undefined || voidsApproval) {
+        // Approval authority keys are owned by content.approve (and the
+        // semantic-edit void below): arbitrary metadata passthrough must not
+        // mint, restore, or erase approval state. Metadata is merged over the
+        // current row so governance lineage survives partial updates.
+        const safeIncomingMetadata: Record<string, unknown> = {
+          ...(metadata ?? {}),
+        };
+        for (const key of APPROVAL_AUTHORITY_METADATA_KEYS) {
+          delete safeIncomingMetadata[key];
+        }
+        const nextMetadata: Record<string, unknown> = {
+          ...currentMetadata,
+          ...safeIncomingMetadata,
+        };
+        if (voidsApproval) {
+          nextMetadata.approved = false;
+          nextMetadata.approvalVoidedAt = new Date().toISOString();
+          nextMetadata.approvalVoidedReason =
+            "semantic_copy_edit_requires_reapproval";
+        }
+        updateData.metadata = nextMetadata;
+      }
+
       await db
         .update(contentPosts)
         .set(updateData)
@@ -1116,6 +1257,65 @@ export const contentRouter = createRouter({
         }
       }
 
+      // ─── WBS13.1: immutable publish-package identity coordinates ───
+      // Gather the governed Creative authority coordinates once per campaign.
+      // Anything that lacks durable governed lineage is classified legacy by
+      // the package builder — lineage is never manufactured here.
+      const wbs11StrategyAuthority = (() => {
+        try {
+          return captureApprovedCreativeStrategyAuthority(campaign);
+        } catch {
+          return null;
+        }
+      })();
+
+      let governingMessagePack: Awaited<ReturnType<typeof loadApprovedMessagePack>> = null;
+      try {
+        governingMessagePack = await loadApprovedMessagePack(input.campaignId);
+      } catch (err: any) {
+        // Tampered/unverifiable message-pack lineage fails closed for copy
+        // coordinates; the caption artifact's own lineage remains the
+        // authority for the caption binding.
+        logError("[PublishCampaignPack] Governing message pack re-verification failed", {
+          campaignId: input.campaignId,
+          error: err?.message,
+        });
+        governingMessagePack = null;
+      }
+
+      // Mirror findCaptionPackRecord: newest caption_pack / caption_adaptation
+      // asset is the governing caption artifact.
+      const captionArtifactRecord = [...captionPacks, ...adaptations].sort(
+        (a, b) =>
+          new Date((b as any).createdAt || 0).getTime() - new Date((a as any).createdAt || 0).getTime()
+      )[0] ?? null;
+      const captionArtifactBinding = captionArtifactRecord
+        ? {
+            artifactId: (captionArtifactRecord as any).id ?? null,
+            artifactKind:
+              (captionArtifactRecord as any).assetType === "caption_adaptation"
+                ? "platform_caption"
+                : "caption_pack",
+            lineage:
+              ((captionArtifactRecord as any).metadata as any)?.creativeArtifactLineage ?? null,
+          }
+        : null;
+
+      const captionLineage = captionArtifactBinding?.lineage as any;
+      const packageStrategyAuthority =
+        wbs11StrategyAuthority ?? captionLineage?.strategy ?? null;
+      const packageApprovedCopy =
+        (governingMessagePack?.creativeArtifactLineage as any)?.approvedCopy ??
+        captionLineage?.approvedCopy ??
+        null;
+      const launchApprovalRequestId = (() => {
+        try {
+          return getLaunchApprovalStatus(campaign).lineage?.approvalRequestId ?? null;
+        } catch {
+          return null;
+        }
+      })();
+
       // Approve all unapproved, non-published posts
       for (const post of posts) {
         const meta = (post.metadata || {}) as any;
@@ -1332,7 +1532,13 @@ export const contentRouter = createRouter({
         status: string;
         postId?: string;
         error?: string;
+        publishPackageId?: string | null;
+        publishPackageFingerprint?: string | null;
+        publishPackageClassification?: string | null;
       }> = [];
+
+      // WBS13.1: one visual artifact identity lookup per selected content post.
+      const visualArtifactByPostId = new Map<number, Record<string, unknown> | null>();
 
       for (const platform of publishablePlatforms) {
         const integration = integrations.find((i) => i.platform === platform);
@@ -1491,58 +1697,189 @@ export const contentRouter = createRouter({
               "Instagram publishing is not ready. Ensure your Facebook Page has a linked Instagram professional account and that the Instagram content publishing permission is granted.";
           }
 
-          // Create publishing queue item for every publishable content post / platform.
+          if (initialStatus === "failed" || initialStatus === "pending_approval") {
+            // Non-executable rows never carry a governed package; they stay
+            // legacy (metadata null) exactly as before this feature.
+            const [queueResult] = await db.insert(publishingQueue).values({
+              userId: ctx.user.id,
+              campaignId: input.campaignId,
+              contentPostId: post.id,
+              integrationId: integration.id,
+              platform,
+              status: initialStatus,
+              lastError: queueError ?? null,
+              approvalRequired: initialStatus === "pending_approval",
+              scheduledAt: null,
+            });
+            queueItemId = Number(queueResult.insertId);
+
+            logInfo("[PublishCampaignPack] Created queue item", {
+              campaignId: input.campaignId,
+              platform,
+              contentPostId: post.id,
+              queueItemId,
+              integrationId: integration.id,
+              status: initialStatus,
+              pageId: platform === "facebook" ? integration.pageId : undefined,
+            });
+
+            results.push({
+              platform,
+              queueItemId,
+              status: initialStatus,
+              error: queueError,
+            });
+            continue;
+          }
+
+          // WBS13.4: an approved row is GOVERNED, so its immutable package is
+          // built BEFORE the queue insert and persisted in the SAME INSERT
+          // below — there is never a governed queue row without its durable
+          // package. queueItemId is assigned by that atomic insert.
+        }
+
+        // ─── WBS13.1: build the immutable publish package for this handoff ───
+        // Pure, deterministic construction from the gathered governed
+        // coordinates — no provider or network call. Classification is
+        // explicit: anything without durable lineage is legacy, never
+        // pretended governed. Construction fails closed on mismatched parent
+        // authorities; the platform is then failed rather than published.
+        let visualArtifact = visualArtifactByPostId.get(post.id);
+        if (visualArtifact === undefined) {
+          visualArtifact = await resolveVisualArtifactIdentity(db, ctx.user.id, post, postMeta);
+          visualArtifactByPostId.set(post.id, visualArtifact);
+        }
+
+        const frozenText = `${post.hook || ""}\n\n${post.caption || ""}\n\n${post.cta || ""}`.trim();
+        const frozenMediaUrl =
+          typeof postMeta?.imageUrl === "string" && postMeta.imageUrl
+            ? postMeta.imageUrl
+            : typeof (post as any)?.imageUrl === "string" && (post as any).imageUrl
+              ? (post as any).imageUrl
+              : null;
+
+        let publishPackage: PublishPackage | null = null;
+        let serializedQueuePackage: QueuePublishPackageMetadata | null = null;
+        try {
+          publishPackage = buildPublishPackage({
+            campaignId: input.campaignId,
+            userId: ctx.user.id,
+            businessId: campaignBusinessId,
+            destination: { platform, integrationId: integration.id },
+            intent: { mode: "immediate" },
+            strategyAuthority: packageStrategyAuthority,
+            approvedCopy: packageApprovedCopy,
+            selectedContent: {
+              contentPostId: post.id,
+              artifactKind: "content_post",
+              lineage: postMeta?.creativeArtifactLineage ?? null,
+            },
+            captionArtifact: captionArtifactBinding,
+            visualArtifact,
+            evidence: { launchApprovalRequestId },
+            payload: {
+              text: frozenText,
+              mediaUrls: frozenMediaUrl ? [frozenMediaUrl] : [],
+              mediaType: frozenMediaUrl ? "image" : null,
+            },
+            createdAtIso: new Date().toISOString(),
+          });
+          // WBS13.4: the exact immutable package, integrity-verified, in its
+          // canonical durable envelope — ready to persist with the row.
+          serializedQueuePackage = serializePublishPackageForQueue(publishPackage);
+        } catch (err: any) {
+          const message = err instanceof TRPCError ? err.message : "Publish package construction failed";
+          let failedQueueItemId: number;
+          if (existingQueue) {
+            failedQueueItemId = existingQueue.id;
+            await db
+              .update(publishingQueue)
+              .set({ status: "failed", lastError: message, nextRetryAt: null })
+              .where(eq(publishingQueue.id, existingQueue.id));
+          } else {
+            // No executable governed row may exist without its package: the
+            // failed row is persisted WITHOUT the governed marker, so it stays
+            // legacy and can never execute governed.
+            const [failedQueueResult] = await db.insert(publishingQueue).values({
+              userId: ctx.user.id,
+              campaignId: input.campaignId,
+              contentPostId: post.id,
+              integrationId: integration.id,
+              platform,
+              status: "failed",
+              lastError: message,
+              approvalRequired: false,
+              scheduledAt: null,
+            });
+            failedQueueItemId = Number(failedQueueResult.insertId);
+          }
+          logError("[PublishCampaignPack] Publish package construction failed closed", {
+            campaignId: input.campaignId,
+            platform,
+            queueItemId: failedQueueItemId,
+            error: message,
+          });
+          results.push({
+            platform,
+            queueItemId: failedQueueItemId,
+            status: "failed",
+            error: message,
+            publishPackageId: null,
+            publishPackageFingerprint: null,
+            publishPackageClassification: null,
+          });
+          continue;
+        }
+
+        // WBS13.4: persist the durable package BEFORE any execution.
+        //  - new row: ONE atomic INSERT of row + package metadata;
+        //  - reused approved/retrying row: metadata UPDATE only (Drizzle .set
+        //    touches no other column), so later worker/cron retries reload
+        //    this exact package instead of rebuilding from mutable rows.
+        let effectiveQueueItemId: number;
+        if (!existingQueue) {
           const [queueResult] = await db.insert(publishingQueue).values({
             userId: ctx.user.id,
             campaignId: input.campaignId,
             contentPostId: post.id,
             integrationId: integration.id,
             platform,
-            status: initialStatus,
-            lastError: queueError ?? null,
-            approvalRequired: initialStatus === "pending_approval",
+            status: "approved",
+            lastError: null,
+            approvalRequired: false,
             scheduledAt: null,
+            metadata: serializedQueuePackage,
           });
-          queueItemId = Number(queueResult.insertId);
+          effectiveQueueItemId = Number(queueResult.insertId);
+          queueItemId = effectiveQueueItemId;
 
           logInfo("[PublishCampaignPack] Created queue item", {
             campaignId: input.campaignId,
             platform,
             contentPostId: post.id,
-            queueItemId,
+            queueItemId: effectiveQueueItemId,
             integrationId: integration.id,
-            status: initialStatus,
+            status: "approved",
             pageId: platform === "facebook" ? integration.pageId : undefined,
           });
-
-          if (initialStatus === "failed") {
-            results.push({
-              platform,
-              queueItemId,
-              status: "failed",
-              error: queueError,
-            });
-            continue;
-          }
-
-          if (initialStatus === "pending_approval") {
-            results.push({
-              platform,
-              queueItemId,
-              status: "pending_approval",
-              error: queueError,
-            });
-            continue;
+        } else {
+          effectiveQueueItemId = existingQueue.id;
+          if (existingQueue.status === "approved" || existingQueue.status === "retrying") {
+            await db
+              .update(publishingQueue)
+              .set({ metadata: serializedQueuePackage })
+              .where(eq(publishingQueue.id, existingQueue.id));
           }
         }
 
-        // Attempt immediate publish for low-risk, ready items
-        const publishResult = await publishSinglePost(queueItemId);
+        // Attempt immediate publish for low-risk, ready items. The frozen
+        // package is the authoritative handoff consumed by the runner.
+        const publishResult = await publishSinglePost(effectiveQueueItemId, { publishPackage });
 
         logInfo("[PublishCampaignPack] Publish attempt completed", {
           campaignId: input.campaignId,
           platform,
-          queueItemId,
+          queueItemId: effectiveQueueItemId,
           integrationId: integration.id,
           pageId: platform === "facebook" ? integration.pageId : undefined,
           status: publishResult.status,
@@ -1553,10 +1890,13 @@ export const contentRouter = createRouter({
 
         results.push({
           platform,
-          queueItemId,
+          queueItemId: effectiveQueueItemId,
           status: publishResult.status,
           postId: publishResult.postId,
           error: publishResult.error,
+          publishPackageId: publishPackage.packageId,
+          publishPackageFingerprint: publishPackage.packageFingerprintSha256,
+          publishPackageClassification: publishPackage.classification,
         });
       }
 

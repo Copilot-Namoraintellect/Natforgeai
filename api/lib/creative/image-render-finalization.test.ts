@@ -17,6 +17,10 @@ import {
   type ImageRenderReplayResult,
   type TransitionImageRenderClaimResult,
 } from "./image-render-claim";
+import {
+  buildPersistedImageRenderLineage,
+  type ImageRenderLineageInput,
+} from "./image-render-lineage";
 
 // ─── Deterministic injected fakes ───
 //
@@ -916,5 +920,163 @@ describe("classifyFinalizationTransactionError", () => {
       err = fixture;
     }
     expect(classifyFinalizationTransactionError(err)).toBe(expected);
+  });
+});
+
+
+// ─── WBS12D: production lineage retention ───
+//
+// When the caller supplies the production lineage authority, finalization
+// validates it before any dependency call and persists the canonical record
+// under the coordinator-owned metadata key `renderLineage` on the
+// generated_images row. Claim-side lineage enforcement is inherited: the
+// lineage fingerprint is bound into the claim intentFingerprint upstream, so
+// the completion CAS rejects results produced under different authority.
+
+function makeLineage(overrides: Record<string, unknown> = {}) {
+  return {
+    contentPostId: 13,
+    strategy: {
+      strategySnapshotId: "strategy_" + "a1".repeat(24),
+      strategyVersion: 3,
+      businessDnaSnapshotId: "dna_snapshot_0001",
+      strategyHashSha256: "ab".repeat(32),
+      strategyRunId: 41,
+      creativeBriefFingerprint: "brief-fingerprint-0001",
+      approvalRequestId: 99,
+    },
+    approvedCopy: {
+      copyHashSha256: "ef".repeat(32),
+      copySchemaVersion: "v2.1",
+      approvedRevisionId: "revision-0001",
+    },
+    ...overrides,
+  } as ImageRenderLineageInput;
+}
+
+describe("finalizeImageRenderAttempt — production lineage (WBS12D)", () => {
+  it("persists the canonical lineage record under the coordinator-owned renderLineage metadata key", async () => {
+    const lineage = makeLineage();
+    const { runner, deps, calls } = makeHarness();
+    const input = makeInput({
+      lineage,
+      generatedImage: {
+        campaignId: 5,
+        businessId: 6,
+        provider: "premium-v2-hybrid",
+        providerJobId: "job-9",
+        prompt: "Spring promo headline",
+        url: "/generated/images/5/img_x.png",
+        aspectRatio: "1:1",
+        style: null,
+        providerCostUsd: 0,
+        metadata: { assetTier: "premium", source: "premium" },
+      },
+    });
+
+    const result = await finalizeImageRenderAttempt(input, deps);
+
+    expect(result.status).toBe("finalized");
+    const insert = runner.runs[0].tx.ops[0];
+    expect(insert.op).toBe("insert-image");
+    const metadata = (insert.payload as Record<string, unknown>).metadata as Record<
+      string,
+      unknown
+    >;
+    // Caller metadata is preserved; the lineage record is added alongside it.
+    expect(metadata.assetTier).toBe("premium");
+    expect(metadata.source).toBe("premium");
+    expect(metadata.renderLineage).toEqual(
+      buildPersistedImageRenderLineage(lineage)
+    );
+    // The completion still ran with the exact snapshot on the same transaction.
+    expect(calls.find((call) => call.name === "complete")).toBeDefined();
+  });
+
+  it("lets the coordinator-owned lineage record win over any caller-supplied renderLineage key", async () => {
+    const lineage = makeLineage();
+    const { runner, deps } = makeHarness();
+    const input = makeInput({
+      lineage,
+      generatedImage: {
+        campaignId: 5,
+        businessId: 6,
+        provider: "premium-v2-hybrid",
+        providerJobId: "job-9",
+        prompt: "Spring promo headline",
+        url: "/generated/images/5/img_x.png",
+        aspectRatio: "1:1",
+        style: null,
+        providerCostUsd: 0,
+        metadata: { renderLineage: { tampered: true } },
+      },
+    });
+
+    await finalizeImageRenderAttempt(input, deps);
+
+    const insert = runner.runs[0].tx.ops[0];
+    const metadata = (insert.payload as Record<string, unknown>).metadata as Record<
+      string,
+      unknown
+    >;
+    expect(metadata.renderLineage).toEqual(
+      buildPersistedImageRenderLineage(lineage)
+    );
+  });
+
+  it("leaves metadata untouched when no lineage is supplied (legacy parity)", async () => {
+    const { runner, deps } = makeHarness();
+
+    await finalizeImageRenderAttempt(makeInput(), deps);
+
+    const insert = runner.runs[0].tx.ops[0];
+    const metadata = (insert.payload as Record<string, unknown>).metadata as Record<
+      string,
+      unknown
+    >;
+    expect(metadata).toEqual({ assetTier: "premium" });
+    expect("renderLineage" in metadata).toBe(false);
+  });
+
+  it("rejects lineage scoped to a different post before any dependency call", async () => {
+    const { runner, deps, calls } = makeHarness();
+    const input = makeInput({ lineage: makeLineage({ contentPostId: 14 }) });
+
+    await expect(finalizeImageRenderAttempt(input, deps)).rejects.toThrow(
+      /contentPostId/
+    );
+    expect(calls).toHaveLength(0);
+    expect(runner.runs).toHaveLength(0);
+  });
+
+  it("rejects malformed lineage before any dependency call", async () => {
+    const { runner, deps, calls } = makeHarness();
+    const input = makeInput({
+      lineage: makeLineage({
+        strategy: { ...makeLineage().strategy, strategyHashSha256: "not-a-hash" },
+      }),
+    });
+
+    await expect(finalizeImageRenderAttempt(input, deps)).rejects.toThrow(
+      /Invalid lineage/
+    );
+    expect(calls).toHaveLength(0);
+    expect(runner.runs).toHaveLength(0);
+  });
+
+  it("rolls back and fails the claim closed when completion rejects a lineage-mismatched identity", async () => {
+    const { runner, deps, calls } = makeHarness({ complete: [{ kind: "reject" }] });
+    const input = makeInput({ lineage: makeLineage() });
+
+    const result = await finalizeImageRenderAttempt(input, deps);
+
+    // identity_mismatch from the claim primitive surfaces as
+    // claim_completion_rejected; the transaction rolls back and the claim is
+    // failed exactly once outside the transaction — the image produced for
+    // the mismatched authority is never attached.
+    expect(result).toEqual({ status: "failed", reason: "claim_completion_rejected" });
+    expect(runner.runs[0].committed).toBe(false);
+    expect(runner.runs[0].tx.rolledBack).toBe(true);
+    expect(calls.filter((call) => call.name === "fail")).toHaveLength(1);
   });
 });

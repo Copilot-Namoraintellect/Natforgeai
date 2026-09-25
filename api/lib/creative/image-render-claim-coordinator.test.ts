@@ -12,6 +12,7 @@ import {
   type ImageRenderAttemptLookup,
   type ImageRenderClaim,
 } from "./image-render-claim";
+import type { ImageRenderLineageInput } from "./image-render-lineage";
 
 // ─── Deterministic injected fakes ───
 //
@@ -1193,5 +1194,155 @@ describe("coordinateImageRenderAttempt — bounded work (no loops, no extra re-r
     expect(lookupAttempt).toHaveBeenCalledTimes(1);
     expect(rearmFailedClaim).toHaveBeenCalledTimes(1);
     expect(acquireClaim).not.toHaveBeenCalled();
+  });
+});
+
+
+// ─── WBS12D: production lineage authority ───
+//
+// The coordinator binds the optional lineage authority into the B1 attempt
+// derivation, so a stored attempt under different approved Strategy/copy
+// authority classifies as intent_conflict and is never acquired, rearmed or
+// replayed through this coordinator.
+
+function makeLineage(overrides: Record<string, unknown> = {}) {
+  return {
+    contentPostId: POST_A,
+    strategy: {
+      strategySnapshotId: "strategy_" + "a1".repeat(24),
+      strategyVersion: 3,
+      businessDnaSnapshotId: "dna_snapshot_0001",
+      strategyHashSha256: "ab".repeat(32),
+      strategyRunId: 41,
+      creativeBriefFingerprint: "brief-fingerprint-0001",
+      approvalRequestId: 99,
+    },
+    approvedCopy: {
+      copyHashSha256: "ef".repeat(32),
+      copySchemaVersion: "v2.1",
+      approvedRevisionId: "revision-0001",
+    },
+    ...overrides,
+  } as ImageRenderLineageInput;
+}
+
+function identityWithLineage(
+  input: ImageRenderCoordinatorInput,
+  lineage: ImageRenderLineageInput | null | undefined
+) {
+  return deriveImageRenderAttemptIdentity({
+    userId: input.userId,
+    contentPostId: input.contentPostId,
+    attempt: {
+      ...input.intent,
+      clientAttemptId: input.clientAttemptId,
+      ...(lineage ? { lineage } : {}),
+    },
+  });
+}
+
+function makeLineageLookup(
+  input: ImageRenderCoordinatorInput,
+  lineage: ImageRenderLineageInput,
+  overrides: Partial<ImageRenderAttemptLookup> = {}
+): ImageRenderAttemptLookup {
+  const identity = identityWithLineage(input, lineage);
+  return {
+    found: true,
+    claimId: 7,
+    userId: input.userId,
+    contentPostId: input.contentPostId,
+    status: "running",
+    intentFingerprint: identity.intentFingerprint,
+    intentComparison: "match",
+    deductionKey: identity.deductionKey,
+    deductionRecorded: false,
+    activeClaimKeyPresent: true,
+    leaseState: "active",
+    ...overrides,
+  };
+}
+
+describe("production lineage authority (WBS12D)", () => {
+  it("passes the lineage authority through to acquisition and binds it in the owner context", async () => {
+    const lineage = makeLineage();
+    const input = makeInput({ lineage });
+    const { deps, lookupAttempt, acquireClaim, rearmFailedClaim } = makeDeps({
+      lookup: [{ found: false }],
+    });
+
+    const result = await coordinateImageRenderAttempt(input, deps);
+
+    expect(result.outcome).toBe("acquired");
+    expect(acquireClaim).toHaveBeenCalledTimes(1);
+    const acquireArgs = acquireClaim.mock.calls[0][0] as AcquireArgs & {
+      identity: ImageRenderAttemptIdentityInput;
+    };
+    expect(acquireArgs.identity.lineage).toEqual(lineage);
+    const expected = identityWithLineage(input, lineage);
+    if (result.outcome === "acquired") {
+      expect(result.owner.requestAttemptKey).toBe(expected.requestAttemptKey);
+      expect(result.owner.intentFingerprint).toBe(expected.intentFingerprint);
+      expect(result.owner.intentFingerprint).not.toBe(
+        identityWithLineage(input, null).intentFingerprint
+      );
+    }
+    expect(rearmFailedClaim).not.toHaveBeenCalled();
+    expect(lookupAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies a stored attempt under different lineage as intent_conflict and authorizes nothing", async () => {
+    const input = makeInput({ lineage: makeLineage() });
+    const staleLineage = makeLineage({
+      strategy: { ...makeLineage().strategy, strategyVersion: 4 },
+    });
+    const { deps, lookupAttempt, acquireClaim, rearmFailedClaim } = makeDeps({
+      lookup: [
+        makeLineageLookup(input, staleLineage, { intentComparison: "conflict" }),
+      ],
+    });
+
+    const result = await coordinateImageRenderAttempt(input, deps);
+
+    expect(result).toEqual({ outcome: "intent_conflict" });
+    expect(acquireClaim).not.toHaveBeenCalled();
+    expect(rearmFailedClaim).not.toHaveBeenCalled();
+    expect(lookupAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("rearms a failed attempt only for the exact lineage-bound identity", async () => {
+    const lineage = makeLineage();
+    const input = makeInput({ lineage });
+    const { deps, lookupAttempt, acquireClaim, rearmFailedClaim } = makeDeps({
+      lookup: [
+        makeLineageLookup(input, lineage, {
+          status: "failed",
+          activeClaimKeyPresent: false,
+          leaseState: "none",
+        }),
+      ],
+    });
+
+    const result = await coordinateImageRenderAttempt(input, deps);
+
+    expect(result.outcome).toBe("rearmed");
+    const rearmArgs = rearmFailedClaim.mock.calls[0][0] as RearmArgs;
+    const expected = identityWithLineage(input, lineage);
+    expect(rearmArgs.requestAttemptKey).toBe(expected.requestAttemptKey);
+    expect(rearmArgs.intentFingerprint).toBe(expected.intentFingerprint);
+    expect(acquireClaim).not.toHaveBeenCalled();
+    expect(lookupAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects lineage scoped to a different post before any dependency call", async () => {
+    const input = makeInput({ lineage: makeLineage({ contentPostId: POST_B }) });
+    const { deps, lookupAttempt, acquireClaim, rearmFailedClaim } = makeDeps();
+
+    await expect(coordinateImageRenderAttempt(input, deps)).rejects.toThrow(
+      /contentPostId/
+    );
+    expect(lookupAttempt).not.toHaveBeenCalled();
+    expect(acquireClaim).not.toHaveBeenCalled();
+    expect(rearmFailedClaim).not.toHaveBeenCalled();
   });
 });

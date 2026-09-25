@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getDb } from "./queries/connection";
-import { evaluateCampaignLearning } from "./lib/learning/learning-service";
+import { runGovernedLearningCycle } from "./lib/learning/learning-cycle-service";
 import { agentRouter } from "./agent-router";
 
 vi.mock("./queries/connection", () => ({
@@ -70,11 +70,11 @@ vi.mock("./lib/creative/creative-generation-claim", () => ({
   })),
 }));
 
-// The Learning engine itself is covered end-to-end in learning-service and
-// learning-router tests; here we verify the agent endpoint wires to it and
-// wraps the result in a governed, non-autonomous envelope.
-vi.mock("./lib/learning/learning-service", () => ({
-  evaluateCampaignLearning: vi.fn(),
+// The Learning cycle itself is covered end-to-end in learning-cycle-service
+// tests; here we verify the agent endpoint wires to it and wraps the result
+// in a governed, non-autonomous envelope.
+vi.mock("./lib/learning/learning-cycle-service", () => ({
+  runGovernedLearningCycle: vi.fn(),
 }));
 
 function buildCtx() {
@@ -115,7 +115,7 @@ function buildRecordedResult() {
       id: 501,
       userId: 22,
       campaignId: 7,
-      evaluationVersion: "learning-v1",
+      evaluationVersion: "learning-v2",
       windowStart: "2026-05-01",
       windowEnd: "2026-05-31",
       objectiveSummary: 'Objective "conversions" assessed missed over 2026-05-01..2026-05-31.',
@@ -136,12 +136,12 @@ function buildRecordedResult() {
           governance: { autoApply: false as const, requiresApproval: true as const },
         },
       ],
-      governance: { autoApply: false as const, requiresApproval: true as const, phase: 1 as const },
+      governance: { autoApply: false as const, requiresApproval: true as const, phase: 2 },
       sourceObservations: [],
       normalisationIssues: [],
       provenance: {
         engine: "learning-engine",
-        engineVersion: "learning-v1",
+        engineVersion: "learning-v2",
         trigger: "manual" as const,
         inputDigest: "digest",
         evaluatedAt: "2026-05-31T00:00:00.000Z",
@@ -153,29 +153,29 @@ function buildRecordedResult() {
   };
 }
 
-describe("agentRouter.runOptimisationAgent (Phase 1 Learning engine wiring)", () => {
+describe("agentRouter.runOptimisationAgent (WBS15.7 governed Learning cycle wiring)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("delegates to the Learning service and returns a governed envelope", async () => {
-    vi.mocked(evaluateCampaignLearning).mockResolvedValue(buildRecordedResult());
+  it("delegates to the governed cycle and returns a governed envelope", async () => {
+    vi.mocked(runGovernedLearningCycle).mockResolvedValue(buildRecordedResult());
 
     const caller = agentRouter.createCaller(buildCtx());
     const result = await caller.runOptimisationAgent({ campaignId: 7 });
 
-    // The "coming in Phase 5" stub is replaced by a real, governed result.
+    // The governed cycle result is wrapped, never auto-applied.
     expect(result.success).toBe(true);
     expect(JSON.stringify(result)).not.toContain("coming in Phase 5");
 
     // Non-autonomy is explicit at the endpoint boundary.
     expect(result.automaticChanges).toBe(false);
     expect(result.engine).toBe("learning-engine");
-    expect(result.evaluationVersion).toBe("learning-v1");
+    expect(result.evaluationVersion).toBe("learning-v2");
     expect(result.status).toBe("recorded");
 
     // Delegation scoped to the authenticated user and requested campaign.
-    expect(evaluateCampaignLearning).toHaveBeenCalledWith({
+    expect(runGovernedLearningCycle).toHaveBeenCalledWith({
       userId: 22,
       campaignId: 7,
       trigger: "manual",
@@ -188,7 +188,7 @@ describe("agentRouter.runOptimisationAgent (Phase 1 Learning engine wiring)", ()
   });
 
   it("propagates insufficient_data outcomes without fabricating a record", async () => {
-    vi.mocked(evaluateCampaignLearning).mockResolvedValue({
+    vi.mocked(runGovernedLearningCycle).mockResolvedValue({
       status: "insufficient_data",
       reason: "No factual observations exist for campaign 7 in window 2026-05-01..2026-05-31.",
       observationCount: 0,
@@ -205,8 +205,25 @@ describe("agentRouter.runOptimisationAgent (Phase 1 Learning engine wiring)", ()
     expect(result.status).toBe("insufficient_data");
   });
 
+  it("propagates fail-closed authority_missing outcomes without fabricating a record", async () => {
+    vi.mocked(runGovernedLearningCycle).mockResolvedValue({
+      status: "authority_missing",
+      reason: "Required Strategy authority is missing for campaign 7",
+      campaignId: 7,
+      readinessStatus: "authority_missing",
+      requiredIssues: [],
+    });
+
+    const caller = agentRouter.createCaller(buildCtx());
+    const result = await caller.runOptimisationAgent({ campaignId: 7 });
+
+    expect(result.success).toBe(true);
+    expect(result.automaticChanges).toBe(false);
+    expect(result.status).toBe("authority_missing");
+  });
+
   it("keeps getDb untouched by the endpoint itself (service owns persistence)", async () => {
-    vi.mocked(evaluateCampaignLearning).mockResolvedValue({
+    vi.mocked(runGovernedLearningCycle).mockResolvedValue({
       status: "insufficient_data",
       reason: "none",
       observationCount: 0,

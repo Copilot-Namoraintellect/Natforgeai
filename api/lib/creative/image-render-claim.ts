@@ -4,6 +4,10 @@ import { eq, and, gt, isNotNull, isNull, lte, sql, SQL } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
 import { imageRenderClaims, generatedImages } from "@db/schema";
 import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
+import {
+  deriveImageRenderLineageFingerprint,
+  type ImageRenderLineageInput,
+} from "./image-render-lineage";
 
 export const IMAGE_RENDER_OPERATION_KIND = "premium_image" as const;
 
@@ -171,6 +175,15 @@ export interface ImageRenderAttemptIdentityInput {
   brandColors?: string[] | null;
   creativeType?: string | null;
   allowNoLogo?: boolean;
+  /**
+   * Production lineage authority (WBS12D): the approved Strategy/copy
+   * authority this render is produced under, plus the source content
+   * identity. When supplied, the intentFingerprint also binds the lineage
+   * fingerprint, so completion, rearm and idempotent replay fail closed for
+   * any result produced under different authority. `lineage.contentPostId`
+   * must equal the derivation-scope contentPostId.
+   */
+  lineage?: ImageRenderLineageInput | null;
 }
 
 export interface ImageRenderAttemptIdentity {
@@ -185,7 +198,9 @@ export interface ImageRenderAttemptIdentity {
  * the same token is detectable as a collision instead of a new attempt.
  * intentFingerprint covers all ten material render inputs (regenerate,
  * forceRegenerate, refinementInstruction, creativeGuidance, strongerBrandFit,
- * provider, templateId, brandColors, creativeType, allowNoLogo); raw text and
+ * provider, templateId, brandColors, creativeType, allowNoLogo) and, when a
+ * lineage authority is supplied, its fingerprint — so a result produced for
+ * different approved authority can never attach or replay; raw text and
  * raw colour values are reduced to digests before canonicalization.
  */
 export function deriveImageRenderAttemptIdentity({
@@ -200,6 +215,18 @@ export function deriveImageRenderAttemptIdentity({
   assertValidId(userId, "userId");
   assertValidId(contentPostId, "contentPostId");
   assertValidClientAttemptId(attempt.clientAttemptId);
+  if (attempt.lineage) {
+    if (attempt.lineage.contentPostId !== contentPostId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "Invalid lineage: contentPostId does not match the attempt scope",
+      });
+    }
+  }
+  const lineageFingerprint = attempt.lineage
+    ? deriveImageRenderLineageFingerprint(attempt.lineage)
+    : null;
 
   const refinementInstruction = normalizeOptionalText(
     attempt.refinementInstruction
@@ -227,6 +254,9 @@ export function deriveImageRenderAttemptIdentity({
       brandColors: normalizeBrandColors(attempt.brandColors),
       creativeType: normalizeOptionalText(attempt.creativeType) || "leaflet",
       allowNoLogo: attempt.allowNoLogo === true,
+      // Absent lineage keeps legacy fingerprints bit-identical (the key is
+      // omitted from the canonical payload, not serialized as null).
+      ...(lineageFingerprint ? { lineageFingerprint } : {}),
     })
   );
 

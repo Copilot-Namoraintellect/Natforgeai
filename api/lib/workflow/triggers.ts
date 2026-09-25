@@ -38,6 +38,9 @@ import {
 } from "./strategy-approval";
 import { getLaunchApprovalStatus, buildLaunchApprovalLineage } from "./launch-approval";
 import { InMemoryWorkflowOperationRegistry } from "./workflow-operation";
+import { resolveCreativeEntryStrategyAuthority } from "../creative/creative-entry-authority";
+import type { CreativeStrategySnapshotInput } from "../creative/strategy-snapshot-input";
+import { getStrategySnapshotByStrategyRunId } from "../strategy/strategy-snapshot-db-store";
 
 export async function onAgentRunComplete(runId: number) {
   const db = getDb();
@@ -92,7 +95,24 @@ export async function onAgentRunComplete(runId: number) {
         riskLevel: "low",
       });
 
+      // Bind the approval lineage to the EXACT immutable Strategy snapshot
+      // authority persisted for this completed Strategy run. Fail closed
+      // when that authority is missing or does not match the run/campaign/
+      // current brief — mutable campaign fields are never used as authority.
+      const snapshotAuthority = await getStrategySnapshotByStrategyRunId(run.id);
       const status = getStrategyApprovalStatus(updatedCampaign, business);
+      if (
+        !snapshotAuthority ||
+        snapshotAuthority.userId !== run.userId ||
+        snapshotAuthority.campaignId !== run.campaignId ||
+        snapshotAuthority.creativeBriefFingerprint !== status.currentFingerprint
+      ) {
+        console.error(
+          `[Workflow] Strategy run ${run.id} for campaign ${run.campaignId} completed without matching immutable Strategy snapshot authority; strategy approval lineage was not recorded.`
+        );
+        return;
+      }
+
       await db
         .update(campaigns)
         .set({
@@ -101,7 +121,14 @@ export async function onAgentRunComplete(runId: number) {
             strategyApprovalLineage: buildStrategyApprovalLineage(
               status.currentFingerprint,
               run.id,
-              approvalRequestId
+              approvalRequestId,
+              "pending",
+              {
+                strategySnapshotId: snapshotAuthority.snapshotId,
+                strategyVersion: snapshotAuthority.version,
+                businessDnaSnapshotId: snapshotAuthority.businessDnaSnapshotId,
+                strategyHashSha256: snapshotAuthority.strategyHashSha256,
+              }
             ),
           } as any,
         })
@@ -630,7 +657,26 @@ export async function onStrategyApproved(
     return;
   }
 
-  // 5. Authoritative atomic claim for the auto-creative step of this approval.
+  // 5. Governed immutable Strategy authority: resolve and verify the exact
+  // approved WBS11 snapshot before any claim, provider spend or billing. This
+  // is the same fail-closed chain the content-generation job runs; a failure
+  // here refuses creative generation without consuming credits.
+  let immutableStrategyInput: CreativeStrategySnapshotInput;
+  try {
+    immutableStrategyInput = await resolveCreativeEntryStrategyAuthority({
+      campaign,
+      userId,
+      campaignId,
+      business,
+    });
+  } catch (err: any) {
+    console.error(
+      `[Workflow] Immutable Strategy authority resolution failed for campaign ${campaignId}: ${err?.message || err}. Refusing to authorise creative generation.`
+    );
+    return;
+  }
+
+  // 6. Authoritative atomic claim for the auto-creative step of this approval.
   //    First try to re-arm a terminal orphan claim so historical evidence is
   //    preserved.  A terminal claim is only an orphan if no success evidence was
   //    found above; otherwise we would have already returned.
@@ -746,6 +792,7 @@ export async function onStrategyApproved(
         userId,
         campaignId,
         generationOperation: { source: "approval", id: approvalId },
+        strategyInput: immutableStrategyInput,
         claimContext: heartbeatController,
         registry: workflowRegistry,
       });

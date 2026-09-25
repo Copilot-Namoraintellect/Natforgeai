@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { approvalRequests, campaigns, businesses, socialIntegrations, agentRuns } from "@db/schema";
+import { approvalRequests, campaigns, businesses, socialIntegrations, agentRuns, strategySnapshots } from "@db/schema";
 import { eq, and, or, desc, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { onApprovalResolved } from "./lib/workflow/triggers";
@@ -9,9 +9,15 @@ import { createApprovalRequest } from "./lib/workflow/engine";
 import { createAuditEvent } from "./lib/audit/audit-event";
 import { persistAuditEvent } from "./lib/audit/audit-store";
 import {
+  isLearningPromotionApproval,
+  sealApprovedLearningPromotionEnvelope,
+  validateLearningPromotionApprovalBinding,
+} from "./lib/learning/promotion/promotion-decision";
+import {
   getStrategyApprovalStatus,
   isLineageAuthoritative,
   validateStrategyRunForCampaign,
+  isStrategySnapshotAuthorityMatch,
 } from "./lib/workflow/strategy-approval";
 import {
   getLaunchApprovalStatus,
@@ -117,6 +123,34 @@ async function validateStrategyApprovalLineage(
       code: "PRECONDITION_FAILED",
       message:
         "The strategy run linked to this approval request is missing or not complete. Regenerate the strategy for approval.",
+    });
+  }
+
+  const [strategySnapshot] = await db
+    .select()
+    .from(strategySnapshots)
+    .where(
+      eq(
+        strategySnapshots.strategyRunId,
+        status.lineage.strategyRunId
+      )
+    )
+    .limit(1);
+
+  if (
+    !strategySnapshot ||
+    !isStrategySnapshotAuthorityMatch(
+      status.lineage,
+      strategySnapshot,
+      approval.userId,
+      Number(approval.campaignId),
+      campaign.businessId
+    )
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "The strategy approval lineage does not match the immutable Strategy snapshot. Regenerate the strategy for approval.",
     });
   }
 
@@ -595,6 +629,17 @@ async function executeApprovalDecision(
       );
     }
 
+    // WBS15.6: a learning promotion approval binds one exact immutable
+    // proposal. Fail closed before any terminal mutation when the source
+    // learning record or recommendation no longer matches the bound
+    // coordinates, and never allow edited approvals (they would break the
+    // proposal fingerprint binding).
+    if (kind !== "reject" && isLearningPromotionApproval(request)) {
+      await validateLearningPromotionApprovalBinding(
+        { request, decisionKind: kind, executor: tx }
+      );
+    }
+
     // ONE decision timestamp, shared by the approval row and the audit event.
     const decidedAt = new Date();
 
@@ -695,6 +740,18 @@ async function executeApprovalDecision(
     });
 
     await persistAuditEvent(auditEvent, tx);
+
+    // WBS15.6: approval seals the durable approved promotion envelope in the
+    // same transaction as the decision. Rejections seal nothing: a rejected
+    // proposal remains auditable evidence and is never consumable.
+    if (kind === "approve" && isLearningPromotionApproval(request)) {
+      await sealApprovedLearningPromotionEnvelope({
+        request,
+        decidedAt,
+        decidedByUserId: ctx.user.id,
+        executor: tx,
+      });
+    }
 
     return {
       success: true as const,

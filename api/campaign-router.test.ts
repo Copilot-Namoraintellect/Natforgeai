@@ -1,6 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TRPCError } from "@trpc/server";
 
+vi.mock("./lib/strategy/strategy-snapshot-db-store", () => ({
+  getStrategySnapshotByStrategyRunId: vi.fn(
+    async (strategyRunId: number) => ({
+      snapshotId: "strategy-test-snapshot",
+      userId: 18,
+      campaignId: 42,
+      businessId: 7,
+      strategyRunId,
+      businessDnaSnapshotId: "bdna-test-snapshot",
+      version: 1,
+      creativeBriefFingerprint: "fp-current",
+      strategyHashSha256:
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      snapshot: {},
+      capturedAt:
+        new Date("2026-09-22T00:00:00.000Z"),
+    })
+  ),
+}));
 vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
 }));
@@ -456,6 +475,10 @@ describe("campaignRouter.regenerateFromProfile", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-old",
             strategyRunId: 251,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 35,
             status: "pending",
           },
@@ -529,6 +552,10 @@ describe("campaignRouter.regenerateFromProfile", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 252,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 36,
             status: "pending",
           },
@@ -804,6 +831,10 @@ describe("campaignRouter.regenerateFromProfile", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-old",
             strategyRunId: 251,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 35,
             status: "pending",
           },
@@ -1147,6 +1178,10 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-old",
             strategyRunId: 110,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 33,
             status: "pending",
           },
@@ -1215,6 +1250,10 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 111,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 33,
             status: "pending",
           },
@@ -1609,6 +1648,10 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 111,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 33,
             status: "pending",
           },
@@ -1739,6 +1782,10 @@ describe("campaignRouter.regenerateStrategyForApproval", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 34,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 34,
             status: "pending",
           },
@@ -1857,6 +1904,10 @@ describe("campaignRouter.strategyApprovalStatus", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 245,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 34,
             status: "pending",
           },
@@ -1896,6 +1947,10 @@ describe("campaignRouter.strategyApprovalStatus", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 111,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 33,
             status: "approved",
           },
@@ -1946,6 +2001,10 @@ describe("campaignRouter.strategyApprovalStatus", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 245,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 34,
             status: "pending",
           },
@@ -2117,7 +2176,7 @@ describe("campaignRouter strategy entry-point lifecycle (Phase 2B integration)",
     // Simulate the business-profile fallback channels changing after the old
     // strategy run was produced. The fingerprint changes, so the stale run must
     // not be reused.
-    vi.mocked(buildGroundedCreativeBrief).mockReturnValue({
+    vi.mocked(buildGroundedCreativeBrief).mockReturnValueOnce({
       fingerprint: "fp-new-email",
       productOrService: "service",
       targetBuyer: "buyer",

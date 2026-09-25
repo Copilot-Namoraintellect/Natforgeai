@@ -1,3 +1,4 @@
+import { getStrategySnapshotByStrategyRunId } from "./lib/strategy/strategy-snapshot-db-store";
 import { z } from "zod";
 import { generateObject } from "ai";
 import { createRouter, authedQuery } from "./middleware";
@@ -796,6 +797,21 @@ export const campaignRouter = createRouter({
           if (run.output.creativeBriefFingerprint !== currentFingerprint) continue;
           const validation = validateStrategyOutputAgainstCampaign(run.output, updatedCampaign);
           if (validation.valid) {
+            const runSnapshotAuthority =
+              await getStrategySnapshotByStrategyRunId(
+                run.id
+              );
+
+            if (
+              !runSnapshotAuthority ||
+              runSnapshotAuthority.userId !== userId ||
+              runSnapshotAuthority.campaignId !== campaignId ||
+              runSnapshotAuthority.strategyRunId !== run.id ||
+              runSnapshotAuthority.creativeBriefFingerprint !== currentFingerprint
+            ) {
+              continue;
+            }
+
             reusableRun = run;
             console.log(`[regenerateFromProfile] reusing completed strategy run ${run.id} with matching fingerprint and valid grounding | campaignId=${campaignId}`);
             break;
@@ -893,11 +909,41 @@ export const campaignRouter = createRouter({
         }
 
         // Reconcile pending strategy_review requests.
+        const strategySnapshotAuthority =
+          await getStrategySnapshotByStrategyRunId(
+            strategyRunId
+          );
+
+        if (
+          !strategySnapshotAuthority ||
+          strategySnapshotAuthority.userId !== userId ||
+          strategySnapshotAuthority.campaignId !== campaignId ||
+          strategySnapshotAuthority.businessId !== Number(business.id) ||
+          strategySnapshotAuthority.strategyRunId !== strategyRunId ||
+          strategySnapshotAuthority.creativeBriefFingerprint !== currentFingerprint
+        ) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "The Strategy run is missing or does not match immutable Strategy snapshot authority. Regenerate the strategy before requesting approval.",
+          });
+        }
+
         const lineage = buildStrategyApprovalLineage(
           currentFingerprint,
           strategyRunId,
           0, // placeholder until we create/find the request
-          "pending"
+          "pending",
+          {
+            strategySnapshotId:
+              strategySnapshotAuthority.snapshotId,
+            strategyVersion:
+              strategySnapshotAuthority.version,
+            businessDnaSnapshotId:
+              strategySnapshotAuthority.businessDnaSnapshotId,
+            strategyHashSha256:
+              strategySnapshotAuthority.strategyHashSha256,
+          }
         );
 
         const existingPendingRequests = await db
@@ -922,6 +968,10 @@ export const campaignRouter = createRouter({
             !existingLineage ||
             existingLineage.creativeBriefFingerprint !== currentFingerprint ||
             existingLineage.strategyRunId !== strategyRunId ||
+            existingLineage.strategySnapshotId !== strategySnapshotAuthority.snapshotId ||
+            existingLineage.strategyVersion !== strategySnapshotAuthority.version ||
+            existingLineage.businessDnaSnapshotId !== strategySnapshotAuthority.businessDnaSnapshotId ||
+            existingLineage.strategyHashSha256 !== strategySnapshotAuthority.strategyHashSha256 ||
             existingLineage.approvalRequestId !== req.id
           ) {
             continue;
@@ -1146,6 +1196,21 @@ export const campaignRouter = createRouter({
           // existing lineage here because this path creates a new one.
           const validation = validateStrategyOutputAgainstCampaign(run.output, campaign);
           if (validation.valid) {
+            const runSnapshotAuthority =
+              await getStrategySnapshotByStrategyRunId(
+                run.id
+              );
+
+            if (
+              !runSnapshotAuthority ||
+              runSnapshotAuthority.userId !== userId ||
+              runSnapshotAuthority.campaignId !== campaignId ||
+              runSnapshotAuthority.strategyRunId !== run.id ||
+              runSnapshotAuthority.creativeBriefFingerprint !== currentFingerprint
+            ) {
+              continue;
+            }
+
             reusableRun = run;
             console.log(`[regenerateStrategyForApproval] reusing completed strategy run ${run.id} with matching fingerprint and valid grounding | campaignId=${campaignId}`);
             break;
@@ -1250,11 +1315,41 @@ export const campaignRouter = createRouter({
 
         // Reconcile pending strategy_review requests. Only reuse a pending request
         // when it is durably linked to the same fingerprint, run and approval ID.
+        const strategySnapshotAuthority =
+          await getStrategySnapshotByStrategyRunId(
+            strategyRunId
+          );
+
+        if (
+          !strategySnapshotAuthority ||
+          strategySnapshotAuthority.userId !== userId ||
+          strategySnapshotAuthority.campaignId !== campaignId ||
+          strategySnapshotAuthority.businessId !== Number(business.id) ||
+          strategySnapshotAuthority.strategyRunId !== strategyRunId ||
+          strategySnapshotAuthority.creativeBriefFingerprint !== currentFingerprint
+        ) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "The Strategy run is missing or does not match immutable Strategy snapshot authority. Regenerate the strategy before requesting approval.",
+          });
+        }
+
         const lineage = buildStrategyApprovalLineage(
           currentFingerprint,
           strategyRunId,
           0, // placeholder until we create/find the request
-          "pending"
+          "pending",
+          {
+            strategySnapshotId:
+              strategySnapshotAuthority.snapshotId,
+            strategyVersion:
+              strategySnapshotAuthority.version,
+            businessDnaSnapshotId:
+              strategySnapshotAuthority.businessDnaSnapshotId,
+            strategyHashSha256:
+              strategySnapshotAuthority.strategyHashSha256,
+          }
         );
 
         const existingPendingRequests = await db
@@ -1279,6 +1374,10 @@ export const campaignRouter = createRouter({
             !existingLineage ||
             existingLineage.creativeBriefFingerprint !== currentFingerprint ||
             existingLineage.strategyRunId !== strategyRunId ||
+            existingLineage.strategySnapshotId !== strategySnapshotAuthority.snapshotId ||
+            existingLineage.strategyVersion !== strategySnapshotAuthority.version ||
+            existingLineage.businessDnaSnapshotId !== strategySnapshotAuthority.businessDnaSnapshotId ||
+            existingLineage.strategyHashSha256 !== strategySnapshotAuthority.strategyHashSha256 ||
             existingLineage.approvalRequestId !== req.id
           ) {
             continue;

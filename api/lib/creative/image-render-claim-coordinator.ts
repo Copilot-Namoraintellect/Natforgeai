@@ -10,6 +10,7 @@ import {
   type ImageRenderClaim,
   type RearmImageRenderClaimResult,
 } from "./image-render-claim";
+import type { ImageRenderLineageInput } from "./image-render-lineage";
 
 // ─── Dormant image-render claim coordinator (B2B-1) ───
 //
@@ -26,7 +27,10 @@ import {
 // This coordinator deliberately accepts no caller-controlled
 // "ownershipVerified" flag, no campaign identity, and no campaign sentinel.
 // It is not an authorization system; ownership remains the existing
-// user-scoped post lookup.
+// user-scoped post lookup. The optional production lineage authority
+// (WBS12D) is bound into the attempt intentFingerprint by the B1 derivation,
+// so any stored attempt produced under different approved Strategy/copy
+// authority classifies as intent_conflict and is never re-authorized.
 //
 // Raw clientAttemptId, raw refinement/guidance text, ownerToken,
 // activeClaimKey, and deductionKey are never returned in blocked diagnostic
@@ -40,7 +44,7 @@ import {
 
 export type ImageRenderCoordinatorIntent = Omit<
   ImageRenderAttemptIdentityInput,
-  "clientAttemptId"
+  "clientAttemptId" | "lineage"
 >;
 
 export interface ImageRenderCoordinatorInput {
@@ -52,6 +56,13 @@ export interface ImageRenderCoordinatorInput {
   clientAttemptId: string;
   /** Complete material render intent — all ten B1 fields. */
   intent: ImageRenderCoordinatorIntent;
+  /**
+   * Production lineage authority (WBS12D) bound into the attempt
+   * intentFingerprint. A stored attempt whose lineage differs classifies as
+   * intent_conflict — stale or cross-authority results are never attached
+   * and never replayed.
+   */
+  lineage?: ImageRenderLineageInput | null;
   /** Ownership credential proposed by the future request owner. */
   ownerToken: string;
   /** Proposed lease expiry for the claim row. */
@@ -123,6 +134,8 @@ export type ImageRenderCoordinatorResult =
 // State precedence (highest first):
 //   1. subsystem failure            (handled by the coordinator, never here)
 //   2. intent conflict / unknown legacy intent
+//      (the intentFingerprint also binds the production lineage authority,
+//      so a lineage mismatch is an intent conflict, never a new attempt)
 //   3. completed replay required
 //   4. deduction-recorded ambiguity
 //   5. running (active / stale lease)
@@ -338,6 +351,7 @@ export async function coordinateImageRenderAttempt(
   const attempt: ImageRenderAttemptIdentityInput = {
     ...input.intent,
     clientAttemptId: input.clientAttemptId,
+    lineage: input.lineage,
   };
   const identity = deriveImageRenderAttemptIdentity({
     userId: input.userId,

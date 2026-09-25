@@ -43,6 +43,19 @@ import { adaptApprovedToCampaignMessagePack } from "./message-approval/compatibi
 import { type LegacyLoadedShadowContextInput } from "./message-approval/integration/legacy-shadow-context";
 import { buildMessageApprovalContextLock } from "./message-approval/context-lock";
 import { verifyCanaryApprovalProof } from "./message-approval/canary-proof";
+import { assertApprovedCopyMatchesEnvelope, captureApprovedCopyAuthority, assertApprovedCopyMatchesStrategyAuthority } from "./approved-copy-authority";
+import type { CreativeStrategyAuthority } from "./strategy-authority";
+import { getStrategyApprovalStatus } from "../workflow/strategy-approval";
+import {
+  assertCreativeArtifactLineageMatchesEnvelope,
+  assertPersistedCreativeArtifactLineageIntact,
+  buildPersistedCreativeArtifactLineage,
+  creativeArtifactApprovedCopyLineageFromEnvelope,
+  creativeArtifactStrategyLineageFromAuthority,
+  creativeArtifactStrategyLineageFromEnvelope,
+  CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY,
+  type CreativeArtifactPersistedLineage,
+} from "./artifact-lineage";
 import {
   computeCreativeBriefFingerprint,
   isApprovedMessagePackCompatible,
@@ -108,6 +121,12 @@ export interface CampaignMessagePack {
   v2ApprovalEnvelope?: V2ApprovalEnvelope;
   /** Stable fingerprint of the campaign brief that produced this pack. */
   creativeBriefFingerprint?: string;
+  /**
+   * WBS12.3 durable lineage (Business DNA → Strategy → approved copy) for
+   * envelope-bearing packs. Persisted by saveApprovedMessagePack and
+   * re-verified on load; absent on legacy/envelope-less packs.
+   */
+  creativeArtifactLineage?: CreativeArtifactPersistedLineage;
 }
 
 export interface CopyValidationResult {
@@ -1369,13 +1388,28 @@ export async function loadAllApprovedMessagePacks(
       const meta = (row.metadata || {}) as any;
       const pack = meta?.approvedMessagePack as CampaignMessagePack | undefined;
       if (!pack) return null;
+      const enriched = enrichMessagePackMetadata({
+        ...pack,
+        messagePackSource: pack.messagePackSource || meta.messagePackSource || "ai_refined_pack",
+        invalidatedAt: pack.invalidatedAt || meta.invalidatedAt,
+        invalidationReason: pack.invalidationReason || meta.invalidationReason,
+      });
+      // WBS12.3: where a durable lineage record exists it must be internally
+      // consistent and bound to the pack's approval envelope. Tampered
+      // lineage fails closed rather than feeding divergent authority to
+      // downstream consumers. Envelope-less legacy packs carry no lineage
+      // and are unaffected.
+      if (enriched.creativeArtifactLineage) {
+        assertPersistedCreativeArtifactLineageIntact(enriched.creativeArtifactLineage);
+        if (enriched.v2ApprovalEnvelope) {
+          assertCreativeArtifactLineageMatchesEnvelope(
+            enriched.creativeArtifactLineage,
+            enriched.v2ApprovalEnvelope
+          );
+        }
+      }
       return {
-        pack: enrichMessagePackMetadata({
-          ...pack,
-          messagePackSource: pack.messagePackSource || meta.messagePackSource || "ai_refined_pack",
-          invalidatedAt: pack.invalidatedAt || meta.invalidatedAt,
-          invalidationReason: pack.invalidationReason || meta.invalidationReason,
-        }),
+        pack: enriched,
         assetId: row.id,
         createdAt: new Date(row.createdAt || Date.now()),
       };
@@ -1438,11 +1472,78 @@ export async function loadApprovedMessagePack(campaignId: number): Promise<Campa
   return best;
 }
 
+/**
+ * WBS12.3: build the canonical durable lineage for an envelope-bearing
+ * message pack. The approved-copy coordinates always come from the pack's
+ * own V2 approval envelope (already proven to hash to the pack copy by
+ * assertApprovedCopyMatchesEnvelope at the save guard). Strategy coordinates
+ * come from a caller-supplied WBS11 authority when provided — verified to
+ * bind to the envelope so coordinates cannot silently diverge — or else from
+ * the envelope's own strategy snapshot, extended with the campaign's current
+ * approved WBS11 lineage when one exists for the same brief.
+ */
+function resolveMessagePackArtifactLineage(
+  pack: CampaignMessagePack,
+  campaign: unknown,
+  creativeBriefFingerprint: string,
+  strategyAuthority?: CreativeStrategyAuthority
+): CreativeArtifactPersistedLineage {
+  const envelope = pack.v2ApprovalEnvelope;
+  if (!envelope) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Message pack lineage requires a V2 approval envelope.",
+    });
+  }
+
+  const approvedCopy =
+    creativeArtifactApprovedCopyLineageFromEnvelope(envelope);
+
+  let strategy;
+  if (strategyAuthority) {
+    assertApprovedCopyMatchesStrategyAuthority(
+      captureApprovedCopyAuthority(pack),
+      strategyAuthority
+    );
+    strategy = creativeArtifactStrategyLineageFromAuthority(strategyAuthority);
+  } else {
+    strategy = creativeArtifactStrategyLineageFromEnvelope(envelope);
+    const wbs11Lineage = campaign
+      ? getStrategyApprovalStatus(campaign).lineage
+      : null;
+    if (
+      wbs11Lineage &&
+      wbs11Lineage.status === "approved" &&
+      wbs11Lineage.creativeBriefFingerprint === creativeBriefFingerprint
+    ) {
+      strategy = {
+        ...strategy,
+        strategyVersion: wbs11Lineage.strategyVersion,
+        strategyRunId: wbs11Lineage.strategyRunId,
+        approvalRequestId: wbs11Lineage.approvalRequestId,
+        creativeBriefFingerprint: wbs11Lineage.creativeBriefFingerprint,
+      };
+    }
+  }
+
+  return buildPersistedCreativeArtifactLineage({
+    artifactKind: "message_pack",
+    platform: null,
+    parent: null,
+    strategy,
+    approvedCopy,
+  });
+}
+
 export async function saveApprovedMessagePack(
   userId: number,
   campaignId: number,
   pack: CampaignMessagePack,
-  options?: { mode?: "legacy" | "canary"; proof?: CanaryApprovalProof }
+  options?: {
+    mode?: "legacy" | "canary";
+    proof?: CanaryApprovalProof;
+    strategyAuthority?: CreativeStrategyAuthority;
+  }
 ): Promise<number> {
   const db = getDb();
   const saveMode = options?.mode || "legacy";
@@ -1486,6 +1587,28 @@ export async function saveApprovedMessagePack(
     }
   }
 
+  // WBS12C: if the pack still carries a V2 approval envelope, its semantic
+  // copy must still hash to that envelope's approved copy. This closes the
+  // legacy-save hole where rewritten copy could silently keep a stale
+  // approval envelope. Canary saves were already proof-verified above; this
+  // re-check is pure and idempotent for both modes.
+  if (enriched.v2ApprovalEnvelope) {
+    assertApprovedCopyMatchesEnvelope(enriched);
+  }
+
+  // WBS12.3: envelope-bearing packs persist the canonical durable lineage so
+  // downstream Distribution can prove Business DNA → Strategy → approved
+  // copy for the pack itself. Envelope-less packs keep the legacy shape and
+  // carry no lineage key.
+  if (enriched.v2ApprovalEnvelope) {
+    enriched.creativeArtifactLineage = resolveMessagePackArtifactLineage(
+      enriched,
+      campaignForFingerprint ?? null,
+      creativeBriefFingerprint,
+      options?.strategyAuthority
+    );
+  }
+
   const [{ insertId }] = await db.insert(campaignAssets).values({
     userId,
     campaignId,
@@ -1502,6 +1625,7 @@ export async function saveApprovedMessagePack(
       isGeneric: enriched.isGeneric,
       specificityScore: enriched.specificityScore,
       v2ApprovalEnvelope: enriched.v2ApprovalEnvelope,
+      [CREATIVE_ARTIFACT_LINEAGE_METADATA_KEY]: enriched.creativeArtifactLineage,
     } as any,
   });
 

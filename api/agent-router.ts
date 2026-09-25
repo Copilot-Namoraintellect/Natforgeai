@@ -29,7 +29,7 @@ import { checkAudienceAgentAccess } from "./lib/audience/access";
 import { generateReply } from "./lib/agents/engagement-agent";
 import { generateFollowUpSequence, generateProposal, generateMeetingPrompt } from "./lib/agents/sales-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
-import { assertApprovedStrategySemanticallyValid } from "./lib/workflow/strategy-approval";
+import { resolveCreativeEntryStrategyAuthority } from "./lib/creative/creative-entry-authority";
 import { transitionCampaignState } from "./lib/workflow/engine";
 import { TRPCError } from "@trpc/server";
 import {
@@ -43,8 +43,8 @@ import {
 } from "./lib/creative/creative-generation-claim";
 import { env } from "./lib/env";
 import { InMemoryWorkflowOperationRegistry } from "./lib/workflow/workflow-operation";
-import { evaluateCampaignLearning } from "./lib/learning/learning-service";
-import { LEARNING_EVALUATION_VERSION } from "./lib/learning/contracts/learning-config";
+import { runGovernedLearningCycle } from "./lib/learning/learning-cycle-service";
+import { LEARNING_CYCLE_EVALUATION_VERSION } from "./lib/learning/contracts/learning-config";
 
 export const agentRouter = createRouter({
   runStrategyAgent: aiActionQuery
@@ -255,9 +255,14 @@ export const agentRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       }
 
-      // Every campaign-linked creative entry point must validate the approved
-      // strategy semantically before acquiring a claim or running the agent.
-      await assertApprovedStrategySemanticallyValid(campaign, ctx.user.id);
+      // Every campaign-linked creative entry point must resolve the approved
+      // immutable Strategy authority before acquiring a claim or running the
+      // agent. Fail closed before any provider spend, persistence or billing.
+      const immutableStrategyInput = await resolveCreativeEntryStrategyAuthority({
+        campaign,
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+      });
 
       // Authoritative atomic claim for this direct creative-agent call.
       const ownerToken = generateOwnerToken();
@@ -507,6 +512,7 @@ export const agentRouter = createRouter({
             userId: ctx.user.id,
             campaignId: input.campaignId,
             generationOperation: { source: "agent", id: operationRowId },
+            strategyInput: immutableStrategyInput,
             claimContext: heartbeatController,
             registry: workflowRegistry,
           });
@@ -766,11 +772,13 @@ export const agentRouter = createRouter({
   runOptimisationAgent: aiActionQuery
     .input(z.object({ campaignId: z.number() }))
     .mutation(async ({ ctx, input }) => {
-      // Phase 1 Learning engine: deterministic, grounded evaluation that
-      // persists a governed learning record. It never auto-applies changes to
-      // Strategy, Creative or Distribution; autonomous triggering remains a
-      // later-phase integration concern.
-      const result = await evaluateCampaignLearning({
+      // WBS15.7: the optimisation agent runs the governed Learning cycle
+      // (learning-v2) — canonical dataset → Strategy-bound KPI evaluation →
+      // governed variant analysis → versioned learning record with bound
+      // authority lineage. It never auto-applies changes to Strategy,
+      // Creative or Distribution; autonomous triggering is owned by the
+      // post-live reconciliation pass.
+      const result = await runGovernedLearningCycle({
         userId: ctx.user.id,
         campaignId: input.campaignId,
         trigger: "manual",
@@ -779,7 +787,7 @@ export const agentRouter = createRouter({
         success: true,
         automaticChanges: false,
         engine: "learning-engine",
-        evaluationVersion: LEARNING_EVALUATION_VERSION,
+        evaluationVersion: LEARNING_CYCLE_EVALUATION_VERSION,
         ...result,
       };
     }),

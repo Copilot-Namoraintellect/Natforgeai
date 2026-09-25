@@ -27,6 +27,8 @@ import { evaluateCopyQuality, type CopyQualityResult } from "./copy-quality";
 import { buildPremiumCopyPack } from "./copy-pack";
 import { scoreLayout, type LayoutScoreResult } from "./layout-scoring";
 import { evaluatePremiumDesignContract, type PremiumDesignContractResult } from "./premium-design-contract";
+import { evaluateVisualQualityGateAtSeam } from "./visual-quality-gate-integration";
+import type { VisualQualityReleaseGateDecision } from "../quality/visual-quality-release-gate";
 
 export interface VariantResult {
   index: number;
@@ -43,6 +45,8 @@ export interface VariantResult {
   logoCropCritic?: LogoCropCriticResult;
   layoutScores: LayoutScoreResult;
   contract: PremiumDesignContractResult;
+  /** WBS12F visual-quality release-gate decision for this variant's render. */
+  visualGate: VisualQualityReleaseGateDecision;
 }
 
 export interface VariantSelection {
@@ -232,6 +236,17 @@ export async function selectBestHybridVariant(
     });
 
     const effectiveCriticPassed = computeEffectiveCriticPassed(rawCritic, logoCropCritic) && !contentFidelity.inventedOfferDetected;
+
+    // WBS12F visual-quality release gate over the render evidence already in
+    // scope. The existing vision critic result is passed through and adapted
+    // by the gate; no additional provider call is made here.
+    const visualGate = evaluateVisualQualityGateAtSeam({
+      metrics: renderResult.metrics,
+      brandKit,
+      visualDirection,
+      critic: rawCritic,
+    });
+
     const contract = evaluatePremiumDesignContract({
       metadata: {},
       metrics: renderResult.metrics,
@@ -243,6 +258,7 @@ export async function selectBestHybridVariant(
       usedDeterministicFallback: false,
       layoutScores,
       visualDirection,
+      visualGate,
     });
 
     const variant: VariantResult = {
@@ -260,6 +276,7 @@ export async function selectBestHybridVariant(
       logoCropCritic,
       layoutScores,
       contract,
+      visualGate,
     };
 
     variants.push(variant);

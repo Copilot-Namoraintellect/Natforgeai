@@ -366,6 +366,28 @@ function metadataOf(audit: Record<string, unknown>): Record<string, unknown> {
   return JSON.parse(JSON.stringify(audit.metadata)) as Record<string, unknown>;
 }
 
+/** The canonical WBS13.8 recovery-decision fields embedded in failure metadata. */
+function recoveryDecisionOf(audit: Record<string, unknown>): Record<string, unknown> {
+  const metadata = metadataOf(audit);
+  return {
+    recoveryClass: metadata.recoveryClass,
+    action: metadata.action,
+    retryable: metadata.retryable,
+    callProviderAgain: metadata.callProviderAgain,
+    retryCount: metadata.retryCount,
+    nextRetryCount: metadata.nextRetryCount,
+    maxRetries: metadata.maxRetries,
+    delayMs: metadata.delayMs,
+    nextRetryAt: metadata.nextRetryAt,
+    terminal: metadata.terminal,
+    terminalStatus: metadata.terminalStatus,
+    escalationRequired: metadata.escalationRequired,
+    escalationChannel: metadata.escalationChannel,
+    safeReason: metadata.safeReason,
+    providerErrorCode: metadata.providerErrorCode,
+  };
+}
+
 describe("publishSinglePost governed audit (WBS7C3)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -443,11 +465,22 @@ describe("publishSinglePost governed audit (WBS7C3)", () => {
     expect(success.campaignId).toBe(27);
     expect(success.contentId).toBe("117"); // subject ids persist as text
     expect(success.outcome).toBe("succeeded");
+    // WBS13.7: the single durable success evidence IS the canonical receipt.
     expect(metadataOf(success)).toEqual({
-      queueItemId: 1,
-      platform: "facebook",
-      attemptOrdinal: 1,
-      externalPostIdPresent: true,
+      publicationReceipt: {
+        schemaVersion: 1,
+        operationId: "publication:facebook:1",
+        queueItemId: 1,
+        platform: "facebook",
+        status: "published",
+        externalPostId: "fb_123",
+        externalUrl: null,
+        publishedAtIso: success.occurredAt,
+        classification: "legacy",
+        publishPackageId: null,
+        packageFingerprintSha256: null,
+        receivedAtIso: null,
+      },
     });
   });
 
@@ -463,8 +496,7 @@ describe("publishSinglePost governed audit (WBS7C3)", () => {
     expect(serialized).not.toContain("Caption body");
     expect(serialized).not.toContain("Shop now");
     expect(serialized).not.toContain("decrypted:");
-    expect(serialized).not.toContain("fb_123"); // raw provider id/URL not duplicated into metadata
-    expect(Object.keys(metadataOf(success)).sort()).toEqual(["attemptOrdinal", "externalPostIdPresent", "platform", "queueItemId"]);
+    expect(Object.keys(metadataOf(success)).sort()).toEqual(["publicationReceipt"]);
   });
 
   it("success transaction failure: no finalization, no ingestion, failure propagates", async () => {
@@ -497,11 +529,23 @@ describe("publishSinglePost governed audit (WBS7C3)", () => {
     const successes = auditsOfType(state, "publication_success");
     expect(successes).toHaveLength(1);
     expect(successes[0]!.occurredAt).toBe("2026-05-05T05:05:05.000Z");
+    // Reconciled through the durable row's original success evidence: an
+    // honest legacy receipt (no fabricated package correlation).
     expect(metadataOf(successes[0]!)).toEqual({
-      queueItemId: 1,
-      platform: "facebook",
-      attemptOrdinal: 1,
-      externalPostIdPresent: true,
+      publicationReceipt: {
+        schemaVersion: 1,
+        operationId: "publication:facebook:1",
+        queueItemId: 1,
+        platform: "facebook",
+        status: "published",
+        externalPostId: "fb_concurrent_winner",
+        externalUrl: null,
+        publishedAtIso: "2026-05-05T05:05:05.000Z",
+        classification: "legacy",
+        publishPackageId: null,
+        packageFingerprintSha256: null,
+        receivedAtIso: null,
+      },
     });
   });
 
@@ -519,13 +563,33 @@ describe("publishSinglePost governed audit (WBS7C3)", () => {
     expect(state.committedQueue!.lastError).toBe("provider boom");
     const failure = auditsOfType(state, "publication_failure")[0]!;
     expect(auditsOfType(state, "publication_failure")).toHaveLength(1);
-    expect(metadataOf(failure)).toEqual({
-      queueItemId: 1,
-      platform: "facebook",
-      attemptOrdinal: 1,
+    expect(metadataOf(failure)).toEqual(
+      expect.objectContaining({
+        queueItemId: 1,
+        platform: "facebook",
+        attemptOrdinal: 1,
+        terminal: false,
+        nextState: "retrying",
+        failureStage: "provider",
+      })
+    );
+    // WBS13.8: the canonical recovery decision is embedded in the failure evidence.
+    expect(recoveryDecisionOf(failure)).toEqual({
+      recoveryClass: "rate_limited",
+      action: "retry",
+      retryable: true,
+      callProviderAgain: true,
+      retryCount: 0,
+      nextRetryCount: 1,
+      maxRetries: 3,
+      delayMs: 60_000,
+      nextRetryAt: expect.any(String),
       terminal: false,
-      nextState: "retrying",
-      failureStage: "provider",
+      terminalStatus: null,
+      escalationRequired: false,
+      escalationChannel: null,
+      safeReason: "Provider rate limit reached; a bounded retry is scheduled.",
+      providerErrorCode: "provider_error",
     });
   });
 
@@ -540,13 +604,34 @@ describe("publishSinglePost governed audit (WBS7C3)", () => {
     expect(state.committedQueue!.status).toBe("failed");
     expect(state.committedQueue!.retryCount).toBe(3);
     const failure = auditsOfType(state, "publication_failure")[0]!;
-    expect(metadataOf(failure)).toEqual({
-      queueItemId: 1,
-      platform: "facebook",
-      attemptOrdinal: 3,
+    expect(metadataOf(failure)).toEqual(
+      expect.objectContaining({
+        queueItemId: 1,
+        platform: "facebook",
+        attemptOrdinal: 3,
+        terminal: true,
+        nextState: "failed",
+        failureStage: "provider",
+      })
+    );
+    // Exhaustion escalates exactly once, through the canonical policy.
+    expect(recoveryDecisionOf(failure)).toEqual({
+      recoveryClass: "rate_limited",
+      action: "escalate",
+      retryable: false,
+      callProviderAgain: false,
+      retryCount: 2,
+      nextRetryCount: 3,
+      maxRetries: 3,
+      delayMs: null,
+      nextRetryAt: null,
       terminal: true,
-      nextState: "failed",
-      failureStage: "provider",
+      terminalStatus: "failed",
+      escalationRequired: true,
+      escalationChannel: { severity: "warning", category: "publishing" },
+      safeReason:
+        "Publication failed after 3 of 3 attempts; the retry budget is exhausted and the item is escalated for operator recovery.",
+      providerErrorCode: "provider_error",
     });
     expect(createAlert).toHaveBeenCalledTimes(1);
   });
@@ -578,13 +663,32 @@ describe("publishSinglePost governed audit (WBS7C3)", () => {
     expect(state.committedQueue!.status).toBe("retrying");
     expect(state.committedQueue!.retryCount).toBe(1);
     const failure = auditsOfType(state, "publication_failure")[0]!;
-    expect(metadataOf(failure)).toEqual({
-      queueItemId: 1,
-      platform: "facebook",
-      attemptOrdinal: 1,
+    expect(metadataOf(failure)).toEqual(
+      expect.objectContaining({
+        queueItemId: 1,
+        platform: "facebook",
+        attemptOrdinal: 1,
+        terminal: false,
+        nextState: "retrying",
+        failureStage: "runtime",
+      })
+    );
+    expect(recoveryDecisionOf(failure)).toEqual({
+      recoveryClass: "rate_limited",
+      action: "retry",
+      retryable: true,
+      callProviderAgain: true,
+      retryCount: 0,
+      nextRetryCount: 1,
+      maxRetries: 3,
+      delayMs: 60_000,
+      nextRetryAt: expect.any(String),
       terminal: false,
-      nextState: "retrying",
-      failureStage: "runtime",
+      terminalStatus: null,
+      escalationRequired: false,
+      escalationChannel: null,
+      safeReason: "Provider rate limit reached; a bounded retry is scheduled.",
+      providerErrorCode: "provider_error",
     });
   });
 
@@ -594,13 +698,33 @@ describe("publishSinglePost governed audit (WBS7C3)", () => {
 
     const result = await publishSinglePost(1);
 
-    expect(result.status).toBe("failed");
+    expect(result.status).toBe("precondition_failed");
+    expect(result.unrecoverable).toBe(true);
     expect(publishToFacebook).not.toHaveBeenCalled();
     expect(state.committedQueue!.status).toBe("failed");
     expect(auditsOfType(state, "publication_attempt")).toHaveLength(0);
     const failure = auditsOfType(state, "publication_failure")[0]!;
     expect(metadataOf(failure).failureStage).toBe("integration");
     expect(metadataOf(failure).terminal).toBe(true);
+    // Auth-class failures are reconnect-terminal and never consume retry budget.
+    expect(recoveryDecisionOf(failure)).toEqual({
+      recoveryClass: "auth",
+      action: "reconnect",
+      retryable: false,
+      callProviderAgain: false,
+      retryCount: 0,
+      nextRetryCount: 0,
+      maxRetries: 3,
+      delayMs: null,
+      nextRetryAt: null,
+      terminal: true,
+      terminalStatus: "failed",
+      escalationRequired: false,
+      escalationChannel: null,
+      safeReason:
+        "Publication credential failure: the platform integration is disconnected or its token expired or was revoked. Reconnect the integration to recover.",
+      providerErrorCode: null,
+    });
   });
 
   it("invalid media: queue failure preserved, stage=media, no attempt, provider not called", async () => {
@@ -617,30 +741,74 @@ describe("publishSinglePost governed audit (WBS7C3)", () => {
 
     const result = await publishSinglePost(1);
 
-    expect(result.status).toBe("failed");
+    expect(result.status).toBe("precondition_failed");
+    expect(result.unrecoverable).toBe(true);
     expect(publishToFacebook).not.toHaveBeenCalled();
     expect(state.committedQueue!.status).toBe("failed");
     expect(auditsOfType(state, "publication_attempt")).toHaveLength(0);
-    expect(metadataOf(auditsOfType(state, "publication_failure")[0]!).failureStage).toBe("media");
+    const failure = auditsOfType(state, "publication_failure")[0]!;
+    expect(metadataOf(failure).failureStage).toBe("media");
+    // Local media checks stay silent (no operator escalation).
+    expect(recoveryDecisionOf(failure)).toEqual({
+      recoveryClass: "provider_rejection",
+      action: "fail_terminal",
+      retryable: false,
+      callProviderAgain: false,
+      retryCount: 0,
+      nextRetryCount: 0,
+      maxRetries: 3,
+      delayMs: null,
+      nextRetryAt: null,
+      terminal: true,
+      terminalStatus: "failed",
+      escalationRequired: false,
+      escalationChannel: null,
+      safeReason:
+        "Publication payload failed a local media check and was never sent to the provider. The item is terminal until the payload is fixed and it is manually requeued.",
+      providerErrorCode: null,
+    });
   });
 
-  it("readiness failure: stage=precondition, no attempt fabricated, provider not called", async () => {
+  it("readiness failure: approval-authority block routes to pending_approval, no attempt fabricated, provider not called", async () => {
     const { db, state } = createAuditFakeDb({ ...readyConfig(), approvals: [] });
     vi.mocked(getDb).mockReturnValue(db as never);
 
     const result = await publishSinglePost(1);
 
-    expect(result.status).toBe("precondition_failed");
+    expect(result.status).toBe("pending_approval");
     expect(publishToFacebook).not.toHaveBeenCalled();
-    expect(state.committedQueue!.status).toBe("failed");
+    // WBS13.8: an approval-authority precondition parks the row awaiting a
+    // human decision instead of fabricating a durable failure.
+    expect(state.committedQueue!.status).toBe("pending_approval");
     expect(auditsOfType(state, "publication_attempt")).toHaveLength(0);
-    expect(metadataOf(auditsOfType(state, "publication_failure")[0]!)).toEqual({
-      queueItemId: 1,
-      platform: "facebook",
-      attemptOrdinal: 1,
+    const failure = auditsOfType(state, "publication_failure")[0]!;
+    expect(metadataOf(failure)).toEqual(
+      expect.objectContaining({
+        queueItemId: 1,
+        platform: "facebook",
+        attemptOrdinal: 1,
+        terminal: true,
+        nextState: "pending_approval",
+        failureStage: "precondition",
+      })
+    );
+    expect(recoveryDecisionOf(failure)).toEqual({
+      recoveryClass: "precondition",
+      action: "require_approval",
+      retryable: false,
+      callProviderAgain: false,
+      retryCount: 0,
+      nextRetryCount: 0,
+      maxRetries: 3,
+      delayMs: null,
+      nextRetryAt: null,
       terminal: true,
-      nextState: "failed",
-      failureStage: "precondition",
+      terminalStatus: "pending_approval",
+      escalationRequired: false,
+      escalationChannel: null,
+      safeReason:
+        "Publication authority is incomplete: a required approval is missing. A human approval decision is required before this item can publish or be recovered.",
+      providerErrorCode: null,
     });
   });
 

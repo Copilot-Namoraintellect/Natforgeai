@@ -169,7 +169,7 @@ describe("evaluateCampaignLearning", () => {
     // Source observations persisted and grounded
     expect(record.sourceObservations).toHaveLength(6);
     expect(record.sourceObservations.map((o) => o.id)).toContain("ao:1");
-    expect(record.kpiAssessment.kpis.length).toBeGreaterThan(0);
+    expect("kpis" in record.kpiAssessment && record.kpiAssessment.kpis.length).toBeGreaterThan(0);
     expect(record.objectiveSummary).toContain("conversions");
     // Governance
     expect(record.governance.autoApply).toBe(false);

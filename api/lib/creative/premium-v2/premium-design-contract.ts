@@ -4,12 +4,21 @@
  * Central gate that decides whether a paid premium asset is good enough to be
  * marked Premium Ready, auto-published and charged for. If the contract fails
  * but objective safety passes, the asset can still be retained for human review.
+ *
+ * WBS12F integration: an optional visual-quality release-gate decision is
+ * consumed when the caller evaluated one. In "observe" mode the decision is
+ * carried through for diagnostics only. In "enforce" mode a blocked decision
+ * fails the contract (blocking auto-publish and premium charging) while
+ * remaining a non-safety quality issue, so the render routes to human review.
+ * The visual gate never reads or rewrites semantic copy — semantic fidelity is
+ * owned by the separate WBS12E stream.
  */
 
 import type { HybridPipelineMetadata, HybridRenderMetrics, PremiumCopyPack, VisualDirection } from "./pipeline-types";
 import type { CopyQualityResult } from "./copy-quality";
 import type { ContentFidelityResult } from "./content-fidelity";
 import type { LayoutScoreResult } from "./layout-scoring";
+import type { VisualQualityReleaseGateDecision } from "../quality/visual-quality-release-gate";
 
 export interface PremiumDesignContractResult {
   passed: boolean;
@@ -18,6 +27,8 @@ export interface PremiumDesignContractResult {
   safeToAutoPublish: boolean;
   safeToChargePremiumCredits: boolean;
   needsHumanReview: boolean;
+  /** WBS12F visual gate decision, when the caller evaluated one; null otherwise. */
+  visualGate: VisualQualityReleaseGateDecision | null;
 }
 
 interface ContractInputs {
@@ -31,6 +42,23 @@ interface ContractInputs {
   usedDeterministicFallback: boolean;
   layoutScores: LayoutScoreResult;
   visualDirection: VisualDirection;
+  /** Optional WBS12F visual-quality release-gate decision for this render. */
+  visualGate?: VisualQualityReleaseGateDecision | null;
+}
+
+function describeVisualGateBlock(gate: VisualQualityReleaseGateDecision): string {
+  const parts: string[] = [];
+  if (gate.failedDimensions.length > 0) {
+    parts.push(
+      `failed dimensions: ${gate.failedDimensions
+        .map((d) => `${d.dimensionId} (score ${d.score}, threshold ${d.threshold})`)
+        .join("; ")}`
+    );
+  }
+  if (gate.insufficientDimensions.length > 0) {
+    parts.push(`insufficient evidence: ${gate.insufficientDimensions.join(", ")}`);
+  }
+  return `Visual quality release gate blocked (${parts.join("; ")})`;
 }
 
 export function evaluatePremiumDesignContract(inputs: ContractInputs): PremiumDesignContractResult {
@@ -47,6 +75,7 @@ export function evaluatePremiumDesignContract(inputs: ContractInputs): PremiumDe
   } = inputs;
 
   const issues: string[] = [];
+  const visualGate = inputs.visualGate ?? null;
 
   const realLogoExpected = metrics?.realLogoExpected ?? false;
   const realLogoRendered = metrics?.realLogoRendered ?? false;
@@ -88,6 +117,13 @@ export function evaluatePremiumDesignContract(inputs: ContractInputs): PremiumDe
   const unique = new Set(bodies);
   if (unique.size !== bodies.length) issues.push("Repeated identical service descriptions");
 
+  // 9. WBS12F visual-quality release gate (enforce mode only). A blocked gate
+  // fails the contract; it is a quality (non-safety) issue, so the render is
+  // retained for human review rather than auto-published or charged.
+  if (visualGate && visualGate.mode === "enforce" && visualGate.blocked) {
+    issues.push(describeVisualGateBlock(visualGate));
+  }
+
   // Safety gate: can we keep the hybrid output for review without it being harmful?
   const safetyIssues = issues.filter((i) =>
     /invented offer|fallback badge rendered while real logo exists|real logo not rendered|content fidelity failed|brand fidelity failed/i.test(i)
@@ -102,5 +138,6 @@ export function evaluatePremiumDesignContract(inputs: ContractInputs): PremiumDe
     safeToAutoPublish: passed,
     safeToChargePremiumCredits: passed,
     needsHumanReview: !passed && safeToRetainHybrid,
+    visualGate,
   };
 }
