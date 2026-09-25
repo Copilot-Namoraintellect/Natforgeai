@@ -9,6 +9,11 @@ import { createApprovalRequest } from "./lib/workflow/engine";
 import { createAuditEvent } from "./lib/audit/audit-event";
 import { persistAuditEvent } from "./lib/audit/audit-store";
 import {
+  isLearningPromotionApproval,
+  sealApprovedLearningPromotionEnvelope,
+  validateLearningPromotionApprovalBinding,
+} from "./lib/learning/promotion/promotion-decision";
+import {
   getStrategyApprovalStatus,
   isLineageAuthoritative,
   validateStrategyRunForCampaign,
@@ -624,6 +629,17 @@ async function executeApprovalDecision(
       );
     }
 
+    // WBS15.6: a learning promotion approval binds one exact immutable
+    // proposal. Fail closed before any terminal mutation when the source
+    // learning record or recommendation no longer matches the bound
+    // coordinates, and never allow edited approvals (they would break the
+    // proposal fingerprint binding).
+    if (kind !== "reject" && isLearningPromotionApproval(request)) {
+      await validateLearningPromotionApprovalBinding(
+        { request, decisionKind: kind, executor: tx }
+      );
+    }
+
     // ONE decision timestamp, shared by the approval row and the audit event.
     const decidedAt = new Date();
 
@@ -724,6 +740,18 @@ async function executeApprovalDecision(
     });
 
     await persistAuditEvent(auditEvent, tx);
+
+    // WBS15.6: approval seals the durable approved promotion envelope in the
+    // same transaction as the decision. Rejections seal nothing: a rejected
+    // proposal remains auditable evidence and is never consumable.
+    if (kind === "approve" && isLearningPromotionApproval(request)) {
+      await sealApprovedLearningPromotionEnvelope({
+        request,
+        decidedAt,
+        decidedByUserId: ctx.user.id,
+        executor: tx,
+      });
+    }
 
     return {
       success: true as const,

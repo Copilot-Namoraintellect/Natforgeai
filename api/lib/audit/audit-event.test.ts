@@ -52,6 +52,7 @@ describe("audit-event taxonomy", () => {
       "engagement_escalation",
       "learning_record_creation",
       "strategy_snapshot_materialized",
+      "learning_promotion_resolved",
     ]);
   });
 

@@ -43,6 +43,7 @@ export const AUDIT_EVENT_TYPES = [
   "engagement_escalation",
   "learning_record_creation",
   "strategy_snapshot_materialized",
+  "learning_promotion_resolved",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
