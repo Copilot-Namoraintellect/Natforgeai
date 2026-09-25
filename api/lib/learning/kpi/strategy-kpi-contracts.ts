@@ -203,3 +203,57 @@ export function extractStrategySuccessMetrics(
     sourcePath: entry.sourcePath,
   }));
 }
+
+/**
+ * WBS15.7 input adapter: builds Strategy success-metric refs directly from
+ * the canonical CampaignPerformanceDataset's success-metric labels
+ * (`dataset.strategyAuthority.successMetrics.metrics`, already extracted from
+ * the approved snapshot's funnel stages by Stream 1). Semantics mirror
+ * extractStrategySuccessMetrics — same alias table, same stable dedupe, same
+ * deterministic ordering and `sm:N` ids — but the dataset carries no per-stage
+ * coordinates, so `stages` is empty and `sourcePath` cites the dataset
+ * section. Labels that do not map to a known metric are preserved with
+ * `metric: null` (fail-closed: never a guessed proxy). No numeric target is
+ * invented: `target`/`unit` stay null so the evaluation precedence rules
+ * (engine band / budget assumption / not_measurable) engage unchanged.
+ */
+export function buildStrategySuccessMetricRefsFromLabels(
+  labels: readonly string[]
+): StrategySuccessMetricRef[] {
+  interface Accumulator {
+    metric: MetricType | null;
+    rawLabel: string;
+    normalizedLabel: string;
+  }
+
+  const byKey = new Map<string, Accumulator>();
+  for (const labelValue of labels) {
+    if (typeof labelValue !== "string") continue;
+    const rawLabel = labelValue;
+    const normalizedLabel = normalizeLabel(rawLabel);
+    if (!normalizedLabel) continue;
+
+    const metric = mapStrategyMetric(rawLabel);
+    const key = metric ?? `raw:${normalizedLabel}`;
+    if (!byKey.has(key)) {
+      byKey.set(key, { metric, rawLabel, normalizedLabel });
+    }
+  }
+
+  const sorted = Array.from(byKey.values()).sort((a, b) => {
+    const aKey = a.metric ?? a.normalizedLabel;
+    const bKey = b.metric ?? b.normalizedLabel;
+    return aKey === bKey ? 0 : aKey < bKey ? -1 : 1;
+  });
+
+  return sorted.map((entry, index) => ({
+    id: `sm:${index}`,
+    metric: entry.metric,
+    rawLabel: entry.rawLabel,
+    normalizedLabel: entry.normalizedLabel,
+    stages: [],
+    target: null,
+    unit: null,
+    sourcePath: "dataset.strategyAuthority.successMetrics",
+  }));
+}

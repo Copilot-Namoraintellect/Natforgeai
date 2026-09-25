@@ -22,6 +22,10 @@ import {
   reconcilePostLiveCampaignFromDb,
 } from "./post-live-lifecycle-db";
 
+import {
+  runGovernedPostLiveLearningTrigger,
+} from "../learning/post-live-learning-trigger";
+
 export interface PostLiveLifecycleCandidateStore {
   listCandidateCampaignIds(): Promise<number[]>;
 }
@@ -79,14 +83,26 @@ PostLiveLifecycleBatchDeps {
     listCandidateCampaignIds: () =>
       candidateStore.listCandidateCampaignIds(),
 
-    reconcileCampaign: ({
+    reconcileCampaign: async ({
       campaignId,
       asOfDate,
-    }) =>
-      reconcilePostLiveCampaignFromDb({
+    }) => {
+      // WBS15.7: before reconciling one campaign, give eligible post-live
+      // campaigns the chance to RUN the governed Learning cycle when factual
+      // performance evidence exists. The trigger is idempotent and
+      // fail-closed (no fabricated Learning, no Strategy mutation), so a
+      // replayed or failed trigger never changes reconciliation semantics.
+      // The outcome is intentionally not part of the batch report; the
+      // durable learning_records row itself remains the lifecycle evidence.
+      await runGovernedPostLiveLearningTrigger({
+        campaignId,
+      });
+
+      return reconcilePostLiveCampaignFromDb({
         campaignId,
         asOfDate,
-      }),
+      });
+    },
   };
 }
 

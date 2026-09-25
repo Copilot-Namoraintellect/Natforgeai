@@ -1726,3 +1726,183 @@ describe("onApprovalResolved publishing reconciliation edge cases", () => {
     );
   });
 });
+
+
+describe("onAgentRunComplete strategy auto-advance lineage authority (WBS15.7 closure blocker)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    snapshotOwnership = { userId: 42, campaignId: 29, businessId: 7 };
+    // Earlier describes leave canRunAutonomousWorkflow mocked to block;
+    // clearAllMocks does not reset implementations, so pin it back here.
+    const { canRunAutonomousWorkflow } = await import("../billing/cost-control");
+    vi.mocked(canRunAutonomousWorkflow).mockResolvedValue({ allowed: true } as any);
+  });
+
+  function strategyCompletedRun() {
+    return {
+      id: 650,
+      userId: 42,
+      campaignId: 29,
+      agentType: "strategy",
+      status: "completed",
+      error: null,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  function strategyPendingCampaign() {
+    return {
+      id: 29,
+      userId: 42,
+      name: "Campaign #29",
+      workflowState: "strategy_pending",
+      workflowContext: {},
+      approvalMode: "assisted",
+    };
+  }
+
+  it("completed Strategy run with valid immutable snapshot authority creates valid approval lineage (no throw)", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { transitionCampaignState } = await import("./engine");
+    const { getStrategySnapshotByStrategyRunId } = await import(
+      "../strategy/strategy-snapshot-db-store"
+    );
+    const { onAgentRunComplete } = await import("./triggers");
+
+    const snapshot = buildPersistedStrategySnapshot(650);
+    vi.mocked(getStrategySnapshotByStrategyRunId).mockResolvedValue(snapshot as any);
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [strategyCompletedRun()],
+      campaign: strategyPendingCampaign(),
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    // Must not throw: buildStrategyApprovalLineage receives full authority.
+    await onAgentRunComplete(650);
+
+    expect(transitionCampaignState).toHaveBeenCalledWith(29, 42, "generate_strategy");
+
+    const lineage = (state.campaign.workflowContext as any)?.strategyApprovalLineage;
+    expect(lineage).toEqual({
+      creativeBriefFingerprint: "test-fingerprint",
+      strategyRunId: 650,
+      strategySnapshotId: "strategy-snapshot-10",
+      strategyVersion: 1,
+      businessDnaSnapshotId: "bdna-snapshot-7",
+      strategyHashSha256: approvedStrategyHash,
+      approvalRequestId: 1,
+      status: "pending",
+    });
+  });
+
+  it("the written lineage binds exactly to the persisted snapshot authority", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { getStrategySnapshotByStrategyRunId } = await import(
+      "../strategy/strategy-snapshot-db-store"
+    );
+    const { isStrategySnapshotAuthorityMatch } = await import("./strategy-approval");
+    const { onAgentRunComplete } = await import("./triggers");
+
+    const snapshot = buildPersistedStrategySnapshot(650);
+    vi.mocked(getStrategySnapshotByStrategyRunId).mockResolvedValue(snapshot as any);
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [strategyCompletedRun()],
+      campaign: strategyPendingCampaign(),
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onAgentRunComplete(650);
+
+    const lineage = (state.campaign.workflowContext as any)?.strategyApprovalLineage;
+    expect(
+      isStrategySnapshotAuthorityMatch(lineage, snapshot as any, 42, 29, 7)
+    ).toBe(true);
+
+    // A different snapshot version (the future-cycle case) must NOT match:
+    // the old approval can never be reused for new Strategy authority.
+    expect(
+      isStrategySnapshotAuthorityMatch(
+        lineage,
+        {
+          ...snapshot,
+          snapshotId: "strategy-snapshot-11",
+          strategyRunId: 651,
+          version: 2,
+          strategyHashSha256: "f".repeat(64),
+        } as any,
+        42,
+        29,
+        7
+      )
+    ).toBe(false);
+  });
+
+  it("fails closed when the immutable snapshot authority is missing", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { getStrategySnapshotByStrategyRunId } = await import(
+      "../strategy/strategy-snapshot-db-store"
+    );
+    const { onAgentRunComplete } = await import("./triggers");
+
+    vi.mocked(getStrategySnapshotByStrategyRunId).mockResolvedValue(null);
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [strategyCompletedRun()],
+      campaign: strategyPendingCampaign(),
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onAgentRunComplete(650);
+
+    // No lineage may be fabricated from mutable campaign state.
+    expect((state.campaign.workflowContext as any)?.strategyApprovalLineage).toBeUndefined();
+  });
+
+  it("fails closed when the snapshot authority belongs to a different campaign", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { getStrategySnapshotByStrategyRunId } = await import(
+      "../strategy/strategy-snapshot-db-store"
+    );
+    const { onAgentRunComplete } = await import("./triggers");
+
+    snapshotOwnership = { userId: 42, campaignId: 99, businessId: 7 };
+    vi.mocked(getStrategySnapshotByStrategyRunId).mockResolvedValue(
+      buildPersistedStrategySnapshot(650) as any
+    );
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [strategyCompletedRun()],
+      campaign: strategyPendingCampaign(),
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onAgentRunComplete(650);
+
+    expect((state.campaign.workflowContext as any)?.strategyApprovalLineage).toBeUndefined();
+  });
+
+  it("fails closed when the snapshot brief fingerprint no longer matches the current brief", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { getStrategySnapshotByStrategyRunId } = await import(
+      "../strategy/strategy-snapshot-db-store"
+    );
+    const { onAgentRunComplete } = await import("./triggers");
+
+    vi.mocked(getStrategySnapshotByStrategyRunId).mockResolvedValue({
+      ...buildPersistedStrategySnapshot(650),
+      creativeBriefFingerprint: "fp-STALE",
+    } as any);
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [strategyCompletedRun()],
+      campaign: strategyPendingCampaign(),
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onAgentRunComplete(650);
+
+    expect((state.campaign.workflowContext as any)?.strategyApprovalLineage).toBeUndefined();
+  });
+});

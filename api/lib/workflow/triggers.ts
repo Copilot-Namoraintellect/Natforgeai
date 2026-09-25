@@ -40,6 +40,7 @@ import { getLaunchApprovalStatus, buildLaunchApprovalLineage } from "./launch-ap
 import { InMemoryWorkflowOperationRegistry } from "./workflow-operation";
 import { resolveCreativeEntryStrategyAuthority } from "../creative/creative-entry-authority";
 import type { CreativeStrategySnapshotInput } from "../creative/strategy-snapshot-input";
+import { getStrategySnapshotByStrategyRunId } from "../strategy/strategy-snapshot-db-store";
 
 export async function onAgentRunComplete(runId: number) {
   const db = getDb();
@@ -94,7 +95,24 @@ export async function onAgentRunComplete(runId: number) {
         riskLevel: "low",
       });
 
+      // Bind the approval lineage to the EXACT immutable Strategy snapshot
+      // authority persisted for this completed Strategy run. Fail closed
+      // when that authority is missing or does not match the run/campaign/
+      // current brief — mutable campaign fields are never used as authority.
+      const snapshotAuthority = await getStrategySnapshotByStrategyRunId(run.id);
       const status = getStrategyApprovalStatus(updatedCampaign, business);
+      if (
+        !snapshotAuthority ||
+        snapshotAuthority.userId !== run.userId ||
+        snapshotAuthority.campaignId !== run.campaignId ||
+        snapshotAuthority.creativeBriefFingerprint !== status.currentFingerprint
+      ) {
+        console.error(
+          `[Workflow] Strategy run ${run.id} for campaign ${run.campaignId} completed without matching immutable Strategy snapshot authority; strategy approval lineage was not recorded.`
+        );
+        return;
+      }
+
       await db
         .update(campaigns)
         .set({
@@ -103,7 +121,14 @@ export async function onAgentRunComplete(runId: number) {
             strategyApprovalLineage: buildStrategyApprovalLineage(
               status.currentFingerprint,
               run.id,
-              approvalRequestId
+              approvalRequestId,
+              "pending",
+              {
+                strategySnapshotId: snapshotAuthority.snapshotId,
+                strategyVersion: snapshotAuthority.version,
+                businessDnaSnapshotId: snapshotAuthority.businessDnaSnapshotId,
+                strategyHashSha256: snapshotAuthority.strategyHashSha256,
+              }
             ),
           } as any,
         })

@@ -12,6 +12,12 @@ export function strategyAgentPrompt(input: {
   website?: string;
   websiteEvidence?: unknown;
   audienceIntelligenceSummaries?: string[];
+  /**
+   * WBS15.7: prebuilt, explicitly labelled section of approved Learning
+   * promotions (provenanceClass: approved_recommendation). Absent when no
+   * approved promotion exists — Learning context is never fabricated.
+   */
+  approvedLearningPromotionSection?: string | null;
   campaignBrief?: {
     name?: string;
     goal?: string;
@@ -100,6 +106,12 @@ ${aiSummaries.map((summary, idx) => `--- Insight ${idx + 1} ---\n${summary}`).jo
 `
       : "";
 
+  const approvedLearningSection =
+    typeof input.approvedLearningPromotionSection === "string" &&
+    input.approvedLearningPromotionSection.trim().length > 0
+      ? input.approvedLearningPromotionSection
+      : "";
+
   return `You are a senior marketing strategist. ${hasStrategy ? "Review and enhance the provided marketing strategy" : "Create a comprehensive marketing strategy"} for the following business.
 
 BUSINESS PROFILE (used only when the campaign brief does not specify a value):
@@ -116,6 +128,7 @@ BUSINESS PROFILE (used only when the campaign brief does not specify a value):
 ${evidenceSection}
 ${briefSection}
 ${audienceIntelligenceSection}
+${approvedLearningSection}
 
 GROUNDING REQUIREMENTS — THE GENERATED STRATEGY MUST:
 - Faithfully preserve every service-capability clause listed in the campaign brief's Product/Service Being Promoted. Do not collapse, paraphrase away, or omit any required capability.

@@ -43,8 +43,8 @@ import {
 } from "./lib/creative/creative-generation-claim";
 import { env } from "./lib/env";
 import { InMemoryWorkflowOperationRegistry } from "./lib/workflow/workflow-operation";
-import { evaluateCampaignLearning } from "./lib/learning/learning-service";
-import { LEARNING_EVALUATION_VERSION } from "./lib/learning/contracts/learning-config";
+import { runGovernedLearningCycle } from "./lib/learning/learning-cycle-service";
+import { LEARNING_CYCLE_EVALUATION_VERSION } from "./lib/learning/contracts/learning-config";
 
 export const agentRouter = createRouter({
   runStrategyAgent: aiActionQuery
@@ -772,11 +772,13 @@ export const agentRouter = createRouter({
   runOptimisationAgent: aiActionQuery
     .input(z.object({ campaignId: z.number() }))
     .mutation(async ({ ctx, input }) => {
-      // Phase 1 Learning engine: deterministic, grounded evaluation that
-      // persists a governed learning record. It never auto-applies changes to
-      // Strategy, Creative or Distribution; autonomous triggering remains a
-      // later-phase integration concern.
-      const result = await evaluateCampaignLearning({
+      // WBS15.7: the optimisation agent runs the governed Learning cycle
+      // (learning-v2) — canonical dataset → Strategy-bound KPI evaluation →
+      // governed variant analysis → versioned learning record with bound
+      // authority lineage. It never auto-applies changes to Strategy,
+      // Creative or Distribution; autonomous triggering is owned by the
+      // post-live reconciliation pass.
+      const result = await runGovernedLearningCycle({
         userId: ctx.user.id,
         campaignId: input.campaignId,
         trigger: "manual",
@@ -785,7 +787,7 @@ export const agentRouter = createRouter({
         success: true,
         automaticChanges: false,
         engine: "learning-engine",
-        evaluationVersion: LEARNING_EVALUATION_VERSION,
+        evaluationVersion: LEARNING_CYCLE_EVALUATION_VERSION,
         ...result,
       };
     }),

@@ -27,6 +27,12 @@ import { defaultModel } from "./openai";
 import { calculateTokenCost } from "../billing/cost-tracker";
 import { emitAgentProviderAlert } from "./provider-error";
 import { materializeGovernedStrategySnapshot } from "../strategy/strategy-snapshot-materialization";
+import {
+  buildApprovedLearningPromotionPromptSection,
+  buildStrategyLearningPromotionLineage,
+  resolveApprovedLearningPromotionsForStrategy,
+  strategyLearningPromotionLineageToJson,
+} from "../learning/learning-strategy-consumption";
 
 function parseBudgetNumber(value: unknown): number {
   if (typeof value === "number") return value;
@@ -1337,6 +1343,18 @@ export async function runStrategyAgent({
     .filter((s): s is string => !!s)
     .slice(0, 3);
 
+  // WBS15.7: resolve approved Learning promotion envelopes as labelled input
+  // evidence for this FUTURE governed cycle. Fail-closed and scope-safe
+  // (same durable business scope only); nothing here mutates Learning,
+  // Strategy or Business DNA state — consumption means including labelled
+  // evidence in THIS run's new governed snapshot/version.
+  const approvedLearningInput = await resolveApprovedLearningPromotionsForStrategy({
+    userId,
+    campaignId,
+  });
+  const approvedLearningSection = buildApprovedLearningPromotionPromptSection(approvedLearningInput);
+  const learningPromotionLineage = buildStrategyLearningPromotionLineage(approvedLearningInput);
+
   const prompt = strategyAgentPrompt({
     businessName: business.name,
     industry: business.industry ?? undefined,
@@ -1352,6 +1370,7 @@ export async function runStrategyAgent({
     strategyText,
     campaignBrief,
     audienceIntelligenceSummaries,
+    approvedLearningPromotionSection: approvedLearningSection,
   });
 
   const estimatedCost = getEstimatedAgentCost("strategy");
@@ -1520,6 +1539,12 @@ export async function runStrategyAgent({
   }
 
   // 6. Establish immutable Strategy authority before mutable success projections.
+  //
+  // WBS15.7: when this cycle consumed approved Learning promotions, their
+  // lineage becomes part of the immutable snapshot payload, so the new
+  // Strategy version is reconstructable as Business DNA + campaign objective +
+  // approved Learning promotions. The promoted items remain labelled
+  // approved_recommendation input evidence — never observed facts.
   const strategySnapshotAuthority =
     await materializeGovernedStrategySnapshot({
       userId,
@@ -1527,7 +1552,14 @@ export async function runStrategyAgent({
       businessId: Number(currentCampaign?.businessId),
       strategyRunId: runId,
       creativeBriefFingerprint: briefFingerprint,
-      snapshot: groundedOutput,
+      snapshot:
+        learningPromotionLineage.length > 0
+          ? {
+              ...groundedOutput,
+              learningPromotionInputs:
+                strategyLearningPromotionLineageToJson(learningPromotionLineage),
+            }
+          : groundedOutput,
     });
 
   // 7. Success: flat, backward-compatible output.
@@ -1557,6 +1589,13 @@ export async function runStrategyAgent({
         strategyVersion: strategySnapshotAuthority.snapshot.version,
         businessDnaSnapshotId: strategySnapshotAuthority.snapshot.businessDnaSnapshotId,
         strategyHashSha256: strategySnapshotAuthority.snapshot.strategyHashSha256,
+        // WBS15.7: explicit lineage of the approved Learning promotions this
+        // cycle consumed (empty when none). The same lineage is embedded in
+        // the immutable snapshot payload above.
+        learningPromotionInputs:
+          learningPromotionLineage.length > 0
+            ? strategyLearningPromotionLineageToJson(learningPromotionLineage)
+            : undefined,
         positioning: groundedOutput.positioning,
         valueProposition: groundedOutput.valueProposition,
         coreMessage: groundedOutput.coreMessage,

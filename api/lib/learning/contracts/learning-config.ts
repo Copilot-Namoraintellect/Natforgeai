@@ -14,6 +14,16 @@ export const LEARNING_ENGINE_NAME = "learning-engine";
 
 export const LEARNING_EVALUATION_VERSION = "learning-v1";
 
+/**
+ * Evaluation version of the WBS15 governed Learning cycle (WBS15.7). It runs
+ * the closed six-engine pipeline (canonical performance dataset → Strategy
+ * KPI evaluation → governed variant analysis → governed derivation) instead
+ * of the Phase 1 fixed-KPI pipeline, and binds the WBS15 authority lineage
+ * into the persisted record. Historical learning-v1 records are immutable
+ * authority and are never rewritten; both versions may coexist per campaign.
+ */
+export const LEARNING_CYCLE_EVALUATION_VERSION = "learning-v2";
+
 export const LEARNING_RECORD_STATUSES = ["recorded"] as const;
 
 /** Minimum impressions before a click-through rate is treated as evidence. */
