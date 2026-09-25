@@ -131,7 +131,7 @@ function buildIdempotencyKey(
   return `lr:${campaignId}:${evaluationVersion}:${windowStart}:${windowEnd}`;
 }
 
-function buildInputDigest(input: {
+export function buildInputDigest(input: {
   evaluationVersion: string;
   windowStart: string;
   windowEnd: string;
