@@ -67,8 +67,9 @@ export function createInstagramAdapter(
 
     buildProviderRequest(
       input: AuthoritativePublicationInput,
-      _destination: InstagramAdapterDestination
+      destination: InstagramAdapterDestination
     ): InstagramProviderRequest {
+        void destination;
       // Transport fidelity: the caption transported to the media container is
       // the authoritative text, byte for byte.
       assertTransportFidelity(input, input.content.text);

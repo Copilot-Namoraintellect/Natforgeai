@@ -255,6 +255,14 @@ function publicationRecoveryMetadata(
     failureStage: _failureStage,
     ...metadata
   } = recoveryEvent;
+
+  void _mutationAuthorized;
+  void _eventType;
+  void _occurredAt;
+  void _queueItemId;
+  void _platform;
+  void _failureStage;
+
   return metadata;
 }
 
