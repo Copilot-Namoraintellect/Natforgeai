@@ -106,10 +106,10 @@ function isApprovedImageReadySocialPost(post: any): boolean {
  * Artifacts without governed lineage stay explicitly legacy-shaped.
  */
 async function resolveVisualArtifactIdentity(
-  db: any,
+  db: Awaited<ReturnType<typeof getDb>>,
   userId: number,
-  post: any,
-  postMeta: Record<string, any>
+  post: typeof contentPosts.$inferSelect & { imageUrl?: unknown },
+  postMeta: Record<string, unknown>
 ): Promise<Record<string, unknown> | null> {
   const imageUrl =
     typeof postMeta?.imageUrl === "string" && postMeta.imageUrl
