@@ -139,10 +139,10 @@ async function resolveVisualArtifactIdentity(
       renderLineage = lineage;
       generatedAssetId = typeof imageRow.id === "number" ? imageRow.id : null;
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     logError("[PublishCampaignPack] visual render lineage lookup failed; treating visual as legacy", {
       contentPostId: post.id,
-      error: err?.message,
+      error: err instanceof Error ? err.message : String(err),
     });
   }
 
@@ -1272,13 +1272,13 @@ export const contentRouter = createRouter({
       let governingMessagePack: Awaited<ReturnType<typeof loadApprovedMessagePack>> = null;
       try {
         governingMessagePack = await loadApprovedMessagePack(input.campaignId);
-      } catch (err: any) {
+      } catch (err: unknown) {
         // Tampered/unverifiable message-pack lineage fails closed for copy
         // coordinates; the caption artifact's own lineage remains the
         // authority for the caption binding.
         logError("[PublishCampaignPack] Governing message pack re-verification failed", {
           campaignId: input.campaignId,
-          error: err?.message,
+          error: err instanceof Error ? err.message : String(err),
         });
         governingMessagePack = null;
       }

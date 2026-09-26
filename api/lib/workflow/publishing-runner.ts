@@ -781,7 +781,7 @@ export async function publishSinglePost(
   let disposition: import("../publish/publication-idempotency").PublicationExecutionDisposition;
   try {
     disposition = await resolveExecutionDisposition(post, frozenPackage);
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Durable operation state is contradictory or malformed: fail closed.
     const message =
       err instanceof Error ? err.message : "Publication operation state failed closed";
