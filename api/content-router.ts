@@ -129,12 +129,24 @@ async function resolveVisualArtifactIdentity(
         and(
           eq(generatedImages.userId, userId),
           eq(generatedImages.contentPostId, post.id),
-          eq(generatedImages.status, "completed" as any)
+          eq(generatedImages.status, "completed")
         )
       )
       .orderBy(desc(generatedImages.createdAt))
       .limit(1);
-    const lineage = (imageRow?.metadata as any)?.renderLineage ?? null;
+    const imageMetadata =
+      imageRow?.metadata &&
+      typeof imageRow.metadata === "object" &&
+      !Array.isArray(imageRow.metadata)
+        ? (imageRow.metadata as Record<string, unknown>)
+        : null;
+    const lineageCandidate = imageMetadata?.renderLineage;
+    const lineage =
+      lineageCandidate &&
+      typeof lineageCandidate === "object" &&
+      !Array.isArray(lineageCandidate)
+        ? (lineageCandidate as Record<string, unknown>)
+        : null;
     if (lineage && typeof lineage.lineageFingerprintSha256 === "string") {
       renderLineage = lineage;
       generatedAssetId = typeof imageRow.id === "number" ? imageRow.id : null;
@@ -744,7 +756,7 @@ export const contentRouter = createRouter({
         for (const field of SEMANTIC_COPY_FIELDS) {
           const nextValue = (data as Record<string, unknown>)[field];
           if (nextValue === undefined) continue;
-          if (String(nextValue ?? "") !== String((post as any)[field] ?? "")) {
+          if (String(nextValue ?? "") !== String(post[field] ?? "")) {
             semanticCopyEdited = true;
             break;
           }
