@@ -170,7 +170,7 @@ export async function transitionCampaignState(
       .set({
         workflowState: nextState,
         workflowContext:
-          workflowContext as any,
+          workflowContext as unknown,
       })
       .where(
         eq(

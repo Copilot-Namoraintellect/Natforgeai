@@ -1226,7 +1226,7 @@ export async function publishSinglePost(
           );
 
         // MySQL2 returns [ResultSetHeader, ...] where affectedRows is on the first element.
-        const affectedRows = (updateResult as any)?.[0]?.affectedRows ?? 0;
+        const affectedRows = (updateResult as unknown as [{ affectedRows?: number }?])?.[0]?.affectedRows ?? 0;
         if (affectedRows === 0) {
           // A concurrent worker may already have terminalised this row.
           // Reread through the SAME tx and fail closed unless the durable

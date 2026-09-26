@@ -340,12 +340,12 @@ export async function assertApprovedStrategySemanticallyValid(
 
   const campaignId =
     Number(
-      (campaign as any)?.id
+      (campaign as { id?: unknown } | null | undefined)?.id
     );
 
   const businessId =
     Number(
-      (campaign as any)?.businessId
+      (campaign as { businessId?: unknown } | null | undefined)?.businessId
     );
 
   if (

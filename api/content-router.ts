@@ -1787,7 +1787,7 @@ export const contentRouter = createRouter({
           // WBS13.4: the exact immutable package, integrity-verified, in its
           // canonical durable envelope — ready to persist with the row.
           serializedQueuePackage = serializePublishPackageForQueue(publishPackage);
-        } catch (err: any) {
+        } catch (err: unknown) {
           const message = err instanceof TRPCError ? err.message : "Publish package construction failed";
           let failedQueueItemId: number;
           if (existingQueue) {

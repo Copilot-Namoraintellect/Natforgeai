@@ -680,7 +680,7 @@ async function executeApprovalDecision(
       );
 
     // MySQL2 returns [ResultSetHeader, ...] where affectedRows is on the first element.
-    const affectedRows = (updateResult as any)?.[0]?.affectedRows ?? 0;
+    const affectedRows = (updateResult as unknown as [{ affectedRows?: number }?])?.[0]?.affectedRows ?? 0;
     if (affectedRows === 0) {
       // A competing decision won the terminal mutation between the pre-check
       // read and this write. Reread through the SAME tx, fail closed with the

@@ -178,11 +178,11 @@ const drizzleExecutor: SensitiveReplyApprovalExecutor = {
     const [result] = await db.insert(approvalRequests).values({
       userId: row.userId,
       campaignId: row.campaignId,
-      approvalType: row.approvalType as any,
+      approvalType: row.approvalType as typeof approvalRequests.$inferInsert["approvalType"],
       title: row.title,
       description: row.description,
       aiRecommendation: row.aiRecommendation,
-      riskLevel: row.riskLevel as any,
+      riskLevel: row.riskLevel as typeof approvalRequests.$inferInsert["riskLevel"],
       status: "pending",
       idempotencyKey: row.idempotencyKey,
       context: row.context,

@@ -17,6 +17,11 @@ export const CREATIVE_GENERATION_OPERATION_SOURCES = [
 export type CreativeGenerationOperationSource =
   (typeof CREATIVE_GENERATION_OPERATION_SOURCES)[number];
 
+type CreativeClaimDbExecutor = {
+  select: ReturnType<typeof getDb>["select"];
+  update: ReturnType<typeof getDb>["update"];
+};
+
 export type CreativeGenerationClaim =
   typeof creativeGenerationClaims.$inferSelect;
 
@@ -252,7 +257,7 @@ export async function rearmCreativeGenerationClaim({
   ownerToken: string;
   leaseExpiresAt: Date | SQL;
   /** Optional transaction/DB seam (WBS9D2B): couples re-arm with replay binding. */
-  db?: any;
+  db?: CreativeClaimDbExecutor;
 }): Promise<RearmCreativeGenerationClaimSuccess | null> {
   assertValidId(userId, "userId");
   assertValidId(campaignId, "campaignId");
@@ -341,7 +346,7 @@ export async function attachCreativeGenerationOperationReference({
   ownerToken: string;
   operationReferenceId: number;
   /** Optional transaction or DB instance to use for the update. */
-  db?: any;
+  db?: CreativeClaimDbExecutor;
 }): Promise<AttachCreativeGenerationOperationReferenceResult> {
   assertValidId(claimId, "claimId");
   assertValidOwnerToken(ownerToken);
@@ -409,7 +414,7 @@ export async function releaseCreativeGenerationClaim({
   ownerToken: string;
   status: "completed" | "failed";
   /** Optional transaction/DB seam (WBS9D2B): couples compensation atomically. */
-  db?: any;
+  db?: CreativeClaimDbExecutor;
 }): Promise<void> {
   assertValidId(claimId, "claimId");
   assertValidOwnerToken(ownerToken);
@@ -895,7 +900,7 @@ export async function terminalizeStaleCreativeGenerationClaim({
   campaignId: number;
   staleBefore: Date;
   /** Optional transaction/DB seam (WBS9D2B): couples stale terminalization. */
-  db?: any;
+  db?: CreativeClaimDbExecutor;
 }): Promise<TerminalizeStaleCreativeGenerationClaimResult> {
   assertValidId(claimId, "claimId");
   assertValidId(userId, "userId");

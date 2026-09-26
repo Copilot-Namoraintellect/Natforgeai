@@ -110,7 +110,7 @@ export async function markQueueItemFailedForInvalidPackage(
         )
       );
 
-    const affectedRows = (updateResult as any)?.[0]?.affectedRows ?? 0;
+    const affectedRows = (updateResult as unknown as [{ affectedRows?: number }?])?.[0]?.affectedRows ?? 0;
     if (affectedRows === 0) {
       // Already terminalised by another execution path; the durable state
       // (and its single failure event) stands.
