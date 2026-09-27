@@ -55,8 +55,9 @@ export function createTwitterAdapter(
 
     buildProviderRequest(
       input: AuthoritativePublicationInput,
-      _destination: TwitterAdapterDestination
+      destination: TwitterAdapterDestination
     ): TwitterProviderRequest {
+        void destination;
       // Transport fidelity: the tweet text transported in the POST body is
       // the authoritative text, byte for byte.
       assertTransportFidelity(input, input.content.text);

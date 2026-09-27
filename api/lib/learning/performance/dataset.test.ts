@@ -7,11 +7,7 @@ import {
   type CampaignPerformanceDataset,
 } from "./dataset";
 import type {
-  AiUsageSource,
   ContentPostSource,
-  EngagementEventSource,
-  LeadSource,
-  ManualPublicationSource,
   PerformanceDatasetInput,
   QueuePublicationSource,
 } from "./sources";

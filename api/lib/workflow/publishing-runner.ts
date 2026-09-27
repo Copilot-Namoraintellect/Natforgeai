@@ -255,6 +255,14 @@ function publicationRecoveryMetadata(
     failureStage: _failureStage,
     ...metadata
   } = recoveryEvent;
+
+  void _mutationAuthorized;
+  void _eventType;
+  void _occurredAt;
+  void _queueItemId;
+  void _platform;
+  void _failureStage;
+
   return metadata;
 }
 
@@ -773,7 +781,7 @@ export async function publishSinglePost(
   let disposition: import("../publish/publication-idempotency").PublicationExecutionDisposition;
   try {
     disposition = await resolveExecutionDisposition(post, frozenPackage);
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Durable operation state is contradictory or malformed: fail closed.
     const message =
       err instanceof Error ? err.message : "Publication operation state failed closed";
@@ -1218,7 +1226,7 @@ export async function publishSinglePost(
           );
 
         // MySQL2 returns [ResultSetHeader, ...] where affectedRows is on the first element.
-        const affectedRows = (updateResult as any)?.[0]?.affectedRows ?? 0;
+        const affectedRows = (updateResult as unknown as [{ affectedRows?: number }?])?.[0]?.affectedRows ?? 0;
         if (affectedRows === 0) {
           // A concurrent worker may already have terminalised this row.
           // Reread through the SAME tx and fail closed unless the durable

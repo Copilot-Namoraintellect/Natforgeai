@@ -62,8 +62,9 @@ export function createLinkedInAdapter(
 
     buildProviderRequest(
       input: AuthoritativePublicationInput,
-      _destination: LinkedInAdapterDestination
+      destination: LinkedInAdapterDestination
     ): LinkedInProviderRequest {
+        void destination;
       // Transport fidelity: the shareCommentary text transported in the UGC
       // post body is the authoritative text, byte for byte.
       assertTransportFidelity(input, input.content.text);

@@ -49,7 +49,6 @@ import {
   toPublishingBullMqJobId,
 } from "./bullmq";
 import {
-  PublishingReplayValidationError,
   executePublishingTerminalReplay,
 } from "./terminal-replay-executor";
 import {
@@ -161,7 +160,7 @@ function makeClient(state: FakeState, journal?: Undo[]) {
         throw new Error(`Unexpected insert into ${name}`);
       }),
     })),
-    select: vi.fn((..._fields: any[]) => ({
+    select: vi.fn(() => ({
       from: vi.fn((t: any) => {
         const name = tableName(t);
         return {

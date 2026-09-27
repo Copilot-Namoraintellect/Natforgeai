@@ -96,7 +96,7 @@ import { storeImageBuffer } from "./storage";
 import * as fidelityProductionGate from "./fidelity/rendered-fidelity-production-gate";
 import * as fidelityGateAdapter from "./fidelity/rendered-semantic-fidelity-gate";
 import { ensureFixtureLogos, resolveFixtureLogoPath } from "./premium-v2/fixture-logos";
-import { computeCreativeBriefFingerprint } from "./brief-grounding";
+
 
 const OWNER = Object.freeze({
   claimId: 777,
@@ -264,7 +264,7 @@ function makeFakeV2Renderer() {
 function makeOrchestration(events: string[] = []) {
   const orchestration: ImageRenderClaimOrchestration = {
     getEffectiveMode: vi.fn(async () => "on" as const),
-    evaluateGate: vi.fn(async (input) => {
+    evaluateGate: vi.fn(async () => {
       events.push("gate");
       return { status: "proceed" as const, owner: OWNER };
     }) as ImageRenderClaimOrchestration["evaluateGate"],
@@ -311,15 +311,6 @@ function lastGateOutcome(spy: ReturnType<typeof vi.spyOn>) {
   const calls = spy.mock.results;
   expect(calls.length).toBeGreaterThan(0);
   return calls[calls.length - 1].value as ReturnType<typeof fidelityProductionGate.evaluateRenderedFidelityProductionGate>;
-}
-
-function saveMode(): string | undefined {
-  return process.env.RENDERED_FIDELITY_GATE_MODE;
-}
-
-function restoreMode(previous: string | undefined) {
-  if (previous === undefined) delete process.env.RENDERED_FIDELITY_GATE_MODE;
-  else process.env.RENDERED_FIDELITY_GATE_MODE = previous;
 }
 
 beforeAll(async () => {

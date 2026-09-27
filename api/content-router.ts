@@ -106,10 +106,10 @@ function isApprovedImageReadySocialPost(post: any): boolean {
  * Artifacts without governed lineage stay explicitly legacy-shaped.
  */
 async function resolveVisualArtifactIdentity(
-  db: any,
+  db: Awaited<ReturnType<typeof getDb>>,
   userId: number,
-  post: any,
-  postMeta: Record<string, any>
+  post: typeof contentPosts.$inferSelect & { imageUrl?: unknown },
+  postMeta: Record<string, unknown>
 ): Promise<Record<string, unknown> | null> {
   const imageUrl =
     typeof postMeta?.imageUrl === "string" && postMeta.imageUrl
@@ -129,20 +129,32 @@ async function resolveVisualArtifactIdentity(
         and(
           eq(generatedImages.userId, userId),
           eq(generatedImages.contentPostId, post.id),
-          eq(generatedImages.status, "completed" as any)
+          eq(generatedImages.status, "completed")
         )
       )
       .orderBy(desc(generatedImages.createdAt))
       .limit(1);
-    const lineage = (imageRow?.metadata as any)?.renderLineage ?? null;
+    const imageMetadata =
+      imageRow?.metadata &&
+      typeof imageRow.metadata === "object" &&
+      !Array.isArray(imageRow.metadata)
+        ? (imageRow.metadata as Record<string, unknown>)
+        : null;
+    const lineageCandidate = imageMetadata?.renderLineage;
+    const lineage =
+      lineageCandidate &&
+      typeof lineageCandidate === "object" &&
+      !Array.isArray(lineageCandidate)
+        ? (lineageCandidate as Record<string, unknown>)
+        : null;
     if (lineage && typeof lineage.lineageFingerprintSha256 === "string") {
       renderLineage = lineage;
       generatedAssetId = typeof imageRow.id === "number" ? imageRow.id : null;
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     logError("[PublishCampaignPack] visual render lineage lookup failed; treating visual as legacy", {
       contentPostId: post.id,
-      error: err?.message,
+      error: err instanceof Error ? err.message : String(err),
     });
   }
 
@@ -744,7 +756,7 @@ export const contentRouter = createRouter({
         for (const field of SEMANTIC_COPY_FIELDS) {
           const nextValue = (data as Record<string, unknown>)[field];
           if (nextValue === undefined) continue;
-          if (String(nextValue ?? "") !== String((post as any)[field] ?? "")) {
+          if (String(nextValue ?? "") !== String(post[field] ?? "")) {
             semanticCopyEdited = true;
             break;
           }
@@ -1272,13 +1284,13 @@ export const contentRouter = createRouter({
       let governingMessagePack: Awaited<ReturnType<typeof loadApprovedMessagePack>> = null;
       try {
         governingMessagePack = await loadApprovedMessagePack(input.campaignId);
-      } catch (err: any) {
+      } catch (err: unknown) {
         // Tampered/unverifiable message-pack lineage fails closed for copy
         // coordinates; the caption artifact's own lineage remains the
         // authority for the caption binding.
         logError("[PublishCampaignPack] Governing message pack re-verification failed", {
           campaignId: input.campaignId,
-          error: err?.message,
+          error: err instanceof Error ? err.message : String(err),
         });
         governingMessagePack = null;
       }
@@ -1287,25 +1299,49 @@ export const contentRouter = createRouter({
       // asset is the governing caption artifact.
       const captionArtifactRecord = [...captionPacks, ...adaptations].sort(
         (a, b) =>
-          new Date((b as any).createdAt || 0).getTime() - new Date((a as any).createdAt || 0).getTime()
+          new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
       )[0] ?? null;
+
+      const captionArtifactMetadata =
+        captionArtifactRecord?.metadata &&
+        typeof captionArtifactRecord.metadata === "object" &&
+        !Array.isArray(captionArtifactRecord.metadata)
+          ? (captionArtifactRecord.metadata as Record<string, unknown>)
+          : null;
+
+      const captionArtifactLineageCandidate =
+        captionArtifactMetadata?.creativeArtifactLineage;
+
+      const captionArtifactLineage =
+        captionArtifactLineageCandidate &&
+        typeof captionArtifactLineageCandidate === "object" &&
+        !Array.isArray(captionArtifactLineageCandidate)
+          ? (captionArtifactLineageCandidate as Record<string, unknown>)
+          : null;
+
       const captionArtifactBinding = captionArtifactRecord
         ? {
-            artifactId: (captionArtifactRecord as any).id ?? null,
+            artifactId: captionArtifactRecord.id ?? null,
             artifactKind:
-              (captionArtifactRecord as any).assetType === "caption_adaptation"
+              captionArtifactRecord.assetType === "caption_adaptation"
                 ? "platform_caption"
                 : "caption_pack",
-            lineage:
-              ((captionArtifactRecord as any).metadata as any)?.creativeArtifactLineage ?? null,
+            lineage: captionArtifactLineage,
           }
         : null;
 
-      const captionLineage = captionArtifactBinding?.lineage as any;
+      const captionLineage = captionArtifactBinding?.lineage;
       const packageStrategyAuthority =
         wbs11StrategyAuthority ?? captionLineage?.strategy ?? null;
+
+      const governingCreativeArtifactLineageCandidate =
+        governingMessagePack?.creativeArtifactLineage;
+
+      const governingCreativeArtifactLineage =
+        governingCreativeArtifactLineageCandidate ?? null;
+
       const packageApprovedCopy =
-        (governingMessagePack?.creativeArtifactLineage as any)?.approvedCopy ??
+        governingCreativeArtifactLineage?.approvedCopy ??
         captionLineage?.approvedCopy ??
         null;
       const launchApprovalRequestId = (() => {
@@ -1751,11 +1787,13 @@ export const contentRouter = createRouter({
         }
 
         const frozenText = `${post.hook || ""}\n\n${post.caption || ""}\n\n${post.cta || ""}`.trim();
+        const legacyPost =
+          post as typeof contentPosts.$inferSelect & { imageUrl?: unknown };
         const frozenMediaUrl =
           typeof postMeta?.imageUrl === "string" && postMeta.imageUrl
             ? postMeta.imageUrl
-            : typeof (post as any)?.imageUrl === "string" && (post as any).imageUrl
-              ? (post as any).imageUrl
+            : typeof legacyPost.imageUrl === "string" && legacyPost.imageUrl
+              ? legacyPost.imageUrl
               : null;
 
         let publishPackage: PublishPackage | null = null;
@@ -1787,7 +1825,7 @@ export const contentRouter = createRouter({
           // WBS13.4: the exact immutable package, integrity-verified, in its
           // canonical durable envelope — ready to persist with the row.
           serializedQueuePackage = serializePublishPackageForQueue(publishPackage);
-        } catch (err: any) {
+        } catch (err: unknown) {
           const message = err instanceof TRPCError ? err.message : "Publish package construction failed";
           let failedQueueItemId: number;
           if (existingQueue) {

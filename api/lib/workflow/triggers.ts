@@ -669,9 +669,10 @@ export async function onStrategyApproved(
       campaignId,
       business,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
     console.error(
-      `[Workflow] Immutable Strategy authority resolution failed for campaign ${campaignId}: ${err?.message || err}. Refusing to authorise creative generation.`
+      `[Workflow] Immutable Strategy authority resolution failed for campaign ${campaignId}: ${errorMessage}. Refusing to authorise creative generation.`
     );
     return;
   }

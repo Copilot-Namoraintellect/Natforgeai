@@ -631,7 +631,7 @@ async function bindContentRecoveryClaimInTx(
       { claimId, ownerTokenHash: fingerprintOwnerToken(ownerToken) },
       tx
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err instanceof TerminalReplayBindingConflictError) {
       throw new ContentReplayValidationError(
         "binding_conflict",

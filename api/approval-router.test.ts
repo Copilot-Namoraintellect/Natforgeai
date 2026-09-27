@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { TRPCError } from "@trpc/server";
+
 
 vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
