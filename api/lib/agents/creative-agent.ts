@@ -631,7 +631,7 @@ function hasMeaningfulText(value: unknown): value is string {
  * generic claims cannot slip into a channel script silently; CTA fields are
  * governed separately by the approved-copy binding check.
  */
-function collectDerivativeFormatText(pack: any): string[] {
+function collectDerivativeFormatText(pack: PremiumCampaignPackOutput): string[] {
   const text: string[] = [];
   const push = (value: unknown) => {
     if (typeof value === "string" && value.trim().length > 0) text.push(value);
@@ -1704,7 +1704,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     .map((p: string) => p.trim())
     .filter(Boolean);
 
-  const adaptationsByPlatform = new Map<string, any>();
+  const adaptationsByPlatform = new Map<string, PremiumCampaignPackOutput["platformAdaptations"][number]>();
   for (const adaptation of pack.platformAdaptations || []) {
     if (adaptation.platform) {
       adaptationsByPlatform.set(adaptation.platform.toLowerCase(), adaptation);
@@ -1751,7 +1751,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     hasMeaningfulText(pack.launchSequence?.title) ||
     (Array.isArray(pack.launchSequence?.sequenceSteps)
       ? pack.launchSequence.sequenceSteps.some(
-          (step: any) => hasMeaningfulText(step?.message) || hasMeaningfulText(step?.cta)
+          (step: PremiumCampaignPackOutput["launchSequence"]["sequenceSteps"][number]) => hasMeaningfulText(step?.message) || hasMeaningfulText(step?.cta)
         )
       : false);
 

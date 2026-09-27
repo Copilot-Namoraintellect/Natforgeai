@@ -1299,25 +1299,49 @@ export const contentRouter = createRouter({
       // asset is the governing caption artifact.
       const captionArtifactRecord = [...captionPacks, ...adaptations].sort(
         (a, b) =>
-          new Date((b as any).createdAt || 0).getTime() - new Date((a as any).createdAt || 0).getTime()
+          new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
       )[0] ?? null;
+
+      const captionArtifactMetadata =
+        captionArtifactRecord?.metadata &&
+        typeof captionArtifactRecord.metadata === "object" &&
+        !Array.isArray(captionArtifactRecord.metadata)
+          ? (captionArtifactRecord.metadata as Record<string, unknown>)
+          : null;
+
+      const captionArtifactLineageCandidate =
+        captionArtifactMetadata?.creativeArtifactLineage;
+
+      const captionArtifactLineage =
+        captionArtifactLineageCandidate &&
+        typeof captionArtifactLineageCandidate === "object" &&
+        !Array.isArray(captionArtifactLineageCandidate)
+          ? (captionArtifactLineageCandidate as Record<string, unknown>)
+          : null;
+
       const captionArtifactBinding = captionArtifactRecord
         ? {
-            artifactId: (captionArtifactRecord as any).id ?? null,
+            artifactId: captionArtifactRecord.id ?? null,
             artifactKind:
-              (captionArtifactRecord as any).assetType === "caption_adaptation"
+              captionArtifactRecord.assetType === "caption_adaptation"
                 ? "platform_caption"
                 : "caption_pack",
-            lineage:
-              ((captionArtifactRecord as any).metadata as any)?.creativeArtifactLineage ?? null,
+            lineage: captionArtifactLineage,
           }
         : null;
 
-      const captionLineage = captionArtifactBinding?.lineage as any;
+      const captionLineage = captionArtifactBinding?.lineage;
       const packageStrategyAuthority =
         wbs11StrategyAuthority ?? captionLineage?.strategy ?? null;
+
+      const governingCreativeArtifactLineageCandidate =
+        governingMessagePack?.creativeArtifactLineage;
+
+      const governingCreativeArtifactLineage =
+        governingCreativeArtifactLineageCandidate ?? null;
+
       const packageApprovedCopy =
-        (governingMessagePack?.creativeArtifactLineage as any)?.approvedCopy ??
+        governingCreativeArtifactLineage?.approvedCopy ??
         captionLineage?.approvedCopy ??
         null;
       const launchApprovalRequestId = (() => {
@@ -1763,11 +1787,13 @@ export const contentRouter = createRouter({
         }
 
         const frozenText = `${post.hook || ""}\n\n${post.caption || ""}\n\n${post.cta || ""}`.trim();
+        const legacyPost =
+          post as typeof contentPosts.$inferSelect & { imageUrl?: unknown };
         const frozenMediaUrl =
           typeof postMeta?.imageUrl === "string" && postMeta.imageUrl
             ? postMeta.imageUrl
-            : typeof (post as any)?.imageUrl === "string" && (post as any).imageUrl
-              ? (post as any).imageUrl
+            : typeof legacyPost.imageUrl === "string" && legacyPost.imageUrl
+              ? legacyPost.imageUrl
               : null;
 
         let publishPackage: PublishPackage | null = null;
