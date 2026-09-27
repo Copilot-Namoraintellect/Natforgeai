@@ -2,7 +2,6 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import * as claimModule from "./image-render-claim";
 import {
   deriveImageRenderAttemptIdentity,
-  type ImageRenderAttemptIdentityInput,
   type ImageRenderReplayResult,
 } from "./image-render-claim";
 import {
@@ -16,7 +15,6 @@ import {
 import {
   coordinateImageRenderAttempt,
   type ImageRenderClaimOwnerContext,
-  type ImageRenderCoordinatorResult,
 } from "./image-render-claim-coordinator";
 import type { ImageRenderLineageInput } from "./image-render-lineage";
 
@@ -53,12 +51,6 @@ const INTENT = {
   creativeType: "leaflet",
   allowNoLogo: false,
 } satisfies ImageRenderClaimGateInput["intent"];
-
-function fullAttempt(
-  overrides: Partial<ImageRenderAttemptIdentityInput> = {}
-): ImageRenderAttemptIdentityInput {
-  return { ...INTENT, clientAttemptId: TOKEN_A, ...overrides };
-}
 
 function makeInput(
   overrides: Partial<ImageRenderClaimGateInput> = {}

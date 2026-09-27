@@ -1027,7 +1027,12 @@ describe("contentRouter.publishCampaignPack", () => {
     expect(entry?.publishPackageId).toEqual(expect.stringMatching(/^ppv1-/));
     expect(entry?.publishPackageFingerprint).toEqual(expect.stringMatching(/^[0-9a-f]{64}$/));
 
-    const handedPackage = vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage!;
+    const handedPackage =
+      vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage;
+    expect(handedPackage).toBeDefined();
+    if (!handedPackage) {
+      throw new Error("Expected publish package to be handed to publishSinglePost");
+    }
     expect(handedPackage).toBeDefined();
     expect(handedPackage.identity.selectedContent.artifactId).toBe(125);
     expect(handedPackage.identity.destination.platform).toBe("instagram");
@@ -1217,7 +1222,12 @@ describe("contentRouter.publishCampaignPack", () => {
     expect(envelope.schemaVersion).toBe(1);
 
     // The durable package round-trips exactly to the package handed to the runner.
-    const handedPackage = vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage!;
+    const handedPackage =
+      vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage;
+    expect(handedPackage).toBeDefined();
+    if (!handedPackage) {
+      throw new Error("Expected publish package to be handed to publishSinglePost");
+    }
     expect(envelope.publishPackage.packageId).toBe(handedPackage.packageId);
     const reloaded = loadPersistedPublishPackage(inserted.metadata);
     expect(reloaded).toEqual(handedPackage);
@@ -1286,7 +1296,12 @@ describe("contentRouter.publishCampaignPack", () => {
     const setPayload = updateSpy!.mock.calls[0][0];
     expect(Object.keys(setPayload)).toEqual(["metadata"]);
 
-    const handedPackage = vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage!;
+    const handedPackage =
+      vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage;
+    expect(handedPackage).toBeDefined();
+    if (!handedPackage) {
+      throw new Error("Expected publish package to be handed to publishSinglePost");
+    }
     const reloaded = loadPersistedPublishPackage(setPayload.metadata);
     expect(reloaded).toEqual(handedPackage);
     expect(publishSinglePost).toHaveBeenCalledWith(

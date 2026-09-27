@@ -316,7 +316,11 @@ describe("runGovernedLearningCycle", () => {
     expect(record.provenance.wbs15?.strategyKpiEvaluation.results.length).toBe(2);
     const conversionsLineage = record.provenance.wbs15?.strategyKpiEvaluation.results.find(
       (r) => r.metric === "conversions"
-    )!;
+    );
+    expect(conversionsLineage).toBeDefined();
+    if (!conversionsLineage) {
+      throw new Error("Expected conversions KPI lineage");
+    }
     expect(conversionsLineage.targetBasis).toBe("budget_assumption");
     expect(conversionsLineage.target).toBe(100);
     expect(conversionsLineage.actual).toBe(50);

@@ -287,8 +287,12 @@ describe("publishing worker durable publish-package reload (WBS13.4)", () => {
     // Identity-based job payload — the package never travels in BullMQ state.
     expect("publishPackage" in makeJob().data).toBe(false);
     expect(publishSinglePost).toHaveBeenCalledTimes(1);
-    const passed = vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage!;
+    const passed = vi.mocked(publishSinglePost).mock.calls[0][1]?.publishPackage;
     expect(passed).toBeDefined();
+    if (!passed) {
+      throw new Error("Expected persisted publish package");
+    }
+
     expect(passed.packageId).toBe(pkg.packageId);
     expect(passed.packageFingerprintSha256).toBe(pkg.packageFingerprintSha256);
     expect(passed.payload).toEqual(pkg.payload);
@@ -314,8 +318,13 @@ describe("publishing worker durable publish-package reload (WBS13.4)", () => {
 
     expect(publishSinglePost).toHaveBeenCalledTimes(2);
     const [first, retry] = vi.mocked(publishSinglePost).mock.calls;
-    const firstPkg = first[1]?.publishPackage!;
-    const retryPkg = retry[1]?.publishPackage!;
+    const firstPkg = first[1]?.publishPackage;
+    const retryPkg = retry[1]?.publishPackage;
+    expect(firstPkg).toBeDefined();
+    expect(retryPkg).toBeDefined();
+    if (!firstPkg || !retryPkg) {
+      throw new Error("Expected persisted packages on initial and retry executions");
+    }
     expect(firstPkg.packageId).toBe(pkg.packageId);
     expect(retryPkg.packageId).toBe(pkg.packageId);
     expect(retryPkg.packageFingerprintSha256).toBe(firstPkg.packageFingerprintSha256);

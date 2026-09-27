@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 
 vi.mock("../alerts", () => ({
@@ -15,7 +15,6 @@ vi.mock("ioredis", () => ({
 }));
 
 import {
-  ReplayReconciliationInvariantError,
   reconcileTerminalReplayRequest,
 } from "./terminal-replay-reconciliation";
 import { TerminalReplayRequestNotFoundError } from "./terminal-replay";
@@ -130,7 +129,7 @@ function makeClient(
         throw new Error(`Unexpected insert into ${name}`);
       }),
     })),
-    select: vi.fn((..._fields: any[]) => ({
+    select: vi.fn(() => ({
       from: vi.fn((t: any) => {
         const name = tableName(t);
         return {
@@ -492,7 +491,7 @@ describe("reconcileTerminalReplayRequest — publishing", () => {
   });
 
   it("15. resolved publishing replay rerun is idempotent (already_terminal)", async () => {
-    const { db, state } = pubWorld();
+    const { db } = pubWorld();
     await reconcile(db);
 
     const rerun = await reconcile(db);
@@ -838,13 +837,13 @@ describe("reconcileTerminalReplayRequest — concurrency/atomicity", () => {
   });
 
   it("53. terminal rerun never reacquires or releases another guard", async () => {
-    const { db, state, failure } = (() => {
+    const { db, state } = (() => {
       const world = createFakeDb();
       const f = pubFailure();
       world.state.failures.set(f.id, f);
       world.state.publishing.set(PUB.itemId, publishingRow());
       seedEnqueuedRequest(world.state, f);
-      return { ...world, failure: f };
+      return { ...world };
     })();
 
     await reconcile(db); // resolves + releases guard

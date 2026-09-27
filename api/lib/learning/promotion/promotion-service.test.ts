@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { TRPCError } from "@trpc/server";
+
 import {
   getApprovedPromotionEnvelopes,
   getLearningPromotionProposal,
