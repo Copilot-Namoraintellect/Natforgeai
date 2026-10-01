@@ -98,7 +98,7 @@ export async function onAgentRunComplete(runId: number) {
       // Bind the approval lineage to the EXACT immutable Strategy snapshot
       // authority persisted for this completed Strategy run. Fail closed
       // when that authority is missing or does not match the run/campaign/
-      // current brief — mutable campaign fields are never used as authority.
+      // current brief Ã¢â‚¬â€ mutable campaign fields are never used as authority.
       const snapshotAuthority = await getStrategySnapshotByStrategyRunId(run.id);
       const status = getStrategyApprovalStatus(updatedCampaign, business);
       if (
@@ -164,7 +164,7 @@ export async function onAgentRunComplete(runId: number) {
       await transitionCampaignState(run.campaignId, run.userId, "creatives_complete");
     }
 
-    // Auto-trigger audience agent after creatives are ready — with dedup guard
+    // Auto-trigger audience agent after creatives are ready Ã¢â‚¬â€ with dedup guard
     try {
       const existingAudience = await db
         .select()
@@ -194,7 +194,7 @@ export async function onAgentRunComplete(runId: number) {
   } else if (state === "audience_generating" && run.agentType === "audience") {
     await transitionCampaignState(run.campaignId, run.userId, "audience_complete");
 
-    // Auto-trigger distribution agent after audience is ready — with dedup guard
+    // Auto-trigger distribution agent after audience is ready Ã¢â‚¬â€ with dedup guard
     try {
       const existingDist = await db
         .select()
@@ -775,7 +775,43 @@ export async function onStrategyApproved(
     }
 
     // Transition to creatives_generating before running the creative agent
-    await transitionCampaignState(campaignId, userId, "generate_creatives");
+    // Normal approval enters creative generation here. A failed creative
+    // operation may later resume with its original claim while the campaign
+    // already remains in creatives_generating; do not replay the completed
+    // governed transition in that recovery state.
+    // A re-armed approval claim may represent recovery after the governed
+    // generate_creatives transition already committed. Only that exact
+    // recovery case may resume without replaying the transition. Every normal
+    // invocation preserves the original workflow transition contract.
+    let resumeExistingCreativeGeneration = false;
+
+    if (rearmResult) {
+      const [creativeTransitionCampaign] = await db
+        .select({
+          workflowState: campaigns.workflowState,
+        })
+        .from(campaigns)
+        .where(
+          and(
+            eq(campaigns.id, campaignId),
+            eq(campaigns.userId, userId)
+          )
+        )
+        .limit(1);
+
+      if (!creativeTransitionCampaign) {
+        throw new Error(
+          `Campaign ${campaignId} unavailable before creative generation recovery`
+        );
+      }
+
+      resumeExistingCreativeGeneration =
+        creativeTransitionCampaign.workflowState === "creatives_generating";
+    }
+
+    if (!resumeExistingCreativeGeneration) {
+      await transitionCampaignState(campaignId, userId, "generate_creatives");
+    }
 
     // Keep the claim alive during the long-running creative generation.
     heartbeatController = createClaimHeartbeatController({
