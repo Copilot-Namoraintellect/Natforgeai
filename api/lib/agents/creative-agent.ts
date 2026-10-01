@@ -588,7 +588,8 @@ function buildValidationContextFromCampaign(
 
 function validatePackAgainstArchitect(
   pack: any,
-  ctx: ValidationContext
+  ctx: ValidationContext,
+  approvedMessagePack: CampaignMessagePack
 ): { passed: boolean; issues: string[] } {
   const masterPost = pack.socialPosts?.[0];
   const platformCaptions = (pack.platformAdaptations || []).map((a: any) => ({
@@ -601,11 +602,9 @@ function validatePackAgainstArchitect(
   const messagePack: CampaignMessagePack = {
     headline: String(masterPost?.hook || masterPost?.title || ""),
     subheadline: String(masterPost?.caption || "").slice(0, 160),
-    benefitBullets: [
-      String(masterPost?.caption || "").slice(0, 120),
-      String(masterPost?.salesAngle || ""),
-      String(masterPost?.transformation || ""),
-    ].filter(Boolean),
+    benefitBullets: approvedMessagePack.benefitBullets
+      .map((benefit) => String(benefit || "").trim())
+      .filter(Boolean),
     cta: String(masterPost?.cta || ""),
     footerContact: {},
     proofPoints: [],
@@ -1477,7 +1476,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     normalizedSelectedStageCta: quality.ctaDiagnostics.normalizedSelectedStageCta,
     ctaMatches: quality.ctaDiagnostics.ctaMatches,
   });
-  const architectQuality = validatePackAgainstArchitect(pack, buildValidationContextFromCampaign(campaign, business));
+  const architectQuality = validatePackAgainstArchitect(pack, buildValidationContextFromCampaign(campaign, business), approvedMessagePack);
   const combinedIssues = quality.passed ? architectQuality.issues : [...quality.issues, ...architectQuality.issues];
   const combinedPassed = quality.passed && architectQuality.passed;
 
@@ -1572,7 +1571,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
         normalizedSelectedStageCta: retryQuality.ctaDiagnostics.normalizedSelectedStageCta,
         ctaMatches: retryQuality.ctaDiagnostics.ctaMatches,
       });
-      const retryArchitectQuality = validatePackAgainstArchitect(pack, buildValidationContextFromCampaign(campaign, business));
+      const retryArchitectQuality = validatePackAgainstArchitect(pack, buildValidationContextFromCampaign(campaign, business), approvedMessagePack);
       logInfo("[CreativeAgent] recovery creative regeneration validation", {
         campaignId,
         userId,

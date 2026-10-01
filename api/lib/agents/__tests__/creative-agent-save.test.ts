@@ -611,6 +611,7 @@ describe("runCreativeAgent post-save failure handling", () => {
           hook: "Join the Trading Revolution",
           caption: "Join thousands and unlock your potential.",
           cta: "Act now",
+          transformation: null,
         },
       ],
     };
@@ -625,6 +626,8 @@ describe("runCreativeAgent post-save failure handling", () => {
     expect(result.pack.socialPosts[0].cta).toBe(groundedRecoveryPack.cta);
     expect(result.pack.socialPosts[0].caption).toContain(groundedRecoveryPack.subheadline);
     expect(result.pack.socialPosts[0].caption).toContain(groundedRecoveryPack.benefitBullets[0]);
+    expect(result.pack.socialPosts[0].caption).toContain(groundedRecoveryPack.benefitBullets[1]);
+    expect(result.pack.socialPosts[0].caption).toContain(groundedRecoveryPack.benefitBullets[2]);
   });
 }, 30000);
 
