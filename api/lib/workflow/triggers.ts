@@ -191,8 +191,16 @@ export async function onAgentRunComplete(runId: number) {
     } catch (err: any) {
       console.error("[Workflow] Auto-audience failed:", err.message);
     }
-  } else if (state === "audience_generating" && run.agentType === "audience") {
-    await transitionCampaignState(run.campaignId, run.userId, "audience_complete");
+  } else if (
+    run.agentType === "audience" &&
+    ["audience_generating", "audience_ready"].includes(state)
+  ) {
+    // audience_generating is the normal completion path.
+    // audience_ready is a bounded resumption path for a completed Audience
+    // run whose output was persisted before orchestration continued.
+    if (state === "audience_generating") {
+      await transitionCampaignState(run.campaignId, run.userId, "audience_complete");
+    }
 
     // Auto-trigger distribution agent after audience is ready Ã¢â‚¬â€ with dedup guard
     try {

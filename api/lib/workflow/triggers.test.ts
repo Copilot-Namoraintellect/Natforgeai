@@ -346,6 +346,191 @@ function createWorkflowDbMock({
   return { db, state };
 }
 
+describe("WBS19.5U audience-to-distribution handoff regression", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  it("keeps Audience output persistence separate from workflow-state ownership", async () => {
+    const fs = await import("node:fs/promises");
+    const source = await fs.readFile(
+      new URL("../agents/audience-agent.ts", import.meta.url),
+      "utf8"
+    );
+
+    expect(source).not.toContain('workflowState: "audience_ready"');
+    expect(source).toContain("audienceRunId: result.runId");
+    expect(source).toContain("audienceProfiles: normalised.audienceProfiles");
+  });
+
+  it("advances normal completed Audience work and starts Distribution exactly once", async () => {
+    const audienceRun = {
+      id: 801,
+      userId: 42,
+      campaignId: 29,
+      agentType: "audience",
+      status: "completed",
+      error: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    const campaign = {
+      id: 29,
+      userId: 42,
+      name: "Audience normal path",
+      workflowState: "audience_generating",
+      workflowContext: { audienceRunId: 801 },
+      approvalMode: "assisted",
+    };
+
+    const { getDb } = await import("../../queries/connection");
+    const { transitionCampaignState } = await import("./engine");
+    const { runDistributionAgent } = await import("../agents/distribution-agent");
+    const { onAgentRunComplete } = await import("./triggers");
+
+    const { db } = createWorkflowDbMock({
+      agentRunsRows: [audienceRun],
+      campaign,
+    });
+
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    vi.mocked(transitionCampaignState).mockImplementation(
+      async (_campaignId, _userId, action) => {
+        if (action === "audience_complete") {
+          campaign.workflowState = "audience_ready";
+          return "audience_ready" as any;
+        }
+        return campaign.workflowState as any;
+      }
+    );
+
+    vi.mocked(runDistributionAgent).mockResolvedValue({
+      runId: 802,
+    } as any);
+
+    await onAgentRunComplete(801);
+
+    expect(transitionCampaignState).toHaveBeenCalledWith(
+      29,
+      42,
+      "audience_complete"
+    );
+
+    expect(runDistributionAgent).toHaveBeenCalledTimes(1);
+    expect(runDistributionAgent).toHaveBeenCalledWith({
+      userId: 42,
+      campaignId: 29,
+      approvalMode: "assisted",
+    });
+  });
+
+  it("resumes completed Audience work already at audience_ready and starts Distribution without replaying audience_complete", async () => {
+    const audienceRun = {
+      id: 278,
+      userId: 22,
+      campaignId: 31,
+      agentType: "audience",
+      status: "completed",
+      error: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    const campaign = {
+      id: 31,
+      userId: 22,
+      name: "Campaign #31",
+      workflowState: "audience_ready",
+      workflowContext: {
+        creativeRunId: 277,
+        audienceRunId: 278,
+      },
+      approvalMode: "assisted",
+    };
+
+    const { getDb } = await import("../../queries/connection");
+    const { transitionCampaignState } = await import("./engine");
+    const { runDistributionAgent } = await import("../agents/distribution-agent");
+    const { onAgentRunComplete } = await import("./triggers");
+
+    const { db } = createWorkflowDbMock({
+      agentRunsRows: [audienceRun],
+      campaign,
+    });
+
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    vi.mocked(runDistributionAgent).mockResolvedValue({
+      runId: 803,
+    } as any);
+
+    await onAgentRunComplete(278);
+
+    expect(transitionCampaignState).not.toHaveBeenCalledWith(
+      31,
+      22,
+      "audience_complete"
+    );
+
+    expect(runDistributionAgent).toHaveBeenCalledTimes(1);
+    expect(runDistributionAgent).toHaveBeenCalledWith({
+      userId: 22,
+      campaignId: 31,
+      approvalMode: "assisted",
+    });
+  });
+
+  it("does not start duplicate Distribution work when audience_ready already has a running Distribution run", async () => {
+    const audienceRun = {
+      id: 278,
+      userId: 22,
+      campaignId: 31,
+      agentType: "audience",
+      status: "completed",
+      error: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    const existingDistributionRun = {
+      id: 803,
+      userId: 22,
+      campaignId: 31,
+      agentType: "distribution",
+      status: "running",
+      error: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    const campaign = {
+      id: 31,
+      userId: 22,
+      name: "Campaign #31",
+      workflowState: "audience_ready",
+      workflowContext: {
+        creativeRunId: 277,
+        audienceRunId: 278,
+      },
+      approvalMode: "assisted",
+    };
+
+    const { getDb } = await import("../../queries/connection");
+    const { runDistributionAgent } = await import("../agents/distribution-agent");
+    const { onAgentRunComplete } = await import("./triggers");
+
+    const { db } = createWorkflowDbMock({
+      agentRunsRows: [
+        audienceRun,
+        existingDistributionRun,
+      ],
+      campaign,
+    });
+
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onAgentRunComplete(278);
+
+    expect(runDistributionAgent).not.toHaveBeenCalled();
+  });
+});
 describe("onAgentRunComplete integration path", () => {
   beforeEach(() => {
     vi.clearAllMocks();

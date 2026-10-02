@@ -266,7 +266,6 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
   await db
     .update(campaigns)
     .set({
-      workflowState: "audience_ready",
       workflowContext: {
         ...(strategyContext || {}),
         audienceGeneratedAt: new Date().toISOString(),
