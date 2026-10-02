@@ -6,13 +6,13 @@ import { eq, and } from "drizzle-orm";
 import { checkContentSafety } from "../safety/checker";
 import { resolvePublicationSchedule } from "../publish/publication-schedule";
 
-const PublishingScheduleSchema = z.object({
+export const PublishingScheduleSchema = z.object({
   schedule: z.array(
     z.object({
       contentPostId: z.number(),
       platform: z.string(),
       scheduledAt: z.string(), // ISO datetime
-      reason: z.string().optional(),
+      reason: z.string(),
     })
   ),
 });
