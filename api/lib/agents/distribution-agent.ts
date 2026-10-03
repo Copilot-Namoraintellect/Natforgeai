@@ -28,6 +28,11 @@ export async function runDistributionAgent({
   campaignId: number;
   approvalMode: "assisted" | "autonomous";
 }) {
+  // Capture one authoritative scheduling reference for both model grounding
+  // and deterministic canonical publication validation.
+  const schedulingReference = new Date();
+  const schedulingReferenceIso = schedulingReference.toISOString();
+
   const db = getDb();
 
   // Get campaign info
@@ -82,7 +87,11 @@ Respond with structured data containing the schedule.`;
     prompt: schedulePrompt,
     schema: PublishingScheduleSchema,
     system:
-      "You are a social media scheduling expert. You understand optimal posting times, platform algorithms, and content distribution strategies. Always respond with valid structured data.",
+      `You are a social media scheduling expert.
+Authoritative scheduling reference instant: ${schedulingReferenceIso}.
+Every scheduledAt value MUST represent an instant at or after this reference instant.
+Never generate a publication timestamp before this reference instant.
+You understand optimal posting times, platform algorithms, and content distribution strategies. Always respond with valid structured data.`,
   });
 
   // Create publishing queue entries with safety checks and deterministic approval mode
@@ -99,7 +108,7 @@ Respond with structured data containing the schedule.`;
     const schedule = resolvePublicationSchedule({
       mode: "scheduled",
       scheduledAtUtc: item.scheduledAt,
-    });
+    }, { now: schedulingReference });
     const canonicalScheduledAt = new Date(schedule.scheduledAtUtcMillis!);
 
     // Run content safety check (bundled into distribution agent cost)
