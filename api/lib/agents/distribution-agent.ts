@@ -96,6 +96,8 @@ You understand optimal posting times, platform algorithms, and content distribut
 
   // Create publishing queue entries with safety checks and deterministic approval mode
   const createdIds: number[] = [];
+  let campaignContentApprovalRequired = false;
+  let campaignContentApprovalRisk: "low" | "medium" = "low";
   for (const item of scheduleResult.output.schedule) {
     const post = posts.find((p) => p.id === item.contentPostId);
     const content = `${post?.hook || ""}\n${post?.caption || ""}\n${post?.cta || ""}`.trim();
@@ -152,16 +154,42 @@ You understand optimal posting times, platform algorithms, and content distribut
     });
     createdIds.push(Number(result.insertId));
 
-    // Create approval request for medium-risk posts in autonomous mode
-    if (safety.riskLevel === "medium" && approvalMode === "autonomous") {
+    // Record campaign-scoped human approval authority for any queue
+    // item that has entered pending_approval. Resolution intentionally
+    // governs the campaign's pending publishing rows as one decision.
+    if (status === "pending_approval") {
+      campaignContentApprovalRequired = true;
+      if (safety.riskLevel === "medium") {
+        campaignContentApprovalRisk = "medium";
+      }
+    }
+  }
+
+  if (campaignContentApprovalRequired) {
+    const existingBrandRiskApproval = await db
+      .select()
+      .from(approvalRequests)
+      .where(
+        and(
+          eq(approvalRequests.userId, userId),
+          eq(approvalRequests.campaignId, campaignId),
+          eq(approvalRequests.approvalType, "brand_risk"),
+          eq(approvalRequests.status, "pending")
+        )
+      )
+      .limit(1);
+
+    if (existingBrandRiskApproval.length === 0) {
       await db.insert(approvalRequests).values({
         userId,
         campaignId,
         approvalType: "brand_risk",
-        title: `Content Safety Review: ${post?.title || "Post"}`,
-        description: `A post scheduled for ${item.platform} was flagged with medium risk.\n\nReasons: ${safety.reasons.join("; ")}\n\nSuggested fixes: ${safety.suggestedFixes.join("; ")}`,
-        aiRecommendation: "Review content before approving. Risks are manageable but require human verification.",
-        riskLevel: "medium",
+        title: "Content Approval Required",
+        description:
+          "One or more scheduled posts require human approval before publication.",
+        aiRecommendation:
+          "Review the campaign's pending scheduled content before approving publication.",
+        riskLevel: campaignContentApprovalRisk,
       });
     }
   }

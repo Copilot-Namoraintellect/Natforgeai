@@ -775,6 +775,206 @@ describe("WBS13 final wiring — legacy scheduling entry points use the schedule
     expect((inserted!.values.scheduledAt as Date).toISOString()).toBe("2026-12-01T08:00:00.000Z");
   });
 
+  it("distribution-agent creates one campaign-scoped brand-risk approval for assisted pending content", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../../agents/runner");
+    const { runDistributionAgent } = await import("../../agents/distribution-agent");
+
+    const db = createWiringDb({
+      campaign: { id: 27, userId: 14, name: "C", goal: "G", platforms: "facebook" },
+      contentPost: { id: 117, userId: 14, campaignId: 27, title: "Post", platform: "facebook", type: "social_post", hook: "h", caption: "c", cta: "c" },
+    });
+
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runAgent).mockResolvedValue({
+      runId: 6,
+      output: {
+        schedule: [
+          {
+            contentPostId: 117,
+            platform: "facebook",
+            scheduledAt: "2026-12-01T10:00:00+02:00",
+          },
+        ],
+      },
+    } as any);
+
+    const result = await runDistributionAgent({
+      userId: 14,
+      campaignId: 27,
+      approvalMode: "assisted",
+    });
+
+    expect(result.queueIds).toEqual([1]);
+
+    const queueInserts = db.state.insertCalls.filter(
+      (c: { table: string | undefined }) => c.table === "publishing_queue"
+    );
+    expect(queueInserts).toHaveLength(1);
+    expect(queueInserts[0].values.status).toBe("pending_approval");
+    expect(queueInserts[0].values.approvalRequired).toBe(true);
+
+    const approvalInserts = db.state.insertCalls.filter(
+      (c: { table: string | undefined }) => c.table === "approval_requests"
+    );
+    expect(approvalInserts).toHaveLength(1);
+    expect(approvalInserts[0].values.approvalType).toBe("brand_risk");
+    expect(approvalInserts[0].values.title).toBe("Content Approval Required");
+    expect(approvalInserts[0].values.riskLevel).toBe("low");
+  });
+
+  it("distribution-agent keeps low-risk autonomous content approved without brand-risk approval", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../../agents/runner");
+    const { runDistributionAgent } = await import("../../agents/distribution-agent");
+
+    const db = createWiringDb({
+      campaign: { id: 27, userId: 14, name: "C", goal: "G", platforms: "facebook" },
+      contentPost: { id: 117, userId: 14, campaignId: 27, title: "Post", platform: "facebook", type: "social_post", hook: "h", caption: "c", cta: "c" },
+    });
+
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runAgent).mockResolvedValue({
+      runId: 7,
+      output: {
+        schedule: [
+          {
+            contentPostId: 117,
+            platform: "facebook",
+            scheduledAt: "2026-12-01T10:00:00+02:00",
+          },
+        ],
+      },
+    } as any);
+
+    const result = await runDistributionAgent({
+      userId: 14,
+      campaignId: 27,
+      approvalMode: "autonomous",
+    });
+
+    expect(result.queueIds).toEqual([1]);
+
+    const queueInserts = db.state.insertCalls.filter(
+      (c: { table: string | undefined }) => c.table === "publishing_queue"
+    );
+    expect(queueInserts).toHaveLength(1);
+    expect(queueInserts[0].values.status).toBe("approved");
+    expect(queueInserts[0].values.approvalRequired).toBe(false);
+
+    const approvalInserts = db.state.insertCalls.filter(
+      (c: { table: string | undefined }) => c.table === "approval_requests"
+    );
+    expect(approvalInserts).toHaveLength(0);
+  });
+  it("distribution-agent preserves medium-risk autonomous approval behaviour", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../../agents/runner");
+    const { checkContentSafety } = await import("../../safety/checker");
+    const { runDistributionAgent } = await import("../../agents/distribution-agent");
+
+    const db = createWiringDb({
+      campaign: { id: 27, userId: 14, name: "C", goal: "G", platforms: "facebook" },
+      contentPost: { id: 117, userId: 14, campaignId: 27, title: "Post", platform: "facebook", type: "social_post", hook: "h", caption: "c", cta: "c" },
+    });
+
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(checkContentSafety).mockResolvedValueOnce({
+      riskLevel: "medium",
+      reasons: ["Requires human review"],
+      suggestedFixes: ["Confirm before publication"],
+    } as any);
+
+    vi.mocked(runAgent).mockResolvedValue({
+      runId: 8,
+      output: {
+        schedule: [
+          {
+            contentPostId: 117,
+            platform: "facebook",
+            scheduledAt: "2026-12-01T10:00:00+02:00",
+          },
+        ],
+      },
+    } as any);
+
+    const result = await runDistributionAgent({
+      userId: 14,
+      campaignId: 27,
+      approvalMode: "autonomous",
+    });
+
+    expect(result.queueIds).toEqual([1]);
+
+    const queueInserts = db.state.insertCalls.filter(
+      (c: { table: string | undefined }) => c.table === "publishing_queue"
+    );
+    expect(queueInserts).toHaveLength(1);
+    expect(queueInserts[0].values.status).toBe("pending_approval");
+    expect(queueInserts[0].values.approvalRequired).toBe(true);
+
+    const approvalInserts = db.state.insertCalls.filter(
+      (c: { table: string | undefined }) => c.table === "approval_requests"
+    );
+    expect(approvalInserts).toHaveLength(1);
+    expect(approvalInserts[0].values.approvalType).toBe("brand_risk");
+    expect(approvalInserts[0].values.riskLevel).toBe("medium");
+  });
+
+  it("distribution-agent does not duplicate an existing pending campaign brand-risk approval", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { runAgent } = await import("../../agents/runner");
+    const { runDistributionAgent } = await import("../../agents/distribution-agent");
+
+    const db = createWiringDb({
+      campaign: { id: 27, userId: 14, name: "C", goal: "G", platforms: "facebook" },
+      contentPost: { id: 117, userId: 14, campaignId: 27, title: "Post", platform: "facebook", type: "social_post", hook: "h", caption: "c", cta: "c" },
+      approvals: [
+        {
+          id: 91,
+          userId: 14,
+          campaignId: 27,
+          approvalType: "brand_risk",
+          status: "pending",
+          riskLevel: "low",
+        },
+      ],
+    });
+
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runAgent).mockResolvedValue({
+      runId: 9,
+      output: {
+        schedule: [
+          {
+            contentPostId: 117,
+            platform: "facebook",
+            scheduledAt: "2026-12-01T10:00:00+02:00",
+          },
+        ],
+      },
+    } as any);
+
+    const result = await runDistributionAgent({
+      userId: 14,
+      campaignId: 27,
+      approvalMode: "assisted",
+    });
+
+    expect(result.queueIds).toEqual([1]);
+
+    const queueInserts = db.state.insertCalls.filter(
+      (c: { table: string | undefined }) => c.table === "publishing_queue"
+    );
+    expect(queueInserts).toHaveLength(1);
+    expect(queueInserts[0].values.status).toBe("pending_approval");
+    expect(queueInserts[0].values.approvalRequired).toBe(true);
+
+    const approvalInserts = db.state.insertCalls.filter(
+      (c: { table: string | undefined }) => c.table === "approval_requests"
+    );
+    expect(approvalInserts).toHaveLength(0);
+  });
   it("distribution-agent fails closed on an offset-less declared schedule (no server-local parsing)", async () => {
     const { getDb } = await import("../../../queries/connection");
     const { runAgent } = await import("../../agents/runner");
