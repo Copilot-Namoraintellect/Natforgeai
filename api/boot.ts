@@ -8,6 +8,7 @@ import { env } from "./lib/env";
 import { startPublishingRunner } from "./lib/workflow/publishing-runner";
 import { startCreditRenewalScheduler } from "./lib/jobs/credit-renewal";
 import { startPostLiveLifecycleScheduler } from "./lib/workflow/post-live-lifecycle-scheduler";
+import { startPostLiveMetricsObservationScheduler } from "./lib/workflow/post-live-metrics-observation-scheduler";
 import { connectRedis, isRedisConfigured } from "./lib/redis";
 import { startPublishingWorker } from "./lib/queue/publishing-worker";
 import { startContentGenerationWorker } from "./lib/queue/content-generation-worker";
@@ -48,6 +49,14 @@ startCreditRenewalScheduler();
 if (env.postLiveLifecycleEnabled) {
   startPostLiveLifecycleScheduler({
     intervalMs: env.postLiveLifecycleIntervalMs,
+  });
+}
+
+// Post-live metrics observation is deliberately default-off.
+// Production activation requires explicit operational configuration.
+if (env.postLiveMetricsObservationEnabled) {
+  startPostLiveMetricsObservationScheduler({
+    intervalMs: env.postLiveMetricsObservationIntervalMs,
   });
 }
 

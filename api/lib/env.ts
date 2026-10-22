@@ -113,6 +113,14 @@ export const env = {
     300_000
   ),
 
+  // Post-live metrics observation remains disabled unless explicitly authorised.
+  postLiveMetricsObservationEnabled:
+    process.env.POST_LIVE_METRICS_OBSERVATION_ENABLED === "true",
+  postLiveMetricsObservationIntervalMs: parsePositiveInteger(
+    process.env.POST_LIVE_METRICS_OBSERVATION_INTERVAL_MS,
+    300_000
+  ),
+
   bannerbearApiKey: process.env.BANNERBEAR_API_KEY ?? "",
   bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
   bannerbearTemplateServiceBusinessPromo: process.env.BANNERBEAR_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",
