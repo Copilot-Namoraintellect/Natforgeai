@@ -16,6 +16,7 @@ import { runCreativeAgent } from "../agents/creative-agent";
 import { runDistributionAgent } from "../agents/distribution-agent";
 import { runAudienceAgent } from "../agents/audience-agent";
 import { runAudienceIntelligenceAgent } from "../agents/audience-intelligence-agent";
+import { terminaliseStaleStrategyRuns } from "../agents/stale-strategy-run";
 import { checkAudienceAgentAccess } from "../audience/access";
 import { canRunAutonomousWorkflow } from "../billing/cost-control";
 import { isBullMQAvailable, schedulePublishingJob } from "../queue/bullmq";
@@ -59,6 +60,27 @@ export async function onAgentRunComplete(runId: number) {
     .limit(1);
 
   if (!campaign) return;
+
+  // WBS-R1.6 forward reliability: terminalise strategy runs orphaned by a
+  // crash (stuck "running") for THIS campaign so status-based dedup and the
+  // workflow status stay sound. Best-effort: a sweep failure must not block
+  // the completion that is already durably recorded.
+  try {
+    const sweep = await terminaliseStaleStrategyRuns({
+      userId: run.userId,
+      campaignId: run.campaignId,
+    });
+    if (sweep.terminalised > 0) {
+      console.log(
+        `[Workflow] Terminalised ${sweep.terminalised} stale strategy run(s) for campaign ${run.campaignId}.`
+      );
+    }
+  } catch (error) {
+    console.error(
+      `[Workflow] Stale strategy-run sweep failed for campaign ${run.campaignId}:`,
+      error instanceof Error ? error.message : error
+    );
+  }
 
   const [business] = campaign.businessId
     ? await db

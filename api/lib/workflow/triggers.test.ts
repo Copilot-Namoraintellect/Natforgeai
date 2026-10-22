@@ -420,6 +420,54 @@ describe("onAgentRunComplete integration path", () => {
     expect(timeline?.creativeRunHistory.length).toBe(1);
   });
 
+  it("terminalises crash-orphaned stale strategy runs while advancing (WBS-R1.6)", async () => {
+    const staleStrategyRun = {
+      id: 650,
+      userId: 42,
+      campaignId: 29,
+      agentType: "strategy",
+      status: "running",
+      startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      error: null,
+    };
+    const creativeCompletedRun = {
+      id: 501,
+      userId: 42,
+      campaignId: 29,
+      agentType: "creative",
+      status: "completed",
+      error: null,
+      createdAt: new Date().toISOString(),
+    };
+    const campaign = {
+      id: 29,
+      userId: 42,
+      name: "Campaign #29",
+      workflowState: "strategy_approved",
+      workflowContext: { savedPosts: 4 },
+      approvalMode: "assisted",
+    };
+
+    const { getDb } = await import("../../queries/connection");
+    const { runAudienceAgent } = await import("../agents/audience-agent");
+    const { onAgentRunComplete } = await import("./triggers");
+
+    const { db, state } = createWorkflowDbMock({
+      agentRunsRows: [staleStrategyRun, creativeCompletedRun],
+      campaign,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runAudienceAgent).mockResolvedValue({ runId: 999 } as any);
+
+    await onAgentRunComplete(501);
+
+    const terminalised = state.agentRuns.find((r) => r.id === 650);
+    expect(terminalised?.status).toBe("failed");
+    expect(String(terminalised?.error ?? "")).toMatch(/Stale strategy run terminalised/);
+    // The live completed run and its campaign are untouched by the sweep.
+    expect(state.agentRuns.find((r) => r.id === 501)?.status).toBe("completed");
+  });
+
   it("keeps one clear failed creative activity with retry guidance and credit-impact messaging", async () => {
     const failedRun = {
       id: 701,
