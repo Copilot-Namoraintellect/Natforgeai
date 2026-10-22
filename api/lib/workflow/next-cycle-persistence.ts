@@ -332,3 +332,17 @@ export async function markNextCycleInstructionDispatched(input: {
 }): Promise<TransitionNextCycleInstructionResult | null> {
   return transitionNextCycleInstructionTo({ ...input, toStatus: "dispatched" });
 }
+
+/**
+ * CAS transition of the campaign's next-cycle instruction from "ready" to
+ * "failed". Exact-instructionId, owner-scoped, idempotent on identical
+ * replay, fail-closed on every other state.
+ */
+export async function markNextCycleInstructionFailed(input: {
+  userId: number;
+  campaignId: number;
+  instructionId: string;
+  executor?: NextCycleDbExecutor;
+}): Promise<TransitionNextCycleInstructionResult | null> {
+  return transitionNextCycleInstructionTo({ ...input, toStatus: "failed" });
+}
