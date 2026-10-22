@@ -4,6 +4,16 @@ import { eq, and, gte, sql } from "drizzle-orm";
 import { checkCredits } from "./credit-engine";
 import { env } from "../env";
 import { getSystemSetting } from "../system-settings";
+import {
+  buildCostPauseProvenance,
+  recordWorkflowCostPause,
+  type WorkflowContinuationKind,
+} from "../workflow/cost-pause";
+
+export interface CostContinuation {
+  kind: WorkflowContinuationKind;
+  continuationId: number;
+}
 
 interface CostControlResult {
   allowed: boolean;
@@ -115,13 +125,29 @@ export async function enforceCostControl(
 /**
  * Pause a campaign's autonomous workflow and create an approval request
  * when cost limits are exceeded.
+ *
+ * When `continuation` is supplied, the durable cost-pause provenance
+ * (workflowContext.costPause) is recorded BEFORE the workflow state is
+ * mutated, capturing the exact continuation coordinates and the pre-pause
+ * workflowState so an approved cost increase can resume at the same point.
  */
 export async function pauseWorkflowForCostLimit(
   userId: number,
   campaignId: number,
-  reason: string
+  reason: string,
+  continuation?: CostContinuation
 ): Promise<void> {
   const db = getDb();
+
+  // Capture the pre-pause authority BEFORE mutating the campaign: the resume
+  // path restores this state and dispatches these exact coordinates.
+  const [campaign] = await db
+    .select({
+      workflowState: campaigns.workflowState,
+    })
+    .from(campaigns)
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
+    .limit(1);
 
   // Update campaign workflow state
   await db
@@ -143,6 +169,19 @@ export async function pauseWorkflowForCostLimit(
     riskLevel: "medium",
     status: "pending",
   });
+
+  if (continuation) {
+    await recordWorkflowCostPause({
+      userId,
+      campaignId,
+      provenance: buildCostPauseProvenance({
+        kind: continuation.kind,
+        continuationId: continuation.continuationId,
+        reason,
+        workflowState: campaign?.workflowState ?? "strategy_pending",
+      }),
+    });
+  }
 }
 
 /**
@@ -150,7 +189,8 @@ export async function pauseWorkflowForCostLimit(
  */
 export async function canRunAutonomousWorkflow(
   userId: number,
-  campaignId: number
+  campaignId: number,
+  continuation?: CostContinuation
 ): Promise<{ allowed: boolean; reason?: string }> {
   const db = getDb();
 
@@ -174,7 +214,8 @@ export async function canRunAutonomousWorkflow(
     await pauseWorkflowForCostLimit(
       userId,
       campaignId,
-      "Insufficient credits for autonomous workflow"
+      "Insufficient credits for autonomous workflow",
+      continuation
     );
     return { allowed: false, reason: "Insufficient credits. Workflow paused." };
   }

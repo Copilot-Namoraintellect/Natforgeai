@@ -75,6 +75,10 @@ vi.mock("../strategy/strategy-snapshot-db-store", () => ({
   getNextStrategySnapshotVersion: vi.fn(),
 }));
 
+vi.mock("./budget-resume", () => ({
+  resumeWorkflowAfterApprovedCostIncrease: vi.fn(async () => ({ outcome: "resumed" })),
+}));
+
 const approvedStrategyPayload = {
   coreMessage: "Immutable core message",
   valueProposition: "Immutable value proposition",
@@ -560,6 +564,67 @@ describe("onAgentRunComplete integration path", () => {
         }),
       })
     );
+  });
+});
+
+describe("onApprovalResolved budget_increase resume (WBS-R1.4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("resumes the cost-paused workflow when the budget increase is approved", async () => {
+    const request = {
+      id: 81,
+      userId: 42,
+      campaignId: 29,
+      approvalType: "budget_increase",
+      status: "approved",
+    };
+    const campaign = {
+      id: 29,
+      userId: 42,
+      name: "Campaign #29",
+      workflowState: "launch_approval_required",
+      status: "paused",
+      workflowContext: { costPause: { kind: "agent_run_complete", continuationId: 501 } },
+    };
+
+    const { getDb } = await import("../../queries/connection");
+    const { onApprovalResolved } = await import("./triggers");
+    const { resumeWorkflowAfterApprovedCostIncrease } = await import("./budget-resume");
+
+    const { db } = createWorkflowDbMock({ approvalRequestsRows: [request], campaign });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onApprovalResolved(81, "approved", 42);
+
+    expect(resumeWorkflowAfterApprovedCostIncrease).toHaveBeenCalledTimes(1);
+    expect(resumeWorkflowAfterApprovedCostIncrease).toHaveBeenCalledWith({
+      userId: 42,
+      campaignId: 29,
+    });
+  });
+
+  it("does not resume when the budget increase is rejected", async () => {
+    const request = {
+      id: 82,
+      userId: 42,
+      campaignId: 29,
+      approvalType: "budget_increase",
+      status: "rejected",
+    };
+    const campaign = { id: 29, userId: 42, name: "Campaign #29", workflowState: "creatives_ready" };
+
+    const { getDb } = await import("../../queries/connection");
+    const { onApprovalResolved } = await import("./triggers");
+    const { resumeWorkflowAfterApprovedCostIncrease } = await import("./budget-resume");
+
+    const { db } = createWorkflowDbMock({ approvalRequestsRows: [request], campaign });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onApprovalResolved(82, "rejected", 42);
+
+    expect(resumeWorkflowAfterApprovedCostIncrease).not.toHaveBeenCalled();
   });
 });
 

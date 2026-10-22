@@ -69,7 +69,10 @@ export async function onAgentRunComplete(runId: number) {
     : [null];
 
   // Check cost control before auto-advancing
-  const autoCheck = await canRunAutonomousWorkflow(run.userId, run.campaignId);
+  const autoCheck = await canRunAutonomousWorkflow(run.userId, run.campaignId, {
+    kind: "agent_run_complete",
+    continuationId: run.id,
+  });
   if (!autoCheck.allowed) {
     console.log(`[Workflow] Auto-advance blocked for campaign ${run.campaignId}: ${autoCheck.reason}`);
     return;
@@ -342,7 +345,10 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
       // Optional: auto-run audience intelligence after launch approval
       try {
         const access = await checkAudienceAgentAccess(userId, null);
-        const autoCheck = await canRunAutonomousWorkflow(userId, campaignId);
+        const autoCheck = await canRunAutonomousWorkflow(userId, campaignId, {
+          kind: "launch_audience_intelligence",
+          continuationId: approvalId,
+        });
         if (access.allowed && autoCheck.allowed) {
           await runAudienceIntelligenceAgent({
             userId,
@@ -410,6 +416,14 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
       await onStrategyApproved(campaignId, userId, approvalId);
     } else {
       await transitionCampaignState(campaignId, userId, "request_strategy_changes");
+    }
+  } else if (request.approvalType === "budget_increase") {
+    if (decision === "approved") {
+      // WBS-R1.4: an approved cost increase resumes the cost-paused workflow
+      // at its durable continuation point. Imported lazily to keep the
+      // module graph acyclic (budget-resume drives the trigger pathways).
+      const { resumeWorkflowAfterApprovedCostIncrease } = await import("./budget-resume");
+      await resumeWorkflowAfterApprovedCostIncrease({ userId, campaignId });
     }
   }
 }
@@ -667,7 +681,10 @@ export async function onStrategyApproved(
 
   // 4. Cost control check BEFORE acquiring or re-arming a claim. A negative
   // result returns without touching claim state.
-  const autoCheck = await canRunAutonomousWorkflow(userId, campaignId);
+  const autoCheck = await canRunAutonomousWorkflow(userId, campaignId, {
+    kind: "strategy_approval",
+    continuationId: approvalId,
+  });
   if (!autoCheck.allowed) {
     console.log(`[Workflow] Auto-creative blocked for campaign ${campaignId}: ${autoCheck.reason}`);
     return;
