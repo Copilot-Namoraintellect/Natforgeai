@@ -129,7 +129,8 @@ describe("triggerNextCycleAfterLearningPromotion", () => {
     });
 
     expect(first?.outcome).toBe("created");
-    expect(second).toEqual({ outcome: "already_present", instructionId: first!.instructionId });
+    if (first?.outcome !== "created") throw new Error("expected the first trigger to create");
+    expect(second).toEqual({ outcome: "already_present", instructionId: first.instructionId });
     // Exactly one durable write across both triggers.
     expect(fake.updateCalls).toHaveLength(1);
   });
