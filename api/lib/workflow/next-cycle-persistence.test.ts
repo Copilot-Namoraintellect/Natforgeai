@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { persistNextCycleInstruction } from "./next-cycle-persistence";
+import {
+  markNextCycleInstructionDispatched,
+  persistNextCycleInstruction,
+} from "./next-cycle-persistence";
 
 interface FakeCampaign {
   id: number;
@@ -196,6 +199,169 @@ describe("persistNextCycleInstruction", () => {
     const fake = createFakeExecutor({ reads: [undefined] });
 
     const result = await persistNextCycleInstruction({
+      userId: 22,
+      campaignId: 404,
+      instructionId: "nci_1",
+      executor: fake.executor,
+    });
+
+    expect(result).toBeNull();
+    expect(fake.updateCalls).toHaveLength(0);
+  });
+});
+
+describe("markNextCycleInstructionDispatched", () => {
+  const READY = { nextCycle: { instructionId: "nci_1", status: "ready" } };
+
+  it("transitions ready to dispatched against the exact instruction", async () => {
+    const fake = createFakeExecutor({
+      reads: [campaign({ campaignLiveAt: "2026-06-01T00:00:00.000Z", ...READY })],
+    });
+
+    const result = await markNextCycleInstructionDispatched({
+      userId: 22,
+      campaignId: 7,
+      instructionId: "nci_1",
+      executor: fake.executor,
+    });
+
+    expect(result).toEqual({
+      instruction: { instructionId: "nci_1", status: "dispatched" },
+      transitioned: true,
+    });
+    expect(fake.updateCalls).toHaveLength(1);
+    const setPayload = fake.updateCalls[0].set as {
+      workflowContext: Record<string, unknown>;
+    };
+    expect(setPayload.workflowContext).toEqual({
+      campaignLiveAt: "2026-06-01T00:00:00.000Z",
+      nextCycle: { instructionId: "nci_1", status: "dispatched" },
+    });
+  });
+
+  it("returns idempotently when the same instruction is already dispatched", async () => {
+    const fake = createFakeExecutor({
+      reads: [campaign({ nextCycle: { instructionId: "nci_1", status: "dispatched" }, other: 1 })],
+    });
+
+    const result = await markNextCycleInstructionDispatched({
+      userId: 22,
+      campaignId: 7,
+      instructionId: "nci_1",
+      executor: fake.executor,
+    });
+
+    expect(result).toEqual({
+      instruction: { instructionId: "nci_1", status: "dispatched" },
+      transitioned: false,
+    });
+    expect(fake.updateCalls).toHaveLength(0);
+  });
+
+  it("fails closed when the instruction is already failed", async () => {
+    const fake = createFakeExecutor({
+      reads: [campaign({ nextCycle: { instructionId: "nci_1", status: "failed" } })],
+    });
+
+    await expect(
+      markNextCycleInstructionDispatched({
+        userId: 22,
+        campaignId: 7,
+        instructionId: "nci_1",
+        executor: fake.executor,
+      })
+    ).rejects.toThrow(/cannot transition to dispatched/);
+    expect(fake.updateCalls).toHaveLength(0);
+  });
+
+  it("fails closed on a conflicting instructionId", async () => {
+    const fake = createFakeExecutor({
+      reads: [campaign({ nextCycle: { instructionId: "nci_other", status: "ready" } })],
+    });
+
+    await expect(
+      markNextCycleInstructionDispatched({
+        userId: 22,
+        campaignId: 7,
+        instructionId: "nci_1",
+        executor: fake.executor,
+      })
+    ).rejects.toThrow(/different next-cycle instruction/);
+    expect(fake.updateCalls).toHaveLength(0);
+  });
+
+  it("fails closed on malformed existing state", async () => {
+    const fake = createFakeExecutor({
+      reads: [campaign({ nextCycle: { instructionId: "nci_1", status: "pending" } })],
+    });
+
+    await expect(
+      markNextCycleInstructionDispatched({
+        userId: 22,
+        campaignId: 7,
+        instructionId: "nci_1",
+        executor: fake.executor,
+      })
+    ).rejects.toThrow(/status/);
+    expect(fake.updateCalls).toHaveLength(0);
+  });
+
+  it("fails closed when no next-cycle instruction exists", async () => {
+    const fake = createFakeExecutor({
+      reads: [campaign({ campaignLiveAt: "2026-06-01T00:00:00.000Z" })],
+    });
+
+    await expect(
+      markNextCycleInstructionDispatched({
+        userId: 22,
+        campaignId: 7,
+        instructionId: "nci_1",
+        executor: fake.executor,
+      })
+    ).rejects.toThrow(/no next-cycle instruction/);
+    expect(fake.updateCalls).toHaveLength(0);
+  });
+
+  it("accepts a zero-row UPDATE when the concurrent winner already dispatched the same instruction", async () => {
+    const fake = createFakeExecutor({
+      reads: [campaign(READY), campaign({ nextCycle: { instructionId: "nci_1", status: "dispatched" } })],
+      updateAffectedRows: 0,
+    });
+
+    const result = await markNextCycleInstructionDispatched({
+      userId: 22,
+      campaignId: 7,
+      instructionId: "nci_1",
+      executor: fake.executor,
+    });
+
+    expect(result).toEqual({
+      instruction: { instructionId: "nci_1", status: "dispatched" },
+      transitioned: false,
+    });
+    expect(fake.updateCalls).toHaveLength(1);
+  });
+
+  it("fails closed on a zero-row UPDATE when the winner dispatched a different instruction", async () => {
+    const fake = createFakeExecutor({
+      reads: [campaign(READY), campaign({ nextCycle: { instructionId: "nci_other", status: "dispatched" } })],
+      updateAffectedRows: 0,
+    });
+
+    await expect(
+      markNextCycleInstructionDispatched({
+        userId: 22,
+        campaignId: 7,
+        instructionId: "nci_1",
+        executor: fake.executor,
+      })
+    ).rejects.toThrow(/changed concurrently/);
+  });
+
+  it("returns null for a missing or wrong-owner campaign without writing", async () => {
+    const fake = createFakeExecutor({ reads: [undefined] });
+
+    const result = await markNextCycleInstructionDispatched({
       userId: 22,
       campaignId: 404,
       instructionId: "nci_1",

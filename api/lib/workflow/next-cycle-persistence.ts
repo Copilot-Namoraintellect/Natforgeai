@@ -20,6 +20,13 @@
  *   or any malformed state fails closed — authority is never overwritten.
  * - workflowContext is a preserved-superset write: every existing field is
  *   carried over untouched; only the nextCycle key is added.
+ * - Lifecycle transitions are exact-instruction CAS moves from "ready" to a
+ *   terminal status ("dispatched" | "failed"), matched on id + userId AND on
+ *   the current ready instruction. An already-completed identical transition
+ *   replays idempotently; a zero-row UPDATE is reconciled by rereading and
+ *   accepting only an identical instruction already in the target status.
+ *   Absent, malformed, conflicting or wrongly-statused state fails closed —
+ *   authority is never overwritten.
  *
  * This module performs NO Strategy execution, NO approval creation and NO
  * schema or migration change. The only mutation target is the owning
@@ -187,4 +194,141 @@ export async function persistNextCycleInstruction(input: {
     );
   }
   return { instruction: winnerInstruction, persisted: false };
+}
+
+export interface TransitionNextCycleInstructionResult {
+  /** The durable instruction authority after this call. */
+  instruction: NextCycleInstruction;
+  /** True when this call performed the CAS write, false on replay. */
+  transitioned: boolean;
+}
+
+/**
+ * Exact-instruction CAS transition of the campaign's workflowContext.nextCycle
+ * from "ready" to `toStatus` ("dispatched" | "failed").
+ *
+ * The campaign is owner-scoped, the instructionId must match exactly, and the
+ * conditional UPDATE is matched on the current ready state, so a concurrent
+ * transition wins the slot at most once. A zero-row UPDATE is reconciled by
+ * rereading and accepting only an identical instruction already in
+ * `toStatus`. Absent, malformed, conflicting or wrongly-statused state fails
+ * closed. All other workflowContext fields are preserved.
+ */
+async function transitionNextCycleInstructionTo(input: {
+  userId: number;
+  campaignId: number;
+  instructionId: string;
+  toStatus: "dispatched" | "failed";
+  executor?: NextCycleDbExecutor;
+}): Promise<TransitionNextCycleInstructionResult | null> {
+  assertPositiveId(input.userId, "userId");
+  assertPositiveId(input.campaignId, "campaignId");
+  if (typeof input.instructionId !== "string" || input.instructionId.trim().length === 0) {
+    throw new Error("instructionId must be a non-blank string");
+  }
+
+  const executor = resolveExecutor(input.executor);
+
+  const campaign = await readScopedCampaign(executor, input.campaignId, input.userId);
+  if (!campaign) {
+    return null;
+  }
+
+  const context = parseJsonObject(campaign.workflowContext);
+  const existingNextCycle = context.nextCycle;
+
+  if (existingNextCycle === undefined) {
+    throw new Error(`campaign ${input.campaignId} has no next-cycle instruction`);
+  }
+
+  // Fail-closed strict parse: malformed stored state throws here.
+  const instruction = parseNextCycleInstruction(existingNextCycle);
+
+  if (instruction.instructionId !== input.instructionId) {
+    throw new Error(
+      `campaign ${input.campaignId} already persists a different next-cycle instruction`
+    );
+  }
+
+  if (instruction.status === input.toStatus) {
+    // Exact replay of an already-completed transition: idempotent no-op.
+    return { instruction, transitioned: false };
+  }
+
+  if (instruction.status !== "ready") {
+    throw new Error(
+      `next-cycle instruction for campaign ${input.campaignId} is "${instruction.status}" and cannot transition to ${input.toStatus}`
+    );
+  }
+
+  const nextContext = {
+    ...context,
+    nextCycle: { instructionId: input.instructionId, status: input.toStatus },
+  };
+
+  const updateResult = await executor
+    .update(campaigns)
+    .set({ workflowContext: nextContext as unknown })
+    .where(
+      and(
+        eq(campaigns.id, input.campaignId),
+        eq(campaigns.userId, input.userId),
+        eq(
+          sql`JSON_UNQUOTE(JSON_EXTRACT(${campaigns.workflowContext}, '$.nextCycle.instructionId'))`,
+          input.instructionId
+        ),
+        eq(
+          sql`JSON_UNQUOTE(JSON_EXTRACT(${campaigns.workflowContext}, '$.nextCycle.status'))`,
+          "ready"
+        )
+      )
+    );
+
+  // MySQL2 returns [ResultSetHeader, ...] where affectedRows is on the first element.
+  const affectedRows =
+    (updateResult as unknown as [{ affectedRows?: number }?])?.[0]?.affectedRows ?? 0;
+
+  if (affectedRows > 0) {
+    return {
+      instruction: { instructionId: input.instructionId, status: input.toStatus },
+      transitioned: true,
+    };
+  }
+
+  // A concurrent transition won the ready slot between our read and this
+  // write. Reread through the same scoped authority and accept ONLY an
+  // identical instruction already in the target status; anything else fails
+  // closed.
+  const winner = await readScopedCampaign(executor, input.campaignId, input.userId);
+  if (!winner) {
+    throw new Error(
+      `campaign ${input.campaignId} disappeared during next-cycle transition reconciliation`
+    );
+  }
+  const winnerInstruction = parseNextCycleInstruction(
+    parseJsonObject(winner.workflowContext).nextCycle
+  );
+  if (
+    winnerInstruction.instructionId === input.instructionId &&
+    winnerInstruction.status === input.toStatus
+  ) {
+    return { instruction: winnerInstruction, transitioned: false };
+  }
+  throw new Error(
+    `next-cycle instruction for campaign ${input.campaignId} changed concurrently and cannot transition to ${input.toStatus}`
+  );
+}
+
+/**
+ * CAS transition of the campaign's next-cycle instruction from "ready" to
+ * "dispatched". Exact-instructionId, owner-scoped, idempotent on identical
+ * replay, fail-closed on every other state.
+ */
+export async function markNextCycleInstructionDispatched(input: {
+  userId: number;
+  campaignId: number;
+  instructionId: string;
+  executor?: NextCycleDbExecutor;
+}): Promise<TransitionNextCycleInstructionResult | null> {
+  return transitionNextCycleInstructionTo({ ...input, toStatus: "dispatched" });
 }
