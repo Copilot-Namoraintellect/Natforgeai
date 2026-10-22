@@ -158,11 +158,18 @@ export async function runAudienceAgent({
   userId,
   campaignId,
   isB2B: explicitIsB2B,
+  billingIdentity,
 }: {
   userId: number;
   campaignId: number;
   /** Explicit override. When omitted, the agent classifies from campaign + business evidence. */
   isB2B?: boolean;
+  /**
+   * Caller-stable billing identity minted at the workflow trigger boundary.
+   * Passed to the keyed runner deduction so retries of this logical step
+   * never double-charge.
+   */
+  billingIdentity?: string;
 }) {
   const db = getDb();
 
@@ -257,6 +264,7 @@ CRITICAL SCHEMA RULES — YOU MUST FOLLOW THESE EXACTLY:
     schema: AudienceDiscoverySchema,
     system:
       "You are an expert audience researcher and media buyer. You understand Facebook Ads Manager, Google Ads, LinkedIn Campaign Manager, and TikTok Ads. You create detailed, actionable audience targeting recommendations. CRITICAL: You must include EVERY key in every object. Use null for fields that do not apply. Never omit a key.",
+    ...(billingIdentity ? { billingIdempotencyKey: billingIdentity } : {}),
   });
 
   // Normalise the AI output so missing/undefined fields become safe defaults

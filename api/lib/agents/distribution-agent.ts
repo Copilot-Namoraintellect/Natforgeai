@@ -23,10 +23,17 @@ export async function runDistributionAgent({
   userId,
   campaignId,
   approvalMode,
+  billingIdentity,
 }: {
   userId: number;
   campaignId: number;
   approvalMode: "assisted" | "autonomous";
+  /**
+   * Caller-stable billing identity minted at the workflow trigger boundary.
+   * Passed to the keyed runner deduction so retries of this logical step
+   * never double-charge.
+   */
+  billingIdentity?: string;
 }) {
   const db = getDb();
 
@@ -83,6 +90,7 @@ Respond with structured data containing the schedule.`;
     schema: PublishingScheduleSchema,
     system:
       "You are a social media scheduling expert. You understand optimal posting times, platform algorithms, and content distribution strategies. Always respond with valid structured data.",
+    ...(billingIdentity ? { billingIdempotencyKey: billingIdentity } : {}),
   });
 
   // Create publishing queue entries with safety checks and deterministic approval mode

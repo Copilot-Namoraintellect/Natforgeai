@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildFailedCreativeMessage, groupCampaignActivity } from "../../../src/lib/agent-activity";
 import { hashStrategySnapshotPayload } from "../strategy/strategy-snapshot";
+import {
+  buildAudienceBillingIdentity,
+  buildDistributionBillingIdentity,
+} from "./agent-billing-identity";
 
 vi.mock("../../queries/connection", () => ({
   getDb: vi.fn(),
@@ -465,6 +469,97 @@ describe("onAgentRunComplete integration path", () => {
 
     const providerMessage = buildFailedCreativeMessage("OpenAI timeout");
     expect(providerMessage.creditsImpact?.toLowerCase()).toContain("automatically refunded");
+  });
+
+  it("mints the audience billing identity at the creative-to-audience trigger boundary", async () => {
+    const creativeCompletedRun = {
+      id: 501,
+      userId: 42,
+      campaignId: 29,
+      agentType: "creative",
+      status: "completed",
+      error: null,
+      createdAt: new Date().toISOString(),
+    };
+    const campaign = {
+      id: 29,
+      userId: 42,
+      name: "Campaign #29",
+      workflowState: "strategy_approved",
+      workflowContext: { savedPosts: 4 },
+      approvalMode: "assisted",
+    };
+
+    const { getDb } = await import("../../queries/connection");
+    const { runAudienceAgent } = await import("../agents/audience-agent");
+    const { onAgentRunComplete } = await import("./triggers");
+
+    const { db } = createWorkflowDbMock({
+      agentRunsRows: [creativeCompletedRun],
+      campaign,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runAudienceAgent).mockResolvedValue({ runId: 999 } as any);
+
+    await onAgentRunComplete(501);
+
+    expect(runAudienceAgent).toHaveBeenCalledTimes(1);
+    expect(runAudienceAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 42,
+        campaignId: 29,
+        billingIdentity: buildAudienceBillingIdentity({
+          campaignId: 29,
+          creativeRunId: 501,
+        }),
+      })
+    );
+  });
+
+  it("mints the distribution billing identity at the audience-to-distribution trigger boundary", async () => {
+    const audienceCompletedRun = {
+      id: 610,
+      userId: 42,
+      campaignId: 29,
+      agentType: "audience",
+      status: "completed",
+      error: null,
+      createdAt: new Date().toISOString(),
+    };
+    const campaign = {
+      id: 29,
+      userId: 42,
+      name: "Campaign #29",
+      workflowState: "audience_generating",
+      workflowContext: { audienceRunId: 610 },
+      approvalMode: "assisted",
+    };
+
+    const { getDb } = await import("../../queries/connection");
+    const { runDistributionAgent } = await import("../agents/distribution-agent");
+    const { onAgentRunComplete } = await import("./triggers");
+
+    const { db } = createWorkflowDbMock({
+      agentRunsRows: [audienceCompletedRun],
+      campaign,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runDistributionAgent).mockResolvedValue({ runId: 998 } as any);
+
+    await onAgentRunComplete(610);
+
+    expect(runDistributionAgent).toHaveBeenCalledTimes(1);
+    expect(runDistributionAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 42,
+        campaignId: 29,
+        approvalMode: "assisted",
+        billingIdentity: buildDistributionBillingIdentity({
+          campaignId: 29,
+          audienceRunId: 610,
+        }),
+      })
+    );
   });
 });
 

@@ -41,6 +41,13 @@ export interface AgentRunOptions<TOutput> {
   system?: string;
   skipBilling?: boolean;
   abortSignal?: AbortSignal;
+  /**
+   * Caller-stable billing identity (minted at the workflow trigger boundary).
+   * When provided, the deduction is recorded under this idempotency key so
+   * retries of the same logical step collapse onto one durable charge.
+   * When omitted, the legacy unkeyed deduction behaviour is preserved.
+   */
+  billingIdempotencyKey?: string;
 }
 
 export interface AgentRunResult<TOutput> {
@@ -61,6 +68,7 @@ export async function runAgent<TOutput>({
   system,
   skipBilling,
   abortSignal,
+  billingIdempotencyKey,
 }: AgentRunOptions<TOutput>): Promise<AgentRunResult<TOutput>> {
   const db = getDb();
 
@@ -94,6 +102,7 @@ export async function runAgent<TOutput>({
       type: "agent_deduction",
       description: `${agentType} agent execution`,
       metadata: { agentType, campaignId, estimatedCost },
+      ...(billingIdempotencyKey ? { idempotencyKey: billingIdempotencyKey } : {}),
     });
     creditsDeducted = estimatedCost;
   }

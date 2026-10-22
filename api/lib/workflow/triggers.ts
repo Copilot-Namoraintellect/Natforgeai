@@ -41,6 +41,10 @@ import { InMemoryWorkflowOperationRegistry } from "./workflow-operation";
 import { resolveCreativeEntryStrategyAuthority } from "../creative/creative-entry-authority";
 import type { CreativeStrategySnapshotInput } from "../creative/strategy-snapshot-input";
 import { getStrategySnapshotByStrategyRunId } from "../strategy/strategy-snapshot-db-store";
+import {
+  buildAudienceBillingIdentity,
+  buildDistributionBillingIdentity,
+} from "./agent-billing-identity";
 
 export async function onAgentRunComplete(runId: number) {
   const db = getDb();
@@ -182,9 +186,15 @@ export async function onAgentRunComplete(runId: number) {
       if (existingAudience.length > 0 && ["running", "completed"].includes(existingAudience[0].status)) {
         console.log(`[Workflow] Skipping duplicate audience run for campaign ${run.campaignId}. Existing run ${existingAudience[0].id} is ${existingAudience[0].status}.`);
       } else {
+        // WBS-R1.3: mint the caller-stable billing identity at the trigger
+        // boundary so retries of this logical step never double-charge.
         const audienceResult = await runAudienceAgent({
           userId: run.userId,
           campaignId: run.campaignId,
+          billingIdentity: buildAudienceBillingIdentity({
+            campaignId: run.campaignId,
+            creativeRunId: run.id,
+          }),
         });
         await onAgentRunComplete(audienceResult.runId);
       }
@@ -212,10 +222,16 @@ export async function onAgentRunComplete(runId: number) {
       if (existingDist.length > 0 && ["running", "completed"].includes(existingDist[0].status)) {
         console.log(`[Workflow] Skipping duplicate distribution run for campaign ${run.campaignId}. Existing run ${existingDist[0].id} is ${existingDist[0].status}.`);
       } else {
+        // WBS-R1.3: mint the caller-stable billing identity at the trigger
+        // boundary so retries of this logical step never double-charge.
         const distResult = await runDistributionAgent({
           userId: run.userId,
           campaignId: run.campaignId,
           approvalMode: campaign.approvalMode as "assisted" | "autonomous",
+          billingIdentity: buildDistributionBillingIdentity({
+            campaignId: run.campaignId,
+            audienceRunId: run.id,
+          }),
         });
         await onAgentRunComplete(distResult.runId);
       }
