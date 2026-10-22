@@ -24,6 +24,7 @@
  */
 
 import { and, asc, eq } from "drizzle-orm";
+import { createHash } from "crypto";
 import { campaigns } from "@db/schema";
 import { getDb } from "../../queries/connection";
 import type { JsonValue } from "../strategy/strategy-snapshot";
@@ -214,4 +215,186 @@ export function strategyLearningPromotionLineageToJson(
   entries: StrategyLearningPromotionLineageEntry[]
 ): JsonValue {
   return JSON.parse(JSON.stringify(entries)) as JsonValue;
+}
+
+/**
+ * Next-cycle identity + instruction contract (WBS-R1.2A) — pure, side-effect
+ * free.
+ *
+ * When a future governed Strategy cycle consumes approved Learning promotions
+ * (section above), the new cycle needs a durable, deterministic IDENTITY for
+ * the instruction set it was seeded from, and a strict, fail-closed contract
+ * for the instruction envelope a dispatcher may later act on.
+ *
+ * Identity model:
+ * - The next-cycle identity is a deterministic SHA-256 over the canonical
+ *   (key-sorted) material: the target campaign, the Strategy snapshot hash
+ *   the cycle starts from, and the sorted set of approved proposal
+ *   fingerprints it consumes. No timestamps: identity is material-only, so
+ *   the same campaign + strategy hash + fingerprint set always yields the
+ *   same identity regardless of when the cycle is prepared.
+ * - Proposal fingerprints are canonicalised by sorting, so equivalent input
+ *   order produces an identical identity. Duplicates are rejected: a
+ *   fingerprint set is a SET, not a list.
+ * - The fingerprint set must be non-empty and every fingerprint must be a
+ *   non-blank string — an empty or blank set would fabricate authority for
+ *   a cycle that consumed nothing.
+ *
+ * Instruction model:
+ * - A NextCycleInstruction is the minimal envelope a dispatcher consumes:
+ *   an instructionId and a lifecycle status (ready | dispatched | failed).
+ * - parseNextCycleInstruction is strict and fail-closed: it rejects
+ *   malformed objects, unknown fields, blank instructionIds and unsupported
+ *   statuses rather than guessing. Nothing here dispatches, persists or
+ *   creates approvals — this is the contract only.
+ */
+
+/** Identity prefix for every next-cycle identity (versioned contract). */
+export const NEXT_CYCLE_IDENTITY_PREFIX = "next-cycle:v1:";
+
+/** Supported next-cycle instruction lifecycle statuses. */
+export const NEXT_CYCLE_INSTRUCTION_STATUSES = [
+  "ready",
+  "dispatched",
+  "failed",
+] as const;
+
+export type NextCycleInstructionStatus =
+  (typeof NEXT_CYCLE_INSTRUCTION_STATUSES)[number];
+
+/**
+ * Minimal next-cycle instruction envelope a future dispatcher may consume.
+ */
+export interface NextCycleInstruction {
+  instructionId: string;
+  status: NextCycleInstructionStatus;
+}
+
+export interface BuildNextCycleIdentityInput {
+  campaignId: number;
+  /** SHA-256 hex digest of the Strategy snapshot the cycle starts from. */
+  strategyHashSha256: string;
+  /** Approved proposal fingerprints the cycle consumes (canonicalised). */
+  proposalFingerprints: string[];
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function canonicalNextCycleJson(value: unknown): string {
+  if (value === null) return "null";
+  switch (typeof value) {
+    case "string":
+      return JSON.stringify(value);
+    case "number": {
+      if (!Number.isFinite(value)) {
+        throw new Error("next-cycle identity material contains a non-finite number");
+      }
+      return JSON.stringify(value);
+    }
+    case "boolean":
+      return value ? "true" : "false";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(entry => canonicalNextCycleJson(entry)).join(",")}]`;
+  }
+  if (!isPlainObject(value)) {
+    throw new Error("next-cycle identity material must be JSON-like");
+  }
+  const keys = Object.keys(value).sort();
+  return `{${keys
+    .map(key => `${JSON.stringify(key)}:${canonicalNextCycleJson(value[key])}`)
+    .join(",")}}`;
+}
+
+/**
+ * Deterministic next-cycle identity over the canonical cycle material.
+ * Identical material always yields the same identity; fingerprint order is
+ * canonicalised by sorting, so equivalent orders collapse onto one identity.
+ */
+export function buildNextCycleIdentity(
+  input: BuildNextCycleIdentityInput
+): string {
+  if (!Number.isInteger(input.campaignId) || input.campaignId <= 0) {
+    throw new Error("next-cycle identity: campaignId must be a positive integer");
+  }
+  if (
+    typeof input.strategyHashSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/.test(input.strategyHashSha256)
+  ) {
+    throw new Error(
+      "next-cycle identity: strategyHashSha256 must be a 64-character lowercase hex SHA-256 digest"
+    );
+  }
+  if (
+    !Array.isArray(input.proposalFingerprints) ||
+    input.proposalFingerprints.length === 0
+  ) {
+    throw new Error(
+      "next-cycle identity: proposalFingerprints must be a non-empty array"
+    );
+  }
+  for (const fingerprint of input.proposalFingerprints) {
+    if (typeof fingerprint !== "string" || fingerprint.trim().length === 0) {
+      throw new Error(
+        "next-cycle identity: proposal fingerprints must be non-blank strings"
+      );
+    }
+  }
+  if (new Set(input.proposalFingerprints).size !== input.proposalFingerprints.length) {
+    throw new Error(
+      "next-cycle identity: proposal fingerprints must not contain duplicates"
+    );
+  }
+
+  // Canonicalise the fingerprint set by sorting so equivalent input order
+  // produces an identical identity.
+  const canonicalFingerprints = [...input.proposalFingerprints].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0
+  );
+
+  const digest = createHash("sha256")
+    .update(
+      canonicalNextCycleJson({
+        campaignId: input.campaignId,
+        strategyHashSha256: input.strategyHashSha256,
+        proposalFingerprints: canonicalFingerprints,
+      }),
+      "utf8"
+    )
+    .digest("hex");
+
+  return `${NEXT_CYCLE_IDENTITY_PREFIX}${digest}`;
+}
+
+/**
+ * Strict, fail-closed parser for a NextCycleInstruction. Throws on any
+ * deviation from the contract instead of guessing — a dispatcher must never
+ * act on a partially-valid instruction.
+ */
+export function parseNextCycleInstruction(value: unknown): NextCycleInstruction {
+  if (!isPlainObject(value)) {
+    throw new Error("next-cycle instruction: value must be a plain object");
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "instructionId" && key !== "status") {
+      throw new Error(`next-cycle instruction: unknown field "${key}"`);
+    }
+  }
+  const instructionId = value.instructionId;
+  if (typeof instructionId !== "string" || instructionId.trim().length === 0) {
+    throw new Error(
+      "next-cycle instruction: instructionId must be a non-blank string"
+    );
+  }
+  const status = value.status;
+  if (!NEXT_CYCLE_INSTRUCTION_STATUSES.includes(status as NextCycleInstructionStatus)) {
+    throw new Error(
+      `next-cycle instruction: status must be one of ${NEXT_CYCLE_INSTRUCTION_STATUSES.join(", ")}`
+    );
+  }
+  return { instructionId, status: status as NextCycleInstructionStatus };
 }

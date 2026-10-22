@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "crypto";
 import {
   LEARNING_PROMOTION_CARRIER_APPROVAL_TYPE,
   buildLearningPromotionContext,
@@ -8,7 +9,11 @@ import {
 import { buildApprovedPromotionEnvelope } from "./promotion/promotion-envelope";
 import {
   buildApprovedLearningPromotionPromptSection,
+  buildNextCycleIdentity,
   buildStrategyLearningPromotionLineage,
+  NEXT_CYCLE_IDENTITY_PREFIX,
+  NEXT_CYCLE_INSTRUCTION_STATUSES,
+  parseNextCycleInstruction,
   resolveApprovedLearningPromotionsForStrategy,
   strategyLearningPromotionLineageToJson,
 } from "./learning-strategy-consumption";
@@ -493,5 +498,130 @@ describe("approved Learning Strategy input builders", () => {
 
     const json = strategyLearningPromotionLineageToJson(lineage);
     expect(JSON.parse(JSON.stringify(json))).toEqual(lineage);
+  });
+});
+
+describe("buildNextCycleIdentity", () => {
+  const STRATEGY_HASH = createHash("sha256").update("strategy-material").digest("hex");
+  const OTHER_STRATEGY_HASH = createHash("sha256")
+    .update("other-strategy-material")
+    .digest("hex");
+  const FP_A = createHash("sha256").update("proposal-a").digest("hex");
+  const FP_B = createHash("sha256").update("proposal-b").digest("hex");
+  const FP_C = createHash("sha256").update("proposal-c").digest("hex");
+
+  function build(overrides: Partial<Parameters<typeof buildNextCycleIdentity>[0]> = {}) {
+    return buildNextCycleIdentity({
+      campaignId: 7,
+      strategyHashSha256: STRATEGY_HASH,
+      proposalFingerprints: [FP_A, FP_B],
+      ...overrides,
+    });
+  }
+
+  it("produces a deterministic next-cycle:v1 identity", () => {
+    const identity = build();
+    expect(identity.startsWith(NEXT_CYCLE_IDENTITY_PREFIX)).toBe(true);
+    expect(identity).toMatch(/^next-cycle:v1:[0-9a-f]{64}$/);
+    expect(build()).toBe(identity);
+  });
+
+  it("canonicalises fingerprint order so equivalent orders produce identical identities", () => {
+    const forward = build({ proposalFingerprints: [FP_A, FP_B, FP_C] });
+    const reversed = build({ proposalFingerprints: [FP_C, FP_B, FP_A] });
+    expect(reversed).toBe(forward);
+  });
+
+  it("changes identity when any material input changes", () => {
+    const base = build();
+    expect(build({ campaignId: 8 })).not.toBe(base);
+    expect(build({ strategyHashSha256: OTHER_STRATEGY_HASH })).not.toBe(base);
+    expect(build({ proposalFingerprints: [FP_A, FP_C] })).not.toBe(base);
+    expect(build({ proposalFingerprints: [FP_A] })).not.toBe(base);
+  });
+
+  it("rejects empty or invalid campaignId", () => {
+    for (const campaignId of [0, -1, 1.5, NaN, "7" as unknown as number]) {
+      expect(() => build({ campaignId })).toThrow(/campaignId/);
+    }
+  });
+
+  it("rejects empty or invalid strategy hash", () => {
+    for (const strategyHashSha256 of [
+      "",
+      "   ",
+      "not-a-hash",
+      "abc123",
+      "a".repeat(63),
+      "a".repeat(65),
+      "A".repeat(64),
+      42 as unknown as string,
+    ]) {
+      expect(() => build({ strategyHashSha256 })).toThrow(/strategyHashSha256/);
+    }
+  });
+
+  it("rejects an empty fingerprint set", () => {
+    expect(() => build({ proposalFingerprints: [] })).toThrow(/non-empty/);
+  });
+
+  it("rejects blank fingerprints", () => {
+    for (const proposalFingerprints of [["", FP_B], ["   ", FP_B], [FP_A, null as unknown as string]]) {
+      expect(() => build({ proposalFingerprints })).toThrow(/non-blank/);
+    }
+  });
+
+  it("rejects duplicate fingerprints", () => {
+    expect(() => build({ proposalFingerprints: [FP_A, FP_A] })).toThrow(/duplicates/);
+    expect(() =>
+      build({ proposalFingerprints: [FP_B, FP_A, FP_B] })
+    ).toThrow(/duplicates/);
+  });
+});
+
+describe("parseNextCycleInstruction", () => {
+  it("parses each supported status", () => {
+    for (const status of NEXT_CYCLE_INSTRUCTION_STATUSES) {
+      expect(parseNextCycleInstruction({ instructionId: "nci_1", status })).toEqual({
+        instructionId: "nci_1",
+        status,
+      });
+    }
+  });
+
+  it("rejects malformed objects", () => {
+    for (const value of [
+      null,
+      undefined,
+      "instruction",
+      42,
+      true,
+      ["ready"],
+      [{ instructionId: "nci_1", status: "ready" }],
+    ]) {
+      expect(() => parseNextCycleInstruction(value)).toThrow(/plain object/);
+    }
+  });
+
+  it("rejects unknown fields", () => {
+    expect(() =>
+      parseNextCycleInstruction({ instructionId: "nci_1", status: "ready", extra: 1 })
+    ).toThrow(/unknown field/);
+  });
+
+  it("rejects missing, invalid or blank instructionId", () => {
+    for (const instructionId of [undefined, null, "", "   ", 7, {}]) {
+      expect(() => parseNextCycleInstruction({ instructionId, status: "ready" })).toThrow(
+        /instructionId/
+      );
+    }
+  });
+
+  it("rejects missing or unsupported status", () => {
+    for (const status of [undefined, null, "", "pending", "READY", 7]) {
+      expect(() => parseNextCycleInstruction({ instructionId: "nci_1", status })).toThrow(
+        /status/
+      );
+    }
   });
 });
