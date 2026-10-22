@@ -69,8 +69,8 @@ const harness = vi.hoisted(() => ({
   audienceBillingIdentities: [] as any[],
   distributionBillingIdentities: [] as any[],
   creativeCalls: 0,
-  runStrategyCalls: 0 as Array<{ userId: number; campaignId: number }>,
-  createStrategyReviewCalls: 0 as Array<{ strategyRunId: number }>,
+  runStrategyCalls: [] as Array<{ userId: number; campaignId: number }>,
+  createStrategyReviewCalls: [] as Array<{ strategyRunId: number }>,
 }));
 
 // ── Module mocks (external boundaries only) ────────────────────────────────
@@ -555,7 +555,9 @@ describe.sequential("R1.9 connected autonomous E2E — fresh-profile forward cha
           { metricType: "clicks", value: 42 },
         ],
       }),
-      persistObservations: async (input: any) => persisted.push(input),
+      persistObservations: async (input: any) => {
+        persisted.push(input);
+      },
     };
 
     const first = await runPostLiveMetricsObservationPass({ asOfDate: "2026-06-12", deps });
