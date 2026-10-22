@@ -20,13 +20,14 @@
  *   or any malformed state fails closed — authority is never overwritten.
  * - workflowContext is a preserved-superset write: every existing field is
  *   carried over untouched; only the nextCycle key is added.
- * - Lifecycle transitions are exact-instruction CAS moves from "ready" to a
- *   terminal status ("dispatched" | "failed"), matched on id + userId AND on
- *   the current ready instruction. An already-completed identical transition
- *   replays idempotently; a zero-row UPDATE is reconciled by rereading and
- *   accepting only an identical instruction already in the target status.
- *   Absent, malformed, conflicting or wrongly-statused state fails closed —
- *   authority is never overwritten.
+ * - Lifecycle transitions are exact-instruction CAS moves — "ready" to a
+ *   terminal status ("dispatched" | "failed"), plus the dispatcher-only
+ *   "dispatched" to "failed" failure-recording path — matched on id + userId
+ *   AND on the current source-status instruction. An already-completed
+ *   identical transition replays idempotently; a zero-row UPDATE is
+ *   reconciled by rereading and accepting only an identical instruction
+ *   already in the target status. Absent, malformed, conflicting or
+ *   wrongly-statused state fails closed — authority is never overwritten.
  *
  * This module performs NO Strategy execution, NO approval creation and NO
  * schema or migration change. The only mutation target is the owning
@@ -205,10 +206,11 @@ export interface TransitionNextCycleInstructionResult {
 
 /**
  * Exact-instruction CAS transition of the campaign's workflowContext.nextCycle
- * from "ready" to `toStatus` ("dispatched" | "failed").
+ * from `fromStatus` ("ready" | "dispatched") to `toStatus` ("dispatched" |
+ * "failed").
  *
  * The campaign is owner-scoped, the instructionId must match exactly, and the
- * conditional UPDATE is matched on the current ready state, so a concurrent
+ * conditional UPDATE is matched on the current source status, so a concurrent
  * transition wins the slot at most once. A zero-row UPDATE is reconciled by
  * rereading and accepting only an identical instruction already in
  * `toStatus`. Absent, malformed, conflicting or wrongly-statused state fails
@@ -218,6 +220,7 @@ async function transitionNextCycleInstructionTo(input: {
   userId: number;
   campaignId: number;
   instructionId: string;
+  fromStatus: "ready" | "dispatched";
   toStatus: "dispatched" | "failed";
   executor?: NextCycleDbExecutor;
 }): Promise<TransitionNextCycleInstructionResult | null> {
@@ -255,7 +258,7 @@ async function transitionNextCycleInstructionTo(input: {
     return { instruction, transitioned: false };
   }
 
-  if (instruction.status !== "ready") {
+  if (instruction.status !== input.fromStatus) {
     throw new Error(
       `next-cycle instruction for campaign ${input.campaignId} is "${instruction.status}" and cannot transition to ${input.toStatus}`
     );
@@ -279,7 +282,7 @@ async function transitionNextCycleInstructionTo(input: {
         ),
         eq(
           sql`JSON_UNQUOTE(JSON_EXTRACT(${campaigns.workflowContext}, '$.nextCycle.status'))`,
-          "ready"
+          input.fromStatus
         )
       )
     );
@@ -330,7 +333,7 @@ export async function markNextCycleInstructionDispatched(input: {
   instructionId: string;
   executor?: NextCycleDbExecutor;
 }): Promise<TransitionNextCycleInstructionResult | null> {
-  return transitionNextCycleInstructionTo({ ...input, toStatus: "dispatched" });
+  return transitionNextCycleInstructionTo({ ...input, fromStatus: "ready", toStatus: "dispatched" });
 }
 
 /**
@@ -344,5 +347,26 @@ export async function markNextCycleInstructionFailed(input: {
   instructionId: string;
   executor?: NextCycleDbExecutor;
 }): Promise<TransitionNextCycleInstructionResult | null> {
-  return transitionNextCycleInstructionTo({ ...input, toStatus: "failed" });
+  return transitionNextCycleInstructionTo({ ...input, fromStatus: "ready", toStatus: "failed" });
+}
+
+/**
+ * CAS transition of the campaign's next-cycle instruction from "dispatched"
+ * to "failed". This is the dispatcher failure-recording path: a dispatched
+ * instruction whose strategy run failed must durably reflect "failed" so a
+ * later retry does not treat it as consumed. Exact-instructionId,
+ * owner-scoped, idempotent on identical replay, fail-closed on every other
+ * state.
+ */
+export async function markDispatchedNextCycleInstructionFailed(input: {
+  userId: number;
+  campaignId: number;
+  instructionId: string;
+  executor?: NextCycleDbExecutor;
+}): Promise<TransitionNextCycleInstructionResult | null> {
+  return transitionNextCycleInstructionTo({
+    ...input,
+    fromStatus: "dispatched",
+    toStatus: "failed",
+  });
 }
