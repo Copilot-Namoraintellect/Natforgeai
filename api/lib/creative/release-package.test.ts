@@ -542,6 +542,7 @@ describe("syncCreativeReleasePackage (impure, idempotent)", () => {
       sealedBy: "test.seal",
     });
     expect(first.outcome).toBe("sealed");
+    if (first.outcome === "incomplete") return;
 
     const sealedAfterFirst = readSealedCreativeReleasePackage(harness.campaign);
     const sealedAt = sealedAfterFirst!.sealedAtIso;
@@ -552,6 +553,7 @@ describe("syncCreativeReleasePackage (impure, idempotent)", () => {
       sealedBy: "test.seal-retry",
     });
     expect(second.outcome).toBe("already_present");
+    if (second.outcome === "incomplete") return;
     expect(second.packageId).toBe(first.packageId);
 
     const sealedAfterRetry = readSealedCreativeReleasePackage(harness.campaign);
@@ -569,6 +571,7 @@ describe("syncCreativeReleasePackage (impure, idempotent)", () => {
       sealedBy: "test.seal",
     });
     expect(first.outcome).toBe("sealed");
+    if (first.outcome === "incomplete") return;
 
     // Regenerate the evidence under a new brief fingerprint (post-edit cycle).
     // The campaign ROW retains its workflow context — including the previously
@@ -588,6 +591,7 @@ describe("syncCreativeReleasePackage (impure, idempotent)", () => {
       sealedBy: "test.seal-after-regen",
     });
     expect(second.outcome).toBe("superseded_sealed");
+    if (second.outcome === "incomplete") return;
     expect(second.packageId).toBe(`crp:${CAMPAIGN_ID}:${newFingerprint}`);
     expect(second.supersedesPackageId).toBe(first.packageId);
 

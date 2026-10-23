@@ -110,6 +110,12 @@ export interface CreativeReleasePackage {
   readonly artefacts: readonly CreativeReleaseArtefactRef[];
   /** Governed-campaign rows that carry no lineage/fingerprint evidence. */
   readonly legacyArtefactIds: readonly number[];
+  /**
+   * Historical rows replaced by a newer authoritative row for the same
+   * artefact identity (regeneration/retry of the same operation). They are
+   * recorded, never bundled, and never mutated.
+   */
+  readonly supersededArtefactIds: readonly number[];
   readonly quality: {
     readonly postsIncluded: number;
     readonly assetsIncluded: number;
@@ -171,6 +177,8 @@ export function computeCreativeReleasePackageFingerprint(
     | "creativeBriefFingerprint"
     | "strategy"
     | "artefacts"
+    | "legacyArtefactIds"
+    | "supersededArtefactIds"
     | "quality"
   >
 ): string {
@@ -184,6 +192,8 @@ export function computeCreativeReleasePackageFingerprint(
         artefacts: [...pkg.artefacts].sort((a, b) =>
           `${a.recordType}:${a.recordId}`.localeCompare(`${b.recordType}:${b.recordId}`)
         ),
+        legacyArtefactIds: [...new Set(pkg.legacyArtefactIds)].sort((a, b) => a - b),
+        supersededArtefactIds: [...new Set(pkg.supersededArtefactIds)].sort((a, b) => a - b),
         quality: pkg.quality,
       }),
       "utf8"
@@ -325,6 +335,7 @@ export type CreativeReleaseBuildResult =
         leafletRecordId: number | null;
         captionRecordIds: readonly number[];
         legacyArtefactIds: readonly number[];
+        supersededArtefactIds: readonly number[];
       };
     };
 
@@ -352,6 +363,7 @@ export function buildCreativeReleasePackage(
         leafletRecordId: null,
         captionRecordIds: [],
         legacyArtefactIds: [],
+        supersededArtefactIds: [],
       },
     };
   }
@@ -397,6 +409,7 @@ export function buildCreativeReleasePackage(
 
   const artefacts: CreativeReleaseArtefactRef[] = [];
   const legacyArtefactIds: number[] = [];
+  const supersededArtefactIds: number[] = [];
   const pushRef = (
     record: unknown,
     kind: CreativeReleaseArtefactKind,
@@ -461,39 +474,113 @@ export function buildCreativeReleasePackage(
   }
 
   // ─── Caption artefacts ───
-  const captionArtefacts = (input.campaignAssets ?? []).filter((asset) => {
-    const assetType = getAssetType(asset);
-    return assetType === "caption_pack" || assetType === "caption_adaptation";
-  });
+  // Exactly one authoritative caption pack per operation: the latest bound
+  // caption_pack wins and older retries are superseded, never bundled.
+  // caption_adaptations are per-platform variants of one operation: the
+  // latest per platform is authoritative.
+  const captionPacksAll = (input.campaignAssets ?? []).filter(
+    (asset) => getAssetType(asset) === "caption_pack"
+  );
+  const captionAdaptationsAll = (input.campaignAssets ?? []).filter(
+    (asset) => getAssetType(asset) === "caption_adaptation"
+  );
   const captionRecordIds: number[] = [];
-  if (captionArtefacts.length === 0) {
+  if (captionPacksAll.length === 0 && captionAdaptationsAll.length === 0) {
     reasons.push("caption_artefacts_missing");
   } else {
-    const staleCaptions = captionArtefacts.filter((asset) => !bound(asset));
-    if (staleCaptions.length > 0) {
-      reasons.push("caption_artefacts_stale");
+    const latestCaptionPack = latestByCreatedAt(captionPacksAll);
+    for (const pack of captionPacksAll) {
+      if (pack !== latestCaptionPack) {
+        const id = getRecordId(pack);
+        if (id !== null) supersededArtefactIds.push(id);
+      }
     }
-    for (const asset of captionArtefacts) {
-      if (staleCaptions.includes(asset)) continue;
-      captionRecordIds.push(getRecordId(asset) ?? 0);
-      pushRef(
-        asset,
-        getAssetType(asset) === "caption_pack" ? "caption_pack" : "caption_adaptation",
-        "campaign_asset"
-      );
+    if (latestCaptionPack) {
+      if (!bound(latestCaptionPack)) {
+        reasons.push("caption_artefacts_stale");
+      } else {
+        captionRecordIds.push(getRecordId(latestCaptionPack) ?? 0);
+        pushRef(latestCaptionPack, "caption_pack", "campaign_asset");
+      }
+    }
+
+    const adaptationsByPlatform = new Map<string, unknown>();
+    for (const adaptation of [...captionAdaptationsAll].sort((a, b) => {
+      const aTime = new Date(String(asRecord(a)?.createdAt ?? 0)).getTime();
+      const bTime = new Date(String(asRecord(b)?.createdAt ?? 0)).getTime();
+      return aTime - bTime;
+    })) {
+      const platform = String(
+        readMetadata(adaptation).platform ?? ""
+      ).toLowerCase();
+      const existing = adaptationsByPlatform.get(platform);
+      if (existing) {
+        const id = getRecordId(existing);
+        if (id !== null) supersededArtefactIds.push(id);
+      }
+      adaptationsByPlatform.set(platform, adaptation);
+    }
+    for (const adaptation of adaptationsByPlatform.values()) {
+      if (!bound(adaptation)) {
+        reasons.push("caption_artefacts_stale");
+        continue;
+      }
+      captionRecordIds.push(getRecordId(adaptation) ?? 0);
+      pushRef(adaptation, "caption_adaptation", "campaign_asset");
     }
   }
 
-  // ─── Supporting outputs: every other campaign output must be current ───
+  // ─── Supporting outputs: the latest current row per artefact identity ───
+  // Every row claimed by a primary selection (message packs, caption
+  // artefacts) is excluded from supporting-output grouping — a superseded
+  // caption pack must never re-enter the manifest under another identity.
+  const idsOf = (records: unknown[]): number[] =>
+    records
+      .map((record) => getRecordId(record))
+      .filter((id): id is number => id !== null);
   const consumedIds = new Set<number>([
+    ...idsOf(messagePacks),
+    ...idsOf(captionPacksAll),
+    ...idsOf(captionAdaptationsAll),
     ...(messagePackRecordId !== null ? [messagePackRecordId] : []),
     ...(leafletRecordId !== null ? [leafletRecordId] : []),
     ...captionRecordIds,
   ]);
 
-  const inspectOutput = (record: unknown) => {
+  const groupKeyOf = (record: unknown, recordType: "campaign_asset" | "content_post") => {
+    const type =
+      getAssetType(record) ??
+      (typeof asRecord(record)?.type === "string"
+        ? (asRecord(record)!.type as string)
+        : "unknown");
+    return `${recordType}:${type}`;
+  };
+
+  const selectedOutputs = new Map<string, unknown>();
+  const groupOutput = (record: unknown, recordType: "campaign_asset" | "content_post") => {
     const id = getRecordId(record);
     if (id === null || consumedIds.has(id)) return;
+    const key = groupKeyOf(record, recordType);
+    const existing = selectedOutputs.get(key);
+    if (!existing) {
+      selectedOutputs.set(key, record);
+      return;
+    }
+    const existingTime = new Date(
+      String(asRecord(existing)?.createdAt ?? 0)
+    ).getTime();
+    const newTime = new Date(String(asRecord(record)?.createdAt ?? 0)).getTime();
+    const winner = newTime >= existingTime ? record : existing;
+    const loser = newTime >= existingTime ? existing : record;
+    selectedOutputs.set(key, winner);
+    const loserId = getRecordId(loser);
+    if (loserId !== null) supersededArtefactIds.push(loserId);
+  };
+
+  for (const post of input.contentPosts ?? []) groupOutput(post, "content_post");
+  for (const asset of input.campaignAssets ?? []) groupOutput(asset, "campaign_asset");
+
+  const inspectOutput = (record: unknown, recordType: "campaign_asset" | "content_post") => {
     const status = asRecord(record)?.status;
     if (status === "published" || status === "archived") return;
     if (isTerminalFailureStatus(record)) {
@@ -508,7 +595,8 @@ export function buildCreativeReleasePackage(
     if (!fingerprint) {
       // Governed-campaign row without lineage evidence: excluded from the
       // package and recorded rather than silently bundled.
-      legacyArtefactIds.push(id);
+      const id = getRecordId(record);
+      if (id !== null) legacyArtefactIds.push(id);
       return;
     }
     if (fingerprint !== currentFingerprint) {
@@ -519,11 +607,12 @@ export function buildCreativeReleasePackage(
       reasons.push("artefact_lineage_mismatch");
       return;
     }
-    pushRef(record, "supporting_asset", "campaign_asset");
+    pushRef(record, recordType === "content_post" ? "content_post" : "supporting_asset", recordType);
   };
 
-  for (const post of input.contentPosts ?? []) inspectOutput(post);
-  for (const asset of input.campaignAssets ?? []) inspectOutput(asset);
+  for (const [key, record] of selectedOutputs) {
+    inspectOutput(record, key.startsWith("content_post:") ? "content_post" : "campaign_asset");
+  }
 
   const uniqueReasons = Array.from(new Set(reasons)) as CreativeReleaseReadinessReason[];
   if (uniqueReasons.length > 0 || !authority || !currentFingerprint) {
@@ -537,6 +626,7 @@ export function buildCreativeReleasePackage(
         leafletRecordId,
         captionRecordIds,
         legacyArtefactIds,
+        supersededArtefactIds,
       },
     };
   }
@@ -553,6 +643,7 @@ export function buildCreativeReleasePackage(
       `${a.recordType}:${a.recordId}`.localeCompare(`${b.recordType}:${b.recordId}`)
     )),
     legacyArtefactIds: Object.freeze([...new Set(legacyArtefactIds)]),
+    supersededArtefactIds: Object.freeze([...new Set(supersededArtefactIds)]),
     quality: Object.freeze({
       postsIncluded: artefacts.filter((ref) => ref.recordType === "content_post").length,
       assetsIncluded: artefacts.filter((ref) => ref.recordType === "campaign_asset").length,
