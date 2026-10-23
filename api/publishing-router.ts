@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { publishingQueue, contentPosts, socialIntegrations } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
@@ -15,6 +15,10 @@ import {
   publicationScheduleFromQueueRow,
   resolvePublicationSchedule,
 } from "./lib/publish/publication-schedule";
+import {
+  extractAdminRequestId,
+  recordAdminMutationAudit,
+} from "./lib/governance/admin-audit";
 
 export const publishingRouter = createRouter({
   createPublishingQueue: authedQuery
@@ -361,9 +365,34 @@ export const publishingRouter = createRouter({
       };
     }),
 
-  publishDuePosts: authedQuery.mutation(async () => {
-    const results = await publishDuePosts();
-    return { success: true, results };
+  // WBS-R4 X3.5: the global due-scan executes due rows for EVERY user; it is
+  // an operator/admin action, not a user action (Stream E contract §13.4).
+  // Admin-gated and audited through the canonical governance ledger; the
+  // worker/scheduler due path (publishing-runner) is unaffected.
+  publishDuePosts: adminQuery.mutation(async ({ ctx }) => {
+    const recordScanAudit = (outcome: "succeeded" | "failed", resultCount?: number) =>
+      recordAdminMutationAudit({
+        actorUserId: ctx.user.id,
+        action: "admin.publish_due_posts_executed",
+        targetType: "publishing_queue",
+        outcome,
+        occurredAt: new Date(),
+        metadata:
+          typeof resultCount === "number" ? { executedDueRows: resultCount } : undefined,
+        requestId: extractAdminRequestId(ctx.req),
+      });
+    try {
+      const results = await publishDuePosts();
+      await recordScanAudit("succeeded", Array.isArray(results) ? results.length : undefined);
+      return { success: true, results };
+    } catch (err) {
+      try {
+        await recordScanAudit("failed");
+      } catch {
+        // Best-effort failed-event recording; the original error takes precedence.
+      }
+      throw err;
+    }
   }),
 
   publishSmokeTest: authedQuery

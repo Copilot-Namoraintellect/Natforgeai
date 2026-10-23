@@ -63,6 +63,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   "admin.diagnostic_authority_executed",
   "admin.campaign_budget_resume",
   "admin.stale_creative_claim_sweep",
+  "admin.publish_due_posts_executed",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
@@ -82,6 +83,7 @@ export const ADMIN_AUDIT_TARGET_TYPES = [
   "creative_claim_sweep",
   "campaign",
   "diagnostic_harness",
+  "publishing_queue",
 ] as const;
 
 export type AdminAuditTargetType = (typeof ADMIN_AUDIT_TARGET_TYPES)[number];
