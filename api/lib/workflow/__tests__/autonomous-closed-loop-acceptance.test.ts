@@ -76,7 +76,7 @@ const APPROVED_COPY = {
 function captionLineage() {
   const lineage = {
     lineageSchemaVersion: 1,
-    artifactKind: "caption_pack",
+    artifactKind: "caption_pack" as const,
     artifactId: 501,
     strategy: STRATEGY_AUTHORITY,
     approvedCopy: APPROVED_COPY,
@@ -184,6 +184,7 @@ function buildApprovedLearningInput(): ApprovedLearningStrategyInput {
         sourceCampaignId: envelope.campaignId,
         learningRecordId: envelope.learningRecordId,
         evaluationVersion: coordinates.evaluationVersion,
+        learningEngineVersion: coordinates.learningEngineVersion,
         recommendationId: coordinates.recommendationId,
         targetEngine: coordinates.targetEngine,
         adjustmentType: coordinates.adjustmentType,

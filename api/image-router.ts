@@ -23,7 +23,42 @@ import type { RenderedQualityObservationAuthority } from "./lib/creative/contrac
 import {
   InMemoryWorkflowOperationRegistry,
 } from "./lib/workflow/workflow-operation";
+import { syncCreativeReleasePackageSafely } from "./lib/creative/release-package";
 import { TRPCError } from "@trpc/server";
+
+/**
+ * R4-B2: after a successful render/caption completion, attempt to seal the
+ * campaign's immutable creative release package. Best-effort: sealing never
+ * changes the render outcome.
+ */
+async function sealReleasePackageAfterRender(
+  userId: number,
+  contentPostId: number,
+  sealedBy: string,
+  db?: Awaited<ReturnType<typeof getDb>>
+): Promise<void> {
+  try {
+    const executor = db ?? getDb();
+    const [post] = await executor
+      .select({ campaignId: contentPosts.campaignId })
+      .from(contentPosts)
+      .where(and(eq(contentPosts.id, contentPostId), eq(contentPosts.userId, userId)))
+      .limit(1);
+    await syncCreativeReleasePackageSafely({
+      userId,
+      campaignId: post?.campaignId ?? null,
+      sealedBy,
+      db: executor,
+    });
+  } catch (err) {
+    // Best-effort by contract: seal bookkeeping must never change the render
+    // outcome. syncCreativeReleasePackageSafely already swallows seal-phase
+    // failures; this guard covers the campaign lookup phase too.
+    console.error(
+      `[image-router] release package seal attempt failed | userId=${userId} | contentPostId=${contentPostId} | error="${err instanceof Error ? err.message : String(err)}"`
+    );
+  }
+}
 
 /**
  * Router-owned Slice 5E workflow authority for a user-initiated premium leaflet
@@ -335,6 +370,12 @@ export const imageRouter = createRouter({
         });
       }
 
+      await sealReleasePackageAfterRender(
+        ctx.user.id,
+        input.contentPostId,
+        "image-router.generateForPost"
+      );
+
       return {
         success: true,
         imageUrl: result.imageUrl,
@@ -415,6 +456,12 @@ export const imageRouter = createRouter({
         });
       }
 
+      await sealReleasePackageAfterRender(
+        ctx.user.id,
+        input.contentPostId,
+        "image-router.generatePremiumLeaflet"
+      );
+
       return {
         success: true,
         imageUrl: result.imageUrl,
@@ -441,6 +488,12 @@ export const imageRouter = createRouter({
           message: "Caption pack generation failed. Please try again.",
         });
       }
+
+      await sealReleasePackageAfterRender(
+        ctx.user.id,
+        input.contentPostId,
+        "image-router.generateCaptionPack"
+      );
 
       return { success: true, pack };
     }),

@@ -22,6 +22,7 @@ import {
 import { env } from "../env";
 import { assertApprovedStrategySemanticallyValid } from "../workflow/strategy-approval";
 import { InMemoryWorkflowOperationRegistry } from "../workflow/workflow-operation";
+import { syncCreativeReleasePackageSafely } from "../creative/release-package";
 
 export interface ContentGenerationJobInput {
   jobId: number;
@@ -305,6 +306,12 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
           } as any,
         })
         .where(eq(agentRuns.id, input.jobId));
+      // R4-B2: idempotent creative release package seal (best-effort).
+      await syncCreativeReleasePackageSafely({
+        userId: input.userId,
+        campaignId: input.campaignId,
+        sealedBy: "content-generation-job",
+      });
       const releaseResult = await releaseClaimOnce("completed");
       if (!releaseResult.released) {
         throw new TRPCError({
@@ -376,6 +383,15 @@ export async function processContentGenerationJob(input: ContentGenerationJobInp
         error: triggerErr.message || String(triggerErr),
       });
     }
+
+    // R4-B2: idempotent creative release package seal (best-effort). The
+    // onAgentRunComplete path above also attempts a seal; both converge on the
+    // same deterministic package identity.
+    await syncCreativeReleasePackageSafely({
+      userId: input.userId,
+      campaignId: input.campaignId,
+      sealedBy: "content-generation-job",
+    });
 
     if (creativeResult.savedPosts === 0) {
       throw new TRPCError({
