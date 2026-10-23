@@ -787,7 +787,7 @@ export default function ContentStudio() {
         businessId: i.businessId,
         instagramBusinessAccountId: i.instagramBusinessAccountId,
         permissions: i.permissions as unknown[],
-        pageAccessTokenEncrypted: i.pageAccessTokenEncrypted,
+        hasPageAccessToken: i.hasPageAccessToken,
       })) ?? [],
     [connectedPlatforms]
   );

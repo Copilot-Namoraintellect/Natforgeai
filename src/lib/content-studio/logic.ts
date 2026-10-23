@@ -358,7 +358,8 @@ export interface ConnectedIntegrationLike {
   businessId?: number | null;
   instagramBusinessAccountId?: string | null;
   permissions?: unknown[];
-  pageAccessTokenEncrypted?: string | null;
+  /** Non-secret presence signal derived server-side (WBS-R3.3); the encrypted token never leaves the API. */
+  hasPageAccessToken?: boolean;
 }
 
 export interface PlatformConfigStatusLike {
@@ -409,7 +410,7 @@ export function getInstagramReadinessError(
   if (!hasPublishingPermission) {
     return "Instagram content publishing permission is missing. Reconnect Meta to grant it.";
   }
-  if (!integration.pageAccessTokenEncrypted) {
+  if (!integration.hasPageAccessToken) {
     return "Instagram page token is missing. Reconnect Meta to refresh it.";
   }
   return null;

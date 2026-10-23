@@ -58,16 +58,23 @@ export const integrationRouter = createRouter({
       .from(socialIntegrations)
       .where(eq(socialIntegrations.userId, ctx.user.id));
 
-    return rows.map((row) => ({
-      ...row,
-      ready:
-        row.status === "connected" &&
-        (row.provider === "facebook"
-          ? isFacebookPublishingReady(row)
-          : row.provider === "instagram"
-          ? isInstagramPublishingReady(row)
-          : ["linkedin", "twitter", "tiktok", "email"].includes(row.provider)),
-    }));
+    return rows.map((row) => {
+      // WBS-R3.3 / GAP25: encrypted tokens never leave the API boundary (see
+      // AGENTS.md §13). Clients only need the non-secret presence signal that
+      // backs the Instagram readiness check.
+      const { pageAccessTokenEncrypted, ...clientSafe } = row;
+      return {
+        ...clientSafe,
+        hasPageAccessToken: !!pageAccessTokenEncrypted,
+        ready:
+          row.status === "connected" &&
+          (row.provider === "facebook"
+            ? isFacebookPublishingReady(row)
+            : row.provider === "instagram"
+            ? isInstagramPublishingReady(row)
+            : ["linkedin", "twitter", "tiktok", "email"].includes(row.provider)),
+      };
+    });
   }),
 
   initiateConnection: authedQuery
