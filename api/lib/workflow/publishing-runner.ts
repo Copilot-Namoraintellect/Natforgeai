@@ -1072,7 +1072,11 @@ export async function publishSinglePost(
     );
 
     // Deduct publishing credit before attempting publish
-    // Skip deduction on retries — credits were already deducted on first attempt
+    // Skip deduction on retries — credits were already deducted on first attempt.
+    // The deduction carries a deterministic idempotency key so a crash between
+    // this charge and the queue-status flip (or a concurrent duplicate
+    // dispatch of the same queue item) can never double-charge: retries of the
+    // same queue item collapse onto one ledger row.
     if (post.status !== "retrying") {
       try {
         await deductCredits({
@@ -1081,6 +1085,7 @@ export async function publishSinglePost(
           type: "publishing_deduction",
           description: `Publish to ${post.platform}`,
           metadata: { queueItemId: post.id, platform: post.platform, attempt: 1 },
+          idempotencyKey: `publishing:${post.id}`,
         });
       } catch (creditError: any) {
         publishResult = {
