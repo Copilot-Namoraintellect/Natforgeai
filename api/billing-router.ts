@@ -9,6 +9,10 @@ import {
   getCreditsSpentThisMonth,
 } from "./lib/billing/credit-engine";
 import { formatMicroCents, creditsToUsd } from "./lib/billing/cost-tracker";
+import {
+  extractAdminRequestId,
+  recordAdminMutationAudit,
+} from "./lib/governance/admin-audit";
 
 export const billingRouter = createRouter({
   // ─── User-facing endpoints ───
@@ -201,6 +205,22 @@ export const billingRouter = createRouter({
         amount: input.amount,
         description: input.description,
         adminUserId: ctx.user.id,
+      });
+      // The credit ledger row is written by the governed service; the
+      // canonical admin audit event is recorded here where the
+      // authenticated operator context lives. Loud failure by design.
+      await recordAdminMutationAudit({
+        actorUserId: ctx.user.id,
+        action: "admin.credit_adjustment",
+        targetType: "credit_wallet",
+        targetId: input.userId,
+        occurredAt: new Date(),
+        metadata: {
+          amount: input.amount,
+          description: input.description,
+          newBalance: result.newBalance,
+        },
+        requestId: extractAdminRequestId(ctx.req),
       });
       return { success: true, newBalance: result.newBalance };
     }),

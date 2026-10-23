@@ -248,8 +248,19 @@ export const adminRouter = createRouter({
     )
     .query(async ({ input }) => {
       const db = getDb();
+      // Explicit safe projection: credential material (password hashes) and
+      // provider identity linkage fields never leave the server.
       const allUsers = await db
-        .select()
+        .select({
+          id: users.id,
+          username: users.username,
+          email: users.email,
+          name: users.name,
+          role: users.role,
+          authType: users.authType,
+          lastSignInAt: users.lastSignInAt,
+          createdAt: users.createdAt,
+        })
         .from(users)
         .orderBy(desc(users.createdAt));
 

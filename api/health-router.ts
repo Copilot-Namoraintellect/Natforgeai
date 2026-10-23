@@ -9,6 +9,10 @@ import { env } from "./lib/env";
 import { getPostLiveLifecycleSchedulerStatus } from "./lib/workflow/post-live-lifecycle-scheduler";
 import { resolvePostLiveLifecycleSchedulerHealth } from "./lib/workflow/post-live-lifecycle-health";
 import { createAlert, listAlerts, acknowledgeAlert, resolveAlerts, getAlertSummary } from "./lib/alerts";
+import {
+  extractAdminRequestId,
+  recordAdminMutationAudit,
+} from "./lib/governance/admin-audit";
 
 export const healthRouter = createRouter({
   getSystemHealth: publicQuery.query(async () => {
@@ -264,15 +268,31 @@ export const healthRouter = createRouter({
 
   acknowledgeAlert: adminQuery
     .input(z.object({ alertId: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       await acknowledgeAlert(input.alertId);
+      await recordAdminMutationAudit({
+        actorUserId: ctx.user.id,
+        action: "admin.alert_acknowledged",
+        targetType: "system_alert",
+        targetId: input.alertId,
+        occurredAt: new Date(),
+        requestId: extractAdminRequestId(ctx.req),
+      });
       return { success: true };
     }),
 
   resolveAlertCategory: adminQuery
     .input(z.object({ category: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const result = await resolveAlerts(input.category);
+      await recordAdminMutationAudit({
+        actorUserId: ctx.user.id,
+        action: "admin.alert_category_resolved",
+        targetType: "system_alert",
+        occurredAt: new Date(),
+        metadata: { category: input.category, resolved: result.resolved },
+        requestId: extractAdminRequestId(ctx.req),
+      });
       return { success: true, resolved: result.resolved };
     }),
 

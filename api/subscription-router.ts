@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { subscriptions, subscriptionTiers, payments, campaigns } from "@db/schema";
+import { subscriptions, subscriptionTiers, campaigns } from "@db/schema";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { getUserTier, getUserUsage, ensureFreeSubscription } from "./lib/subscription";
 import { allocateMonthlyCredits } from "./lib/billing/credit-engine";
@@ -80,9 +80,14 @@ export const subscriptionRouter = createRouter({
       });
     }),
 
-  // Subscribe to a tier
+  // Subscribe to a tier. Free tiers self-serve; paid tiers can only be
+  // activated through the payment-provider confirmation path (checkout +
+  // provider webhook) — never through a client-supplied flag. There is
+  // intentionally no `confirmedByWebhook`-style client input: a caller-
+  // supplied "payment confirmed" boolean would be a privilege-escalation
+  // backdoor (self-granted paid tier plus a forged completed payment row).
   subscribe: authedQuery
-    .input(z.object({ tierId: z.number(), paymentMethod: z.string().optional(), confirmedByWebhook: z.boolean().optional() }))
+    .input(z.object({ tierId: z.number(), paymentMethod: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
 
@@ -95,8 +100,9 @@ export const subscriptionRouter = createRouter({
 
       if (!tier) throw new Error("Tier not found");
 
-      // Block paid tier subscriptions unless confirmed by webhook or explicitly allowed
-      if (tier.priceUsd > 0 && !input.confirmedByWebhook) {
+      // Paid tiers always require provider confirmation; this endpoint only
+      // ever serves free self-serve subscriptions. Fail closed.
+      if (tier.priceUsd > 0) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "Paid tier changes must be confirmed by payment provider. Use createCheckoutSession instead.",
@@ -127,27 +133,13 @@ export const subscriptionRouter = createRouter({
       const [result] = await db.insert(subscriptions).values({
         userId: ctx.user.id,
         tierId: input.tierId,
-        status: input.confirmedByWebhook ? "active" : "active",
+        status: "active",
         currentPeriodStart: now,
         currentPeriodEnd: periodEnd,
         paymentMethod: (input.paymentMethod as any) || "manual",
       });
 
       const subId = Number(result.insertId);
-
-      // Record payment if this was a webhook-confirmed paid tier
-      if (tier.priceUsd > 0 && input.confirmedByWebhook) {
-        await db.insert(payments).values({
-          userId: ctx.user.id,
-          subscriptionId: subId,
-          amount: tier.priceUsd,
-          currency: "USD",
-          status: "completed",
-          paymentMethod: "stripe",
-          description: `Subscription to ${tier.name}`,
-          paidAt: new Date(),
-        });
-      }
 
       // Allocate monthly credits for the tier
       if (tier.monthlyCredits > 0) {
