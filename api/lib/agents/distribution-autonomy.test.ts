@@ -17,6 +17,7 @@ import { getDb } from "../../queries/connection";
 import { runAgent } from "./runner";
 import { runDistributionAgent, DISTRIBUTION_PLATFORMS } from "./distribution-agent";
 import { buildDistributionBillingIdentity } from "../workflow/agent-billing-identity";
+import { computeCreativeReleasePackageFingerprint } from "../creative/release-package";
 
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as
@@ -25,9 +26,13 @@ function getTableName(table: unknown): string | undefined {
 }
 
 function makeReleasePackage(campaignId: number, userId: number, postIds: number[], fingerprint = "brieffp1") {
-  return {
+  // X3.1: fixtures must carry a genuinely sealed package — the consumer now
+  // verifies the package through Stream B's sole tamper authority, so the
+  // fingerprint is computed with buildCreativeReleasePackageFingerprint below.
+  const base = {
+    schemaVersion: 1 as const,
     packageId: `crp:${campaignId}:${fingerprint}`,
-    packageFingerprintSha256: createHash("sha256").update("pkg").digest("hex"),
+    packageFingerprintSha256: "",
     campaignId,
     userId,
     creativeBriefFingerprint: fingerprint,
@@ -41,18 +46,27 @@ function makeReleasePackage(campaignId: number, userId: number, postIds: number[
       creativeBriefFingerprint: fingerprint,
     },
     artefacts: postIds.map((id) => ({
-      kind: "leaflet",
-      recordType: "content_post",
+      kind: "leaflet" as const,
+      recordType: "content_post" as const,
       recordId: id,
       title: `Post ${id}`,
       creativeBriefFingerprint: fingerprint,
+      lineageFingerprintSha256: createHash("sha256").update(`lineage-${id}`).digest("hex"),
     })),
-    quality: { renderedLeafletReady: true },
+    quality: {
+      postsIncluded: postIds.length,
+      assetsIncluded: 0,
+      renderedLeafletReady: true,
+    },
     sealedAtIso: "2026-06-29T00:00:00.000Z",
     sealedBy: "creative-agent",
     supersedesPackageId: null,
     legacyArtefactIds: [],
     supersededArtefactIds: [],
+  };
+  return {
+    ...base,
+    packageFingerprintSha256: computeCreativeReleasePackageFingerprint(base),
   };
 }
 
