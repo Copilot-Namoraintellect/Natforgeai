@@ -5,6 +5,7 @@ import { schedules, contentPosts } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { loadAndAssertCampaignPublicationReadiness } from "./lib/creative/publication-readiness-service";
+import { enqueueCalendarScheduledPublication } from "./lib/publish/calendar-schedule-convergence";
 
 export const scheduleRouter = createRouter({
   list: authedQuery
@@ -94,6 +95,23 @@ export const scheduleRouter = createRouter({
             campaignId: contentPost.campaignId,
             selectedOutput: { record: contentPost, type: "content_post" },
             requireLaunchApproval: true,
+          });
+
+          // WBS-R3.2 / GAP24 convergence: a campaign-linked content schedule is
+          // an executable publication intent, gated above by the same launch
+          // authority as every other launch path. The publishing_queue is the
+          // single execution authority (BullMQ + due-scan); the schedules row
+          // remains the planning/calendar display record. One-off non-campaign
+          // posts stay planning-only: publishing_queue.campaignId is NOT NULL.
+          await enqueueCalendarScheduledPublication({
+            executor: db,
+            userId: ctx.user.id,
+            campaignId: contentPost.campaignId,
+            contentPostId: contentPost.id,
+            platform: input.platform,
+            scheduledDate: input.scheduledDate,
+            scheduledTime: input.scheduledTime,
+            timezone: input.timezone,
           });
         }
       }

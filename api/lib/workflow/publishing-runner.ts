@@ -6,8 +6,9 @@ import {
   campaigns,
   businesses,
   approvalRequests,
+  schedules,
 } from "@db/schema";
-import { eq, and, lte, or, isNotNull, type SQL } from "drizzle-orm";
+import { eq, and, lte, or, isNotNull, inArray, type SQL } from "drizzle-orm";
 import { transitionCampaignState } from "./engine";
 import { createAuditEvent } from "../audit/audit-event";
 import { persistAuditEvent } from "../audit/audit-store";
@@ -1300,6 +1301,30 @@ export async function publishSinglePost(
           err.message
         );
       });
+
+      // WBS-R3.2 / GAP24 display convergence: `schedules` is a planning/display
+      // authority fed by the calendar intake bridge — mirror the published
+      // outcome onto same-user calendar rows for this content so the display
+      // never contradicts the single execution state. Best-effort and
+      // post-commit, matching the surrounding refresh conventions.
+      if (post.contentPostId) {
+        await db
+          .update(schedules)
+          .set({ status: "posted" })
+          .where(
+            and(
+              eq(schedules.userId, post.userId),
+              eq(schedules.contentPostId, post.contentPostId),
+              inArray(schedules.status, ["scheduled", "draft"])
+            )
+          )
+          .catch((err: any) => {
+            console.error(
+              `[Publishing Runner] schedule status mirror failed for content ${post.contentPostId}:`,
+              err.message
+            );
+          });
+      }
 
       // Refresh permissioned audience data after a successful publish so that
       // engagement and performance signals can feed back into Audience Intelligence.

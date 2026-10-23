@@ -252,6 +252,43 @@ describe("publishSinglePost", () => {
     );
   });
 
+  it("mirrors the published outcome onto same-user calendar schedule rows (GAP24 display convergence)", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishSinglePost } = await import("../publishing-runner");
+
+    vi.mocked(publishToFacebook).mockResolvedValueOnce({
+      success: true,
+      postId: "fb_789",
+    });
+
+    const db = createMockDb({
+      queueItem: { ...baseQueueItem, integrationId: 9 },
+      contentPost: campaignLinkedContentPost(),
+      integration: baseIntegration,
+      campaign: readyCampaignWithApprovedLineage,
+      business: readyBusiness,
+      approvals: [approvedLaunchApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const result = await publishSinglePost(1);
+
+    expect(result.status).toBe("published");
+    const mirrorUpdate = db.updateCalls.find(
+      (call: { table: string | undefined; set: Record<string, unknown> }) =>
+        call.table === "schedules"
+    );
+    expect(mirrorUpdate).toBeDefined();
+    expect(mirrorUpdate.set).toEqual({ status: "posted" });
+    // Exactly one mirror write on the success path.
+    expect(
+      db.updateCalls.filter(
+        (call: { table: string | undefined }) => call.table === "schedules"
+      )
+    ).toHaveLength(1);
+  });
+
   it("falls back to user + platform lookup when integrationId is not stored", async () => {
     const { getDb } = await import("../../../queries/connection");
     const { publishToFacebook } = await import("../../integrations/platforms");

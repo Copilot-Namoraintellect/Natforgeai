@@ -30,6 +30,11 @@ vi.mock("./lib/logger", () => ({
   logError: vi.fn(),
 }));
 
+vi.mock("./lib/queue/bullmq", () => ({
+  isBullMQAvailable: vi.fn(() => false),
+  schedulePublishingJob: vi.fn(async () => {}),
+}));
+
 function getTableName(table: unknown): string | undefined {
   return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as string | undefined;
 }
@@ -343,5 +348,136 @@ describe("scheduleRouter.create Phase 2B gate", () => {
         contentPostId: 404,
       })
     ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe("scheduleRouter.create GAP24 queue convergence (WBS-R3.2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("enqueues a campaign-linked content schedule into the publishing queue execution authority", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { scheduleRouter } = await import("./schedule-router");
+
+    const currentPost = { ...readyLeafletPost, id: 407 };
+    const db = buildMockDb({
+      campaign: readyCampaign,
+      contentPosts: [currentPost],
+      campaignAssets: [readyCaptionAsset],
+      approvals: [readyApproval],
+      insertId: 900,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = scheduleRouter.createCaller(buildCtx());
+    const result = await caller.create({
+      title: "Converged campaign schedule",
+      platform: "Instagram",
+      scheduledDate: "2027-03-15",
+      scheduledTime: "09:30",
+      contentPostId: 407,
+    });
+
+    expect(result.success).toBe(true);
+    // Planning/display record kept.
+    expect(db._insertedRows.schedules).toHaveLength(1);
+    // Single execution authority fed: one approved queue row with canonical UTC.
+    const queueRows = db._insertedRows.publishing_queue as any[];
+    expect(queueRows).toHaveLength(1);
+    expect(queueRows[0]).toMatchObject({
+      userId: 18,
+      campaignId: 28,
+      contentPostId: 407,
+      platform: "instagram",
+      status: "approved",
+      approvalRequired: false,
+    });
+    expect(queueRows[0].scheduledAt.toISOString()).toBe("2027-03-15T09:30:00.000Z");
+  });
+
+  it("keeps one-off non-campaign schedules planning-only (no queue row)", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { scheduleRouter } = await import("./schedule-router");
+
+    const oneOffPost = {
+      id: 408,
+      userId: 18,
+      campaignId: null,
+      type: "social_post",
+      platform: "Instagram",
+      status: "draft",
+      metadata: {},
+    };
+    const db = buildMockDb({ contentPosts: [oneOffPost] });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = scheduleRouter.createCaller(buildCtx());
+    const result = await caller.create({
+      title: "One-off planning entry",
+      platform: "Instagram",
+      scheduledDate: "2027-03-15",
+      contentPostId: 408,
+    });
+
+    expect(result.success).toBe(true);
+    expect(db._insertedRows.schedules).toHaveLength(1);
+    expect(db._insertedRows.publishing_queue ?? []).toHaveLength(0);
+  });
+
+  it("fails closed without any row when the campaign-linked instant is in the past", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { scheduleRouter } = await import("./schedule-router");
+
+    const currentPost = { ...readyLeafletPost, id: 409 };
+    const db = buildMockDb({
+      campaign: readyCampaign,
+      contentPosts: [currentPost],
+      campaignAssets: [readyCaptionAsset],
+      approvals: [readyApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = scheduleRouter.createCaller(buildCtx());
+    await expect(
+      caller.create({
+        title: "Past campaign schedule",
+        platform: "Instagram",
+        scheduledDate: "2020-01-01",
+        scheduledTime: "09:30",
+        contentPostId: 409,
+      })
+    ).rejects.toThrow(/in the past/i);
+
+    expect(db._insertedRows.schedules ?? []).toHaveLength(0);
+    expect(db._insertedRows.publishing_queue ?? []).toHaveLength(0);
+  });
+
+  it("writes no queue row when the launch-approval gate rejects the intake", async () => {
+    const { getDb } = await import("./queries/connection");
+    const { scheduleRouter } = await import("./schedule-router");
+
+    const currentPost = { ...readyLeafletPost, id: 410 };
+    const db = buildMockDb({
+      campaign: readyCampaign,
+      contentPosts: [currentPost],
+      campaignAssets: [readyCaptionAsset],
+      approvals: [],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = scheduleRouter.createCaller(buildCtx());
+    await expect(
+      caller.create({
+        title: "Missing approval",
+        platform: "Instagram",
+        scheduledDate: "2027-03-15",
+        scheduledTime: "09:30",
+        contentPostId: 410,
+      })
+    ).rejects.toThrow(/approval/i);
+
+    expect(db._insertedRows.publishing_queue ?? []).toHaveLength(0);
+    expect(db._insertedRows.schedules ?? []).toHaveLength(0);
   });
 });
