@@ -26,6 +26,10 @@ import {
   readLaunchApprovalLineage,
   type LaunchApprovalLineage,
 } from "./lib/workflow/launch-approval";
+import {
+  COST_PAUSE_CONTEXT_KEY,
+  parseCostPauseProvenance,
+} from "./lib/workflow/cost-pause";
 
 type ApprovalDb = ReturnType<typeof getDb>;
 
@@ -627,6 +631,31 @@ async function executeApprovalDecision(
         },
         tx
       );
+    }
+
+    // WBS-R4 A3-3: a budget_increase decision is only meaningful when bound to
+    // the campaign's pending cost pause. A pause provenance recorded with a
+    // budgetIncreaseApprovalId resumes under that exact approval only; an
+    // unbound approval cannot resume this pause and fails closed BEFORE the
+    // terminal mutation. Legacy pauses without the binding pass.
+    if (request.approvalType === "budget_increase" && request.campaignId) {
+      const [budgetCampaign] = await tx
+        .select({ workflowContext: campaigns.workflowContext })
+        .from(campaigns)
+        .where(and(eq(campaigns.id, request.campaignId), eq(campaigns.userId, ctx.user.id)))
+        .limit(1);
+      const budgetContext = (budgetCampaign?.workflowContext ?? {}) as Record<string, unknown>;
+      const costPause = parseCostPauseProvenance(budgetContext[COST_PAUSE_CONTEXT_KEY]);
+      if (
+        costPause &&
+        costPause.budgetIncreaseApprovalId !== undefined &&
+        costPause.budgetIncreaseApprovalId !== request.id
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Budget increase approval ${request.id} is not bound to the pending cost pause (bound to approval ${costPause.budgetIncreaseApprovalId}); it cannot resume this pause.`,
+        });
+      }
     }
 
     // WBS15.6: a learning promotion approval binds one exact immutable

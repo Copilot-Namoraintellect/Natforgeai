@@ -4,7 +4,7 @@ import { generateObject } from "ai";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { campaigns, businesses, agentRuns, approvalRequests } from "@db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { checkLimit, incrementCampaignUsage, incrementResultUsage } from "./lib/subscription";
 import { TRPCError } from "@trpc/server";
 import { defaultModel } from "./lib/agents/openai";
@@ -19,6 +19,7 @@ import {
 } from "./lib/agents/strategy-agent";
 import { onAgentRunComplete } from "./lib/workflow/triggers";
 import { createApprovalRequest } from "./lib/workflow/engine";
+import { evaluateStrategyEntryBusinessDnaReadiness } from "./lib/workflow/strategy-entry-readiness";
 import {
   getStrategyApprovalStatus,
   buildStrategyApprovalLineage,
@@ -52,6 +53,25 @@ function campaignSuggestionSchema() {
     referenceStyle: z.string().nullable().describe("Reference style or example"),
     contentStyle: z.string().nullable().describe("Preferred content style"),
   });
+}
+
+function parseWorkflowContextObject(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
 }
 
 export const campaignRouter = createRouter({
@@ -179,10 +199,41 @@ export const campaignRouter = createRouter({
         excludedOffers: z.string().optional(),
         referenceStyle: z.string().optional(),
         contentStyle: z.string().optional(),
+        idempotencyKey: z.string().min(8).max(128).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
+
+      // WBS-R4 A1-3: idempotent campaign bootstrap. A replayed create with a
+      // previously persisted bootstrap key returns the original campaign
+      // without inserting a row or consuming campaign usage.
+      if (input.idempotencyKey) {
+        const [existingBootstrap] = await db
+          .select()
+          .from(campaigns)
+          .where(
+            and(
+              eq(campaigns.userId, ctx.user.id),
+              sql`JSON_UNQUOTE(JSON_EXTRACT(${campaigns.workflowContext}, '$.bootstrapIdempotencyKey')) = ${input.idempotencyKey}`
+            )
+          )
+          .limit(1);
+
+        if (existingBootstrap) {
+          const existingContext = parseWorkflowContextObject(
+            existingBootstrap.workflowContext
+          );
+          if (existingContext.bootstrapIdempotencyKey === input.idempotencyKey) {
+            return {
+              id: existingBootstrap.id,
+              success: true,
+              workflowState: existingBootstrap.workflowState,
+              idempotentReplay: true,
+            };
+          }
+        }
+      }
 
       // Check campaign limit
       const campaignCheck = await checkLimit(ctx.user.id, "campaign");
@@ -249,6 +300,9 @@ export const campaignRouter = createRouter({
       };
       if (input.startDate) data.startDate = new Date(input.startDate);
       if (input.endDate) data.endDate = new Date(input.endDate);
+      if (input.idempotencyKey) {
+        data.workflowContext = { bootstrapIdempotencyKey: input.idempotencyKey } as any;
+      }
       const [camp] = await db.insert(campaigns).values(data);
       const campaignId = Number(camp.insertId);
 
@@ -282,23 +336,51 @@ export const campaignRouter = createRouter({
           if (!readiness.ready) {
             return { id: campaignId, success: true, workflowState, readiness };
           }
+
+          // WBS-R4 A1-2: shared Business DNA readiness gate. The background
+          // strategy run is not launched when the linked profile is unready;
+          // the client receives the same structured readiness block so the UI
+          // can guide the user to complete the business profile.
+          const businessDnaReadiness = evaluateStrategyEntryBusinessDnaReadiness({
+            campaign: { id: campaignId, businessId },
+            business,
+          });
+          if (!businessDnaReadiness.ready) {
+            return { id: campaignId, success: true, workflowState, readiness: businessDnaReadiness };
+          }
+
+          // WBS-R4 A1-2: low-confidence website evidence previously skipped
+          // silently inside the background task. Surface the same structured
+          // readiness block instead so the user is guided to run website
+          // analysis or complete the profile. The 0.6 threshold is unchanged.
+          const evidence = (business.websiteEvidence || null) as {
+            businessCategory?: string;
+            productsServices?: string[];
+            confidence?: number;
+          } | null;
+          if (evidence && (evidence.confidence ?? 0) < 0.6) {
+            return {
+              id: campaignId,
+              success: true,
+              workflowState,
+              readiness: {
+                ready: false,
+                code: "WEBSITE_EVIDENCE_INSUFFICIENT_CONFIDENCE",
+                gate: "website_evidence",
+                confidence: evidence.confidence ?? 0,
+                userMessage: `Website analysis for this business did not capture enough reliable detail (confidence ${Math.round(
+                  (evidence.confidence ?? 0) * 100
+                )}%) to generate a strategy automatically. Run website analysis again or complete the business profile, then retry.`,
+                action: { path: "/settings?tab=businesses", label: "Complete business profile" },
+              },
+            };
+          }
         }
 
         Promise.resolve().then(async () => {
           try {
             if (!business) {
               console.log(`[CampaignCreate] Strategy auto-start skipped: business ${businessId} not found for campaign ${campaignId}`);
-              return;
-            }
-
-            // Confidence / evidence gate before auto-starting strategy
-            const evidence = (business.websiteEvidence || null) as {
-              businessCategory?: string;
-              productsServices?: string[];
-              confidence?: number;
-            } | null;
-            if (evidence && (evidence.confidence ?? 0) < 0.6) {
-              console.log(`[CampaignCreate] Strategy auto-start blocked: low website confidence for campaign ${campaignId}`);
               return;
             }
 

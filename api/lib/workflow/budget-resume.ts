@@ -61,7 +61,8 @@ export interface ResumeWorkflowDeps {
 export type ResumeWorkflowOutcome =
   | { outcome: "resumed"; kind: WorkflowContinuationKind; continuationId: number }
   | { outcome: "still_blocked"; reason: string }
-  | { outcome: "already_resumed" };
+  | { outcome: "already_resumed" }
+  | { outcome: "not_bound" };
 
 function parseWorkflowContextObject(value: unknown): Record<string, unknown> {
   if (value === null || value === undefined) return {};
@@ -101,10 +102,19 @@ async function defaultRunLaunchAudienceIntelligence(input: {
  * Resumes the owner-scoped campaign's cost-paused workflow after an approved
  * cost increase. Returns null when the campaign does not exist or records no
  * cost pause.
+ *
+ * `approvalId` (WBS-R4 A3-3) is the budget_increase approval request whose
+ * approval authorised this resume. When the pause provenance binds an exact
+ * `budgetIncreaseApprovalId`, a resume attempted under any other approval is a
+ * no-op ({ outcome: "not_bound" }): the decision is not bound to this pause
+ * and must not mutate or dispatch anything. Provenance recorded before the
+ * binding existed (no `budgetIncreaseApprovalId` field) resumes under any
+ * approved budget_increase decision.
  */
 export async function resumeWorkflowAfterApprovedCostIncrease(input: {
   userId: number;
   campaignId: number;
+  approvalId?: number;
   deps?: ResumeWorkflowDeps;
 }): Promise<ResumeWorkflowOutcome | null> {
   const executor = input.deps?.executor ?? getDb();
@@ -134,6 +144,17 @@ export async function resumeWorkflowAfterApprovedCostIncrease(input: {
     throw new Error(
       `campaign ${input.campaignId} records malformed cost pause provenance; refusing to resume`
     );
+  }
+
+  // WBS-R4 A3-3 exact binding: a pause recorded with a budgetIncreaseApprovalId
+  // only resumes under that exact approval decision. Anything else is a
+  // no-op — no state change, no dispatch.
+  if (
+    input.approvalId !== undefined &&
+    provenance.budgetIncreaseApprovalId !== undefined &&
+    provenance.budgetIncreaseApprovalId !== input.approvalId
+  ) {
+    return { outcome: "not_bound" };
   }
 
   // 2. Affordability recheck through the SAME gate that paused the workflow.

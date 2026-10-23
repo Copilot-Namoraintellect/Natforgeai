@@ -12,7 +12,10 @@
  *     continuationId:   the runId / approvalId to resume from,
  *     reason:           the affordability reason recorded at pause time,
  *     recordedAt:       ISO timestamp of the pause,
- *     workflowState:    the campaign workflowState BEFORE the pause mutated it
+ *     workflowState:    the campaign workflowState BEFORE the pause mutated it,
+ *     budgetIncreaseApprovalId?: the budget_increase approval request created
+ *                       for this pause (absent on pre-R4 pauses: any approved
+ *                       budget decision resumes them)
  *   }
  *
  * The provenance is strict and fail-closed: a malformed payload is never
@@ -46,6 +49,12 @@ export interface CostPauseProvenance {
   recordedAt: string;
   /** Campaign workflowState captured BEFORE the pause mutated it. */
   workflowState: string;
+  /**
+   * ID of the budget_increase approval request created for THIS pause.
+   * Optional: pauses recorded before WBS-R4 A3-3 lack the field and remain
+   * resumable by any approved budget_increase decision for the campaign.
+   */
+  budgetIncreaseApprovalId?: number;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -60,6 +69,7 @@ export function buildCostPauseProvenance(input: {
   reason: string;
   workflowState: string;
   recordedAt?: string;
+  budgetIncreaseApprovalId?: number;
 }): CostPauseProvenance {
   if (!WORKFLOW_CONTINUATION_KINDS.includes(input.kind)) {
     throw new Error(`cost pause kind must be one of ${WORKFLOW_CONTINUATION_KINDS.join(", ")}`);
@@ -73,13 +83,23 @@ export function buildCostPauseProvenance(input: {
   if (typeof input.workflowState !== "string" || input.workflowState.trim().length === 0) {
     throw new Error("cost pause workflowState must be a non-blank string");
   }
-  return {
+  if (
+    input.budgetIncreaseApprovalId !== undefined &&
+    (!Number.isInteger(input.budgetIncreaseApprovalId) || input.budgetIncreaseApprovalId <= 0)
+  ) {
+    throw new Error("cost pause budgetIncreaseApprovalId must be a positive integer");
+  }
+  const provenance: CostPauseProvenance = {
     kind: input.kind,
     continuationId: input.continuationId,
     reason: input.reason,
     recordedAt: input.recordedAt ?? new Date().toISOString(),
     workflowState: input.workflowState,
   };
+  if (input.budgetIncreaseApprovalId !== undefined) {
+    provenance.budgetIncreaseApprovalId = input.budgetIncreaseApprovalId;
+  }
+  return provenance;
 }
 
 /**
@@ -89,7 +109,11 @@ export function buildCostPauseProvenance(input: {
 export function parseCostPauseProvenance(value: unknown): CostPauseProvenance | null {
   if (!isPlainObject(value)) return null;
   for (const key of Object.keys(value)) {
-    if (!["kind", "continuationId", "reason", "recordedAt", "workflowState"].includes(key)) {
+    if (
+      !["kind", "continuationId", "reason", "recordedAt", "workflowState", "budgetIncreaseApprovalId"].includes(
+        key
+      )
+    ) {
       return null;
     }
   }
@@ -105,13 +129,24 @@ export function parseCostPauseProvenance(value: unknown): CostPauseProvenance | 
       return null;
     }
   }
-  return {
+  if (
+    value.budgetIncreaseApprovalId !== undefined &&
+    (!Number.isInteger(value.budgetIncreaseApprovalId) ||
+      (value.budgetIncreaseApprovalId as number) <= 0)
+  ) {
+    return null;
+  }
+  const provenance: CostPauseProvenance = {
     kind: value.kind as WorkflowContinuationKind,
     continuationId: value.continuationId as number,
     reason: value.reason as string,
     recordedAt: value.recordedAt as string,
     workflowState: value.workflowState as string,
   };
+  if (value.budgetIncreaseApprovalId !== undefined) {
+    provenance.budgetIncreaseApprovalId = value.budgetIncreaseApprovalId as number;
+  }
+  return provenance;
 }
 
 function parseWorkflowContextObject(value: unknown): Record<string, unknown> {
@@ -137,14 +172,30 @@ function parseWorkflowContextObject(value: unknown): Record<string, unknown> {
  * Records the durable cost-pause provenance on the owner-scoped campaign.
  * An identical pause replays idempotently; a conflicting pending pause fails
  * closed. Returns null when the campaign does not exist.
+ *
+ * `approvalId` (WBS-R4 A3-3) optionally binds the pause to the exact
+ * budget_increase approval request created for it; it is recorded as
+ * `budgetIncreaseApprovalId` in the provenance when the supplied provenance
+ * does not already carry the field.
  */
 export async function recordWorkflowCostPause(input: {
   userId: number;
   campaignId: number;
   provenance: CostPauseProvenance;
+  approvalId?: number;
   executor?: NextCycleDbExecutor;
 }): Promise<{ recorded: boolean } | null> {
   const executor = input.executor ?? getDb();
+
+  let provenance = input.provenance;
+  if (input.approvalId !== undefined) {
+    if (!Number.isInteger(input.approvalId) || input.approvalId <= 0) {
+      throw new Error("cost pause approvalId must be a positive integer");
+    }
+    if (provenance.budgetIncreaseApprovalId === undefined) {
+      provenance = { ...provenance, budgetIncreaseApprovalId: input.approvalId };
+    }
+  }
 
   const [campaign] = await executor
     .select({ id: campaigns.id, workflowContext: campaigns.workflowContext })
@@ -180,7 +231,7 @@ export async function recordWorkflowCostPause(input: {
     .set({
       workflowContext: {
         ...context,
-        [COST_PAUSE_CONTEXT_KEY]: input.provenance,
+        [COST_PAUSE_CONTEXT_KEY]: provenance,
       } as unknown,
     })
     .where(and(eq(campaigns.id, input.campaignId), eq(campaigns.userId, input.userId)));

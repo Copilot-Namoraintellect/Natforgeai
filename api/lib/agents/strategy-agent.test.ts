@@ -114,6 +114,61 @@ vi.mock("../creative/brief-grounding", async () => {
   };
 });
 
+function getTableName(table: unknown): string | undefined {
+  return (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol] as
+    | string
+    | undefined;
+}
+
+// Strategy-entry gates (WBS-R4) load the campaign and its owned business row
+// before any run insert; the fake must serve both from the campaigns/businesses
+// tables and stay empty everywhere else.
+function strategyEntryRows(table: unknown): any[] {
+  const name = getTableName(table);
+  if (name === "campaigns") {
+    return [{ id: 42, userId: 18, businessId: 7, workflowContext: {} }];
+  }
+  if (name === "businesses") {
+    return [
+      {
+        id: 7,
+        userId: 18,
+        name: "Test Business",
+        productOrService: "payout platform for restaurants",
+        targetCustomer: "restaurant owners",
+        targetAudience: null,
+        websiteEvidence: {
+          productsServices: ["payout platform"],
+          targetCustomers: ["restaurant owners"],
+          confidence: 0.9,
+        },
+        isActive: true,
+      },
+    ];
+  }
+  return [];
+}
+
+function makeStrategyEntrySelectMock() {
+  return vi.fn(() => ({
+    from: vi.fn((table: unknown) => ({
+      where: vi.fn(() => {
+        const rows = strategyEntryRows(table);
+        return {
+          limit: vi.fn(async () => rows),
+          orderBy: vi.fn(() => ({
+            limit: vi.fn(async () => rows),
+            then: (resolve: (value: unknown[]) => unknown) =>
+              Promise.resolve(rows).then(resolve),
+          })),
+          then: (resolve: (value: unknown[]) => unknown) =>
+            Promise.resolve(rows).then(resolve),
+        };
+      }),
+    })),
+  }));
+}
+
 function buildOutput(overrides: Partial<StrategyOutput> = {}): StrategyOutput {
   return {
     personas: [
@@ -2122,16 +2177,7 @@ describe("runStrategyAgent atomic run/claim lifecycle", () => {
         return result;
       }),
       update: makeUpdateMock(),
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            limit: vi.fn(async () => []),
-            orderBy: vi.fn(() => ({
-              limit: vi.fn(async () => []),
-            })),
-          })),
-        })),
-      })),
+      select: makeStrategyEntrySelectMock(),
     };
 
     return { db, tx, get transactionCommitted() { return transactionCommitted; }, updateSets };
@@ -3226,14 +3272,7 @@ describe("Phase 2B evidence reconciliation", () => {
       const db = {
         transaction: vi.fn(async (callback: (tx: any) => Promise<any>) => callback(tx)),
         update: makeUpdateMock(),
-        select: vi.fn(() => ({
-          from: vi.fn(() => ({
-            where: vi.fn(() => ({
-              limit: vi.fn(async () => []),
-              orderBy: vi.fn(() => ({ limit: vi.fn(async () => []) })),
-            })),
-          })),
-        })),
+        select: makeStrategyEntrySelectMock(),
       };
       return { db, tx, updateSets };
     }

@@ -111,6 +111,26 @@ function createDecisionDb(config: FakeConfig) {
               if (name === "agent_runs") return working.agentRuns.map((r) => ({ ...r }));
               if (name === "audit_events") return working.audits.map((r) => ({ ...r }));
               if (name === "businesses") return [];
+              if (name === "strategy_snapshots") {
+                // Immutable Strategy snapshot authority for completed strategy
+                // runs (same derivation the approval-router harness uses).
+                return working.agentRuns
+                  .filter((r) => r.agentType === "strategy")
+                  .map((run) => ({
+                    snapshotId: "strategy-test-snapshot",
+                    userId: run.userId,
+                    campaignId: run.campaignId,
+                    businessId: working.campaigns[0]?.businessId ?? null,
+                    strategyRunId: run.id,
+                    businessDnaSnapshotId: "bdna-test-snapshot",
+                    version: 1,
+                    creativeBriefFingerprint: "fp-current",
+                    strategyHashSha256:
+                      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    snapshot: {},
+                    capturedAt: new Date(CREATED_AT),
+                  }));
+              }
               return [];
             },
           }),
@@ -252,6 +272,7 @@ describe("approval decision atomic audit (WBS7C2)", () => {
     expect(state.txSpawned).toBe(1);
     expect(state.txOperations).toEqual([
       "tx1:select", // request pre-check
+      "tx1:select", // campaign read for the budget cost-pause binding check (WBS-R4 A3-3)
       "tx1:update", // guarded terminal mutation
       "tx1:select", // campaign read for business lineage
       "tx1:select", // audit pre-check
@@ -414,6 +435,11 @@ describe("approval decision atomic audit (WBS7C2)", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-old",
             strategyRunId: 10,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256:
+              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 3,
             status: "pending",
           },
@@ -442,6 +468,11 @@ describe("approval decision atomic audit (WBS7C2)", () => {
           strategyApprovalLineage: {
             creativeBriefFingerprint: "fp-current",
             strategyRunId: 10,
+            strategySnapshotId: "strategy-test-snapshot",
+            strategyVersion: 1,
+            businessDnaSnapshotId: "bdna-test-snapshot",
+            strategyHashSha256:
+              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             approvalRequestId: 3,
             status: "pending",
           },

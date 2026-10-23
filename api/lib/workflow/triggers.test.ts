@@ -651,6 +651,7 @@ describe("onApprovalResolved budget_increase resume (WBS-R1.4)", () => {
     expect(resumeWorkflowAfterApprovedCostIncrease).toHaveBeenCalledWith({
       userId: 42,
       campaignId: 29,
+      approvalId: 81,
     });
   });
 
@@ -674,6 +675,64 @@ describe("onApprovalResolved budget_increase resume (WBS-R1.4)", () => {
     await onApprovalResolved(82, "rejected", 42);
 
     expect(resumeWorkflowAfterApprovedCostIncrease).not.toHaveBeenCalled();
+  });
+});
+
+describe("onApprovalResolved ownership scoping (WBS-R4 A3-2 security boundary)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const request = {
+    id: 81,
+    userId: 42,
+    campaignId: 29,
+    approvalType: "budget_increase",
+    status: "approved",
+  };
+  const campaign = {
+    id: 29,
+    userId: 42,
+    name: "Campaign #29",
+    workflowState: "launch_approval_required",
+    status: "paused",
+    workflowContext: { costPause: { kind: "agent_run_complete", continuationId: 501 } },
+  };
+
+  it("cross-user invocation fails closed: no branch runs and no delegate is called", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { onApprovalResolved } = await import("./triggers");
+    const { resumeWorkflowAfterApprovedCostIncrease } = await import("./budget-resume");
+    const { transitionCampaignState } = await import("./engine");
+    const { runAudienceIntelligenceAgent } = await import("../agents/audience-intelligence-agent");
+
+    // The ownership-scoped re-read (id + userId) misses for a foreign user.
+    const { db } = createWorkflowDbMock({ approvalRequestsRows: [request], campaign });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await expect(onApprovalResolved(81, "approved", 999)).rejects.toThrow(/not found/);
+
+    expect(resumeWorkflowAfterApprovedCostIncrease).not.toHaveBeenCalled();
+    expect(transitionCampaignState).not.toHaveBeenCalled();
+    expect(runAudienceIntelligenceAgent).not.toHaveBeenCalled();
+  });
+
+  it("replay with the owning user still drives the continuation", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { onApprovalResolved } = await import("./triggers");
+    const { resumeWorkflowAfterApprovedCostIncrease } = await import("./budget-resume");
+
+    const { db } = createWorkflowDbMock({ approvalRequestsRows: [request], campaign });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onApprovalResolved(81, "approved", 42);
+
+    expect(resumeWorkflowAfterApprovedCostIncrease).toHaveBeenCalledTimes(1);
+    expect(resumeWorkflowAfterApprovedCostIncrease).toHaveBeenCalledWith({
+      userId: 42,
+      campaignId: 29,
+      approvalId: 81,
+    });
   });
 });
 

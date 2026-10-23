@@ -349,6 +349,26 @@ function createMockDb(seed: DbSeed) {
           };
         }
         if (name === "learning_records") return learningChain;
+        if (name === "businesses") {
+          // Strategy-entry gates (WBS-R4) load the owned business row before
+          // any run insert; serve a ready profile here.
+          return {
+            where: () => ({
+              limit: async () => [
+                {
+                  id: 5,
+                  userId: 18,
+                  name: "Payout Co",
+                  productOrService: "payout platform for restaurants",
+                  targetCustomer: "restaurant owners",
+                  targetAudience: null,
+                  websiteEvidence: {},
+                  isActive: true,
+                },
+              ],
+            }),
+          };
+        }
         return genericChain;
       }),
     })),
