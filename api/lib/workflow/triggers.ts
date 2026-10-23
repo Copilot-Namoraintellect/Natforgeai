@@ -19,7 +19,7 @@ import { runAudienceIntelligenceAgent } from "../agents/audience-intelligence-ag
 import { terminaliseStaleStrategyRuns } from "../agents/stale-strategy-run";
 import { checkAudienceAgentAccess } from "../audience/access";
 import { canRunAutonomousWorkflow } from "../billing/cost-control";
-import { isBullMQAvailable, schedulePublishingJob } from "../queue/bullmq";
+import { isBullMQAvailable, removePublishingJob, schedulePublishingJob } from "../queue/bullmq";
 import { ingestAudienceData } from "../audience/ingest";
 import {
   acquireCreativeGenerationClaim,
@@ -336,6 +336,58 @@ async function enqueueApprovedPublishingRows(
     failed,
   };
 }
+
+/**
+ * WBS-R3.4 / GAP29(a): launch rejection withdraws publication authority.
+ * Distribution-created queue rows that sit in an executable state
+ * (`approved`, or `retrying` with a pending re-attempt) were created under
+ * the assumption the launch would be approved. Left live, the due-scan and
+ * any already-enqueued BullMQ jobs would re-attempt them every cycle and
+ * churn them toward terminal failure — execution-time readiness would fail
+ * closed, but only after wasted attempts and durable failure noise. Park
+ * them back in the gated `pending_approval` state (the established
+ * non-executable authority state, mirroring the brand_risk reject policy)
+ * and cancel scheduled BullMQ jobs best-effort.
+ */
+async function withdrawApprovedPublishingRows(
+  campaignId: number,
+  userId: number
+): Promise<{ withdrawn: number }> {
+  const db = getDb();
+
+  const campaignRows = await db
+    .select()
+    .from(publishingQueue)
+    .where(
+      and(
+        eq(publishingQueue.campaignId, campaignId),
+        eq(publishingQueue.userId, userId)
+      )
+    );
+
+  let withdrawn = 0;
+  for (const row of campaignRows) {
+    if (row.status !== "approved" && row.status !== "retrying") continue;
+    await db
+      .update(publishingQueue)
+      .set({ status: "pending_approval", approvalRequired: true })
+      .where(eq(publishingQueue.id, row.id));
+    withdrawn += 1;
+
+    if (isBullMQAvailable()) {
+      try {
+        await removePublishingJob(row.id);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(
+          `[Workflow] Failed to remove publishing job for withdrawn queue item ${row.id}: ${message}`
+        );
+      }
+    }
+  }
+
+  return { withdrawn };
+}
 export async function onApprovalResolved(approvalId: number, decision: "approved" | "rejected", userId: number) {
   const db = getDb();
 
@@ -384,6 +436,9 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
       }
     } else {
       await transitionCampaignState(campaignId, userId, "reject_launch");
+      // GAP29(a): executable queue rows outlive the rejected launch; withdraw
+      // them so no runner path can attempt publication without authority.
+      await withdrawApprovedPublishingRows(campaignId, userId);
     }
   } else if (request.approvalType === "brand_risk") {
     // Find associated publishing queue items for this campaign that are safety_blocked or pending_approval

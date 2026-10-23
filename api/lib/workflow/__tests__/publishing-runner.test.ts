@@ -289,6 +289,41 @@ describe("publishSinglePost", () => {
     ).toHaveLength(1);
   });
 
+  it("executes an approved immediate (NULL scheduledAt) row for a campaign that holds publication authority (GAP29 b/c)", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishDuePosts } = await import("../publishing-runner");
+
+    vi.mocked(publishToFacebook).mockResolvedValueOnce({
+      success: true,
+      postId: "fb_immediate_cron",
+    });
+
+    const db = createMockDb({
+      queueItem: {
+        ...baseQueueItem,
+        integrationId: 9,
+        scheduledAt: null,
+        status: "approved",
+      },
+      contentPost: campaignLinkedContentPost(),
+      integration: baseIntegration,
+      campaign: { ...readyCampaignWithApprovedLineage, workflowState: "campaign_live" },
+      business: readyBusiness,
+      approvals: [approvedLaunchApproval],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const results = await publishDuePosts();
+
+    // The row appears in both selects under condition-ignoring fakes; the
+    // executable map must still execute it exactly once.
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe("published");
+    expect(results[0].postId).toBe("fb_immediate_cron");
+    expect(publishToFacebook).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to user + platform lookup when integrationId is not stored", async () => {
     const { getDb } = await import("../../../queries/connection");
     const { publishToFacebook } = await import("../../integrations/platforms");

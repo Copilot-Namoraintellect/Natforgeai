@@ -46,6 +46,7 @@ vi.mock("../billing/cost-control", () => ({
 vi.mock("../queue/bullmq", () => ({
   isBullMQAvailable: vi.fn(() => false),
   schedulePublishingJob: vi.fn(async () => ({ id: "publish-test-job" })),
+  removePublishingJob: vi.fn(async () => {}),
 }));
 
 vi.mock("../audience/ingest", () => ({
@@ -673,6 +674,102 @@ describe("onApprovalResolved budget_increase resume (WBS-R1.4)", () => {
     await onApprovalResolved(82, "rejected", 42);
 
     expect(resumeWorkflowAfterApprovedCostIncrease).not.toHaveBeenCalled();
+  });
+});
+
+describe("onApprovalResolved campaign_launch rejection (WBS-R3.4 / GAP29a)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function launchRequest(id: number) {
+    return {
+      id,
+      userId: 42,
+      campaignId: 29,
+      approvalType: "campaign_launch",
+      status: "rejected",
+    };
+  }
+
+  it("withdraws approved and retrying queue rows into pending_approval on reject", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { onApprovalResolved } = await import("./triggers");
+
+    const campaign = { id: 29, userId: 42, name: "Campaign #29", workflowState: "launch_approval_required" };
+    const queueRows = [
+      { id: 601, userId: 42, campaignId: 29, platform: "facebook", status: "approved", approvalRequired: false },
+      { id: 602, userId: 42, campaignId: 29, platform: "instagram", status: "retrying", approvalRequired: false },
+      { id: 603, userId: 42, campaignId: 29, platform: "linkedin", status: "published", approvalRequired: false },
+      { id: 604, userId: 42, campaignId: 29, platform: "twitter", status: "pending_approval", approvalRequired: true },
+      { id: 605, userId: 42, campaignId: 30, platform: "facebook", status: "approved", approvalRequired: false },
+    ];
+
+    const { db, state } = createWorkflowDbMock({
+      approvalRequestsRows: [launchRequest(91)],
+      campaign,
+      publishingQueueRows: queueRows,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onApprovalResolved(91, "rejected", 42);
+
+    const byId = new Map(state.publishingQueue.map((r: any) => [r.id, r]));
+    expect(byId.get(601)).toMatchObject({ status: "pending_approval", approvalRequired: true });
+    expect(byId.get(602)).toMatchObject({ status: "pending_approval", approvalRequired: true });
+    // Terminal and already-gated rows are untouched.
+    expect(byId.get(603).status).toBe("published");
+    expect(byId.get(604)).toMatchObject({ status: "pending_approval", approvalRequired: true });
+    // Other campaigns' rows are out of scope.
+    expect(byId.get(605)).toMatchObject({ status: "approved", approvalRequired: false });
+  });
+
+  it("cancels scheduled BullMQ jobs for withdrawn rows when BullMQ is available", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { onApprovalResolved } = await import("./triggers");
+    const { isBullMQAvailable, removePublishingJob } = await import("../queue/bullmq");
+
+    vi.mocked(isBullMQAvailable).mockReturnValue(true);
+
+    const campaign = { id: 29, userId: 42, name: "Campaign #29", workflowState: "launch_approval_required" };
+    const queueRows = [
+      { id: 611, userId: 42, campaignId: 29, platform: "facebook", status: "approved", approvalRequired: false },
+      { id: 612, userId: 42, campaignId: 29, platform: "instagram", status: "approved", approvalRequired: false },
+    ];
+
+    const { db } = createWorkflowDbMock({
+      approvalRequestsRows: [launchRequest(92)],
+      campaign,
+      publishingQueueRows: queueRows,
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onApprovalResolved(92, "rejected", 42);
+
+    expect(removePublishingJob).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(removePublishingJob).mock.calls.map((c) => c[0]).sort()).toEqual([611, 612]);
+  });
+
+  it("leaves BullMQ untouched when it is unavailable", async () => {
+    const { getDb } = await import("../../queries/connection");
+    const { onApprovalResolved } = await import("./triggers");
+    const { isBullMQAvailable, removePublishingJob } = await import("../queue/bullmq");
+
+    vi.mocked(isBullMQAvailable).mockReturnValue(false);
+
+    const campaign = { id: 29, userId: 42, name: "Campaign #29", workflowState: "launch_approval_required" };
+    const { db } = createWorkflowDbMock({
+      approvalRequestsRows: [launchRequest(93)],
+      campaign,
+      publishingQueueRows: [
+        { id: 621, userId: 42, campaignId: 29, platform: "facebook", status: "approved", approvalRequired: false },
+      ],
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await onApprovalResolved(93, "rejected", 42);
+
+    expect(removePublishingJob).not.toHaveBeenCalled();
   });
 });
 

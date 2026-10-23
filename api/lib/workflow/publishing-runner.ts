@@ -8,7 +8,7 @@ import {
   approvalRequests,
   schedules,
 } from "@db/schema";
-import { eq, and, lte, or, isNotNull, inArray, type SQL } from "drizzle-orm";
+import { eq, and, lte, or, isNull, isNotNull, inArray, type SQL } from "drizzle-orm";
 import { transitionCampaignState } from "./engine";
 import { createAuditEvent } from "../audit/audit-event";
 import { persistAuditEvent } from "../audit/audit-store";
@@ -1473,6 +1473,39 @@ export function buildDuePostsCondition(now: Date): SQL {
   )!;
 }
 
+/**
+ * Workflow states that hold publication authority for a campaign. Mirrored
+ * from the launch-resolution gate in triggers.ts; an approved queue row is
+ * only executable once the campaign is in one of these states.
+ */
+export const LIVE_PUBLICATION_WORKFLOW_STATES = [
+  "publication_pending",
+  "campaign_live",
+] as const;
+
+/**
+ * WBS-R3.4 / GAP29(b/c): the immediate-row branch of the due-scan.
+ *
+ * An approved row with NULL scheduledAt is an explicit immediate publication.
+ * Today only launch-resolution BullMQ enqueue can execute it, so a BullMQ
+ * outage at that moment stalls the row forever (`lte(scheduledAt, now)`
+ * never matches NULL), and publishing-router immediate rows stall even with
+ * BullMQ up because nothing ever enqueues them. The due-scan owns these rows
+ * from here on — but ONLY for campaigns that already hold publication
+ * authority: pre-launch approved-but-unscheduled rows (the brand_risk
+ * approval design in triggers.ts) must stay invisible until launch
+ * resolution, otherwise the cron would park them in `pending_approval`
+ * through the approval-blocked recovery path and the later launch enqueue
+ * would skip them.
+ */
+export function buildImmediatePostsCondition(liveCampaignIds: number[]): SQL {
+  return and(
+    eq(publishingQueue.status, "approved"),
+    isNull(publishingQueue.scheduledAt),
+    inArray(publishingQueue.campaignId, liveCampaignIds)
+  )!;
+}
+
 export async function publishDuePosts() {
   const db = getDb();
   const now = new Date();
@@ -1482,8 +1515,30 @@ export async function publishDuePosts() {
     .from(publishingQueue)
     .where(buildDuePostsCondition(now));
 
+  // GAP29(b/c): immediate (NULL scheduledAt) approved rows gain a
+  // BullMQ-independent executor for campaigns that hold publication
+  // authority. The two selects can overlap only under synthetic fakes; the
+  // map dedupes by id so each row executes at most once per pass.
+  const liveCampaigns = await db
+    .select({ id: campaigns.id })
+    .from(campaigns)
+    .where(inArray(campaigns.workflowState, [...LIVE_PUBLICATION_WORKFLOW_STATES]));
+  const liveCampaignIds = liveCampaigns.map((c) => c.id);
+  const immediatePosts = liveCampaignIds.length
+    ? await db
+        .select()
+        .from(publishingQueue)
+        .where(buildImmediatePostsCondition(liveCampaignIds))
+    : [];
+
+  const executablePosts = new Map<number, (typeof duePosts)[number]>();
+  for (const post of duePosts) executablePosts.set(post.id, post);
+  for (const post of immediatePosts) {
+    if (!executablePosts.has(post.id)) executablePosts.set(post.id, post);
+  }
+
   const results = [];
-  for (const post of duePosts) {
+  for (const post of executablePosts.values()) {
     // WBS13.4: reload the exact persisted publish package for this durable
     // queue row through the same loader the BullMQ worker uses. Governed rows
     // execute the persisted package; legacy rows keep the established
