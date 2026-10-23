@@ -461,4 +461,65 @@ describe("learning promotion governed boundary (WBS15.6)", () => {
       learningPromotionRouter.createCaller(otherCtx).approvedEnvelopes({ campaignId: 7 })
     ).resolves.toEqual([]);
   });
+
+  describe("WBS-R4-D4 adversarial authorization boundary", () => {
+    it("rejects unauthenticated callers on every promotion procedure", async () => {
+      const anonCtx = {
+        req: new Request("http://localhost/api/trpc"),
+        resHeaders: new Headers(),
+      } as never;
+      const caller = learningPromotionRouter.createCaller(anonCtx);
+
+      await expect(
+        caller.propose({ learningRecordId: 501, recommendationId: "rec_align_offer_conversion" })
+      ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+      await expect(caller.proposals({ campaignId: 7 })).rejects.toMatchObject({
+        code: "UNAUTHORIZED",
+      });
+      await expect(caller.proposal({ approvalRequestId: 1 })).rejects.toMatchObject({
+        code: "UNAUTHORIZED",
+      });
+      await expect(caller.approvedEnvelopes({ campaignId: 7 })).rejects.toMatchObject({
+        code: "UNAUTHORIZED",
+      });
+    });
+
+    it("never leaks a sealed envelope under a sibling campaign of the same user", async () => {
+      const { db, state } = createIntegrationDb();
+      // Same user, sibling campaign without any promotion proposals.
+      state.campaigns.push({
+        id: 8,
+        userId: 22,
+        businessId: null,
+        workflowState: "active",
+        workflowContext: {},
+      });
+      vi.mocked(getDb).mockReturnValue(db as never);
+
+      const { proposal } = await proposePromotion();
+      await approvalCaller().approveAction({ approvalId: proposal.approvalRequestId });
+
+      expect(await promotionCaller().approvedEnvelopes({ campaignId: 7 })).toHaveLength(1);
+      expect(await promotionCaller().approvedEnvelopes({ campaignId: 8 })).toEqual([]);
+    });
+
+    it("rejects proposals bound to superseded learning authority at decision time", async () => {
+      const { db, state } = createIntegrationDb();
+      vi.mocked(getDb).mockReturnValue(db as never);
+
+      const { proposal } = await proposePromotion();
+      // A later evaluation supersedes the record: its authority material is
+      // rewritten (historical records are immutable in production; this
+      // simulates the only drift channel — restoration from backup).
+      state.learningRecords[0].provenance = {
+        ...(state.learningRecords[0].provenance as Record<string, unknown>),
+        inputDigest: "digest-superseded",
+      };
+
+      await expect(
+        approvalCaller().approveAction({ approvalId: proposal.approvalRequestId })
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(await promotionCaller().approvedEnvelopes({ campaignId: 7 })).toEqual([]);
+    });
+  });
 });
