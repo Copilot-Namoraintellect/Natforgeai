@@ -47,6 +47,7 @@ import type { CreativeStrategySnapshotInput } from "../creative/strategy-snapsho
 import { getStrategySnapshotByStrategyRunId } from "../strategy/strategy-snapshot-db-store";
 import {
   buildAudienceBillingIdentity,
+  buildAudienceIntelligenceBillingIdentity,
   buildDistributionBillingIdentity,
 } from "./agent-billing-identity";
 import { isLearningPromotionApproval } from "../learning/promotion/promotion-decision";
@@ -541,10 +542,18 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
           continuationId: approvalId,
         });
         if (access.allowed && autoCheck.allowed) {
+          // WBS-R4 C0.2: mint the caller-stable audience-intelligence billing
+          // identity at the trigger boundary (Stream E contract §2) so a
+          // replayed/resumed launch continuation cannot re-charge the same
+          // logical operation.
           await runAudienceIntelligenceAgent({
             userId,
             campaignId,
             autoCreateLeads: false,
+            billingIdentity: buildAudienceIntelligenceBillingIdentity({
+              campaignId,
+              continuationId: approvalId,
+            }),
           });
         }
       } catch (err) {
@@ -1028,7 +1037,18 @@ export async function onStrategyApproved(
         } else {
           console.log(`[Workflow] Running audience-intelligence for campaign ${campaignId} before creative generation.`);
           await ingestAudienceData({ userId, businessId: campaign.businessId, campaignId });
-          await runAudienceIntelligenceAgent({ userId, campaignId, autoCreateLeads: false });
+          // WBS-R4 C0.2: stable billing identity for the strategy-approval
+          // dispatch (Stream E contract §2); a restarted/replayed strategy
+          // continuation re-enters under the same key and cannot double-charge.
+          await runAudienceIntelligenceAgent({
+            userId,
+            campaignId,
+            autoCreateLeads: false,
+            billingIdentity: buildAudienceIntelligenceBillingIdentity({
+              campaignId,
+              continuationId: approvalId,
+            }),
+          });
         }
       }
     } catch (err: any) {

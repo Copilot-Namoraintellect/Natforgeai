@@ -36,6 +36,7 @@ import { getDb } from "../../queries/connection";
 import { canRunAutonomousWorkflow } from "../billing/cost-control";
 import { checkAudienceAgentAccess } from "../audience/access";
 import { runAudienceIntelligenceAgent } from "../agents/audience-intelligence-agent";
+import { buildAudienceIntelligenceBillingIdentity } from "./agent-billing-identity";
 import { onAgentRunComplete, onStrategyApproved } from "./triggers";
 import {
   COST_PAUSE_CONTEXT_KEY,
@@ -55,6 +56,8 @@ export interface ResumeWorkflowDeps {
   runLaunchAudienceIntelligence?: (input: {
     userId: number;
     campaignId: number;
+    /** Durable cost-pause continuation id; mints the stable billing identity (Stream E §2). */
+    continuationId?: number;
   }) => Promise<void>;
 }
 
@@ -86,6 +89,7 @@ function parseWorkflowContextObject(value: unknown): Record<string, unknown> {
 async function defaultRunLaunchAudienceIntelligence(input: {
   userId: number;
   campaignId: number;
+  continuationId?: number;
 }): Promise<void> {
   const access = await checkAudienceAgentAccess(input.userId, null);
   if (!access.allowed) {
@@ -95,6 +99,16 @@ async function defaultRunLaunchAudienceIntelligence(input: {
     userId: input.userId,
     campaignId: input.campaignId,
     autoCreateLeads: false,
+    // WBS-R4 C0.2: resume under the same stable billing identity as the
+    // original launch dispatch so a recovered continuation cannot re-charge.
+    ...(input.continuationId !== undefined
+      ? {
+          billingIdentity: buildAudienceIntelligenceBillingIdentity({
+            campaignId: input.campaignId,
+            continuationId: input.continuationId,
+          }),
+        }
+      : {}),
   });
 }
 
@@ -237,6 +251,7 @@ export async function resumeWorkflowAfterApprovedCostIncrease(input: {
       await dispatchLaunchAudienceIntelligence({
         userId: input.userId,
         campaignId: input.campaignId,
+        continuationId: provenance.continuationId,
       });
       break;
   }
