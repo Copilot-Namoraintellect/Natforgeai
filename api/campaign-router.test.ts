@@ -2096,7 +2096,7 @@ describe("campaignRouter strategy entry-point lifecycle (Phase 2B integration)",
 
   it("create does not reuse a failed-validation envelope and starts a new strategy run", async () => {
     const { getDb } = await import("./queries/connection");
-    const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
+    const { runStrategyAgent, chargeForStrategyRun } = await import("./lib/agents/strategy-agent");
     const { onAgentRunComplete } = await import("./lib/workflow/triggers");
     const { campaignRouter } = await import("./campaign-router");
 
@@ -2135,11 +2135,19 @@ describe("campaignRouter strategy entry-point lifecycle (Phase 2B integration)",
 
     expect(runStrategyAgent).toHaveBeenCalledTimes(1);
     expect(onAgentRunComplete).not.toHaveBeenCalledWith(247);
+    // WBS-R4E charge-gap reconciliation: the fresh run is charged once under
+    // its stable strategy-run identity before the workflow advances.
+    expect(chargeForStrategyRun).toHaveBeenCalledTimes(1);
+    expect(chargeForStrategyRun).toHaveBeenCalledWith(
+      18,
+      expect.any(Number),
+      expect.objectContaining({ runId: 248 })
+    );
   });
 
   it("create reuses a valid completed flat strategy run and advances the workflow", async () => {
     const { getDb } = await import("./queries/connection");
-    const { runStrategyAgent } = await import("./lib/agents/strategy-agent");
+    const { runStrategyAgent, reconcileStrategyRunCharge } = await import("./lib/agents/strategy-agent");
     const { onAgentRunComplete } = await import("./lib/workflow/triggers");
     const { campaignRouter } = await import("./campaign-router");
 
@@ -2177,6 +2185,9 @@ describe("campaignRouter strategy entry-point lifecycle (Phase 2B integration)",
 
     expect(runStrategyAgent).not.toHaveBeenCalled();
     expect(onAgentRunComplete).toHaveBeenCalledWith(111);
+    // WBS-R4E charge-gap reconciliation: the reused run's durable charge is
+    // reconciled exactly-once before advancement.
+    expect(reconcileStrategyRunCharge).toHaveBeenCalledWith(18, expect.any(Number), 111);
   });
 
   it("create does not reuse a completed strategy run grounded with stale fallback channels", async () => {

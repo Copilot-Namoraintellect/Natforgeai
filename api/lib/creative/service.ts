@@ -3421,13 +3421,17 @@ export async function completePremiumVideo({
     });
   }
 
-  // Deduct credits on success
+  // Deduct credits on success. The deduction is keyed by the provider job
+  // identity: refreshStatus, the Creatify webhook and the synchronous-done
+  // shortcut can all race into this completion, and the ledger collapses them
+  // onto exactly one charge for the render job.
   const cost = getPremiumVideoCredits();
   const deduction = await deductCredits({
     userId,
     amount: cost,
     type: "video_generation",
     description: "Premium Master Video Ad generation",
+    idempotencyKey: `premium-video:${providerJobId}`,
     metadata: {
       provider: provider.name,
       providerJobId,

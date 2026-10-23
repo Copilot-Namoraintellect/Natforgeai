@@ -30,6 +30,20 @@ const ReplySchema = z.object({
 
 export type ReplyOutput = z.infer<typeof ReplySchema>;
 
+/**
+ * Caller-stable billing identity for an engagement reply. Derived from the
+ * event-scoped dedupKey, so a webhook redelivery or lease-recovery replay of
+ * the same inbound event re-enters the runner's governed reservation under
+ * the same identity and cannot double-charge the reply generation.
+ */
+export function buildEngagementReplyBillingIdentity(dedupKey: string): string {
+  const normalized = (dedupKey || "").trim();
+  if (!normalized) {
+    throw new Error("dedupKey must be a non-empty string to mint a billing identity.");
+  }
+  return `engagement-reply:${normalized}`;
+}
+
 export async function generateReply({
   userId,
   campaignId,
@@ -38,6 +52,7 @@ export async function generateReply({
   platform,
   businessContext,
   dedupKey,
+  billingIdempotencyKey,
   approvalExecutor,
 }: {
   userId: number;
@@ -53,6 +68,14 @@ export async function generateReply({
   };
   /** Event-scoped idempotency key; when set, the persisted AI reply is deduplicated per event. */
   dedupKey?: string;
+  /**
+   * Optional caller-stable billing identity. When the event-scoped dedupKey is
+   * available, pass buildEngagementReplyBillingIdentity(dedupKey) so recovery
+   * retries of the same event collapse onto one governed charge. Manual
+   * invocations without an event identity omit this (each invocation is a new
+   * billable operation by design).
+   */
+  billingIdempotencyKey?: string;
   /**
    * Optional test seam for the sensitive-reply approval bridge; production
    * callers omit this and the durable store uses its drizzle executor.
@@ -116,6 +139,7 @@ Respond with structured data.`;
     schema: ReplySchema,
     system:
       "You are an expert customer service and sales engagement AI. You write natural, persuasive replies that build trust and move conversations toward conversion. You are careful with sensitive topics and always escalate when unsure. Always respond with valid structured data.",
+    billingIdempotencyKey,
   });
 
   // Save the AI reply. When driven by the inbound pipeline's event-scoped
@@ -305,7 +329,10 @@ export async function handleNewMessage({
     // Inbound message already recorded for this event (retry path).
   }
 
-  // Generate AI reply
+  // Generate AI reply. The event-scoped dedupKey also mints the governed
+  // billing identity: a webhook recovery retry of the same event re-enters
+  // the runner's reservation under the same key, so a redelivery cannot
+  // double-charge the reply generation.
   const result = await generateReply({
     userId,
     campaignId,
@@ -314,6 +341,9 @@ export async function handleNewMessage({
     platform,
     businessContext,
     dedupKey,
+    billingIdempotencyKey: dedupKey
+      ? buildEngagementReplyBillingIdentity(dedupKey)
+      : undefined,
     approvalExecutor,
   });
 

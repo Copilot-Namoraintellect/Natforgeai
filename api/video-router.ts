@@ -4,6 +4,7 @@ import { getDb } from "./queries/connection";
 import { videoRenderJobs } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { env } from "./lib/env";
 import {
   renderBasicDraftVideo,
   generatePremiumVideo,
@@ -108,7 +109,18 @@ export const videoRouter = createRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Feature flags are enforced server-side, fail closed: the UI hides
+      // these modes when the flags are off, but the API must not allow
+      // callers to bypass that and trigger provider spend (premium spends
+      // Creatify credits immediately) against a disabled feature.
       if (input.mode === "premium") {
+        if (!env.enablePremiumVideo) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Premium video generation is not enabled on this deployment.",
+          });
+        }
+
         const result = await generatePremiumVideo({
           userId: ctx.user.id,
           contentPostId: input.contentPostId,
@@ -136,6 +148,13 @@ export const videoRouter = createRouter({
       }
 
       // Basic draft mode
+      if (!env.enableBasicDraftVideo) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Basic draft video generation is not enabled on this deployment.",
+        });
+      }
+
       const result = await renderBasicDraftVideo({
         userId: ctx.user.id,
         contentPostId: input.contentPostId,

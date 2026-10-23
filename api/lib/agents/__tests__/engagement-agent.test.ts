@@ -10,7 +10,10 @@ vi.mock("../runner", () => ({
 
 import { getDb } from "../../../queries/connection";
 import { runAgent } from "../runner";
-import { handleNewMessage } from "../engagement-agent";
+import {
+  buildEngagementReplyBillingIdentity,
+  handleNewMessage,
+} from "../engagement-agent";
 
 function createMockDb(overrides?: {
   existingThread?: Record<string, unknown> | null;
@@ -396,5 +399,87 @@ describe("handleNewMessage recovery idempotency (event-scoped dedupKey)", () => 
       countRows(db, "conversation_messages", v => v.senderType === "lead")
     ).toBe(2);
     expect(countRows(db, "leads", () => true)).toBe(1); // email-guarded
+  });
+});
+
+describe("buildEngagementReplyBillingIdentity", () => {
+  it("mints a caller-stable billing identity from the event-scoped dedupKey", () => {
+    expect(buildEngagementReplyBillingIdentity("facebook:m-100")).toBe(
+      "engagement-reply:facebook:m-100"
+    );
+    expect(buildEngagementReplyBillingIdentity("whatsapp:wamid.HBg...")).toBe(
+      "engagement-reply:whatsapp:wamid.HBg..."
+    );
+  });
+
+  it("throws on blank input", () => {
+    expect(() => buildEngagementReplyBillingIdentity("")).toThrow(
+      /non-empty string/
+    );
+    expect(() => buildEngagementReplyBillingIdentity("   ")).toThrow(
+      /non-empty string/
+    );
+  });
+});
+
+describe("handleNewMessage governed billing identity threading", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const thread = {
+    id: 77,
+    userId: 14,
+    campaignId: 30,
+    platform: "facebook",
+    externalThreadId: "meta:message:page-1:user-9",
+    status: "open",
+  };
+
+  const plainOutput = {
+    runId: 904,
+    output: {
+      reply: "Hi! Yes, we deliver across Cape Town.",
+      shouldQualify: false,
+      shouldEscalate: false,
+      sentiment: "positive",
+    },
+  } as any;
+
+  it("passes billingIdempotencyKey engagement-reply:<provider>:<externalEventId> to runAgent when a dedupKey is set", async () => {
+    const db = createMockDb({ existingThread: thread });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runAgent).mockResolvedValue(plainOutput);
+
+    await handleNewMessage({
+      ...baseInput,
+      campaignId: 30,
+      dedupKey: "facebook:m-100",
+    });
+
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 14,
+        agentType: "engagement",
+        billingIdempotencyKey: "engagement-reply:facebook:m-100",
+      })
+    );
+  });
+
+  it("passes billingIdempotencyKey undefined to runAgent when no dedupKey is set", async () => {
+    const db = createMockDb({ existingThread: thread });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runAgent).mockResolvedValue(plainOutput);
+
+    await handleNewMessage({ ...baseInput, campaignId: 30 });
+
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    const runArgs = vi.mocked(runAgent).mock.calls[0][0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect("billingIdempotencyKey" in runArgs).toBe(true);
+    expect(runArgs.billingIdempotencyKey).toBeUndefined();
   });
 });

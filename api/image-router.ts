@@ -3,7 +3,8 @@ import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { generatedImages, contentPosts, businesses, campaigns } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
-import { checkCredits, deductCredits, recordAiUsage, adminAdjustCredits } from "./lib/billing/credit-engine";
+import { deductCredits, recordAiUsage, adminAdjustCredits } from "./lib/billing/credit-engine";
+import { enforceCostControl } from "./lib/billing/cost-control";
 import { calculateFixedCost } from "./lib/billing/cost-tracker";
 import { generateBasicDraftLeaflet, generatePremiumLeaflet, generateCaptionPack } from "./lib/creative/service";
 import {
@@ -198,13 +199,13 @@ export const imageRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
 
-      // Pre-flight credit check
+      // Pre-flight credit + budget check (balance, daily and monthly limits)
       const IMAGE_COST = 2; // 2 credits per image generation
-      const preCheck = await checkCredits(ctx.user.id, IMAGE_COST);
-      if (!preCheck.hasCredits) {
+      const costControl = await enforceCostControl(ctx.user.id, IMAGE_COST);
+      if (!costControl.allowed) {
         throw new TRPCError({
           code: "PAYMENT_REQUIRED",
-          message: `Insufficient credits. You have ${preCheck.balance} credits. Image generation requires ${IMAGE_COST} credits.`,
+          message: costControl.reason || `Image generation requires ${IMAGE_COST} credits.`,
         });
       }
 
@@ -226,6 +227,10 @@ export const imageRouter = createRouter({
         aspectRatio: input.aspectRatio ?? "1:1",
         style: input.style,
         status: "pending",
+        // Persist the up-front charge so the worker-failure refund path in
+        // image.update has live evidence (previously never set, so refunds
+        // were structurally dead).
+        creditsCharged: IMAGE_COST,
       });
 
       const imageId = Number(img.insertId);

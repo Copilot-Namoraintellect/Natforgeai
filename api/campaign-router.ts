@@ -407,6 +407,16 @@ export const campaignRouter = createRouter({
 
             if (reusableRun) {
               console.log(`[CampaignCreate] Reusing completed strategy run ${reusableRun.id} with matching fingerprint for campaign ${campaignId}`);
+              // WBS-R4E Stream A charge-gap reconciliation: verify the durable
+              // charge for the reused run before advancing. Reconciliation is
+              // exactly-once under strategy-run-${runId} and fails closed on
+              // conflicting evidence; a failure is logged without stalling
+              // the lifecycle advancement.
+              try {
+                await reconcileStrategyRunCharge(ctx.user.id, campaignId, reusableRun.id);
+              } catch (reconcileError: any) {
+                console.error(`[CampaignCreate] Strategy charge reconcile failed for campaign ${campaignId}:`, reconcileError.message);
+              }
               await onAgentRunComplete(reusableRun.id);
               return;
             }
@@ -451,6 +461,19 @@ export const campaignRouter = createRouter({
                 contentStyle: input.contentStyle,
               },
             });
+
+            // WBS-R4E Stream A charge-gap reconciliation: charge every freshly
+            // generated strategy run exactly once under the stable
+            // server-derived identity strategy-run-${runId} (the ledger
+            // collapses retries onto that key). A charge failure must not
+            // strand the lifecycle — the reuse/reconcile paths recover a
+            // missing durable charge later — so it is logged and the
+            // workflow still advances.
+            try {
+              await chargeForStrategyRun(ctx.user.id, campaignId, result);
+            } catch (chargeError: any) {
+              console.error(`[CampaignCreate] Strategy charge failed for campaign ${campaignId}:`, chargeError.message);
+            }
 
             await onAgentRunComplete(result.runId);
           } catch (err: any) {

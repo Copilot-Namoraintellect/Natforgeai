@@ -79,14 +79,12 @@ describe("pauseWorkflowForCostLimit continuation provenance (WBS-R1.4)", () => {
     expect(approval.approvalType).toBe("budget_increase");
     expect(approval.status).toBe("pending");
 
-    // Write order: state clobber first, THEN provenance (with pre-pause state).
+    // Write order: durable provenance FIRST, THEN the state clobber. A crash
+    // after the provenance write leaves a restorable pause; a crash between a
+    // clobber and a later provenance write would strand the campaign paused
+    // with no continuation coordinates.
     expect(fake.updateCalls).toHaveLength(2);
-    const clobber = fake.updateCalls[0].set as { workflowState: string; status: string };
-    expect(clobber.workflowState).toBe("launch_approval_required");
-    expect(clobber.status).toBe("paused");
-    expect("workflowContext" in clobber).toBe(false);
-
-    const provenanceWrite = fake.updateCalls[1].set as {
+    const provenanceWrite = fake.updateCalls[0].set as {
       workflowContext: Record<string, unknown>;
     };
     expect(provenanceWrite.workflowContext).toEqual({
@@ -101,6 +99,11 @@ describe("pauseWorkflowForCostLimit continuation provenance (WBS-R1.4)", () => {
         budgetIncreaseApprovalId: 5001,
       },
     });
+
+    const clobber = fake.updateCalls[1].set as { workflowState: string; status: string };
+    expect(clobber.workflowState).toBe("launch_approval_required");
+    expect(clobber.status).toBe("paused");
+    expect("workflowContext" in clobber).toBe(false);
   });
 
   it("records no provenance when no continuation is supplied (legacy callers)", async () => {

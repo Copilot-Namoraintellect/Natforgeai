@@ -252,6 +252,40 @@ describe("publishSinglePost", () => {
     );
   });
 
+  it("charges the publishing credit under the queue-item idempotency key (publishing:<queueItemId>)", async () => {
+    const { getDb } = await import("../../../queries/connection");
+    const { publishToFacebook } = await import("../../integrations/platforms");
+    const { publishSinglePost } = await import("../publishing-runner");
+
+    vi.mocked(publishToFacebook).mockResolvedValueOnce({
+      success: true,
+      postId: "fb_billed_123",
+    });
+
+    vi.mocked(getDb).mockReturnValue(
+      createMockDb({
+        queueItem: { ...baseQueueItem, integrationId: 9 },
+        contentPost: campaignLinkedContentPost(),
+        integration: baseIntegration,
+        campaign: readyCampaignWithApprovedLineage,
+        business: readyBusiness,
+        approvals: [approvedLaunchApproval],
+      }) as any
+    );
+
+    const result = await publishSinglePost(1);
+
+    expect(result.status).toBe("published");
+    expect(deductCredits).toHaveBeenCalledTimes(1);
+    expect(deductCredits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: baseQueueItem.userId,
+        type: "publishing_deduction",
+        idempotencyKey: `publishing:${baseQueueItem.id}`,
+      })
+    );
+  });
+
   it("mirrors the published outcome onto same-user calendar schedule rows (GAP24 display convergence)", async () => {
     const { getDb } = await import("../../../queries/connection");
     const { publishToFacebook } = await import("../../integrations/platforms");
