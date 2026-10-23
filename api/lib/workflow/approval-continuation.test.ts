@@ -857,3 +857,74 @@ describe("runApprovalContinuationSweep", () => {
     expect(onApprovalResolvedMock).toHaveBeenCalledWith(2, "approved", 22);
   });
 });
+
+
+describe("reconciler identity discipline (WBS-R4 security addendum)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("dispatches with the approval ROW's userId (DB-derived), never a caller-supplied identity", async () => {
+    const calls: Array<[number, string, number]> = [];
+    let campaignLookupUserId: number | null = null;
+
+    // The approval row belongs to user 77. The reconciler's only inputs are
+    // (approvalId, deps) — there is no caller identity parameter, and every
+    // downstream call must carry the row's userId.
+    const result = await reconcileApprovalContinuation(11, {
+      loadApproval: async () =>
+        approval({ id: 11, userId: 77, campaignId: 7, status: "approved" }),
+      loadCampaign: async (input) => {
+        campaignLookupUserId = input.userId;
+        return {
+          id: 7,
+          userId: 77,
+          workflowState: "strategy_generated",
+          workflowContext: {
+            strategyApprovalLineage: { approvalRequestId: 11, status: "pending" },
+          },
+        };
+      },
+      onApprovalResolved: async (approvalId, decision, userId) => {
+        calls.push([approvalId, decision, userId]);
+      },
+    });
+
+    expect(result.reconciled).toBe(true);
+    expect(campaignLookupUserId).toBe(77);
+    expect(calls).toEqual([[11, "approved", 77]]);
+  });
+
+  it("performs no campaign writes outside the delegated entry points", async () => {
+    const journal: string[] = [];
+
+    await reconcileApprovalContinuation(11, {
+      loadApproval: async (approvalId) => {
+        journal.push(`loadApproval:${approvalId}`);
+        return approval({ id: approvalId, status: "approved" });
+      },
+      loadCampaign: async (input) => {
+        journal.push(`loadCampaign:${input.campaignId}:${input.userId}`);
+        return {
+          id: input.campaignId,
+          userId: input.userId,
+          workflowState: "strategy_generated",
+          workflowContext: {
+            strategyApprovalLineage: { approvalRequestId: 11, status: "pending" },
+          },
+        };
+      },
+      onApprovalResolved: async (approvalId, decision, userId) => {
+        journal.push(`onApprovalResolved:${approvalId}:${decision}:${userId}`);
+      },
+    });
+
+    // Exactly: load the approval, load its owner-scoped campaign, delegate.
+    // No update/mutation seam exists or was invoked.
+    expect(journal).toEqual([
+      "loadApproval:11",
+      "loadCampaign:7:22",
+      "onApprovalResolved:11:approved:22",
+    ]);
+  });
+});

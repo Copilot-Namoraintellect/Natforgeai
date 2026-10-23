@@ -187,4 +187,38 @@ describe("autonomousWorkflow.retryNextCycleDispatch (WBS-R4 A4-3)", () => {
       /Campaign not found/
     );
   });
+
+  it("rejects malformed campaignIds at validation (0, negative, non-integer)", async () => {
+    installCampaign({ instructionId: "nci_1", status: "ready" });
+
+    for (const bad of [0, -1, 7.5, Number.NaN]) {
+      await expect(
+        caller().retryNextCycleDispatch({ campaignId: bad })
+      ).rejects.toBeInstanceOf(Error);
+    }
+    // Validation fails before any dispatch boundary is reached.
+    expect(dispatchNextCycleInstruction).not.toHaveBeenCalled();
+    expect(retryFailedNextCycleInstruction).not.toHaveBeenCalled();
+  });
+
+  it("cross-user retry fails closed without dispatching or revealing state", async () => {
+    // The ownership-scoped campaign read returns nothing for another user, so
+    // the retry fails with NOT_FOUND and neither boundary runs.
+    installCampaign({ instructionId: "nci_1", status: "failed" });
+    vi.mocked(getDb).mockReturnValue({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [],
+          }),
+        }),
+      }),
+    } as never);
+
+    await expect(caller().retryNextCycleDispatch({ campaignId: 7 })).rejects.toThrow(
+      /Campaign not found/
+    );
+    expect(dispatchNextCycleInstruction).not.toHaveBeenCalled();
+    expect(retryFailedNextCycleInstruction).not.toHaveBeenCalled();
+  });
 });

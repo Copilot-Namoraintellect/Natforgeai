@@ -350,3 +350,246 @@ describe("executeApprovalDecision budget binding precondition (WBS-R4 A3-3)", ()
     expect(onApprovalResolved).toHaveBeenCalledWith(9, "approved", 18);
   });
 });
+
+
+describe("budget binding security boundaries (WBS-R4 security addendum)", () => {
+  // Local harness copies (module-scoped so the security describe is
+  // self-contained; the originals live inside their own describes).
+  function createSecurityHarness(costPause: unknown) {
+    const campaign = {
+      id: 42,
+      userId: 18,
+      workflowState: "launch_approval_required",
+      status: "paused" as const,
+      workflowContext: costPause === undefined ? {} : { costPause },
+    };
+    const approvals = [
+      {
+        id: 9,
+        userId: 18,
+        campaignId: 42,
+        approvalType: "budget_increase",
+        status: "pending",
+      },
+    ];
+    const state = {
+      updatedApprovals: [] as any[],
+      transactions: 0,
+      committed: false,
+      rolledBack: false,
+    };
+
+    const flatten = (sql: any): any[] => {
+      if (!sql || typeof sql !== "object" || !Array.isArray(sql.queryChunks)) return [];
+      const out: any[] = [];
+      for (const chunk of sql.queryChunks) {
+        if (chunk && typeof chunk === "object" && Array.isArray(chunk.queryChunks)) {
+          out.push(...flatten(chunk));
+        } else {
+          out.push(chunk);
+        }
+      }
+      return out;
+    };
+    const columnFilters = (condition: unknown): Array<{ name: string; value: unknown }> => {
+      const chunks = flatten(condition);
+      const filters: Array<{ name: string; value: unknown }> = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        if (chunk && typeof chunk === "object" && "name" in chunk && typeof chunk.name === "string") {
+          for (let j = i + 1; j < chunks.length; j++) {
+            const candidate = chunks[j];
+            if (
+              candidate &&
+              typeof candidate === "object" &&
+              !("name" in candidate) &&
+              "value" in candidate &&
+              !Array.isArray(candidate.value)
+            ) {
+              filters.push({ name: chunk.name, value: candidate.value });
+              break;
+            }
+          }
+        }
+      }
+      return filters;
+    };
+    const matches = (row: any, condition: unknown) =>
+      columnFilters(condition).every((f) => row[f.name] === f.value);
+
+    const executor: any = {
+      select: vi.fn(() => ({
+        from: vi.fn((table: unknown) => ({
+          where: vi.fn((condition: unknown) => {
+            const name = getTableName(table);
+            const result =
+              name === "approval_requests"
+                ? approvals.filter((r) => matches(r, condition))
+                : name === "campaigns"
+                  ? [campaign]
+                  : [];
+            return {
+              limit: vi.fn(async () => result),
+              then: (resolve: (value: unknown[]) => unknown) =>
+                Promise.resolve(result).then(resolve),
+            };
+          }),
+        })),
+      })),
+      insert: vi.fn(() => ({
+        values: vi.fn(async () => [{ insertId: 1 }]),
+      })),
+      update: vi.fn((table: unknown) => ({
+        set: vi.fn((payload: any) => ({
+          where: vi.fn(async () => {
+            if (getTableName(table) === "approval_requests") {
+              state.updatedApprovals.push(payload);
+            }
+            return [{ affectedRows: 1 }];
+          }),
+        })),
+      })),
+    };
+    const db: any = {
+      state,
+      ...executor,
+      transaction: async (cb: any) => {
+        state.transactions += 1;
+        try {
+          const result = await cb(executor);
+          state.committed = true;
+          return result;
+        } catch (err) {
+          state.rolledBack = true;
+          throw err;
+        }
+      },
+    };
+    return { db, state };
+  }
+
+  function fakeSecurityDbForPause(costPause: unknown) {
+    const updateCalls: Array<{ set: unknown }> = [];
+    const executor = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [
+              {
+                id: 7,
+                userId: 22,
+                status: "paused",
+                workflowContext: { costPause },
+              },
+            ],
+          }),
+        }),
+      }),
+      update: () => ({
+        set: (setPayload: unknown) => ({
+          where: async () => {
+            updateCalls.push({ set: setPayload });
+            return [{ affectedRows: 1 }];
+          },
+        }),
+      }),
+    } as never;
+    return { executor, updateCalls };
+  }
+
+  async function flushSecurityMicrotasks() {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function buildCaller(userId: number) {
+    return {
+      resHeaders: new Headers(),
+      user: { id: userId, tierSlug: "free" },
+      session: { verified: true },
+    } as any;
+  }
+
+  it("stale authority: unbound decision rejected with campaign state + pause untouched and no dispatch", async () => {
+    const { approvalRouter } = await import("../../approval-router");
+    const { db, state } = createSecurityHarness(BOUND_PAUSE);
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = approvalRouter.createCaller(buildCaller(18));
+    await expect(caller.approveAction({ approvalId: 9 })).rejects.toThrow(/not bound/);
+
+    expect(state.updatedApprovals).toHaveLength(0);
+    expect(state.committed).toBe(false);
+    expect(state.rolledBack).toBe(true);
+    await flushSecurityMicrotasks();
+    expect(onApprovalResolved).not.toHaveBeenCalled();
+  });
+
+  it("cross-user decision fails with the existing ownership NOT_FOUND", async () => {
+    const { approvalRouter } = await import("../../approval-router");
+    const { db, state } = createSecurityHarness(BOUND_PAUSE);
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    // User 999 attempts user 18's budget approval.
+    const caller = approvalRouter.createCaller(buildCaller(999));
+    await expect(caller.approveAction({ approvalId: 9 })).rejects.toThrow(
+      /Approval request not found/
+    );
+    expect(state.updatedApprovals).toHaveLength(0);
+    expect(state.rolledBack).toBe(true);
+    await flushSecurityMicrotasks();
+    expect(onApprovalResolved).not.toHaveBeenCalled();
+  });
+
+  it("malformed binding material fails closed: strict parser rejects wrong types and unknown keys", async () => {
+    // Wrong types for budgetIncreaseApprovalId never parse.
+    expect(
+      parseCostPauseProvenance({ ...BOUND_PAUSE, budgetIncreaseApprovalId: "9" })
+    ).toBeNull();
+    expect(
+      parseCostPauseProvenance({ ...BOUND_PAUSE, budgetIncreaseApprovalId: -4 })
+    ).toBeNull();
+    // Unknown extra keys remain fail-closed even alongside a valid binding.
+    expect(
+      parseCostPauseProvenance({ ...BOUND_PAUSE, injectedAuthority: true })
+    ).toBeNull();
+
+    // The resume pathway refuses a malformed pause with a safe error (no raw
+    // stack disclosure, no state change, no dispatch).
+    const { executor, updateCalls } = fakeSecurityDbForPause({
+      ...BOUND_PAUSE,
+      budgetIncreaseApprovalId: "9",
+    });
+    await expect(
+      resumeWorkflowAfterApprovedCostIncrease({
+        userId: 22,
+        campaignId: 7,
+        approvalId: 5,
+        deps: { executor },
+      })
+    ).rejects.toThrow(/malformed cost pause provenance/);
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it("decision precondition treats an unparseable pause as unbound authority and does not crash", async () => {
+    const { approvalRouter } = await import("../../approval-router");
+    // The campaign records a malformed pause: the binding precondition skips
+    // it (parse null), the human decision is still recorded, and the async
+    // resume refuses closed — no crash, no stack disclosure to the caller.
+    const { db, state } = createSecurityHarness({
+      ...BOUND_PAUSE,
+      budgetIncreaseApprovalId: "9",
+    });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    const caller = approvalRouter.createCaller(buildCaller(18));
+    const result = await caller.approveAction({ approvalId: 9 });
+    expect(result.success).toBe(true);
+    expect(state.committed).toBe(true);
+    await flushSecurityMicrotasks();
+    expect(onApprovalResolved).toHaveBeenCalledTimes(1);
+  });
+});

@@ -187,7 +187,7 @@ export const autonomousWorkflowRouter = createRouter({
   // back to "ready" (exact instructionId) and then dispatched. Everything is
   // idempotent: retries collapse onto the durable instruction authority.
   retryNextCycleDispatch: authedQuery
-    .input(z.object({ campaignId: z.number() }))
+    .input(z.object({ campaignId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
 

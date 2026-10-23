@@ -464,3 +464,168 @@ describe("runStrategyAgent entry gates (before any run-row insert)", () => {
     expect(completedUpdate).toBeDefined();
   });
 });
+
+
+describe("runStrategyAgent business ownership scoping (WBS-R4 security addendum)", () => {
+  const baseBusiness = {
+    name: "Test Business",
+    industry: "Food & Beverage",
+    location: "Johannesburg",
+    productOrService: "payout platform for restaurants",
+    targetCustomer: "restaurant owners",
+    brandTone: "professional",
+    mainGoal: "increase sign-ups",
+    monthlyBudget: 5000,
+    preferredPlatforms: "Facebook, Instagram",
+    website: "https://example.com",
+    websiteEvidence: {},
+  };
+
+  /**
+   * Scoped mock: the businesses select honours the where conditions (the
+   * production query is id + userId + isActive), so a business owned by
+   * another tenant — or an inactive one — is genuinely invisible.
+   */
+  function createScopedBusinessDb(business: Record<string, unknown> | null) {
+    let inserted = false;
+
+    const flatten = (sql: any): any[] => {
+      if (!sql || typeof sql !== "object" || !Array.isArray(sql.queryChunks)) return [];
+      const out: any[] = [];
+      for (const chunk of sql.queryChunks) {
+        if (chunk && typeof chunk === "object" && Array.isArray(chunk.queryChunks)) {
+          out.push(...flatten(chunk));
+        } else {
+          out.push(chunk);
+        }
+      }
+      return out;
+    };
+    const columnFilters = (condition: unknown): Array<{ name: string; value: unknown }> => {
+      const chunks = flatten(condition);
+      const filters: Array<{ name: string; value: unknown }> = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        if (chunk && typeof chunk === "object" && "name" in chunk && typeof chunk.name === "string") {
+          for (let j = i + 1; j < chunks.length; j++) {
+            const candidate = chunks[j];
+            if (
+              candidate &&
+              typeof candidate === "object" &&
+              !("name" in candidate) &&
+              "value" in candidate &&
+              !Array.isArray(candidate.value)
+            ) {
+              filters.push({ name: chunk.name, value: candidate.value });
+              break;
+            }
+          }
+        }
+      }
+      return filters;
+    };
+
+    const db: any = {
+      transaction: vi.fn(async (callback: (tx: any) => Promise<any>) => {
+        const result = await callback({
+          insert: vi.fn(() => ({
+            values: vi.fn(async () => {
+              inserted = true;
+              return [{ insertId: 9101 }];
+            }),
+          })),
+          update: vi.fn(() => ({
+            set: vi.fn(() => ({ where: vi.fn(async () => [{ affectedRows: 1 }]) })),
+          })),
+        });
+        return result;
+      }),
+      select: vi.fn(() => ({
+        from: vi.fn((table: unknown) => ({
+          where: vi.fn((condition: unknown) => {
+            const name = (table as Record<symbol, unknown>)[
+              Symbol.for("drizzle:Name") as symbol
+            ] as string;
+            let rows: any[] = [];
+            if (name === "campaigns") {
+              rows = [{ id: 42, userId: 18, businessId: 7, workflowContext: {} }];
+            } else if (name === "businesses" && business) {
+              const filters = columnFilters(condition);
+              rows = filters.every((f) => (business as any)[f.name] === f.value)
+                ? [{ ...business }]
+                : [];
+            } else if (name === "agent_runs") {
+              rows = [];
+            }
+            return {
+              limit: vi.fn(async () => rows),
+              orderBy: vi.fn(() => ({
+                limit: vi.fn(async () => rows),
+                then: (resolve: (value: unknown[]) => unknown) =>
+                  Promise.resolve(rows).then(resolve),
+              })),
+              then: (resolve: (value: unknown[]) => unknown) =>
+                Promise.resolve(rows).then(resolve),
+            };
+          }),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(async () => [{ affectedRows: 1 }]) })),
+      })),
+    };
+
+    return { db, get inserted() { return inserted; } };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("fails closed with BusinessDnaNotFoundError when the business belongs to another user", async () => {
+    const { runStrategyAgent } = await import("./strategy-agent");
+    const { getDb } = await import("../../queries/connection");
+
+    // The campaign (user 18) links to business 7, but business 7 is owned by
+    // user 999: the owned-active scoped load must see nothing.
+    const mock = createScopedBusinessDb({
+      id: 7,
+      userId: 999,
+      name: "Foreign Business",
+      productOrService: "payout platform for restaurants",
+      targetCustomer: "restaurant owners",
+      websiteEvidence: { productsServices: ["payouts"], targetCustomers: ["restaurant owners"] },
+      isActive: true,
+    });
+    vi.mocked(getDb).mockReturnValue(mock.db as any);
+
+    await expect(
+      runStrategyAgent({ userId: 18, campaignId: 42, business: baseBusiness })
+    ).rejects.toBeInstanceOf(BusinessDnaNotFoundError);
+    expect(mock.db.transaction).not.toHaveBeenCalled();
+    expect(mock.inserted).toBe(false);
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with BusinessDnaNotFoundError when the business is inactive", async () => {
+    const { runStrategyAgent } = await import("./strategy-agent");
+    const { getDb } = await import("../../queries/connection");
+
+    const mock = createScopedBusinessDb({
+      id: 7,
+      userId: 18,
+      name: "Inactive Business",
+      productOrService: "payout platform for restaurants",
+      targetCustomer: "restaurant owners",
+      websiteEvidence: { productsServices: ["payouts"], targetCustomers: ["restaurant owners"] },
+      isActive: false,
+    });
+    vi.mocked(getDb).mockReturnValue(mock.db as any);
+
+    await expect(
+      runStrategyAgent({ userId: 18, campaignId: 42, business: baseBusiness })
+    ).rejects.toBeInstanceOf(BusinessDnaNotFoundError);
+    expect(mock.db.transaction).not.toHaveBeenCalled();
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+});
