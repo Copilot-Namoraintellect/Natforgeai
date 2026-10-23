@@ -105,8 +105,13 @@ export async function runAudienceIntelligenceAgent({
 }: RunAudienceIntelligenceOptions): Promise<RunAudienceIntelligenceResult> {
   const db = getDb();
 
-  // Load campaign + business
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
+  // Load campaign + business — owner-scoped: a campaign owned by another user
+  // is invisible (strict tenant isolation, WBS-R4 security mandate).
+  const [campaign] = await db
+    .select()
+    .from(campaigns)
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
+    .limit(1);
   if (!campaign) throw new Error("Campaign not found");
 
   let business: typeof businesses.$inferSelect | null = null;

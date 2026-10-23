@@ -60,7 +60,7 @@ function createBillableDb({
   recordedRun,
   recordedRunVisible = true,
 }: {
-  campaign: Record<string, unknown>;
+  campaign: Record<string, unknown> | null;
   recordedRun?: Record<string, unknown> | null;
   /**
    * Models the scoped agentRuns ownership filter: a row owned by another user
@@ -329,8 +329,7 @@ describe("runAudienceIntelligenceAgent billing identity plumbing (WBS-R4 C0.2)",
     expect(result.runId).toBe(558);
   });
 
-  it("cross-user replay is rejected: a key recorded by another user's run never matches", async () => {
-    const billingIdentity = expectedBillingKey(29, 9001);
+  it("cross-user replay is rejected: a key recorded by another user's run never matches", async () => {    const billingIdentity = expectedBillingKey(29, 9001);
     // Same campaign context (defensive), but the recorded run belongs to a
     // different user — the scoped agentRuns lookup must not match it.
     const campaign = baseCampaign({
@@ -359,5 +358,46 @@ describe("runAudienceIntelligenceAgent billing identity plumbing (WBS-R4 C0.2)",
     // so the guard cannot match it: the operation re-enters under its own key.
     expect(runAgent).toHaveBeenCalledTimes(1);
     expect(result.runId).toBe(559);
+  });
+
+  it("rejects cross-business invocation: a campaign owned by another user is invisible (C1)", async () => {
+    // Owner-scoped campaign lookup returns nothing for user 42.
+    const { db } = createBillableDb({ campaign: null });
+    vi.mocked(getDb).mockReturnValue(db as any);
+
+    await expect(
+      runAudienceIntelligenceAgent({
+        userId: 42,
+        campaignId: 29,
+        billingIdentity: expectedBillingKey(29, 9001),
+      })
+    ).rejects.toThrow("Campaign not found");
+
+    // Nothing billable or external may happen for a cross-tenant request.
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it("binds the durable audience result to campaign lineage coordinates (C1)", async () => {
+    const campaign = baseCampaign({});
+    const { db, updates } = createBillableDb({ campaign });
+    vi.mocked(getDb).mockReturnValue(db as any);
+    vi.mocked(runAgent).mockResolvedValue({ runId: 560, output: RAW_OUTPUT } as any);
+
+    await runAudienceIntelligenceAgent({
+      userId: 42,
+      campaignId: 29,
+      billingIdentity: expectedBillingKey(29, 9001),
+    });
+
+    const campaignUpdate = updates.find((u) => u.table === "campaigns");
+    const context = (campaignUpdate!.values as { workflowContext: Record<string, unknown> })
+      .workflowContext;
+    // One authoritative result coordinate set per campaign context.
+    expect(context.audienceIntelligenceRunId).toBe(560);
+    expect(context.audienceIntelligenceGeneratedAt).toEqual(expect.any(String));
+    expect(context.audienceIntelligenceSummary).toMatchObject({
+      scoredLeadCount: 1,
+      reachOutCount: 1,
+    });
   });
 });
