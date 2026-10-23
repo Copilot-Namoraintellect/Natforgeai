@@ -25,8 +25,13 @@
  *   injectable so tests run with zero live provider calls. The default
  *   bindings carry no live provider yet — fetching fails closed per
  *   candidate until a future provider expansion wires real metric reads.
+ * - Durable persistence is idempotent (WBS-R4-D): every persisted row carries
+ *   a deterministic observationId unique per campaign/platform/post/metric/
+ *   day, so replays, restarts and same-day re-observation upsert instead of
+ *   duplicating durable metrics.
  */
 
+import { createHash } from "crypto";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { analytics, publishingQueue } from "@db/schema";
 import { getDb } from "../../queries/connection";
@@ -155,6 +160,33 @@ export function createDefaultMetricsObservationBindings(): Record<
   };
 }
 
+/**
+ * Deterministic durable identity for one observed metric row:
+ * `obs:` + SHA-256 over the canonical { campaignId, platform,
+ * externalPostId, metricType, date } material. Provider-originated
+ * identifiers are treated as untrusted input: they are hashed into the
+ * identity, never persisted verbatim, and never reach logs through this
+ * path. The same provider payload replayed on the same day collapses onto
+ * one analytics row (upsert), so observation retries cannot duplicate
+ * durable metrics.
+ */
+export function buildObservationId(input: {
+  campaignId: number;
+  platform: string;
+  externalPostId: string;
+  metricType: string;
+  date: string;
+}): string {
+  const canonical = JSON.stringify({
+    campaignId: input.campaignId,
+    date: input.date,
+    externalPostId: input.externalPostId,
+    metricType: input.metricType,
+    platform: input.platform,
+  });
+  return `obs:${createHash("sha256").update(canonical, "utf8").digest("hex")}`;
+}
+
 export function createDefaultPostLiveMetricsObservationPassDeps(): PostLiveMetricsObservationPassDeps {
   const bindings = createDefaultMetricsObservationBindings();
   const db = getDb();
@@ -193,7 +225,9 @@ export function createDefaultPostLiveMetricsObservationPassDeps(): PostLiveMetri
 
     async loadLastObservedAt(candidate) {
       // The analytics table is the durable observation authority: the newest
-      // observation attributed to this campaign + platform.
+      // provider-observed row attributed to this campaign + platform.
+      // Manually recorded rows (observationId IS NULL) are not observations
+      // and must never suppress a due observation.
       const rows = await db
         .select({ date: analytics.date })
         .from(analytics)
@@ -201,7 +235,8 @@ export function createDefaultPostLiveMetricsObservationPassDeps(): PostLiveMetri
           and(
             eq(analytics.userId, candidate.userId),
             eq(analytics.campaignId, candidate.campaignId),
-            eq(analytics.platform, candidate.platform)
+            eq(analytics.platform, candidate.platform),
+            isNotNull(analytics.observationId)
           )
         )
         .orderBy(desc(analytics.date))
@@ -220,15 +255,31 @@ export function createDefaultPostLiveMetricsObservationPassDeps(): PostLiveMetri
 
     async persistObservations(input) {
       const observedDate = new Date(`${input.observedAt.slice(0, 10)}T00:00:00.000Z`);
+      const observationDate = input.observedAt.slice(0, 10);
       for (const metric of input.metrics) {
-        await db.insert(analytics).values({
-          userId: input.candidate.userId,
-          campaignId: input.candidate.campaignId,
-          metricType: metric.metricType,
-          platform: input.candidate.platform,
-          value: Math.round(metric.value),
-          date: observedDate,
-        });
+        const value = Math.round(metric.value);
+        // Idempotent durable persistence: the deterministic observationId is
+        // unique, so a replayed payload, a restarted pass or a re-run inside
+        // the same observation day upserts the value onto the SAME row
+        // instead of creating duplicate durable metrics.
+        await db
+          .insert(analytics)
+          .values({
+            userId: input.candidate.userId,
+            campaignId: input.candidate.campaignId,
+            metricType: metric.metricType,
+            platform: input.candidate.platform,
+            value,
+            date: observedDate,
+            observationId: buildObservationId({
+              campaignId: input.candidate.campaignId,
+              platform: input.candidate.platform,
+              externalPostId: input.candidate.externalPostId,
+              metricType: metric.metricType,
+              date: observationDate,
+            }),
+          })
+          .onDuplicateKeyUpdate({ set: { value } });
       }
     },
   };
