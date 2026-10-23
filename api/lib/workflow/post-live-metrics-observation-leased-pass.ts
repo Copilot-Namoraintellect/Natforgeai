@@ -8,10 +8,19 @@
  * owner can neither observe candidates nor delete another owner's lease.
  *
  * This module owns no scheduler or startup hook.
+ *
+ * Lease authority: production always requires Redis (env validation), so the
+ * distributed Redis lease is the only production path. When Redis is not
+ * configured (development/test), the pass runs under a process-local lease
+ * store instead: the observation scheduler is already a process-local
+ * singleton, so single-process ownership is preserved and observation stays
+ * autonomous without any developer command. This is not a production fallback
+ * — production startup fails closed when Redis is missing.
  */
 
 import { randomUUID } from "node:crypto";
 
+import { isRedisConfigured } from "../redis";
 import {
   createRedisPostLiveLifecycleLeaseStore,
   type PostLiveLifecycleLeaseStore,
@@ -70,9 +79,51 @@ function assertLeaseTiming(input: { ttlMs: number; heartbeatMs: number }): void 
   }
 }
 
-async function createDefaultDeps(): Promise<PostLiveMetricsObservationLeasedPassDeps> {
+/**
+ * Process-local lease store for development/test runs without Redis.
+ *
+ * Ownership mirrors the Redis contract within this process: only one owner can
+ * hold a key at a time, renew/release require the current owner token, and a
+ * released or expired key can be re-acquired. The observation scheduler is a
+ * module singleton, so no second process-local contender exists; this store
+ * exists so observation remains autonomous in dev without weakening the
+ * production Redis-only path.
+ */
+export function createInProcessMetricsObservationLeaseStore(): PostLiveLifecycleLeaseStore {
+  const held = new Map<string, string>();
+
+  const assertInput = (input: { key: string; ownerToken: string }) => {
+    if (!input.key.trim()) throw new Error("Lease key must not be empty");
+    if (!input.ownerToken.trim()) throw new Error("Lease ownerToken must not be empty");
+  };
+
   return {
-    leaseStore: await createRedisPostLiveLifecycleLeaseStore(),
+    async acquire({ key, ownerToken }) {
+      assertInput({ key, ownerToken });
+      if (held.has(key)) return false;
+      held.set(key, ownerToken);
+      return true;
+    },
+    async renew({ key, ownerToken }) {
+      assertInput({ key, ownerToken });
+      return held.get(key) === ownerToken;
+    },
+    async release({ key, ownerToken }) {
+      assertInput({ key, ownerToken });
+      if (held.get(key) !== ownerToken) return false;
+      held.delete(key);
+      return true;
+    },
+  };
+}
+
+async function createDefaultDeps(): Promise<PostLiveMetricsObservationLeasedPassDeps> {
+  const leaseStore = isRedisConfigured()
+    ? await createRedisPostLiveLifecycleLeaseStore()
+    : createInProcessMetricsObservationLeaseStore();
+
+  return {
+    leaseStore,
     passDeps: createDefaultPostLiveMetricsObservationPassDeps(),
     createOwnerToken: () => randomUUID(),
     startInterval: (callback, intervalMs) => setInterval(callback, intervalMs),

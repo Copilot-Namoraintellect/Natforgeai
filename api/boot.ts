@@ -52,8 +52,9 @@ if (env.postLiveLifecycleEnabled) {
   });
 }
 
-// Post-live metrics observation is deliberately default-off.
-// Production activation requires explicit operational configuration.
+// Post-live metrics observation is part of normal platform autonomy and
+// starts by default; set POST_LIVE_METRICS_OBSERVATION_ENABLED=false to
+// disable it explicitly.
 if (env.postLiveMetricsObservationEnabled) {
   startPostLiveMetricsObservationScheduler({
     intervalMs: env.postLiveMetricsObservationIntervalMs,
