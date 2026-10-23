@@ -35,7 +35,7 @@
 import { and, eq } from "drizzle-orm";
 import { approvalRequests, businesses, campaigns } from "@db/schema";
 import { getDb } from "../../queries/connection";
-import { runStrategyAgent } from "../agents/strategy-agent";
+import { runStrategyAgent, chargeForStrategyRun } from "../agents/strategy-agent";
 import { buildGroundedCreativeBrief } from "../creative/brief-grounding";
 import { getStrategySnapshotByStrategyRunId } from "../strategy/strategy-snapshot-db-store";
 import { createApprovalRequest } from "./engine";
@@ -122,6 +122,22 @@ async function defaultRunStrategy(input: {
     campaignId: input.campaignId,
     business: input.business,
   });
+
+  // WBS-R4 X3.2 (Stream E contract §5): this dispatch path is now a live
+  // production caller, so the fresh Strategy run is charged exactly once
+  // under the stable server-derived identity strategy-run-${runId} — the
+  // same treatment as the campaign-create flow. A charge failure must not
+  // strand the lifecycle (the reuse/reconcile paths recover a missing
+  // durable charge later), so it is logged and dispatch still advances.
+  try {
+    await chargeForStrategyRun(input.userId, input.campaignId, result);
+  } catch (chargeError: any) {
+    console.error(
+      `[NextCycle] Strategy charge failed for campaign ${input.campaignId}:`,
+      chargeError?.message ?? chargeError
+    );
+  }
+
   return { runId: result.runId };
 }
 

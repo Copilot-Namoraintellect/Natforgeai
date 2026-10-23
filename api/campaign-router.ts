@@ -265,7 +265,17 @@ export const campaignRouter = createRouter({
           .from(businesses)
           .where(and(eq(businesses.id, businessId), eq(businesses.userId, ctx.user.id)))
           .limit(1);
-        if (biz && biz.onboardingComplete) isOnboarded = true;
+        // WBS-R4 X6: fail closed on a business id the caller does not own.
+        // Storing another user's businessId here would link the campaign
+        // across tenants and leak the foreign business row into the
+        // readiness/auto-start path below (which reads it by id alone).
+        if (!biz) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Business profile not found for the authenticated user.",
+          });
+        }
+        if (biz.onboardingComplete) isOnboarded = true;
       }
 
       const workflowState = isOnboarded ? "strategy_pending" : "business_onboarding";
@@ -318,7 +328,7 @@ export const campaignRouter = createRouter({
         const [business] = await db
           .select()
           .from(businesses)
-          .where(eq(businesses.id, businessId))
+          .where(and(eq(businesses.id, businessId), eq(businesses.userId, ctx.user.id)))
           .limit(1);
 
         if (business) {
