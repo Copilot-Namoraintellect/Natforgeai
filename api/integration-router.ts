@@ -7,6 +7,10 @@ import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { env } from "./lib/env";
 import {
+  extractAdminRequestId,
+  recordAdminMutationAudit,
+} from "./lib/governance/admin-audit";
+import {
   getOAuthUrl,
   exchangeCodeForToken,
   refreshAccessToken,
@@ -280,7 +284,11 @@ export const integrationRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const [integration] = await db
-        .select({ id: socialIntegrations.id, userId: socialIntegrations.userId })
+        .select({
+          id: socialIntegrations.id,
+          userId: socialIntegrations.userId,
+          businessId: socialIntegrations.businessId,
+        })
         .from(socialIntegrations)
         .where(eq(socialIntegrations.id, input.id))
         .limit(1);
@@ -296,10 +304,26 @@ export const integrationRouter = createRouter({
         });
       }
 
-      await db
-        .update(socialIntegrations)
-        .set({ businessId: input.businessId })
-        .where(eq(socialIntegrations.id, input.id));
+      await db.transaction(async (tx) => {
+        await tx
+          .update(socialIntegrations)
+          .set({ businessId: input.businessId })
+          .where(eq(socialIntegrations.id, input.id));
+
+        await recordAdminMutationAudit({
+          actorUserId: ctx.user.id,
+          action: "admin.integration_business_assigned",
+          targetType: "social_integration",
+          targetId: input.id,
+          occurredAt: new Date(),
+          metadata: {
+            beforeBusinessId: integration.businessId ?? null,
+            afterBusinessId: input.businessId,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+          executor: tx,
+        });
+      });
 
       return { success: true };
     }),

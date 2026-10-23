@@ -44,6 +44,9 @@ export const AUDIT_EVENT_TYPES = [
   "learning_record_creation",
   "strategy_snapshot_materialized",
   "learning_promotion_resolved",
+  // R4-F: privileged/admin mutations recorded by the operator control plane.
+  // One material type; the specific action lives in sanitized metadata.
+  "admin_mutation",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

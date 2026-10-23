@@ -44,6 +44,11 @@ import {
   ContentReplayValidationError,
 } from "./lib/queue/terminal-content-replay-executor";
 import { reconcileTerminalReplayBatch } from "./lib/queue/terminal-replay-reconciliation-batch";
+import {
+  extractAdminRequestId,
+  recordAdminMutationAudit,
+} from "./lib/governance/admin-audit";
+import { projectCampaignLifecycle } from "./lib/governance/lifecycle-projection";
 import { eq, desc, sql, count, and, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
@@ -136,6 +141,45 @@ function mapTerminalReplayError(
   });
 }
 
+/**
+ * Best-effort audit for a privileged operator mutation whose governed step
+ * FAILED. The failure audit never masks the original error: an audit
+ * failure here is logged and swallowed so the caller still receives the
+ * authoritative mapped error.
+ */
+async function recordFailedAdminMutationAudit(
+  ctx: { req: unknown },
+  actorUserId: number,
+  action:
+    | "admin.terminal_replay_requested"
+    | "admin.terminal_replay_executed"
+    | "admin.terminal_replay_reconciled"
+    | "admin.diagnostic_authority_executed",
+  targetType: "terminal_replay" | "terminal_replay_batch" | "diagnostic_harness",
+  metadata: Record<string, unknown>
+): Promise<void> {
+  try {
+    await recordAdminMutationAudit({
+      actorUserId,
+      action,
+      targetType,
+      outcome: "failed",
+      occurredAt: new Date(),
+      metadata,
+      requestId: extractAdminRequestId(ctx.req),
+    });
+  } catch (auditErr) {
+    const errorCode =
+      (auditErr as { code?: unknown } | null | undefined)?.code;
+    logError("[Admin] Failed to record admin mutation audit event", {
+      event: "admin_audit_record_failed",
+      adminUserId: actorUserId,
+      action,
+      errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+    });
+  }
+}
+
 export const adminRouter = createRouter({
   // ─── Dashboard Stats ───
   stats: adminQuery.query(async () => {
@@ -205,8 +249,19 @@ export const adminRouter = createRouter({
     )
     .query(async ({ input }) => {
       const db = getDb();
+      // Explicit safe projection: credential material (password hashes) and
+      // provider identity linkage fields never leave the server.
       const allUsers = await db
-        .select()
+        .select({
+          id: users.id,
+          username: users.username,
+          email: users.email,
+          name: users.name,
+          role: users.role,
+          authType: users.authType,
+          lastSignInAt: users.lastSignInAt,
+          createdAt: users.createdAt,
+        })
         .from(users)
         .orderBy(desc(users.createdAt));
 
@@ -230,12 +285,29 @@ export const adminRouter = createRouter({
   // ─── Update User Role ───
   updateUserRole: adminQuery
     .input(z.object({ userId: z.number(), role: z.enum(["user", "admin"]) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const db = getDb();
-      await db
-        .update(users)
-        .set({ role: input.role })
-        .where(eq(users.id, input.userId));
+      // The role mutation and its canonical audit evidence commit or roll
+      // back as one unit: an audit failure can never leave a silent
+      // privilege change.
+      await db.transaction(async (tx) => {
+        const [before] = await tx
+          .select({ role: users.role })
+          .from(users)
+          .where(eq(users.id, input.userId))
+          .limit(1);
+        await tx.update(users).set({ role: input.role }).where(eq(users.id, input.userId));
+        await recordAdminMutationAudit({
+          actorUserId: ctx.user.id,
+          action: "admin.user_role_updated",
+          targetType: "user",
+          targetId: input.userId,
+          occurredAt: new Date(),
+          metadata: { beforeRole: before?.role ?? null, afterRole: input.role },
+          requestId: extractAdminRequestId(ctx.req),
+          executor: tx,
+        });
+      });
       return { success: true };
     }),
 
@@ -269,15 +341,32 @@ export const adminRouter = createRouter({
         status: z.enum(["pending", "completed", "failed", "refunded", "disputed"]),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const db = getDb();
-      await db
-        .update(payments)
-        .set({
-          status: input.status,
-          paidAt: input.status === "completed" ? new Date() : undefined,
-        })
-        .where(eq(payments.id, input.paymentId));
+      await db.transaction(async (tx) => {
+        const [before] = await tx
+          .select({ status: payments.status })
+          .from(payments)
+          .where(eq(payments.id, input.paymentId))
+          .limit(1);
+        await tx
+          .update(payments)
+          .set({
+            status: input.status,
+            paidAt: input.status === "completed" ? new Date() : undefined,
+          })
+          .where(eq(payments.id, input.paymentId));
+        await recordAdminMutationAudit({
+          actorUserId: ctx.user.id,
+          action: "admin.payment_status_updated",
+          targetType: "payment",
+          targetId: input.paymentId,
+          occurredAt: new Date(),
+          metadata: { beforeStatus: before?.status ?? null, afterStatus: input.status },
+          requestId: extractAdminRequestId(ctx.req),
+          executor: tx,
+        });
+      });
       return { success: true };
     }),
 
@@ -347,18 +436,38 @@ export const adminRouter = createRouter({
         subscriptionId: z.number().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const db = getDb();
-      await db.insert(payments).values({
-        userId: input.userId,
-        subscriptionId: input.subscriptionId,
-        amount: input.amount,
-        currency: input.currency,
-        status: "completed",
-        paymentMethod: input.paymentMethod,
-        paymentReference: input.paymentReference,
-        description: input.description,
-        paidAt: new Date(),
+      // Payment insert and audit evidence are one atomic unit.
+      await db.transaction(async (tx) => {
+        const [result] = await tx.insert(payments).values({
+          userId: input.userId,
+          subscriptionId: input.subscriptionId,
+          amount: input.amount,
+          currency: input.currency,
+          status: "completed",
+          paymentMethod: input.paymentMethod,
+          paymentReference: input.paymentReference,
+          description: input.description,
+          paidAt: new Date(),
+        });
+        await recordAdminMutationAudit({
+          actorUserId: ctx.user.id,
+          action: "admin.payment_recorded",
+          targetType: "payment",
+          targetId: Number(result.insertId),
+          occurredAt: new Date(),
+          metadata: {
+            amount: input.amount,
+            currency: input.currency,
+            paymentMethod: input.paymentMethod,
+            subscriptionId: input.subscriptionId ?? null,
+            targetUserId: input.userId,
+            description: input.description ?? null,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+          executor: tx,
+        });
       });
       return { success: true };
     }),
@@ -393,24 +502,44 @@ export const adminRouter = createRouter({
         });
       }
 
-      // Delete all related data
-      await db.delete(campaigns).where(eq(campaigns.userId, targetId));
-      await db.delete(contentPosts).where(eq(contentPosts.userId, targetId));
-      await db.delete(leads).where(eq(leads.userId, targetId));
-      await db.delete(schedules).where(eq(schedules.userId, targetId));
-      await db.delete(automations).where(eq(automations.userId, targetId));
-      await db.delete(analytics).where(eq(analytics.userId, targetId));
-      await db.delete(generatedImages).where(eq(generatedImages.userId, targetId));
-      await db.delete(businesses).where(eq(businesses.userId, targetId));
-      await db.delete(subscriptions).where(eq(subscriptions.userId, targetId));
-      await db.delete(payments).where(eq(payments.userId, targetId));
-      await db.delete(bankingDetails).where(eq(bankingDetails.adminUserId, targetId));
+      // Delete all related data. Everything — including the canonical audit
+      // evidence — commits or rolls back as one unit, so a mid-delete failure
+      // can no longer leave orphaned user data, and a deletion can never
+      // silently bypass the audit ledger.
+      await db.transaction(async (tx) => {
+        await tx.delete(campaigns).where(eq(campaigns.userId, targetId));
+        await tx.delete(contentPosts).where(eq(contentPosts.userId, targetId));
+        await tx.delete(leads).where(eq(leads.userId, targetId));
+        await tx.delete(schedules).where(eq(schedules.userId, targetId));
+        await tx.delete(automations).where(eq(automations.userId, targetId));
+        await tx.delete(analytics).where(eq(analytics.userId, targetId));
+        await tx.delete(generatedImages).where(eq(generatedImages.userId, targetId));
+        await tx.delete(businesses).where(eq(businesses.userId, targetId));
+        await tx.delete(subscriptions).where(eq(subscriptions.userId, targetId));
+        await tx.delete(payments).where(eq(payments.userId, targetId));
+        await tx.delete(bankingDetails).where(eq(bankingDetails.adminUserId, targetId));
 
-      // Delete user usage record
-      await db.delete(userUsage).where(eq(userUsage.userId, targetId));
+        // Delete user usage record
+        await tx.delete(userUsage).where(eq(userUsage.userId, targetId));
 
-      // Finally delete the user
-      await db.delete(users).where(eq(users.id, targetId));
+        // Finally delete the user
+        await tx.delete(users).where(eq(users.id, targetId));
+
+        await recordAdminMutationAudit({
+          actorUserId: adminId,
+          action: "admin.user_deleted",
+          targetType: "user",
+          targetId,
+          occurredAt: new Date(),
+          metadata: {
+            deletedAuthType: targetUser.authType ?? null,
+            deletedRole: targetUser.role ?? null,
+            deletedUsername: targetUser.username ?? null,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+          executor: tx,
+        });
+      });
 
       return {
         success: true,
@@ -434,7 +563,7 @@ export const adminRouter = createRouter({
         role: z.enum(["user", "admin"]).default("user"),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const db = getDb();
 
       // Check for existing username or email
@@ -458,44 +587,61 @@ export const adminRouter = createRouter({
       const bcrypt = await import("bcryptjs");
       const passwordHash = await bcrypt.hash(input.password, 12);
 
-      const [result] = await db.insert(users).values({
-        username: input.username,
-        email: input.email,
-        passwordHash,
-        name: input.name,
-        authType: "local",
-        role: input.role,
-        lastSignInAt: new Date(),
-      });
-
-      const userId = Number(result.insertId);
-
-      // Auto-assign free tier
-      const [freeTier] = await db
-        .select()
-        .from(subscriptionTiers)
-        .where(eq(subscriptionTiers.slug, "free"))
-        .limit(1);
-
-      if (freeTier) {
-        const now = new Date();
-        const periodEnd = new Date(now);
-        periodEnd.setMonth(periodEnd.getMonth() + 1);
-        await db.insert(subscriptions).values({
-          userId,
-          tierId: freeTier.id,
-          status: "active",
-          currentPeriodStart: now,
-          currentPeriodEnd: periodEnd,
-          paymentMethod: "manual",
+      // User creation (account + free tier + usage row) and its canonical
+      // audit evidence are one atomic unit. The plaintext password is never
+      // referenced by the audit metadata.
+      let userId = 0;
+      await db.transaction(async (tx) => {
+        const [result] = await tx.insert(users).values({
+          username: input.username,
+          email: input.email,
+          passwordHash,
+          name: input.name,
+          authType: "local",
+          role: input.role,
+          lastSignInAt: new Date(),
         });
-      }
 
-      // Create usage tracking
-      await db.insert(userUsage).values({
-        userId,
-        campaignsCreated: 0,
-        successfulResults: 0,
+        userId = Number(result.insertId);
+
+        // Auto-assign free tier
+        const [freeTier] = await tx
+          .select()
+          .from(subscriptionTiers)
+          .where(eq(subscriptionTiers.slug, "free"))
+          .limit(1);
+
+        if (freeTier) {
+          const now = new Date();
+          const periodEnd = new Date(now);
+          periodEnd.setMonth(periodEnd.getMonth() + 1);
+          await tx.insert(subscriptions).values({
+            userId,
+            tierId: freeTier.id,
+            status: "active",
+            currentPeriodStart: now,
+            currentPeriodEnd: periodEnd,
+            paymentMethod: "manual",
+          });
+        }
+
+        // Create usage tracking
+        await tx.insert(userUsage).values({
+          userId,
+          campaignsCreated: 0,
+          successfulResults: 0,
+        });
+
+        await recordAdminMutationAudit({
+          actorUserId: ctx.user.id,
+          action: "admin.user_created",
+          targetType: "user",
+          targetId: userId,
+          occurredAt: new Date(),
+          metadata: { createdAuthType: "local", createdRole: input.role },
+          requestId: extractAdminRequestId(ctx.req),
+          executor: tx,
+        });
       });
 
       return {
@@ -620,9 +766,33 @@ export const adminRouter = createRouter({
           logInfo("[Admin] V2 diagnostic authority executed", safeEvent);
         }
 
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.diagnostic_authority_executed",
+          targetType: "diagnostic_harness",
+          targetId: input.executionId,
+          occurredAt: new Date(),
+          outcome: result.errorStage || result.errorCode ? "failed" : "succeeded",
+          metadata: {
+            billingMutationCount: result.billingMutationCount,
+            decision: result.decision,
+            executionMode: result.executionMode,
+            fixtureCase: input.fixtureCase,
+            productionMode: result.productionMode,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
+
         return result;
       } catch (err: any) {
         const errorCode = typeof err?.code === "string" ? err.code : "DIAGNOSTIC_AUTHORITY_ERROR";
+        await recordFailedAdminMutationAudit(
+          ctx,
+          adminUserId,
+          "admin.diagnostic_authority_executed",
+          "diagnostic_harness",
+          { executionId: input.executionId, fixtureCase: input.fixtureCase }
+        );
         logError("[Admin] V2 diagnostic authority unexpected error", {
           event: "v2_diagnostic_authority_error",
           executionId: input.executionId,
@@ -710,6 +880,21 @@ export const adminRouter = createRouter({
           replayMode: result.record.replayMode,
           alreadyRequested: result.alreadyRequested,
         });
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.terminal_replay_requested",
+          targetType: "terminal_replay",
+          targetId: result.record.id,
+          reason: input.reason,
+          occurredAt: new Date(),
+          metadata: {
+            alreadyRequested: result.alreadyRequested,
+            queueName: result.record.queueName,
+            replayMode: result.record.replayMode,
+            terminalFailureId: input.terminalFailureId,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
         return {
           replayRequestId: result.record.id,
           terminalFailureId: result.record.terminalFailureId,
@@ -720,6 +905,9 @@ export const adminRouter = createRouter({
           createdAt: result.record.createdAt,
         };
       } catch (err) {
+        await recordFailedAdminMutationAudit(ctx, adminUserId, "admin.terminal_replay_requested", "terminal_replay", {
+          terminalFailureId: input.terminalFailureId,
+        });
         throw mapTerminalReplayError(err, adminUserId, {
           terminalFailureId: input.terminalFailureId,
         });
@@ -767,8 +955,23 @@ export const adminRouter = createRouter({
           replayMode: request.replayMode,
           outcome: result.outcome,
         });
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.terminal_replay_executed",
+          targetType: "terminal_replay",
+          targetId: input.replayRequestId,
+          occurredAt: new Date(),
+          metadata: {
+            outcome: result.outcome,
+            replayMode: request.replayMode,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
         return result;
       } catch (err) {
+        await recordFailedAdminMutationAudit(ctx, adminUserId, "admin.terminal_replay_executed", "terminal_replay", {
+          replayRequestId: input.replayRequestId,
+        });
         throw mapTerminalReplayError(err, adminUserId, {
           replayRequestId: input.replayRequestId,
         });
@@ -798,9 +1001,27 @@ export const adminRouter = createRouter({
           pendingCount: report.pendingCount,
           errorCount: report.errorCount,
         });
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.terminal_replay_reconciled",
+          targetType: "terminal_replay_batch",
+          occurredAt: new Date(),
+          metadata: {
+            attemptedCount: report.attemptedCount,
+            errorCount: report.errorCount,
+            failedCount: report.failedCount,
+            pendingCount: report.pendingCount,
+            resolvedCount: report.resolvedCount,
+            selectedCount: report.selectedCount,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
         return report;
       } catch (err) {
         const errorCode = (err as { code?: unknown } | null | undefined)?.code;
+        await recordFailedAdminMutationAudit(ctx, adminUserId, "admin.terminal_replay_reconciled", "terminal_replay_batch", {
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
         logError("[Admin] Terminal replay reconciliation failed", {
           event: "terminal_replay_reconciliation_error",
           adminUserId,
@@ -811,5 +1032,171 @@ export const adminRouter = createRouter({
           message: "Terminal replay reconciliation failed.",
         });
       }
+    }),
+
+  // ─── WBS-R4-F: Operator lifecycle control plane ───
+  // Read-only lifecycle projection (F3) plus the two safe governed recovery
+  // actions that reuse existing governed services (F4). There is
+  // deliberately NO force-complete / force-approve / arbitrary state setter
+  // here: every exposed action delegates to an existing governed authority.
+
+  // READ ONLY: the canonical per-campaign lifecycle projection. Answers
+  // "why is this campaign not progressing?" without database access.
+  getCampaignLifecycle: adminQuery
+    .input(z.object({ campaignId: z.number().int().positive() }))
+    .query(async ({ input }) => {
+      const projection = await projectCampaignLifecycle({ campaignId: input.campaignId });
+      if (!projection.campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found." });
+      }
+      return projection;
+    }),
+
+  // Governed recovery: resume a cost-paused campaign through the existing
+  // budget-resume continuation authority. The owner user id is derived from
+  // the durable campaign row — never from client input.
+  resumeBudgetPausedCampaign: adminQuery
+    .input(z.object({ campaignId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const adminUserId = ctx.user.id;
+      const db = getDb();
+      const [campaign] = await db
+        .select({ id: campaigns.id, userId: campaigns.userId })
+        .from(campaigns)
+        .where(eq(campaigns.id, input.campaignId))
+        .limit(1);
+      if (!campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found." });
+      }
+
+      // Lazy import mirrors the approval-trigger wiring and keeps the heavy
+      // trigger graph out of the admin module's static import cycle.
+      const { resumeWorkflowAfterApprovedCostIncrease } = await import(
+        "./lib/workflow/budget-resume"
+      );
+
+      let outcome: Awaited<ReturnType<typeof resumeWorkflowAfterApprovedCostIncrease>>;
+      try {
+        outcome = await resumeWorkflowAfterApprovedCostIncrease({
+          userId: campaign.userId,
+          campaignId: input.campaignId,
+        });
+      } catch (err) {
+        const errorCode = (err as { code?: unknown } | null | undefined)?.code;
+        logError("[Admin] Budget resume failed", {
+          event: "campaign_budget_resume_error",
+          adminUserId,
+          campaignId: input.campaignId,
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Campaign budget resume failed. No state was changed.",
+        });
+      }
+
+      // No durable cost pause: nothing mutated, nothing to audit.
+      if (!outcome) {
+        return { outcome: "no_cost_pause" as const };
+      }
+
+      try {
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.campaign_budget_resume",
+          targetType: "campaign",
+          targetId: input.campaignId,
+          occurredAt: new Date(),
+          metadata: {
+            campaignUserId: campaign.userId,
+            continuationId: outcome.outcome === "resumed" ? outcome.continuationId : null,
+            kind: outcome.outcome === "resumed" ? outcome.kind : null,
+            outcome: outcome.outcome,
+            stillBlockedReason: outcome.outcome === "still_blocked" ? outcome.reason : null,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
+      } catch (auditErr) {
+        const errorCode = (auditErr as { code?: unknown } | null | undefined)?.code;
+        logError("[Admin] Budget resume audit failed", {
+          event: "admin_audit_record_failed",
+          adminUserId,
+          campaignId: input.campaignId,
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Resume was applied but audit recording failed; the resume is idempotent and retry is safe.",
+        });
+      }
+
+      return outcome;
+    }),
+
+  // Governed recovery: one controlled sweep of stale creative-generation
+  // claims via the existing dormant sweep authority (terminalization only —
+  // it never rearms, never runs agents, never retries).
+  sweepStaleCreativeClaims: adminQuery
+    .input(
+      z
+        .object({
+          staleBeforeMinutes: z.number().int().min(1).max(24 * 60).optional(),
+        })
+        .optional()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const adminUserId = ctx.user.id;
+      const staleBeforeMinutes = input?.staleBeforeMinutes ?? 30;
+      const staleBefore = new Date(Date.now() - staleBeforeMinutes * 60_000);
+
+      const { sweepStaleCreativeGenerationClaims } = await import(
+        "./lib/creative/creative-stale-claim-sweep"
+      );
+
+      let report: Awaited<ReturnType<typeof sweepStaleCreativeGenerationClaims>>;
+      try {
+        report = await sweepStaleCreativeGenerationClaims({ staleBefore });
+      } catch (err) {
+        const errorCode = (err as { code?: unknown } | null | undefined)?.code;
+        logError("[Admin] Stale creative claim sweep failed", {
+          event: "stale_creative_claim_sweep_error",
+          adminUserId,
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Stale creative claim sweep failed.",
+        });
+      }
+
+      try {
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.stale_creative_claim_sweep",
+          targetType: "creative_claim_sweep",
+          occurredAt: new Date(),
+          metadata: {
+            ambiguousLeftUntouched: report.ambiguousLeftUntouched.length,
+            found: report.found,
+            healthyIgnored: report.healthyIgnored,
+            recovered: report.recovered.length,
+            staleBefore: report.staleBefore,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
+      } catch (auditErr) {
+        const errorCode = (auditErr as { code?: unknown } | null | undefined)?.code;
+        logError("[Admin] Stale creative claim sweep audit failed", {
+          event: "admin_audit_record_failed",
+          adminUserId,
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Sweep completed but audit recording failed; re-running the sweep is a safe no-op.",
+        });
+      }
+
+      return report;
     }),
 });

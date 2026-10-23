@@ -138,6 +138,7 @@ function createFakeDb(seed: { terminalFailures: any[]; replayRequests: any[] }) 
   const state = {
     terminalFailures: seed.terminalFailures.map((r) => ({ ...r })),
     replayRequests: seed.replayRequests.map((r) => ({ ...r })),
+    auditInserts: [] as any[],
     mutations: 0,
   };
   const db: any = {
@@ -203,6 +204,16 @@ function createFakeDb(seed: { terminalFailures: any[]; replayRequests: any[] }) 
       state.mutations++;
       throw new Error("admin replay control plane must not delete business state");
     }),
+    insert: vi.fn((table: any) => ({
+      values: vi.fn(async (row: any) => {
+        if (table?.[Symbol.for("drizzle:Name") as symbol] === "audit_events") {
+          state.auditInserts.push(row);
+          return [];
+        }
+        state.mutations++;
+        throw new Error("admin replay control plane must not insert business state");
+      }),
+    })),
   };
   return { db, state };
 }
@@ -306,6 +317,7 @@ describe("admin terminal replay control plane — authorization", () => {
       record: {
         id: 1000,
         terminalFailureId: 501,
+        queueName: "publishing",
         replayMode: "publishing_requeue",
         status: "requested",
         requestedByUserId: 1,
@@ -356,6 +368,7 @@ describe("admin terminal replay control plane — kill switch", () => {
       record: {
         id: 1000,
         terminalFailureId: 501,
+        queueName: "publishing",
         replayMode: "publishing_requeue",
         status: "requested",
         requestedByUserId: 1,
@@ -517,6 +530,7 @@ describe("admin.requestTerminalReplay", () => {
       record: {
         id: 1000,
         terminalFailureId: 501,
+        queueName: "publishing",
         replayMode: "publishing_requeue",
         status: "requested",
         requestedByUserId: 1,
@@ -788,5 +802,139 @@ describe("admin terminal replay control plane — structural boundaries", () => 
     expect(source).not.toContain(".retry(");
     expect(source).not.toContain("ownerToken");
     expect(source).not.toContain("publicQuery");
+  });
+});
+
+
+describe("admin terminal replay control plane — audit ledger (R4-F1)", () => {
+  beforeEach(() => {
+    loggedEvents.length = 0;
+    vi.clearAllMocks();
+    delete process.env.TERMINAL_REPLAY_ADMIN_ENABLED;
+  });
+
+  it("records a canonical audit event for a requested replay", async () => {
+    process.env.TERMINAL_REPLAY_ADMIN_ENABLED = "true";
+    const world = seedDb();
+    mockedRequest.mockResolvedValue({
+      record: {
+        id: 1000,
+        terminalFailureId: 501,
+        queueName: "publishing",
+        replayMode: "publishing_requeue",
+        status: "requested",
+        requestedByUserId: 1,
+        createdAt: new Date("2026-06-01T00:00:00Z"),
+      },
+      alreadyRequested: false,
+    } as any);
+    const caller = makeCaller();
+
+    await caller.requestTerminalReplay({
+      terminalFailureId: 501,
+      replayKey: "op:k",
+      reason: "operator approved recovery",
+    });
+
+    expect(world.state.auditInserts).toHaveLength(1);
+    expect(world.state.auditInserts[0]).toMatchObject({
+      eventType: "admin_mutation",
+      source: "admin",
+      userId: 1,
+      outcome: "succeeded",
+    });
+    expect(world.state.auditInserts[0].metadata).toMatchObject({
+      action: "admin.terminal_replay_requested",
+      targetType: "terminal_replay",
+      targetId: 1000,
+      reason: "operator approved recovery",
+      terminalFailureId: 501,
+      replayMode: "publishing_requeue",
+    });
+  });
+
+  it("records a canonical audit event for an executed replay", async () => {
+    process.env.TERMINAL_REPLAY_ADMIN_ENABLED = "true";
+    const world = seedDb();
+    mockedPublishExec.mockResolvedValue({
+      outcome: "enqueued",
+      replayRequestId: 1000,
+      replayBullmqJobId: "publish-5",
+    } as any);
+    const caller = makeCaller();
+
+    await caller.executeTerminalReplay({ replayRequestId: 1000 });
+
+    expect(world.state.auditInserts).toHaveLength(1);
+    expect(world.state.auditInserts[0].metadata).toMatchObject({
+      action: "admin.terminal_replay_executed",
+      targetType: "terminal_replay",
+      targetId: 1000,
+      outcome: "enqueued",
+      replayMode: "publishing_requeue",
+    });
+  });
+
+  it("records a canonical audit event for a reconciliation pass", async () => {
+    process.env.TERMINAL_REPLAY_ADMIN_ENABLED = "true";
+    const world = seedDb();
+    mockedBatch.mockResolvedValue({
+      selectedCount: 2,
+      attemptedCount: 2,
+      resolvedCount: 1,
+      failedCount: 0,
+      pendingCount: 1,
+      alreadyTerminalCount: 0,
+      errorCount: 0,
+      resolved: [],
+      failed: [],
+      pending: [],
+      errors: [],
+    } as any);
+    const caller = makeCaller();
+
+    await caller.reconcileTerminalReplays({});
+
+    expect(world.state.auditInserts).toHaveLength(1);
+    expect(world.state.auditInserts[0].metadata).toMatchObject({
+      action: "admin.terminal_replay_reconciled",
+      targetType: "terminal_replay_batch",
+      selectedCount: 2,
+      resolvedCount: 1,
+    });
+  });
+
+  it("records a failed-outcome audit event when the governed step fails", async () => {
+    process.env.TERMINAL_REPLAY_ADMIN_ENABLED = "true";
+    const world = seedDb();
+    mockedRequest.mockRejectedValue(new (await import("./lib/queue/terminal-replay")).TerminalReplayTargetNotFoundError(999));
+    const caller = makeCaller();
+
+    await expectTrpcCode(
+      caller.requestTerminalReplay({
+        terminalFailureId: 999,
+        replayKey: "op:k",
+        reason: "r",
+      }),
+      "NOT_FOUND"
+    );
+
+    expect(world.state.auditInserts).toHaveLength(1);
+    expect(world.state.auditInserts[0].outcome).toBe("failed");
+    expect(world.state.auditInserts[0].metadata).toMatchObject({
+      action: "admin.terminal_replay_requested",
+      terminalFailureId: 999,
+    });
+  });
+
+  it("writes no audit row while the kill switch blocks the mutation", async () => {
+    const world = seedDb();
+    const caller = makeCaller();
+    await expectTrpcCode(
+      caller.requestTerminalReplay({ terminalFailureId: 501, replayKey: "op:k", reason: "r" }),
+      "SERVICE_UNAVAILABLE"
+    );
+    expect(world.state.auditInserts).toHaveLength(0);
+    expect(mockedRequest).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,27 @@ import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { bankingDetails } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import {
+  extractAdminRequestId,
+  recordAdminMutationAudit,
+} from "./lib/governance/admin-audit";
+
+type BankingMethodKind = "bank_transfer" | "stripe" | "paypal" | "crypto";
+
+/**
+ * Classifies the receiving method from the fields present. Never derived
+ * from secret-bearing values; used only as coarse audit metadata.
+ */
+function bankingMethodKind(input: {
+  stripeAccountId?: string | null;
+  paypalEmail?: string | null;
+  cryptoWalletAddress?: string | null;
+}): BankingMethodKind {
+  if (input.stripeAccountId) return "stripe";
+  if (input.paypalEmail) return "paypal";
+  if (input.cryptoWalletAddress) return "crypto";
+  return "bank_transfer";
+}
 
 export const bankingRouter = createRouter({
   // Get all banking details (admin only)
@@ -47,20 +68,39 @@ export const bankingRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
 
-      // If setting as default, unset other defaults
-      if (input.isDefault) {
-        await db
-          .update(bankingDetails)
-          .set({ isDefault: false })
-          .where(eq(bankingDetails.isDefault, true));
-      }
+      // Mutation + canonical audit evidence are one atomic unit. Audit
+      // metadata records ONLY the method kind and default flag — never
+      // account numbers, wallet addresses, or any credential material.
+      let createdId = 0;
+      const methodKind = bankingMethodKind(input);
+      await db.transaction(async (tx) => {
+        // If setting as default, unset other defaults
+        if (input.isDefault) {
+          await tx
+            .update(bankingDetails)
+            .set({ isDefault: false })
+            .where(eq(bankingDetails.isDefault, true));
+        }
 
-      const [result] = await db.insert(bankingDetails).values({
-        adminUserId: ctx.user.id,
-        ...input,
+        const [result] = await tx.insert(bankingDetails).values({
+          adminUserId: ctx.user.id,
+          ...input,
+        });
+        createdId = Number(result.insertId);
+
+        await recordAdminMutationAudit({
+          actorUserId: ctx.user.id,
+          action: "admin.banking_detail_created",
+          targetType: "banking_detail",
+          targetId: createdId,
+          occurredAt: new Date(),
+          metadata: { isDefault: input.isDefault ?? false, methodKind },
+          requestId: extractAdminRequestId(ctx.req),
+          executor: tx,
+        });
       });
 
-      return { id: Number(result.insertId), success: true };
+      return { id: createdId, success: true };
     }),
 
   // Update banking detail (admin only)
@@ -84,21 +124,37 @@ export const bankingRouter = createRouter({
         isActive: z.boolean().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const { id, ...data } = input;
 
-      if (data.isDefault) {
-        await db
-          .update(bankingDetails)
-          .set({ isDefault: false })
-          .where(eq(bankingDetails.isDefault, true));
-      }
+      // Field NAMES only in the audit metadata — values may carry account
+      // numbers or credential material and must never reach the ledger.
+      const changedFields = Object.keys(data).sort();
+      await db.transaction(async (tx) => {
+        if (data.isDefault) {
+          await tx
+            .update(bankingDetails)
+            .set({ isDefault: false })
+            .where(eq(bankingDetails.isDefault, true));
+        }
 
-      await db
-        .update(bankingDetails)
-        .set(data)
-        .where(eq(bankingDetails.id, id));
+        await tx
+          .update(bankingDetails)
+          .set(data)
+          .where(eq(bankingDetails.id, id));
+
+        await recordAdminMutationAudit({
+          actorUserId: ctx.user.id,
+          action: "admin.banking_detail_updated",
+          targetType: "banking_detail",
+          targetId: id,
+          occurredAt: new Date(),
+          metadata: { changedFields },
+          requestId: extractAdminRequestId(ctx.req),
+          executor: tx,
+        });
+      });
 
       return { success: true };
     }),
@@ -106,11 +162,23 @@ export const bankingRouter = createRouter({
   // Delete banking detail (admin only)
   delete: adminQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const db = getDb();
-      await db
-        .delete(bankingDetails)
-        .where(eq(bankingDetails.id, input.id));
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(bankingDetails)
+          .where(eq(bankingDetails.id, input.id));
+
+        await recordAdminMutationAudit({
+          actorUserId: ctx.user.id,
+          action: "admin.banking_detail_deleted",
+          targetType: "banking_detail",
+          targetId: input.id,
+          occurredAt: new Date(),
+          requestId: extractAdminRequestId(ctx.req),
+          executor: tx,
+        });
+      });
       return { success: true };
     }),
 });
