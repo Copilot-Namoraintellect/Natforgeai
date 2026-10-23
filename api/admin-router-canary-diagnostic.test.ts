@@ -4,7 +4,26 @@ import { TRPCError } from "@trpc/server";
 import type { User } from "@db/schema";
 
 const loggedEvents: any[] = [];
+const auditRows: Record<string, unknown>[] = [];
 const TEST_EXECUTION_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
+
+vi.mock("./queries/connection", () => {
+  const fakeDb = {
+    select: () => ({
+      from: () => ({
+        where: () => ({ limit: async () => [] }),
+        limit: async () => [],
+      }),
+    }),
+    insert: () => ({
+      values: async (row: Record<string, unknown>) => {
+        auditRows.push(row);
+        return [];
+      },
+    }),
+  };
+  return { getDb: vi.fn(() => fakeDb) };
+});
 
 vi.mock("./lib/env", () => ({
   env: {
@@ -43,6 +62,7 @@ function makeCaller(role: "user" | "admin") {
 describe("admin.canaryDiagnosticAuthority", () => {
   beforeEach(() => {
     loggedEvents.length = 0;
+    auditRows.length = 0;
     vi.unstubAllEnvs();
   });
 
@@ -163,6 +183,24 @@ describe("admin.canaryDiagnosticAuthority", () => {
     expect(result.billingMutationCount).toBe(0);
     expect(result.artifactMutationCount).toBe(0);
     expect(result.publishingMutationCount).toBe(0);
+
+    // The privileged harness execution is recorded in the canonical audit
+    // ledger with structured, secret-free metadata.
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0]).toMatchObject({
+      eventType: "admin_mutation",
+      source: "admin",
+      userId: 1,
+    });
+    expect(auditRows[0]?.metadata).toMatchObject({
+      action: "admin.diagnostic_authority_executed",
+      targetType: "diagnostic_harness",
+      targetId: TEST_EXECUTION_ID,
+      fixtureCase: "approved",
+      productionMode: "shadow",
+      decision: "approved",
+    });
+    expect(JSON.stringify(auditRows[0]?.metadata)).not.toContain("candidateCopy");
   });
 
   it("reports unknown production mode safely", async () => {

@@ -140,6 +140,45 @@ function mapTerminalReplayError(
   });
 }
 
+/**
+ * Best-effort audit for a privileged operator mutation whose governed step
+ * FAILED. The failure audit never masks the original error: an audit
+ * failure here is logged and swallowed so the caller still receives the
+ * authoritative mapped error.
+ */
+async function recordFailedAdminMutationAudit(
+  ctx: { req: unknown },
+  actorUserId: number,
+  action:
+    | "admin.terminal_replay_requested"
+    | "admin.terminal_replay_executed"
+    | "admin.terminal_replay_reconciled"
+    | "admin.diagnostic_authority_executed",
+  targetType: "terminal_replay" | "terminal_replay_batch" | "diagnostic_harness",
+  metadata: Record<string, unknown>
+): Promise<void> {
+  try {
+    await recordAdminMutationAudit({
+      actorUserId,
+      action,
+      targetType,
+      outcome: "failed",
+      occurredAt: new Date(),
+      metadata,
+      requestId: extractAdminRequestId(ctx.req),
+    });
+  } catch (auditErr) {
+    const errorCode =
+      (auditErr as { code?: unknown } | null | undefined)?.code;
+    logError("[Admin] Failed to record admin mutation audit event", {
+      event: "admin_audit_record_failed",
+      adminUserId: actorUserId,
+      action,
+      errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+    });
+  }
+}
+
 export const adminRouter = createRouter({
   // ─── Dashboard Stats ───
   stats: adminQuery.query(async () => {
@@ -715,9 +754,33 @@ export const adminRouter = createRouter({
           logInfo("[Admin] V2 diagnostic authority executed", safeEvent);
         }
 
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.diagnostic_authority_executed",
+          targetType: "diagnostic_harness",
+          targetId: input.executionId,
+          occurredAt: new Date(),
+          outcome: result.errorStage || result.errorCode ? "failed" : "succeeded",
+          metadata: {
+            billingMutationCount: result.billingMutationCount,
+            decision: result.decision,
+            executionMode: result.executionMode,
+            fixtureCase: input.fixtureCase,
+            productionMode: result.productionMode,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
+
         return result;
       } catch (err: any) {
         const errorCode = typeof err?.code === "string" ? err.code : "DIAGNOSTIC_AUTHORITY_ERROR";
+        await recordFailedAdminMutationAudit(
+          ctx,
+          adminUserId,
+          "admin.diagnostic_authority_executed",
+          "diagnostic_harness",
+          { executionId: input.executionId, fixtureCase: input.fixtureCase }
+        );
         logError("[Admin] V2 diagnostic authority unexpected error", {
           event: "v2_diagnostic_authority_error",
           executionId: input.executionId,
@@ -805,6 +868,21 @@ export const adminRouter = createRouter({
           replayMode: result.record.replayMode,
           alreadyRequested: result.alreadyRequested,
         });
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.terminal_replay_requested",
+          targetType: "terminal_replay",
+          targetId: result.record.id,
+          reason: input.reason,
+          occurredAt: new Date(),
+          metadata: {
+            alreadyRequested: result.alreadyRequested,
+            queueName: result.record.queueName,
+            replayMode: result.record.replayMode,
+            terminalFailureId: input.terminalFailureId,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
         return {
           replayRequestId: result.record.id,
           terminalFailureId: result.record.terminalFailureId,
@@ -815,6 +893,9 @@ export const adminRouter = createRouter({
           createdAt: result.record.createdAt,
         };
       } catch (err) {
+        await recordFailedAdminMutationAudit(ctx, adminUserId, "admin.terminal_replay_requested", "terminal_replay", {
+          terminalFailureId: input.terminalFailureId,
+        });
         throw mapTerminalReplayError(err, adminUserId, {
           terminalFailureId: input.terminalFailureId,
         });
@@ -862,8 +943,23 @@ export const adminRouter = createRouter({
           replayMode: request.replayMode,
           outcome: result.outcome,
         });
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.terminal_replay_executed",
+          targetType: "terminal_replay",
+          targetId: input.replayRequestId,
+          occurredAt: new Date(),
+          metadata: {
+            outcome: result.outcome,
+            replayMode: request.replayMode,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
         return result;
       } catch (err) {
+        await recordFailedAdminMutationAudit(ctx, adminUserId, "admin.terminal_replay_executed", "terminal_replay", {
+          replayRequestId: input.replayRequestId,
+        });
         throw mapTerminalReplayError(err, adminUserId, {
           replayRequestId: input.replayRequestId,
         });
@@ -893,9 +989,27 @@ export const adminRouter = createRouter({
           pendingCount: report.pendingCount,
           errorCount: report.errorCount,
         });
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.terminal_replay_reconciled",
+          targetType: "terminal_replay_batch",
+          occurredAt: new Date(),
+          metadata: {
+            attemptedCount: report.attemptedCount,
+            errorCount: report.errorCount,
+            failedCount: report.failedCount,
+            pendingCount: report.pendingCount,
+            resolvedCount: report.resolvedCount,
+            selectedCount: report.selectedCount,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
         return report;
       } catch (err) {
         const errorCode = (err as { code?: unknown } | null | undefined)?.code;
+        await recordFailedAdminMutationAudit(ctx, adminUserId, "admin.terminal_replay_reconciled", "terminal_replay_batch", {
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
         logError("[Admin] Terminal replay reconciliation failed", {
           event: "terminal_replay_reconciliation_error",
           adminUserId,
