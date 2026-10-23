@@ -48,6 +48,7 @@ import {
   extractAdminRequestId,
   recordAdminMutationAudit,
 } from "./lib/governance/admin-audit";
+import { projectCampaignLifecycle } from "./lib/governance/lifecycle-projection";
 import { eq, desc, sql, count, and, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
@@ -1031,5 +1032,171 @@ export const adminRouter = createRouter({
           message: "Terminal replay reconciliation failed.",
         });
       }
+    }),
+
+  // ─── WBS-R4-F: Operator lifecycle control plane ───
+  // Read-only lifecycle projection (F3) plus the two safe governed recovery
+  // actions that reuse existing governed services (F4). There is
+  // deliberately NO force-complete / force-approve / arbitrary state setter
+  // here: every exposed action delegates to an existing governed authority.
+
+  // READ ONLY: the canonical per-campaign lifecycle projection. Answers
+  // "why is this campaign not progressing?" without database access.
+  getCampaignLifecycle: adminQuery
+    .input(z.object({ campaignId: z.number().int().positive() }))
+    .query(async ({ input }) => {
+      const projection = await projectCampaignLifecycle({ campaignId: input.campaignId });
+      if (!projection.campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found." });
+      }
+      return projection;
+    }),
+
+  // Governed recovery: resume a cost-paused campaign through the existing
+  // budget-resume continuation authority. The owner user id is derived from
+  // the durable campaign row — never from client input.
+  resumeBudgetPausedCampaign: adminQuery
+    .input(z.object({ campaignId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const adminUserId = ctx.user.id;
+      const db = getDb();
+      const [campaign] = await db
+        .select({ id: campaigns.id, userId: campaigns.userId })
+        .from(campaigns)
+        .where(eq(campaigns.id, input.campaignId))
+        .limit(1);
+      if (!campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found." });
+      }
+
+      // Lazy import mirrors the approval-trigger wiring and keeps the heavy
+      // trigger graph out of the admin module's static import cycle.
+      const { resumeWorkflowAfterApprovedCostIncrease } = await import(
+        "./lib/workflow/budget-resume"
+      );
+
+      let outcome: Awaited<ReturnType<typeof resumeWorkflowAfterApprovedCostIncrease>>;
+      try {
+        outcome = await resumeWorkflowAfterApprovedCostIncrease({
+          userId: campaign.userId,
+          campaignId: input.campaignId,
+        });
+      } catch (err) {
+        const errorCode = (err as { code?: unknown } | null | undefined)?.code;
+        logError("[Admin] Budget resume failed", {
+          event: "campaign_budget_resume_error",
+          adminUserId,
+          campaignId: input.campaignId,
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Campaign budget resume failed. No state was changed.",
+        });
+      }
+
+      // No durable cost pause: nothing mutated, nothing to audit.
+      if (!outcome) {
+        return { outcome: "no_cost_pause" as const };
+      }
+
+      try {
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.campaign_budget_resume",
+          targetType: "campaign",
+          targetId: input.campaignId,
+          occurredAt: new Date(),
+          metadata: {
+            campaignUserId: campaign.userId,
+            continuationId: outcome.outcome === "resumed" ? outcome.continuationId : null,
+            kind: outcome.outcome === "resumed" ? outcome.kind : null,
+            outcome: outcome.outcome,
+            stillBlockedReason: outcome.outcome === "still_blocked" ? outcome.reason : null,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
+      } catch (auditErr) {
+        const errorCode = (auditErr as { code?: unknown } | null | undefined)?.code;
+        logError("[Admin] Budget resume audit failed", {
+          event: "admin_audit_record_failed",
+          adminUserId,
+          campaignId: input.campaignId,
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Resume was applied but audit recording failed; the resume is idempotent and retry is safe.",
+        });
+      }
+
+      return outcome;
+    }),
+
+  // Governed recovery: one controlled sweep of stale creative-generation
+  // claims via the existing dormant sweep authority (terminalization only —
+  // it never rearms, never runs agents, never retries).
+  sweepStaleCreativeClaims: adminQuery
+    .input(
+      z
+        .object({
+          staleBeforeMinutes: z.number().int().min(1).max(24 * 60).optional(),
+        })
+        .optional()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const adminUserId = ctx.user.id;
+      const staleBeforeMinutes = input?.staleBeforeMinutes ?? 30;
+      const staleBefore = new Date(Date.now() - staleBeforeMinutes * 60_000);
+
+      const { sweepStaleCreativeGenerationClaims } = await import(
+        "./lib/creative/creative-stale-claim-sweep"
+      );
+
+      let report: Awaited<ReturnType<typeof sweepStaleCreativeGenerationClaims>>;
+      try {
+        report = await sweepStaleCreativeGenerationClaims({ staleBefore });
+      } catch (err) {
+        const errorCode = (err as { code?: unknown } | null | undefined)?.code;
+        logError("[Admin] Stale creative claim sweep failed", {
+          event: "stale_creative_claim_sweep_error",
+          adminUserId,
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Stale creative claim sweep failed.",
+        });
+      }
+
+      try {
+        await recordAdminMutationAudit({
+          actorUserId: adminUserId,
+          action: "admin.stale_creative_claim_sweep",
+          targetType: "creative_claim_sweep",
+          occurredAt: new Date(),
+          metadata: {
+            ambiguousLeftUntouched: report.ambiguousLeftUntouched.length,
+            found: report.found,
+            healthyIgnored: report.healthyIgnored,
+            recovered: report.recovered.length,
+            staleBefore: report.staleBefore,
+          },
+          requestId: extractAdminRequestId(ctx.req),
+        });
+      } catch (auditErr) {
+        const errorCode = (auditErr as { code?: unknown } | null | undefined)?.code;
+        logError("[Admin] Stale creative claim sweep audit failed", {
+          event: "admin_audit_record_failed",
+          adminUserId,
+          errorCode: typeof errorCode === "string" ? errorCode : "UNEXPECTED",
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Sweep completed but audit recording failed; re-running the sweep is a safe no-op.",
+        });
+      }
+
+      return report;
     }),
 });
