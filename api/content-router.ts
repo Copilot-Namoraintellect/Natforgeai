@@ -33,6 +33,7 @@ import {
   isLaunchApprovalEvidenceUsable,
 } from "./lib/workflow/launch-approval";
 import { captureApprovedCreativeStrategyAuthority } from "./lib/creative/strategy-authority";
+import { buildGroundedCreativeBrief } from "./lib/creative/brief-grounding";
 import { loadApprovedMessagePack } from "./lib/creative/campaign-message-architect";
 import {
   buildPublishPackage,
@@ -63,6 +64,7 @@ const AUTO_PUBLISH_PLATFORMS = new Set([
 const APPROVAL_AUTHORITY_METADATA_KEYS = [
   "approved",
   "approvedAt",
+  "approvedBriefFingerprint",
   "approvalVoidedAt",
   "approvalVoidedReason",
 ] as const;
@@ -819,6 +821,33 @@ export const contentRouter = createRouter({
         throw new Error("Content post not found");
       }
 
+      // R4-B1: bind the human approval decision to the exact campaign brief it
+      // was made under so downstream release/distribution gates can prove
+      // approval currency. Standalone content has no campaign authority model
+      // and stays unbound. The fingerprint is derived from the persisted
+      // campaign brief only — never from workflow state.
+      let approvedBriefFingerprint: string | null = null;
+      if (post.campaignId) {
+        const [campaign] = await db
+          .select()
+          .from(campaigns)
+          .where(eq(campaigns.id, post.campaignId))
+          .limit(1);
+        if (campaign) {
+          const [business] = campaign.businessId
+            ? await db
+                .select()
+                .from(businesses)
+                .where(eq(businesses.id, campaign.businessId))
+                .limit(1)
+            : [null];
+          approvedBriefFingerprint = buildGroundedCreativeBrief({
+            campaign,
+            business: business ?? undefined,
+          }).fingerprint;
+        }
+      }
+
       const currentMetadata = (post.metadata || {}) as any;
       await db
         .update(contentPosts)
@@ -827,6 +856,7 @@ export const contentRouter = createRouter({
             ...currentMetadata,
             approved: true,
             approvedAt: new Date().toISOString(),
+            approvedBriefFingerprint,
           },
         })
         .where(
