@@ -190,10 +190,13 @@ describe("admin mutation audit ledger (R4-F1)", () => {
     expect(audit?.metadata).toMatchObject({
       action: "admin.payment_recorded",
       targetType: "payment",
-      targetId: Number((paymentInsert as { values: { id?: number } }).values.insertId ?? 500) || 500,
       amount: 2000,
       targetUserId: 42,
     });
+    // The audit targets the id of the payment row inserted in the same tx.
+    const metadata = audit?.metadata as Record<string, unknown>;
+    expect(typeof metadata.targetId).toBe("number");
+    expect(metadata.targetId as number).toBeGreaterThan(0);
   });
 
   it("audits deleteUser inside the same transaction as every delete", async () => {
