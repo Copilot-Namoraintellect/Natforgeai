@@ -6,6 +6,10 @@ import { eq, and, desc, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { checkLimit, incrementCampaignUsage } from "./lib/subscription";
 import { transitionCampaignState, getWorkflowState } from "./lib/workflow/engine";
+import {
+  parseNextCycleInstruction,
+  type NextCycleInstruction,
+} from "./lib/learning/learning-strategy-consumption";
 
 function parseWorkflowContextObject(value: unknown): Record<string, unknown> {
   if (value === null || value === undefined) return {};
@@ -176,5 +180,117 @@ export const autonomousWorkflowRouter = createRouter({
         pendingApprovals,
         recentAgentRuns: recentRuns,
       };
+    }),
+
+  // WBS-R4 A4-3: governed recovery for a stuck next-cycle dispatch. A "ready"
+  // instruction is dispatched directly; a "failed" instruction is CAS-retried
+  // back to "ready" (exact instructionId) and then dispatched. Everything is
+  // idempotent: retries collapse onto the durable instruction authority.
+  retryNextCycleDispatch: authedQuery
+    .input(z.object({ campaignId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+
+      const [campaign] = await db
+        .select({ id: campaigns.id, workflowContext: campaigns.workflowContext })
+        .from(campaigns)
+        .where(and(eq(campaigns.id, input.campaignId), eq(campaigns.userId, ctx.user.id)))
+        .limit(1);
+
+      if (!campaign) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      }
+
+      const context = parseWorkflowContextObject(campaign.workflowContext);
+      const rawNextCycle = context.nextCycle;
+      if (rawNextCycle === undefined) {
+        return { outcome: "noop" as const, status: null };
+      }
+
+      let instruction: NextCycleInstruction;
+      try {
+        instruction = parseNextCycleInstruction(rawNextCycle);
+      } catch {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Campaign records a malformed next-cycle instruction; refusing to dispatch.",
+        });
+      }
+
+      if (instruction.status === "dispatched") {
+        return { outcome: "noop" as const, status: "dispatched" as const };
+      }
+
+      if (instruction.status === "ready") {
+        try {
+          const { dispatchNextCycleInstruction } = await import(
+            "./lib/workflow/next-cycle-dispatcher"
+          );
+          const result = await dispatchNextCycleInstruction({
+            userId: ctx.user.id,
+            campaignId: input.campaignId,
+            instructionId: instruction.instructionId,
+          });
+          if (result.outcome === "already_dispatched") {
+            return { outcome: "noop" as const, status: "dispatched" as const };
+          }
+          return {
+            outcome: "dispatched" as const,
+            instructionId: result.instructionId,
+            strategyRunId: result.strategyRunId,
+            approvalRequestId: result.approvalRequestId,
+          };
+        } catch (err) {
+          return {
+            outcome: "dispatch_failed" as const,
+            status: "ready" as const,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
+
+      // status === "failed": governed CAS retry to "ready", then dispatch.
+      const { retryFailedNextCycleInstruction } = await import(
+        "./lib/workflow/next-cycle-persistence"
+      );
+      const retry = await retryFailedNextCycleInstruction({
+        userId: ctx.user.id,
+        campaignId: input.campaignId,
+        instructionId: instruction.instructionId,
+      });
+      if (!retry || !retry.retried) {
+        return {
+          outcome: "noop" as const,
+          status: "failed" as const,
+          reason: retry?.reason ?? "campaign not found",
+        };
+      }
+
+      try {
+        const { dispatchNextCycleInstruction } = await import(
+          "./lib/workflow/next-cycle-dispatcher"
+        );
+        const result = await dispatchNextCycleInstruction({
+          userId: ctx.user.id,
+          campaignId: input.campaignId,
+          instructionId: instruction.instructionId,
+        });
+        if (result.outcome === "already_dispatched") {
+          return { outcome: "noop" as const, status: "dispatched" as const };
+        }
+        return {
+          outcome: "retried_and_dispatched" as const,
+          instructionId: result.instructionId,
+          strategyRunId: result.strategyRunId,
+          approvalRequestId: result.approvalRequestId,
+        };
+      } catch (err) {
+        // The instruction is back to "ready": the dispatch can be retried.
+        return {
+          outcome: "retried_dispatch_failed" as const,
+          status: "ready" as const,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
     }),
 });

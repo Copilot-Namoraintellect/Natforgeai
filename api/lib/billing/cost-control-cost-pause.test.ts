@@ -97,6 +97,8 @@ describe("pauseWorkflowForCostLimit continuation provenance (WBS-R1.4)", () => {
         reason: "Insufficient credits for autonomous workflow",
         recordedAt: expect.any(String),
         workflowState: "creatives_generating",
+        // WBS-R4 A3-3: the pause is bound to the approval created for it.
+        budgetIncreaseApprovalId: 5001,
       },
     });
   });

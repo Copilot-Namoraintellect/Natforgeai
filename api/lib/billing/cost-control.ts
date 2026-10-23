@@ -159,7 +159,7 @@ export async function pauseWorkflowForCostLimit(
     .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)));
 
   // Create approval request
-  await db.insert(approvalRequests).values({
+  const approvalInsert = await db.insert(approvalRequests).values({
     userId,
     campaignId,
     approvalType: "budget_increase",
@@ -171,9 +171,17 @@ export async function pauseWorkflowForCostLimit(
   });
 
   if (continuation) {
+    // WBS-R4 A3-3: bind the pause to the exact budget_increase approval that
+    // was just created for it, so an unrelated approved budget decision can
+    // never resume this pause. Legacy pauses recorded without the binding
+    // remain resumable by any approved budget_increase decision.
+    const approvalId = Number(
+      (approvalInsert as unknown as [{ insertId?: number | string }?])?.[0]?.insertId
+    );
     await recordWorkflowCostPause({
       userId,
       campaignId,
+      approvalId: Number.isInteger(approvalId) && approvalId > 0 ? approvalId : undefined,
       provenance: buildCostPauseProvenance({
         kind: continuation.kind,
         continuationId: continuation.continuationId,

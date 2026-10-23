@@ -9,6 +9,7 @@ import { startPublishingRunner } from "./lib/workflow/publishing-runner";
 import { startCreditRenewalScheduler } from "./lib/jobs/credit-renewal";
 import { startPostLiveLifecycleScheduler } from "./lib/workflow/post-live-lifecycle-scheduler";
 import { startPostLiveMetricsObservationScheduler } from "./lib/workflow/post-live-metrics-observation-scheduler";
+import { runApprovalContinuationSweep } from "./lib/workflow/approval-continuation";
 import { connectRedis, isRedisConfigured } from "./lib/redis";
 import { startPublishingWorker } from "./lib/queue/publishing-worker";
 import { startContentGenerationWorker } from "./lib/queue/content-generation-worker";
@@ -59,6 +60,24 @@ if (env.postLiveMetricsObservationEnabled) {
     intervalMs: env.postLiveMetricsObservationIntervalMs,
   });
 }
+
+// WBS-R4 A3: crash-recovery reconciliation for dangling approval
+// continuations (a decision committed but its post-commit dispatch did not
+// run). Fire-and-forget and NOT env-gated: the sweep only acts on decided
+// approvals whose continuation evidence shows it never applied, and a sweep
+// failure must never crash the server.
+void runApprovalContinuationSweep()
+  .then((summary) => {
+    console.log(
+      `[ApprovalContinuation] Boot sweep complete: ${summary.scanned} scanned, ${summary.reconciled} reconciled, ${summary.skipped} skipped, ${summary.failed} failed.`
+    );
+  })
+  .catch((err) => {
+    console.error(
+      "[ApprovalContinuation] Boot sweep failed:",
+      err instanceof Error ? err.message : err
+    );
+  });
 
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 

@@ -651,6 +651,7 @@ describe("onApprovalResolved budget_increase resume (WBS-R1.4)", () => {
     expect(resumeWorkflowAfterApprovedCostIncrease).toHaveBeenCalledWith({
       userId: 42,
       campaignId: 29,
+      approvalId: 81,
     });
   });
 

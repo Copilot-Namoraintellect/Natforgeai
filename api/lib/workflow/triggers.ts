@@ -46,6 +46,7 @@ import {
   buildAudienceBillingIdentity,
   buildDistributionBillingIdentity,
 } from "./agent-billing-identity";
+import { isLearningPromotionApproval } from "../learning/promotion/promotion-decision";
 
 interface StrategyReviewLineageLike {
   readonly strategyRunId?: unknown;
@@ -491,10 +492,12 @@ async function withdrawApprovedPublishingRows(
 export async function onApprovalResolved(approvalId: number, decision: "approved" | "rejected", userId: number) {
   const db = getDb();
 
+  // Ownership-scoped re-read (WBS-R4 A3-2): the approval is only ever driven
+  // for the user whose decision resolved it.
   const [request] = await db
     .select()
     .from(approvalRequests)
-    .where(eq(approvalRequests.id, approvalId))
+    .where(and(eq(approvalRequests.id, approvalId), eq(approvalRequests.userId, userId)))
     .limit(1);
 
   if (!request) {
@@ -599,8 +602,43 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
       // WBS-R1.4: an approved cost increase resumes the cost-paused workflow
       // at its durable continuation point. Imported lazily to keep the
       // module graph acyclic (budget-resume drives the trigger pathways).
+      // WBS-R4 A3-3: the approval id is passed through so the resume is bound
+      // to the exact approval that authorised it (provenance recorded with a
+      // budgetIncreaseApprovalId refuses any other decision).
       const { resumeWorkflowAfterApprovedCostIncrease } = await import("./budget-resume");
-      await resumeWorkflowAfterApprovedCostIncrease({ userId, campaignId });
+      await resumeWorkflowAfterApprovedCostIncrease({ userId, campaignId, approvalId });
+    }
+  } else if (
+    request.approvalType === "high_value_proposal" &&
+    isLearningPromotionApproval(request) &&
+    decision === "approved" &&
+    campaignId
+  ) {
+    // WBS-R4 A4-1: an approved learning promotion (envelope sealed in the
+    // decision transaction) seeds the next governed Strategy cycle. The glue
+    // mints/persists the durable next-cycle instruction through the governed
+    // trigger and dispatches it only while it is still "ready". Failures are
+    // logged per-item: they must never reject the approval resolution.
+    try {
+      const { dispatchNextCycleAfterLearningPromotion } = await import("./approval-continuation");
+      const { triggered, dispatched } = await dispatchNextCycleAfterLearningPromotion({
+        userId,
+        campaignId,
+      });
+      console.log(
+        `[Workflow] Learning-promotion next-cycle trigger for approval ${approvalId} (campaign ${campaignId}): ${triggered?.outcome ?? "null"}`
+      );
+      if (dispatched) {
+        console.log(
+          `[Workflow] Learning-promotion next-cycle dispatch for approval ${approvalId} (campaign ${campaignId}): ${dispatched.outcome}`
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[Workflow] Next-cycle continuation after promotion approval ${approvalId} failed for campaign ${campaignId}:`,
+        message
+      );
     }
   }
 }
