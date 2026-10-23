@@ -7,7 +7,7 @@ import {
 } from "ai";
 import { strategyAgentPrompt } from "./prompts";
 import { getDb } from "../../queries/connection";
-import { agentRuns, campaigns, creditTransactions } from "@db/schema";
+import { agentRuns, campaigns, businesses, creditTransactions } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import {
   buildGroundedCreativeBrief,
@@ -33,6 +33,12 @@ import {
   resolveApprovedLearningPromotionsForStrategy,
   strategyLearningPromotionLineageToJson,
 } from "../learning/learning-strategy-consumption";
+import { evaluateStrategyEntryBusinessDnaReadiness } from "../workflow/strategy-entry-readiness";
+import { assertStrategyEntryGates } from "./strategy-entry-gates";
+import {
+  BusinessDnaNotFoundError,
+  BusinessDnaReadinessError,
+} from "../business-dna-governance";
 
 function parseBudgetNumber(value: unknown): number {
   if (typeof value === "number") return value;
@@ -1413,6 +1419,61 @@ export async function runStrategyAgent({
       code: readiness.code as any,
       message: readiness.userMessage,
     });
+  }
+
+  // WBS-R4 A2-1: duplicate/precondition hardening BEFORE any run-row insert.
+  // A non-stale running strategy run blocks re-entry (stale rows are left for
+  // the WBS-R1.6 sweep to terminalise), and the campaign must be linked to a
+  // business so snapshot materialization never crashes on an invalid id.
+  const strategyEntryRuns = await db
+    .select({
+      id: agentRuns.id,
+      agentType: agentRuns.agentType,
+      status: agentRuns.status,
+      startedAt: agentRuns.startedAt,
+    })
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.userId, userId),
+        eq(agentRuns.campaignId, campaignId),
+        eq(agentRuns.agentType, "strategy")
+      )
+    );
+  const { businessId } = assertStrategyEntryGates({
+    userId,
+    campaignId,
+    campaign: currentCampaign,
+    strategyRuns: strategyEntryRuns,
+  });
+
+  // WBS-R4 A1-1: shared Strategy-entry Business DNA readiness gate (hard
+  // gate), evaluated before the agentRuns insert so an unready profile can
+  // never strand a "running" run (the historical failure surfaced only after
+  // the model call, inside materialization). The business row is loaded with
+  // the same owned-active scoping governed materialization uses.
+  const [businessRow] = await db
+    .select()
+    .from(businesses)
+    .where(
+      and(
+        eq(businesses.id, businessId),
+        eq(businesses.userId, userId),
+        eq(businesses.isActive, true)
+      )
+    )
+    .limit(1);
+
+  if (!businessRow) {
+    throw new BusinessDnaNotFoundError(userId, businessId);
+  }
+
+  const businessDnaReadiness = evaluateStrategyEntryBusinessDnaReadiness({
+    campaign: currentCampaign,
+    business: businessRow,
+  });
+  if (!businessDnaReadiness.ready) {
+    throw new BusinessDnaReadinessError(businessId, businessDnaReadiness.missing);
   }
 
   const runId = await db.transaction(async (tx) => {

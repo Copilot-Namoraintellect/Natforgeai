@@ -289,6 +289,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
     const db = createMockDb({
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -378,6 +380,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
       ],
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -421,6 +425,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
     const db = createMockDb({
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -486,6 +492,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
       },
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -563,6 +571,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
       },
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -604,6 +614,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
       },
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -658,6 +670,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
       },
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -707,6 +721,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
       },
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -746,6 +762,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
     const db = createMockDb({
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -842,6 +860,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
       },
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -887,6 +907,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
     const db = createMockDb({
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -951,6 +973,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
       ],
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -1000,6 +1024,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
       ],
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -1051,6 +1077,8 @@ describe("campaignRouter.regenerateFromProfile", () => {
       ],
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -2085,6 +2113,8 @@ describe("campaignRouter strategy entry-point lifecycle (Phase 2B integration)",
       ],
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -2126,6 +2156,8 @@ describe("campaignRouter strategy entry-point lifecycle (Phase 2B integration)",
       ],
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -2167,6 +2199,8 @@ describe("campaignRouter strategy entry-point lifecycle (Phase 2B integration)",
       ],
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -2391,6 +2425,8 @@ describe("Phase 4 — pre-generation readiness gate at router entry points", () 
     const db = createMockDb({
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -2426,6 +2462,8 @@ describe("Phase 4 — pre-generation readiness gate at router entry points", () 
     const db = createMockDb({
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -2464,6 +2502,8 @@ describe("Phase 4 — pre-generation readiness gate at router entry points", () 
     const createDb = createMockDb({
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });
@@ -2500,6 +2540,8 @@ describe("Phase 4 — pre-generation readiness gate at router entry points", () 
       },
       businessOverrides: {
         onboardingComplete: true,
+        productOrService: "service",
+        targetCustomer: "buyer",
         websiteEvidence: { confidence: 0.8 },
       },
     });

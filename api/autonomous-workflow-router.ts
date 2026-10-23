@@ -2,10 +2,29 @@ import { z } from "zod";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { campaigns, businesses, approvalRequests, agentRuns } from "@db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { checkLimit, incrementCampaignUsage } from "./lib/subscription";
 import { transitionCampaignState, getWorkflowState } from "./lib/workflow/engine";
+
+function parseWorkflowContextObject(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
 
 export const autonomousWorkflowRouter = createRouter({
   startCampaignWorkflow: authedQuery
@@ -17,10 +36,40 @@ export const autonomousWorkflowRouter = createRouter({
         strategyText: z.string().optional(),
         approvalMode: z.enum(["assisted", "autonomous"]).default("assisted"),
         autoPublish: z.boolean().default(false),
+        idempotencyKey: z.string().min(8).max(128).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
+
+      // WBS-R4 A1-3: idempotent campaign bootstrap. A replayed start with a
+      // previously persisted bootstrap key returns the original campaign
+      // without inserting a row or consuming campaign usage.
+      if (input.idempotencyKey) {
+        const [existingBootstrap] = await db
+          .select()
+          .from(campaigns)
+          .where(
+            and(
+              eq(campaigns.userId, ctx.user.id),
+              sql`JSON_UNQUOTE(JSON_EXTRACT(${campaigns.workflowContext}, '$.bootstrapIdempotencyKey')) = ${input.idempotencyKey}`
+            )
+          )
+          .limit(1);
+
+        if (existingBootstrap) {
+          const existingContext = parseWorkflowContextObject(
+            existingBootstrap.workflowContext
+          );
+          if (existingContext.bootstrapIdempotencyKey === input.idempotencyKey) {
+            return {
+              id: existingBootstrap.id,
+              success: true,
+              idempotentReplay: true,
+            };
+          }
+        }
+      }
 
       // Check campaign limit
       const campaignCheck = await checkLimit(ctx.user.id, "campaign");
@@ -53,6 +102,9 @@ export const autonomousWorkflowRouter = createRouter({
         workflowContext: {
           startedAt: new Date().toISOString(),
           strategyText: input.strategyText,
+          ...(input.idempotencyKey
+            ? { bootstrapIdempotencyKey: input.idempotencyKey }
+            : {}),
         } as any,
         approvalMode: input.approvalMode,
         autoPublish: input.autoPublish,

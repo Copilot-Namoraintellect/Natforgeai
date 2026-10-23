@@ -47,6 +47,49 @@ import {
   buildDistributionBillingIdentity,
 } from "./agent-billing-identity";
 
+interface StrategyReviewLineageLike {
+  readonly strategyRunId?: unknown;
+  readonly approvalRequestId?: unknown;
+  readonly status?: unknown;
+}
+
+function readStrategyApprovalLineage(
+  workflowContext: unknown
+): StrategyReviewLineageLike | undefined {
+  if (!workflowContext || typeof workflowContext !== "object") return undefined;
+  const lineage = (workflowContext as Record<string, unknown>).strategyApprovalLineage;
+  if (!lineage || typeof lineage !== "object") return undefined;
+  return lineage as StrategyReviewLineageLike;
+}
+
+/**
+ * Resolves the strategy run an approval request is bound to. The primary
+ * binding is the campaign's strategyApprovalLineage (approvalRequestId ->
+ * strategyRunId); a durable request-level context carrying strategyRunId is
+ * honoured when present. Returns null when the binding cannot be determined.
+ */
+function resolveStrategyReviewRunId(
+  request: { readonly id: number; readonly context?: unknown },
+  lineage: StrategyReviewLineageLike | undefined
+): number | null {
+  const context = request.context as Record<string, unknown> | null;
+  if (
+    context &&
+    Number.isFinite(Number(context.strategyRunId)) &&
+    Number(context.strategyRunId) > 0
+  ) {
+    return Number(context.strategyRunId);
+  }
+  if (
+    lineage &&
+    lineage.approvalRequestId === request.id &&
+    Number.isFinite(Number(lineage.strategyRunId))
+  ) {
+    return Number(lineage.strategyRunId);
+  }
+  return null;
+}
+
 export async function onAgentRunComplete(runId: number) {
   const db = getDb();
   const [run] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId)).limit(1);
@@ -114,15 +157,61 @@ export async function onAgentRunComplete(runId: number) {
       .limit(1);
 
     if (updatedCampaign) {
-      const { id: approvalRequestId } = await createApprovalRequest({
-        userId: run.userId,
-        campaignId: run.campaignId,
-        approvalType: "strategy_review",
-        title: `Approve Strategy: ${updatedCampaign.name}`,
-        description: `The strategy for "${updatedCampaign.name}" has been generated. Review and approve to continue to creative content generation.`,
-        aiRecommendation: "Based on the campaign goal and target audience, this strategy aligns with best practices for the selected platforms.",
-        riskLevel: "low",
-      });
+      // WBS-R4 A2-2: idempotent strategy_review creation. A replay of this
+      // trigger for the same strategy run (e.g. the state rolled back to
+      // strategy_pending after a crash) must never create a duplicate review.
+      // A pending request already bound to THIS run is reused; pending
+      // requests bound to a different run are superseded with the exact
+      // mechanism the next-cycle dispatcher uses.
+      const existingLineage = readStrategyApprovalLineage(
+        updatedCampaign.workflowContext
+      );
+
+      const pendingStrategyReviews = await db
+        .select()
+        .from(approvalRequests)
+        .where(
+          and(
+            eq(approvalRequests.campaignId, run.campaignId),
+            eq(approvalRequests.userId, run.userId),
+            eq(approvalRequests.approvalType, "strategy_review"),
+            eq(approvalRequests.status, "pending")
+          )
+        );
+
+      const sameRunRequest = pendingStrategyReviews.find(
+        (request) => resolveStrategyReviewRunId(request, existingLineage) === run.id
+      );
+
+      let approvalRequestId: number;
+      if (sameRunRequest) {
+        approvalRequestId = sameRunRequest.id;
+        console.log(
+          `[Workflow] Reusing pending strategy_review request ${approvalRequestId} already bound to strategy run ${run.id} for campaign ${run.campaignId}.`
+        );
+      } else {
+        for (const oldRequest of pendingStrategyReviews) {
+          await db
+            .update(approvalRequests)
+            .set({
+              status: "rejected",
+              rejectedAt: new Date(),
+              description: `${oldRequest.description || ""}\n\nSuperseded: a new strategy was generated for the next governed cycle.`.trim(),
+            })
+            .where(eq(approvalRequests.id, oldRequest.id));
+        }
+
+        const { id } = await createApprovalRequest({
+          userId: run.userId,
+          campaignId: run.campaignId,
+          approvalType: "strategy_review",
+          title: `Approve Strategy: ${updatedCampaign.name}`,
+          description: `The strategy for "${updatedCampaign.name}" has been generated. Review and approve to continue to creative content generation.`,
+          aiRecommendation: "Based on the campaign goal and target audience, this strategy aligns with best practices for the selected platforms.",
+          riskLevel: "low",
+        });
+        approvalRequestId = id;
+      }
 
       // Bind the approval lineage to the EXACT immutable Strategy snapshot
       // authority persisted for this completed Strategy run. Fail closed
@@ -139,6 +228,17 @@ export async function onAgentRunComplete(runId: number) {
         console.error(
           `[Workflow] Strategy run ${run.id} for campaign ${run.campaignId} completed without matching immutable Strategy snapshot authority; strategy approval lineage was not recorded.`
         );
+        return;
+      }
+
+      const lineageAlreadyBound =
+        !!sameRunRequest &&
+        existingLineage?.strategyRunId === run.id &&
+        existingLineage?.approvalRequestId === approvalRequestId &&
+        existingLineage?.status === "pending";
+      if (lineageAlreadyBound) {
+        // Fully idempotent replay: the pending review exists and the lineage
+        // is already bound to it. Nothing further to write.
         return;
       }
 
