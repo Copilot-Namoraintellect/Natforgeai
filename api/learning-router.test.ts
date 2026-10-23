@@ -78,12 +78,32 @@ function createMockDb({
               name === "learning_records"
                 ? conds.map((c) => deepFindIdempotencyKey(c)).find((k) => k !== null) ?? null
                 : null;
+            const numbers: number[] = [];
+            const walk = (value: unknown, seen: Set<object> = new Set()) => {
+              if (typeof value === "number") numbers.push(value);
+              else if (typeof value === "string") return;
+              else if (Array.isArray(value)) value.forEach((v) => walk(v, seen));
+              else if (value && typeof value === "object") {
+                // drizzle SQL/column objects reference each other; never
+                // recurse into an already-visited object.
+                if (seen.has(value as object)) return;
+                seen.add(value as object);
+                Object.values(value as Record<string, unknown>).forEach((v) => walk(v, seen));
+              }
+            };
+            conds.forEach((c) => walk(c));
+            const ownershipFiltered =
+              name === "campaigns"
+                ? result.filter(
+                    (r: any) => numbers.includes(r.id) && numbers.includes(r.userId)
+                  )
+                : result;
             const filtered = key
-              ? result.filter((r: any) => r.idempotencyKey === key)
-              : result;
+              ? ownershipFiltered.filter((r: any) => r.idempotencyKey === key)
+              : ownershipFiltered;
             const chain: any = {
               limit: vi.fn(async () => filtered.slice(0, 1)),
-              orderBy: vi.fn(async () => filtered),
+              orderBy: vi.fn(() => chain),
               then: (resolve: any, reject: any) =>
                 Promise.resolve(filtered).then(resolve, reject),
             };
@@ -231,5 +251,58 @@ describe("learningRouter contract", () => {
       caller.evaluate({ campaignId: 7, windowStart: "05/01/2026", windowEnd: "2026-05-31" })
     ).rejects.toThrow();
     expect(db.state.insertedRows).toHaveLength(0);
+  });
+
+  describe("WBS-R4-D4 governed-cycle authorization boundary", () => {
+    it("rejects unauthenticated runGovernedCycle and record callers", async () => {
+      const db = createMockDb({});
+      vi.mocked(getDb).mockReturnValue(db);
+
+      const caller = learningRouter.createCaller({
+        resHeaders: new Headers(),
+        user: undefined,
+        session: undefined,
+      } as any);
+
+      await expect(caller.runGovernedCycle({ campaignId: 7 })).rejects.toMatchObject({
+        code: "UNAUTHORIZED",
+      });
+      await expect(caller.record({ id: 501 })).rejects.toMatchObject({
+        code: "UNAUTHORIZED",
+      });
+    });
+
+    it("runGovernedCycle refuses campaigns owned by another user", async () => {
+      const db = createMockDb({
+        campaign: {
+          id: 7,
+          userId: 999,
+          goal: "Drive online bookings",
+          primaryOutcome: "drive online bookings",
+          budget: 5000,
+          platforms: "instagram",
+          startDate: "2026-05-01",
+          endDate: "2026-05-31",
+        },
+      });
+      vi.mocked(getDb).mockReturnValue(db);
+
+      const caller = learningRouter.createCaller(buildCtx());
+      await expect(caller.runGovernedCycle({ campaignId: 7 })).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+      expect(db.state.insertedRows).toHaveLength(0);
+    });
+
+    it("runGovernedCycle fails closed when strategy authority is missing and writes nothing", async () => {
+      const db = createMockDb({});
+      vi.mocked(getDb).mockReturnValue(db);
+
+      const caller = learningRouter.createCaller(buildCtx());
+      const result = await caller.runGovernedCycle({ campaignId: 7 });
+
+      expect(result.status).toBe("authority_missing");
+      expect(db.state.insertedRows).toHaveLength(0);
+    });
   });
 });

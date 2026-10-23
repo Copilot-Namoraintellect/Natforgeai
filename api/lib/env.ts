@@ -113,9 +113,13 @@ export const env = {
     300_000
   ),
 
-  // Post-live metrics observation remains disabled unless explicitly authorised.
+  // Post-live metrics observation is part of normal platform autonomy
+  // (WBS-R4-D): it runs by default so published work is observed when due
+  // without any developer command. The pass is due-only, lease-protected,
+  // fault-isolated per candidate and never mutates publication state.
+  // Set POST_LIVE_METRICS_OBSERVATION_ENABLED=false to disable explicitly.
   postLiveMetricsObservationEnabled:
-    process.env.POST_LIVE_METRICS_OBSERVATION_ENABLED === "true",
+    process.env.POST_LIVE_METRICS_OBSERVATION_ENABLED !== "false",
   postLiveMetricsObservationIntervalMs: parsePositiveInteger(
     process.env.POST_LIVE_METRICS_OBSERVATION_INTERVAL_MS,
     300_000

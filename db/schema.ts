@@ -500,26 +500,39 @@ export const automations = mysqlTable("automations", {
 export type Automation = typeof automations.$inferSelect;
 
 // ─── Analytics ───
-export const analytics = mysqlTable("analytics", {
-  id: serial("id").primaryKey(),
-  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-  campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
-  businessId: bigint("businessId", { mode: "number", unsigned: true }),
-  metricType: mysqlEnum("metricType", [
-    "impressions",
-    "clicks",
-    "conversions",
-    "leads",
-    "revenue",
-    "engagement",
-    "followers",
-    "reach",
-  ]).notNull(),
-  platform: varchar("platform", { length: 50 }),
-  value: int("value").default(0),
-  date: date("date").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+export const analytics = mysqlTable(
+  "analytics",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    metricType: mysqlEnum("metricType", [
+      "impressions",
+      "clicks",
+      "conversions",
+      "leads",
+      "revenue",
+      "engagement",
+      "followers",
+      "reach",
+    ]).notNull(),
+    platform: varchar("platform", { length: 50 }),
+    value: int("value").default(0),
+    date: date("date").notNull(),
+    /**
+     * Deterministic identity of a provider-observed metric row
+     * (`obs:` + SHA-256 over campaign/platform/externalPostId/metricType/date).
+     * NULL for manually recorded rows. Unique so observation retries and
+     * replays upsert instead of duplicating durable metrics.
+     */
+    observationId: varchar("observationId", { length: 191 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    observationIdIdx: uniqueIndex("analytics_observation_id_idx").on(table.observationId),
+  })
+);
 
 export type Analytics = typeof analytics.$inferSelect;
 
@@ -980,6 +993,15 @@ export const campaignInterestSignals = mysqlTable(
       table.externalIdentifier
     ),
     userCampaignIdx: index("cis_user_campaign_idx").on(table.userId, table.campaignId),
+    /**
+     * One interest signal per campaign + actor: the aggregation upsert in
+     * audience/ingest relies on this unique key so repeated ingest cycles
+     * refresh the signal instead of accumulating duplicate actor rows.
+     */
+    campaignActorUniqueIdx: uniqueIndex("cis_campaign_actor_uidx").on(
+      table.campaignId,
+      table.externalIdentifier
+    ),
   })
 );
 

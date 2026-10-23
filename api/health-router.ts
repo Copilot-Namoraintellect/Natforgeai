@@ -8,6 +8,8 @@ import { getPublishingQueueStats, getPublishingWorker } from "./lib/queue/bullmq
 import { env } from "./lib/env";
 import { getPostLiveLifecycleSchedulerStatus } from "./lib/workflow/post-live-lifecycle-scheduler";
 import { resolvePostLiveLifecycleSchedulerHealth } from "./lib/workflow/post-live-lifecycle-health";
+import { getPostLiveMetricsObservationSchedulerStatus } from "./lib/workflow/post-live-metrics-observation-scheduler";
+import { resolvePostLiveMetricsObservationSchedulerHealth } from "./lib/workflow/post-live-metrics-observation-health";
 import { createAlert, listAlerts, acknowledgeAlert, resolveAlerts, getAlertSummary } from "./lib/alerts";
 
 export const healthRouter = createRouter({
@@ -64,6 +66,14 @@ export const healthRouter = createRouter({
         configuredIntervalMs:
           env.postLiveLifecycleIntervalMs,
         runtime: postLiveLifecycleRuntime,
+      });
+
+    // Post-live metrics observation scheduler readiness (default-on autonomy)
+    checks.postLiveMetricsObservation =
+      resolvePostLiveMetricsObservationSchedulerHealth({
+        enabled: env.postLiveMetricsObservationEnabled,
+        configuredIntervalMs: env.postLiveMetricsObservationIntervalMs,
+        runtime: getPostLiveMetricsObservationSchedulerStatus(),
       });
 
     // API health

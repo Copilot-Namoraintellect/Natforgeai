@@ -1,0 +1,1 @@
+ALTER TABLE `campaign_interest_signals` ADD CONSTRAINT `cis_campaign_actor_uidx` UNIQUE(`campaignId`,`externalIdentifier`);

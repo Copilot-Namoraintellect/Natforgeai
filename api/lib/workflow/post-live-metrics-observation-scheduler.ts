@@ -13,8 +13,9 @@
  * - the interval must be a positive safe integer;
  * - the first pass runs immediately at start.
  *
- * Startup wiring lives in api/boot.ts behind the
- * POST_LIVE_METRICS_OBSERVATION_ENABLED flag, which is DEFAULT OFF.
+ * Startup wiring lives in api/boot.ts. Post-live metrics observation is part
+ * of normal platform autonomy: the scheduler starts by default
+ * (POST_LIVE_METRICS_OBSERVATION_ENABLED=false disables it explicitly).
  */
 
 import {

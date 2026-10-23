@@ -31,6 +31,8 @@ vi.mock("./lib/env", () => ({
   env: {
     postLiveLifecycleEnabled: false,
     postLiveLifecycleIntervalMs: 300_000,
+    postLiveMetricsObservationEnabled: true,
+    postLiveMetricsObservationIntervalMs: 300_000,
   },
 }));
 
@@ -38,6 +40,13 @@ vi.mock(
   "./lib/workflow/post-live-lifecycle-scheduler",
   () => ({
     getPostLiveLifecycleSchedulerStatus: vi.fn(),
+  })
+);
+
+vi.mock(
+  "./lib/workflow/post-live-metrics-observation-scheduler",
+  () => ({
+    getPostLiveMetricsObservationSchedulerStatus: vi.fn(),
   })
 );
 
@@ -67,6 +76,11 @@ async function arrange(input: {
   } = await import(
     "./lib/workflow/post-live-lifecycle-scheduler"
   );
+  const {
+    getPostLiveMetricsObservationSchedulerStatus,
+  } = await import(
+    "./lib/workflow/post-live-metrics-observation-scheduler"
+  );
   const { healthRouter } =
     await import("./health-router");
 
@@ -83,11 +97,22 @@ async function arrange(input: {
     getPostLiveLifecycleSchedulerStatus
   ).mockReturnValue(input.runtime);
 
+  vi.mocked(
+    getPostLiveMetricsObservationSchedulerStatus
+  ).mockReturnValue({
+    started: true,
+    intervalMs: 300_000,
+    lastPassAt: null,
+    lastPassStatus: null,
+    passInFlight: false,
+  });
+
   return {
     caller: healthRouter.createCaller(
       buildCtx()
     ),
     getPostLiveLifecycleSchedulerStatus,
+    getPostLiveMetricsObservationSchedulerStatus,
   };
 }
 
@@ -172,5 +197,70 @@ describe("healthRouter post-live lifecycle integration", () => {
       result.checks.postLiveLifecycle.message
     ).toContain("idle");
     expect(result.status).toBe("healthy");
+  });
+
+  it("reports the default-on metrics observation scheduler as healthy and running", async () => {
+    const {
+      caller,
+      getPostLiveMetricsObservationSchedulerStatus,
+    } = await arrange({
+      enabled: false,
+      runtime: {
+        started: false,
+        intervalMs: null,
+        passInFlight: false,
+      },
+    });
+
+    const result = await caller.getSystemHealth();
+
+    expect(
+      result.checks.postLiveMetricsObservation
+    ).toEqual({
+      status: "ok",
+      latencyMs: 0,
+      message:
+        "Post-live metrics observation scheduler running at 300000ms; idle",
+    });
+    expect(
+      getPostLiveMetricsObservationSchedulerStatus
+    ).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("healthy");
+  });
+
+  it("degrades overall health when the metrics observation scheduler is enabled but not started", async () => {
+    const {
+      caller,
+      getPostLiveMetricsObservationSchedulerStatus,
+    } = await arrange({
+      enabled: false,
+      runtime: {
+        started: false,
+        intervalMs: null,
+        passInFlight: false,
+      },
+    });
+
+    vi.mocked(
+      getPostLiveMetricsObservationSchedulerStatus
+    ).mockReturnValue({
+      started: false,
+      intervalMs: null,
+      lastPassAt: null,
+      lastPassStatus: null,
+      passInFlight: false,
+    });
+
+    const result = await caller.getSystemHealth();
+
+    expect(
+      result.checks.postLiveMetricsObservation
+    ).toEqual({
+      status: "error",
+      latencyMs: 0,
+      message:
+        "Post-live metrics observation scheduler is enabled but not started",
+    });
+    expect(result.status).toBe("degraded");
   });
 });
