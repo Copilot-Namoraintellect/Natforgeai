@@ -464,7 +464,7 @@ describe("onAgentRunComplete integration path", () => {
 
     const terminalised = state.agentRuns.find((r) => r.id === 650);
     expect(terminalised?.status).toBe("failed");
-    expect(String(terminalised?.error ?? "")).toMatch(/Stale strategy run terminalised/);
+    expect(String(terminalised?.error ?? "")).toMatch(/Stale agent run terminalised/);
     // The live completed run and its campaign are untouched by the sweep.
     expect(state.agentRuns.find((r) => r.id === 501)?.status).toBe("completed");
   });

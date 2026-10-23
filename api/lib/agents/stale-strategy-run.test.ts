@@ -44,6 +44,22 @@ describe("isStaleStrategyRun", () => {
       isStaleStrategyRun({ agentType: "strategy", status: "running", startedAt: "garbage", now: NOW })
     ).toBe(false);
   });
+
+  it("WBS-R4E: honours an explicit agent-type eligibility set", () => {
+    expect(
+      isStaleStrategyRun({
+        agentType: "creative",
+        status: "running",
+        startedAt: OLD_STARTED,
+        now: NOW,
+        agentTypes: ["strategy", "creative"],
+      })
+    ).toBe(true);
+    // Default stays strategy-only for bare classification calls.
+    expect(
+      isStaleStrategyRun({ agentType: "creative", status: "running", startedAt: OLD_STARTED, now: NOW })
+    ).toBe(false);
+  });
 });
 
 function createFakeExecutor(rows: Array<Record<string, unknown>>, zeroRowIds: Set<number> = new Set()) {
@@ -96,7 +112,7 @@ function extractId(conds: unknown): number {
 }
 
 describe("terminaliseStaleStrategyRuns", () => {
-  it("terminalises only stale running strategy runs, preserving other rows", async () => {
+  it("terminalises only stale running strategy runs when restricted to strategy (legacy behaviour)", async () => {
     const rows = [
       { id: 501, agentType: "strategy", status: "running", startedAt: OLD_STARTED },
       { id: 502, agentType: "strategy", status: "running", startedAt: OLD_STARTED },
@@ -110,6 +126,7 @@ describe("terminaliseStaleStrategyRuns", () => {
       userId: 42,
       campaignId: 29,
       now: NOW,
+      agentTypes: ["strategy"],
       executor: fake.executor,
     });
 
@@ -118,9 +135,39 @@ describe("terminaliseStaleStrategyRuns", () => {
     expect(fake.updateCalls.map(c => c.id).sort()).toEqual([501, 502]);
     const first = fake.updateCalls.find(c => c.id === 501)!;
     expect(first.set.status).toBe("failed");
-    expect(String(first.set.error)).toMatch(/Stale strategy run terminalised/);
+    expect(String(first.set.error)).toMatch(/Stale agent run terminalised/);
     expect(fake.rows.find(r => r.id === 503)?.status).toBe("running");
     expect(fake.rows.find(r => r.id === 504)?.status).toBe("completed");
+    expect(fake.rows.find(r => r.id === 505)?.status).toBe("running");
+  });
+
+  it("WBS-R4E: by default terminalises stale runs of every governed workflow agent type", async () => {
+    const rows = [
+      { id: 501, agentType: "strategy", status: "running", startedAt: OLD_STARTED },
+      { id: 506, agentType: "audience", status: "running", startedAt: OLD_STARTED },
+      { id: 507, agentType: "distribution", status: "running", startedAt: OLD_STARTED },
+      { id: 508, agentType: "creative", status: "running", startedAt: OLD_STARTED },
+      { id: 509, agentType: "engagement", status: "running", startedAt: OLD_STARTED },
+      // Not eligible: completed evidence rows and fresh runs are untouched.
+      { id: 510, agentType: "audience", status: "completed", startedAt: OLD_STARTED },
+      { id: 511, agentType: "distribution", status: "running", startedAt: RECENT_STARTED },
+      // Unknown types outside the governed chain are left alone.
+      { id: 512, agentType: "custom_bot", status: "running", startedAt: OLD_STARTED },
+    ];
+    const fake = createFakeExecutor(rows);
+
+    const summary = await terminaliseStaleStrategyRuns({
+      userId: 42,
+      campaignId: 29,
+      now: NOW,
+      executor: fake.executor,
+    });
+
+    expect(summary).toEqual({ examined: 5, terminalised: 5 });
+    expect(fake.updateCalls.map(c => c.id).sort()).toEqual([501, 506, 507, 508, 509]);
+    expect(fake.rows.find(r => r.id === 510)?.status).toBe("completed");
+    expect(fake.rows.find(r => r.id === 511)?.status).toBe("running");
+    expect(fake.rows.find(r => r.id === 512)?.status).toBe("running");
   });
 
   it("does not double-terminalise a run already terminalised concurrently", async () => {

@@ -1,25 +1,49 @@
 /**
- * Stale strategy-run classification and terminalisation (WBS-R1.6).
+ * Stale agent-run classification and terminalisation (WBS-R1.6, WBS-R4E).
  *
- * Forward reliability only: when a process dies between inserting a strategy
- * agent run and completing it, the agentRuns row stays "running" forever,
+ * Forward reliability only: when a process dies between inserting an agent
+ * run and completing it, the agentRuns row stays "running" forever,
  * polluting status-based dedup and workflow status displays. This module
- * classifies such runs (strategy type, still running, started before the
- * staleness TTL) and terminalises them through an exact-once conditional
- * write (running → failed with an explicit stale reason).
+ * classifies such runs (still running, started before the staleness TTL)
+ * and terminalises them through an exact-once conditional write
+ * (running → failed with an explicit stale reason).
+ *
+ * WBS-R4E: the staleness policy now covers every governed workflow agent
+ * run type, not only strategy. A stuck audience/distribution run previously
+ * blocked the forward chain permanently (the status-based dedup guards in
+ * triggers/agent-router skip campaigns whose latest run is still
+ * "running"), and the stuck row was never reaped because the reaper was
+ * strategy-only. Terminalising it unblocks an idempotent retry of the same
+ * logical step, which replays the same caller-stable billing identity and
+ * therefore settles or releases at most once.
  *
  * Deliberately narrow: this is NOT a general historical-data recovery
- * executor. It only terminalises strategy runs matching the staleness policy
- * for a specific owner-scoped campaign at a forward boundary; anything else
- * is left untouched.
+ * executor. It only terminalises runs matching the staleness policy for a
+ * specific owner-scoped campaign at a forward boundary; anything else is
+ * left untouched.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { agentRuns } from "@db/schema";
 import { getDb } from "../../queries/connection";
 
-/** A strategy run older than this while still "running" is stale. */
+/** A run older than this while still "running" is stale. */
 export const STALE_STRATEGY_RUN_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * Governed workflow agent run types eligible for stale terminalisation.
+ * Audience-intelligence runs persist agentType "audience" and are covered
+ * by that entry.
+ */
+export const STALE_AGENT_RUN_TYPES: readonly string[] = [
+  "strategy",
+  "creative",
+  "audience",
+  "distribution",
+  "engagement",
+  "sales",
+  "optimisation",
+];
 
 type StrategyRunDb = ReturnType<typeof getDb>;
 
@@ -50,9 +74,9 @@ function toEpochMillis(value: unknown): number | null {
 }
 
 /**
- * Pure staleness classification. Only a strategy-type run still in "running"
- * status can be stale; completed/failed rows are historical evidence and are
- * never touched.
+ * Pure staleness classification. Only a run of an eligible agent type still
+ * in "running" status can be stale; completed/failed rows are historical
+ * evidence and are never touched.
  */
 export function isStaleStrategyRun(input: {
   agentType: string;
@@ -60,8 +84,10 @@ export function isStaleStrategyRun(input: {
   startedAt: unknown;
   now: Date;
   ttlMs?: number;
+  agentTypes?: readonly string[];
 }): boolean {
-  if (input.agentType !== "strategy") return false;
+  const eligibleTypes = input.agentTypes ?? ["strategy"];
+  if (!eligibleTypes.includes(input.agentType)) return false;
   if (input.status !== "running") return false;
   const startedAt = toEpochMillis(input.startedAt);
   if (startedAt === null) return false;
@@ -70,20 +96,28 @@ export function isStaleStrategyRun(input: {
 }
 
 /**
- * Terminalises the owner-scoped campaign's stale strategy runs. Each
+ * Terminalises the owner-scoped campaign's stale agent runs. Each
  * terminalisation is a conditional UPDATE matched on the row still being
  * "running", so a concurrent terminaliser cannot double-terminalise and an
  * already-completed run is never overwritten.
+ *
+ * agentTypes defaults to every governed workflow agent type (WBS-R4E): the
+ * forward-chain dedup guards key on the latest run's status regardless of
+ * type, so reaping only strategy runs left audience/distribution stalls
+ * permanent. Callers that need the legacy strategy-only behaviour can pass
+ * `agentTypes: ["strategy"]`.
  */
 export async function terminaliseStaleStrategyRuns(input: {
   userId: number;
   campaignId: number;
   now?: Date;
   ttlMs?: number;
+  agentTypes?: readonly string[];
   executor?: StaleStrategyRunDbExecutor;
 }): Promise<StaleStrategyRunSummary> {
   const executor = input.executor ?? getDb();
   const now = input.now ?? new Date();
+  const agentTypes = input.agentTypes ?? STALE_AGENT_RUN_TYPES;
 
   const rows = await executor
     .select({
@@ -97,7 +131,7 @@ export async function terminaliseStaleStrategyRuns(input: {
       and(
         eq(agentRuns.userId, input.userId),
         eq(agentRuns.campaignId, input.campaignId),
-        eq(agentRuns.agentType, "strategy")
+        inArray(agentRuns.agentType, [...agentTypes])
       )
     );
 
@@ -105,14 +139,14 @@ export async function terminaliseStaleStrategyRuns(input: {
   let terminalised = 0;
 
   for (const row of rows) {
-    if (!isStaleStrategyRun({ ...row, now, ttlMs: input.ttlMs })) continue;
+    if (!isStaleStrategyRun({ ...row, now, ttlMs: input.ttlMs, agentTypes })) continue;
     examined += 1;
 
     const updateResult = await executor
       .update(agentRuns)
       .set({
         status: "failed",
-        error: `Stale strategy run terminalised: still running ${Math.round(
+        error: `Stale agent run terminalised: still running ${Math.round(
           (now.getTime() - (toEpochMillis(row.startedAt) ?? now.getTime())) / 1000
         )}s after start.`,
         completedAt: now,
