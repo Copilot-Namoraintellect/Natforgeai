@@ -138,3 +138,20 @@ Artefact refs expose `kind`, `recordType` (`campaign_asset` | `content_post`),
   preserved; a video render job does not participate in the release manifest.
 - Stream B does not execute migrations; the package persists in the existing
   JSON workflow context.
+
+## 10. Security considerations (R4 security addendum)
+
+- The sealed package carries lineage coordinates and identifiers only — no
+  secrets, tokens, prompts with credential material, or provider payloads.
+  Stream C must not add any when persisting or forwarding the package.
+- Tenant isolation: sealing is authorized by (campaignId + userId) lookup; a
+  cross-tenant seal returns `campaign_missing` and writes nothing. The package
+  is server-side only; there is no client endpoint that writes it.
+- Fail-closed: malformed or tampered sealed context fails
+  `assertCreativeReleasePackageIntact` / reads as absent; database or provider
+  failure during sealing never produces a fallback seal.
+- `content.approve` binds approval to the server-computed brief fingerprint;
+  the key is in the WBS12.9 approval-authority metadata strip list so client
+  metadata passthrough cannot mint or forge it.
+- Error surfaces transport tRPC codes and reason codes only; no stack traces,
+  connection strings or provider details are added by this stream.
