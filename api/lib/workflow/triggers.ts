@@ -33,6 +33,9 @@ import {
 } from "../creative/creative-generation-claim";
 import { env } from "../env";
 import {
+  syncCreativeReleasePackageSafely,
+} from "../creative/release-package";
+import {
   getStrategyApprovalStatus,
   buildStrategyApprovalLineage,
   validateStrategyRunForCampaign,
@@ -191,6 +194,17 @@ export async function onAgentRunComplete(runId: number) {
 
     if (resolvedCreativeState === "creatives_ready") {
       await transitionCampaignState(run.campaignId, run.userId, "creatives_complete");
+
+      // R4-B2: the creative pipeline reached its readiness state — attempt to
+      // seal the immutable creative release package from durable evidence.
+      // Best-effort: sealing never blocks workflow advancement, and an
+      // incomplete evidence set simply defers the seal to a later completion
+      // (e.g. the post-hoc leaflet render / caption pack generation).
+      await syncCreativeReleasePackageSafely({
+        userId: run.userId,
+        campaignId: run.campaignId,
+        sealedBy: "workflow.onAgentRunComplete",
+      });
     }
 
     // Auto-trigger audience agent after creatives are ready — with dedup guard
