@@ -401,6 +401,9 @@ export function buildCreativeReleasePackage(
 
   const bound = (record: unknown): boolean => {
     if (!authority) return false;
+    // Failed or still-generating rows are never release-bound, regardless of
+    // the lineage coordinates they carry.
+    if (isTerminalFailureStatus(record) || isGeneratingStatus(record)) return false;
     const coordinates = extractStrategyCoordinates(record);
     if (!coordinates || !coordinatesMatch(coordinates, authority)) return false;
     const fingerprint = getRecordFingerprint(record);
