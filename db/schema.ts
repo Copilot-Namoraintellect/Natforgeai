@@ -993,6 +993,15 @@ export const campaignInterestSignals = mysqlTable(
       table.externalIdentifier
     ),
     userCampaignIdx: index("cis_user_campaign_idx").on(table.userId, table.campaignId),
+    /**
+     * One interest signal per campaign + actor: the aggregation upsert in
+     * audience/ingest relies on this unique key so repeated ingest cycles
+     * refresh the signal instead of accumulating duplicate actor rows.
+     */
+    campaignActorUniqueIdx: uniqueIndex("cis_campaign_actor_uidx").on(
+      table.campaignId,
+      table.externalIdentifier
+    ),
   })
 );
 

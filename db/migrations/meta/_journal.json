@@ -197,6 +197,13 @@
       "when": 1792750070817,
       "tag": "0027_add_analytics_observation_id",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "5",
+      "when": 1792751248158,
+      "tag": "0028_add_campaign_interest_signal_actor_unique",
+      "breakpoints": true
     }
   ]
 }
