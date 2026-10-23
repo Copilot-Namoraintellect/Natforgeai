@@ -77,13 +77,32 @@ interface RunAudienceIntelligenceOptions {
   userId: number;
   campaignId: number;
   autoCreateLeads?: boolean;
+  /**
+   * Caller-stable billing identity minted at the workflow trigger boundary
+   * (Stream E financial-reliability contract §2:
+   * `agent-audience-intel-${sha256("workflow/agent-billing@v1:audience-intel:{campaignId}:{continuationId}")}`).
+   * Passed to the governed reservation path so retries/replays of the same
+   * logical operation collapse onto at most one durable charge. Omit on
+   * manual invocations — each manual run is a new billable operation by
+   * design (Stream E §6).
+   */
+  billingIdentity?: string;
+}
+
+export interface RunAudienceIntelligenceResult {
+  runId: number;
+  output: AudienceIntelligenceOutput;
+  createdLeadIds: number[];
+  /** True when this call was an idempotent replay of an already-completed keyed run. */
+  replayed?: boolean;
 }
 
 export async function runAudienceIntelligenceAgent({
   userId,
   campaignId,
   autoCreateLeads = false,
-}: RunAudienceIntelligenceOptions) {
+  billingIdentity,
+}: RunAudienceIntelligenceOptions): Promise<RunAudienceIntelligenceResult> {
   const db = getDb();
 
   // Load campaign + business
@@ -103,6 +122,49 @@ export async function runAudienceIntelligenceAgent({
   const audienceProfiles = Array.isArray(workflowContext?.audienceProfiles)
     ? workflowContext.audienceProfiles
     : [];
+
+  // ─── Keyed idempotent-replay guard (WBS-R4 C0.2 / C1 duplicate trigger) ───
+  // A keyed dispatch records its billing identity next to the durable result
+  // coordinates after a successful run. A replayed trigger (duplicate approval
+  // resolution, budget-resume replay, restarted continuation) re-enters with
+  // the same identity and must not re-run the LLM or re-charge: return the
+  // already-authoritative result. Unkeyed (manual) invocations never match and
+  // always execute, preserving the manual-is-new-billable-operation contract.
+  if (billingIdentity) {
+    const recordedKey = workflowContext.audienceIntelligenceBillingKey;
+    const recordedRunId = workflowContext.audienceIntelligenceRunId;
+    if (recordedKey === billingIdentity && Number.isInteger(recordedRunId)) {
+      const [recordedRun] = await db
+        .select()
+        .from(agentRuns)
+        .where(
+          and(
+            eq(agentRuns.id, recordedRunId as number),
+            eq(agentRuns.userId, userId),
+            eq(agentRuns.campaignId, campaignId),
+            eq(agentRuns.agentType, "audience")
+          )
+        )
+        .limit(1);
+      if (recordedRun && recordedRun.status === "completed") {
+        const storedOutput = recordedRun.output as Record<string, unknown> | null;
+        if (storedOutput && storedOutput.noData === true) {
+          return {
+            runId: recordedRun.id,
+            output: storedOutput as unknown as AudienceIntelligenceOutput,
+            createdLeadIds: [],
+            replayed: true,
+          };
+        }
+        return {
+          runId: recordedRun.id,
+          output: normaliseOutput(storedOutput),
+          createdLeadIds: [],
+          replayed: true,
+        };
+      }
+    }
+  }
 
   // ─── Source-data guard ───
   // Do not run the LLM (and therefore do not charge credits) when there is no
@@ -173,6 +235,7 @@ export async function runAudienceIntelligenceAgent({
           ...workflowContext,
           audienceIntelligenceGeneratedAt: new Date().toISOString(),
           audienceIntelligenceRunId: runId,
+          ...(billingIdentity ? { audienceIntelligenceBillingKey: billingIdentity } : {}),
           audienceIntelligenceSummary: {
             executiveSummary: "",
             scoredLeadCount: 0,
@@ -328,6 +391,7 @@ CRITICAL SCHEMA RULES:
     schema: AudienceIntelligenceSchema,
     system:
       "You are an expert marketing analyst specialising in lead discovery and social audience intelligence. You turn engagement signals into actionable, scored lead recommendations. CRITICAL: include EVERY key in every object. Use null for unknown values. Never omit a key.",
+    ...(billingIdentity ? { billingIdempotencyKey: billingIdentity } : {}),
   });
 
   const normalised = normaliseOutput(result.output);
@@ -349,6 +413,7 @@ CRITICAL SCHEMA RULES:
         ...workflowContext,
         audienceIntelligenceGeneratedAt: new Date().toISOString(),
         audienceIntelligenceRunId: result.runId,
+        ...(billingIdentity ? { audienceIntelligenceBillingKey: billingIdentity } : {}),
         audienceIntelligenceSummary: {
           executiveSummary: normalised.executiveSummary,
           scoredLeadCount: normalised.scoredLeads.length,

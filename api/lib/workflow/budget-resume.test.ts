@@ -212,7 +212,11 @@ describe("resumeWorkflowAfterApprovedCostIncrease", () => {
       kind: "launch_audience_intelligence",
       continuationId: 81,
     });
-    expect(dispatched).toEqual([{ userId: 22, campaignId: 7 }]);
+    // WBS-R4 C0.2: the durable cost-pause continuation id is threaded into the
+    // dispatch so the audience-intelligence run mints its stable billing
+    // identity (Stream E contract §2) and a resumed continuation cannot
+    // re-charge the original logical operation.
+    expect(dispatched).toEqual([{ userId: 22, campaignId: 7, continuationId: 81 }]);
   });
 
   it("reports already_resumed when a concurrent resumer claimed the pause", async () => {
