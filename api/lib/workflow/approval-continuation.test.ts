@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   classifyApprovalContinuation,
   reconcileApprovalContinuation,
+  reconcileDanglingStrategyRunCompletions,
   runApprovalContinuationSweep,
   type ApprovalContinuationApproval,
   type ApprovalContinuationCampaign,
@@ -147,6 +148,69 @@ describe("classifyApprovalContinuation", () => {
           campaign({
             workflowContext: {
               strategyApprovalLineage: { ...boundLineage, approvalRequestId: 99 },
+            },
+          })
+        )
+      ).toEqual({ kind: "none" });
+    });
+
+    it("WBS-R4 A5-1: classifies a lost creative kickoff after an applied approval", () => {
+      // approve_strategy transition + lineage.status "approved" applied, but
+      // the creative kickoff that follows was lost.
+      expect(
+        classifyApprovalContinuation(
+          approval(),
+          campaign({
+            workflowState: "strategy_approved",
+            workflowContext: {
+              strategyApprovalLineage: { ...boundLineage, status: "approved" },
+            },
+          })
+        )
+      ).toEqual({
+        kind: "strategy_approved_kickoff_continuation",
+        campaignId: 7,
+        userId: 22,
+        approvalId: 11,
+      });
+    });
+
+    it("WBS-R4 A5-1: kickoff expectation stays fail-closed on superseded or unapproved lineage", () => {
+      // Lineage bound to a newer request: superseded regardless of state.
+      expect(
+        classifyApprovalContinuation(
+          approval(),
+          campaign({
+            workflowState: "strategy_approved",
+            workflowContext: {
+              strategyApprovalLineage: {
+                ...boundLineage,
+                approvalRequestId: 99,
+                status: "approved",
+              },
+            },
+          })
+        )
+      ).toEqual({ kind: "none" });
+      // strategy_approved but lineage not yet approved: the callee would
+      // refuse (fingerprint/lineage persistence incomplete) — do not dispatch.
+      expect(
+        classifyApprovalContinuation(
+          approval(),
+          campaign({
+            workflowState: "strategy_approved",
+            workflowContext: { strategyApprovalLineage: boundLineage },
+          })
+        )
+      ).toEqual({ kind: "none" });
+      // strategy_generated with an already-approved lineage: onStrategyApproved
+      // already ran or is running (it persists "approved" first).
+      expect(
+        classifyApprovalContinuation(
+          approval(),
+          campaign({
+            workflowContext: {
+              strategyApprovalLineage: { ...boundLineage, status: "approved" },
             },
           })
         )
@@ -372,6 +436,55 @@ describe("reconcileApprovalContinuation", () => {
     expect(onApprovalResolved).toHaveBeenCalledWith(11, "approved", 22);
   });
 
+  it("WBS-R4 A5-1: re-invokes onApprovalResolved for a lost creative kickoff", async () => {
+    // Mid-flight / no-evidence case: the classifier cannot see
+    // credit_transactions, so it re-dispatches and onStrategyApproved's own
+    // guards (creative-success charge key, in-progress claim) are the
+    // authority that keeps this a no-op when the kickoff already happened.
+    const onApprovalResolved = vi.fn(async () => undefined);
+    const result = await reconcileApprovalContinuation(11, {
+      loadApproval: async () => approval(),
+      loadCampaign: async () =>
+        campaign({
+          workflowState: "strategy_approved",
+          workflowContext: {
+            strategyApprovalLineage: { approvalRequestId: 11, status: "approved" },
+          },
+        }),
+      onApprovalResolved,
+    });
+
+    expect(result).toEqual({
+      reconciled: true,
+      kind: "strategy_approved_kickoff_continuation",
+      outcome: "dispatched",
+    });
+    expect(onApprovalResolved).toHaveBeenCalledTimes(1);
+    expect(onApprovalResolved).toHaveBeenCalledWith(11, "approved", 22);
+
+    // Already-has-success-marker case: the classifier still re-dispatches
+    // (purity limit, documented); the callee's dedup — modelled here by the
+    // fake recording that it no-opped — prevents any double execution.
+    let creativeCalls = 0;
+    const calleeWithDedup = vi.fn(async () => {
+      if (creativeCalls > 0) return; // hasSuccessfulCreativeGenerationForApproval
+      creativeCalls += 1;
+    });
+    await reconcileApprovalContinuation(11, {
+      loadApproval: async () => approval(),
+      loadCampaign: async () =>
+        campaign({
+          workflowState: "strategy_approved",
+          workflowContext: {
+            strategyApprovalLineage: { approvalRequestId: 11, status: "approved" },
+          },
+        }),
+      onApprovalResolved: calleeWithDedup,
+    });
+    expect(calleeWithDedup).toHaveBeenCalledTimes(1);
+    expect(creativeCalls).toBe(1);
+  });
+
   it("delegates a rejected launch continuation to onApprovalResolved as rejected", async () => {
     const onApprovalResolved = vi.fn(async () => undefined);
     const result = await reconcileApprovalContinuation(11, {
@@ -495,6 +608,162 @@ describe("reconcileApprovalContinuation", () => {
   });
 });
 
+describe("reconcileDanglingStrategyRunCompletions (WBS-R4 A5-2)", () => {
+  const completedRun = {
+    id: 600,
+    userId: 22,
+    campaignId: 7,
+    agentType: "strategy",
+    status: "completed",
+    completedAt: new Date().toISOString(),
+  };
+
+  it("re-drives a completed run whose campaign never left strategy_pending", async () => {
+    const onRunComplete = vi.fn(async () => undefined);
+    const rollbackStrategyTransition = vi.fn(async () => undefined);
+    const result = await reconcileDanglingStrategyRunCompletions({
+      deps: {
+        listCompletedStrategyRuns: async () => [completedRun],
+        loadCampaign: async () => campaign({ workflowState: "strategy_pending" }),
+        listStrategyReviews: async () => [],
+        onRunComplete,
+        rollbackStrategyTransition,
+      },
+    });
+
+    expect(result).toEqual({ scanned: 1, reconciled: 1, failed: 0, skipped: 0 });
+    expect(onRunComplete).toHaveBeenCalledTimes(1);
+    expect(onRunComplete).toHaveBeenCalledWith(600);
+    expect(rollbackStrategyTransition).not.toHaveBeenCalled();
+  });
+
+  it("rolls back a dangling strategy_generated transition when no review is bound, then re-drives", async () => {
+    const onRunComplete = vi.fn(async () => undefined);
+    const rollbackStrategyTransition = vi.fn(async () => undefined);
+    const result = await reconcileDanglingStrategyRunCompletions({
+      deps: {
+        listCompletedStrategyRuns: async () => [completedRun],
+        loadCampaign: async () =>
+          campaign({
+            workflowState: "strategy_generated",
+            workflowContext: {},
+          }),
+        listStrategyReviews: async () => [],
+        onRunComplete,
+        rollbackStrategyTransition,
+      },
+    });
+
+    expect(result).toEqual({ scanned: 1, reconciled: 1, failed: 0, skipped: 0 });
+    expect(rollbackStrategyTransition).toHaveBeenCalledTimes(1);
+    expect(rollbackStrategyTransition).toHaveBeenCalledWith({ campaignId: 7, userId: 22 });
+    expect(onRunComplete).toHaveBeenCalledTimes(1);
+    expect(onRunComplete).toHaveBeenCalledWith(600);
+  });
+
+  it("skips a strategy_generated campaign whose review is already bound to the run", async () => {
+    const boundReview: ApprovalContinuationApproval = {
+      id: 9001,
+      userId: 22,
+      campaignId: 7,
+      approvalType: "strategy_review",
+      status: "pending",
+      context: { strategyRunId: 600 },
+    };
+    const onRunComplete = vi.fn();
+    const rollbackStrategyTransition = vi.fn();
+    const result = await reconcileDanglingStrategyRunCompletions({
+      deps: {
+        listCompletedStrategyRuns: async () => [completedRun],
+        loadCampaign: async () =>
+          campaign({
+            workflowState: "strategy_generated",
+            workflowContext: {},
+          }),
+        listStrategyReviews: async () => [boundReview],
+        onRunComplete,
+        rollbackStrategyTransition,
+      },
+    });
+
+    expect(result).toEqual({ scanned: 1, reconciled: 0, failed: 0, skipped: 1 });
+    expect(onRunComplete).not.toHaveBeenCalled();
+    expect(rollbackStrategyTransition).not.toHaveBeenCalled();
+  });
+
+  it("honours the binding through the campaign lineage when the request context lacks strategyRunId", async () => {
+    const boundViaLineage: ApprovalContinuationApproval = {
+      id: 9001,
+      userId: 22,
+      campaignId: 7,
+      approvalType: "strategy_review",
+      status: "approved",
+    };
+    const onRunComplete = vi.fn();
+    const result = await reconcileDanglingStrategyRunCompletions({
+      deps: {
+        listCompletedStrategyRuns: async () => [completedRun],
+        loadCampaign: async () =>
+          campaign({
+            workflowState: "strategy_generated",
+            workflowContext: {
+              strategyApprovalLineage: {
+                approvalRequestId: 9001,
+                strategyRunId: 600,
+                status: "approved",
+              },
+            },
+          }),
+        listStrategyReviews: async () => [boundViaLineage],
+        onRunComplete,
+      },
+    });
+
+    expect(result).toEqual({ scanned: 1, reconciled: 0, failed: 0, skipped: 1 });
+    expect(onRunComplete).not.toHaveBeenCalled();
+  });
+
+  it("skips advanced states, foreign run kinds and missing campaigns", async () => {
+    const onRunComplete = vi.fn();
+    const result = await reconcileDanglingStrategyRunCompletions({
+      deps: {
+        listCompletedStrategyRuns: async () => [
+          completedRun,
+          { ...completedRun, id: 601, agentType: "creative" },
+          { ...completedRun, id: 602, campaignId: null },
+          { ...completedRun, id: 603 },
+        ],
+        loadCampaign: async ({ campaignId }) =>
+          campaignId === 7
+            ? campaign({ workflowState: "creatives_ready" })
+            : null,
+        listStrategyReviews: async () => [],
+        onRunComplete,
+      },
+    });
+
+    expect(result).toEqual({ scanned: 4, reconciled: 0, failed: 0, skipped: 4 });
+    expect(onRunComplete).not.toHaveBeenCalled();
+  });
+
+  it("isolates per-item delegate failures without throwing", async () => {
+    const onRunComplete = vi.fn(async (runId: number) => {
+      if (runId === 600) throw new Error("trigger exploded");
+    });
+    const result = await reconcileDanglingStrategyRunCompletions({
+      deps: {
+        listCompletedStrategyRuns: async () => [completedRun, { ...completedRun, id: 601 }],
+        loadCampaign: async () => campaign({ workflowState: "strategy_pending" }),
+        listStrategyReviews: async () => [],
+        onRunComplete,
+      },
+    });
+
+    expect(result).toEqual({ scanned: 2, reconciled: 1, failed: 1, skipped: 0 });
+    expect(onRunComplete).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("runApprovalContinuationSweep", () => {
   it("scans recently-decided approvals and isolates per-item failures", async () => {
     vi.resetModules();
@@ -504,6 +773,7 @@ describe("runApprovalContinuationSweep", () => {
     }));
     vi.doMock("./triggers", () => ({
       onApprovalResolved: onApprovalResolvedMock,
+      onAgentRunComplete: vi.fn(async () => undefined),
     }));
     const { getDb } = await import("../../queries/connection");
     const { runApprovalContinuationSweep: sweepReal } = await import("./approval-continuation");
@@ -564,7 +834,12 @@ describe("runApprovalContinuationSweep", () => {
             const name = (table as Record<symbol, unknown>)[
               Symbol.for("drizzle:Name") as symbol
             ] as string;
-            const base = name === "approval_requests" ? [danglingApproval] : [danglingCampaign];
+            const base =
+              name === "approval_requests"
+                ? [danglingApproval]
+                : name === "campaigns"
+                  ? [danglingCampaign]
+                  : [];
             const chainable: Record<string, unknown> = {};
             chainable.orderBy = () => chainable;
             chainable.limit = async () => base;

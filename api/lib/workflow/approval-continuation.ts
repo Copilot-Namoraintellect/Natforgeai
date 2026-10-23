@@ -19,16 +19,22 @@
  *   campaign, classifies, and re-dispatches BY DELEGATION through the existing
  *   idempotent entry points (never duplicating their logic). It never throws
  *   past the caller: failures are logged and reported as { reconciled: false }.
- * - runApprovalContinuationSweep reconciles recently-decided approvals
- *   sequentially with per-item error isolation and is wired once at boot as a
- *   fire-and-forget recovery sweep.
+ * - reconcileDanglingStrategyRunCompletions (WBS-R4 A5-2) closes the
+ *   "restart after execution but before state update" gap: a completed
+ *   strategy run whose campaign never advanced (or advanced without a bound
+ *   review) is re-driven through onAgentRunComplete, rolling back the
+ *   dangling strategy_generated transition through the governed engine action
+ *   when review creation was lost.
+ * - runApprovalContinuationSweep reconciles both scans sequentially with
+ *   per-item error isolation and is wired once at boot as a fire-and-forget
+ *   recovery sweep.
  *
  * This module performs NO schema or migration change and mutates nothing
  * itself; the delegated entry points keep their own governance semantics.
  */
 
 import { and, desc, eq, gte, inArray, or } from "drizzle-orm";
-import { approvalRequests, campaigns } from "@db/schema";
+import { agentRuns, approvalRequests, campaigns } from "@db/schema";
 import { getDb } from "../../queries/connection";
 import {
   COST_PAUSE_CONTEXT_KEY,
@@ -65,6 +71,7 @@ export interface ApprovalContinuationCampaign {
 export type ContinuationExpectation =
   | { kind: "none" }
   | { kind: "strategy_approved_continuation"; campaignId: number; userId: number; approvalId: number }
+  | { kind: "strategy_approved_kickoff_continuation"; campaignId: number; userId: number; approvalId: number }
   | { kind: "strategy_rejected_continuation"; campaignId: number; userId: number; approvalId: number }
   | { kind: "launch_approved_continuation"; campaignId: number; userId: number; approvalId: number }
   | { kind: "launch_rejected_continuation"; campaignId: number; userId: number; approvalId: number }
@@ -92,6 +99,7 @@ function readWorkflowContext(value: unknown): Record<string, unknown> {
 
 interface StrategyLineageLike {
   approvalRequestId?: unknown;
+  strategyRunId?: unknown;
   status?: unknown;
 }
 
@@ -107,12 +115,20 @@ function readStrategyApprovalLineage(context: Record<string, unknown>): Strategy
  * Fail-closed throughout — every non-"none" expectation is corroborated by
  * durable campaign evidence so re-dispatch can never double-run a continuation
  * that already applied or clobber a newer cycle:
- * - strategy_review: only while the campaign is still in strategy_generated.
- *   Approved requires the lineage to identify THIS request and not yet be
- *   "approved" (onStrategyApproved persists "approved" first, so an approved
- *   lineage means it ran or is running). Rejected re-applies
- *   request_strategy_changes. A lineage bound to a newer request supersedes
- *   this decision entirely.
+ * - strategy_review: approved decisions require the lineage to identify THIS
+ *   request. While the campaign is still in strategy_generated with the
+ *   lineage not yet "approved", the decision continuation itself never
+ *   applied (strategy_approved_continuation). While the campaign is in
+ *   strategy_approved with the lineage already "approved", onStrategyApproved
+ *   persisted the approval but its creative kickoff was lost
+ *   (strategy_approved_kickoff_continuation) — re-dispatch is safe because the
+ *   callee's own dedup is the authority: it early-no-ops on the
+ *   creative-success charge key and refuses to double-run an in-progress
+ *   claim. The classifier is PURE: it cannot see credit_transactions, so a
+ *   kickoff that already produced its success marker still classifies here
+ *   and relies on that callee dedup to no-op. Rejected re-applies
+ *   request_strategy_changes while still in strategy_generated. A lineage
+ *   bound to a newer request supersedes this decision entirely.
  * - campaign_launch: only while still in launch_approval_required, with the
  *   same superseding guard on the launch lineage.
  * - budget_increase: only an APPROVED decision, and only while a parseable
@@ -176,7 +192,6 @@ export function classifyApprovalContinuation(
   }
 
   if (approvalType === "strategy_review") {
-    if (campaign.workflowState !== "strategy_generated") return { kind: "none" };
     const lineage = readStrategyApprovalLineage(context);
     // Superseded: a lineage bound to a newer request means this decision must
     // never clobber the newer cycle.
@@ -184,16 +199,33 @@ export function classifyApprovalContinuation(
       return { kind: "none" };
     }
     if (approval.status === "approved") {
-      // The approve continuation is only re-dispatched when the durable
-      // lineage identifies THIS request and has not recorded the approval yet:
-      // lineage.status "approved" means onStrategyApproved already ran or is
-      // running (it persists that marker before any other side effect).
+      // Both approved expectations require the durable lineage to identify
+      // THIS request.
       if (!lineage || lineage.approvalRequestId !== approval.id) return { kind: "none" };
-      if (lineage.status === "approved") return { kind: "none" };
-      return { kind: "strategy_approved_continuation", ...base };
+      if (campaign.workflowState === "strategy_generated") {
+        // lineage.status "approved" means onStrategyApproved already ran or is
+        // running (it persists that marker before any other side effect).
+        if (lineage.status === "approved") return { kind: "none" };
+        // Approved while still in strategy_generated with a pending lineage:
+        // the post-commit continuation never applied.
+        return { kind: "strategy_approved_continuation", ...base };
+      }
+      if (campaign.workflowState === "strategy_approved") {
+        // WBS-R4 A5-1: the approve_strategy transition and lineage approval
+        // were applied, but the creative kickoff that follows was lost. The
+        // re-dispatch re-enters onStrategyApproved, whose own dedup (success
+        // charge key, in-progress claim) no-ops when the kickoff already
+        // happened — the classifier cannot see that evidence itself.
+        if (lineage.status === "approved") {
+          return { kind: "strategy_approved_kickoff_continuation", ...base };
+        }
+        return { kind: "none" };
+      }
+      return { kind: "none" };
     }
     // Rejected while still in strategy_generated: request_strategy_changes
     // never applied.
+    if (campaign.workflowState !== "strategy_generated") return { kind: "none" };
     return { kind: "strategy_rejected_continuation", ...base };
   }
 
@@ -438,6 +470,7 @@ export async function reconcileApprovalContinuation(
 
     switch (expectation.kind) {
       case "strategy_approved_continuation":
+      case "strategy_approved_kickoff_continuation":
       case "launch_approved_continuation": {
         const dispatchApproval = deps?.onApprovalResolved ?? defaultOnApprovalResolved;
         await dispatchApproval(approvalId, "approved", userId);
@@ -482,6 +515,229 @@ export async function reconcileApprovalContinuation(
   }
 }
 
+// ── Dangling strategy-run completion reconciliation (WBS-R4 A5-2) ──────────
+
+/** Minimal agent run row shape the run-completion reconciler needs. */
+export interface DanglingStrategyRunLike {
+  id: number;
+  userId: number;
+  campaignId: number | null;
+  agentType: string;
+  status: string;
+  completedAt?: unknown;
+}
+
+export interface ReconcileDanglingStrategyRunDeps {
+  /** Lists recent completed strategy runs (default: completedAt within window). */
+  listCompletedStrategyRuns?: (input: {
+    cutoff: Date;
+    limit: number;
+  }) => Promise<DanglingStrategyRunLike[]>;
+  /** Owner-scoped campaign load (default: getDb read). */
+  loadCampaign?: (input: {
+    campaignId: number;
+    userId: number;
+  }) => Promise<ApprovalContinuationCampaign | null>;
+  /** strategy_review approvals for the campaign (any status). */
+  listStrategyReviews?: (input: {
+    campaignId: number;
+    userId: number;
+  }) => Promise<ApprovalContinuationApproval[]>;
+  /** Continuation boundary (default: the real onAgentRunComplete trigger). */
+  onRunComplete?: (runId: number) => Promise<void>;
+  /**
+   * Governed rollback of a dangling strategy_generated transition
+   * (default: transitionCampaignState request_strategy_changes). Only invoked
+   * for the strategy_generated-without-bound-review case, before the
+   * re-drive, so the existing strategy_pending pathway can recreate the
+   * review + lineage exactly once (A2-2 dedup).
+   */
+  rollbackStrategyTransition?: (input: {
+    campaignId: number;
+    userId: number;
+  }) => Promise<void>;
+}
+
+/**
+ * True when a pending/approved strategy_review approval is durably bound to
+ * this run: either via the request-level context strategyRunId or via the
+ * campaign lineage (approvalRequestId -> strategyRunId). Rejected requests
+ * are superseded evidence and never count as bound.
+ */
+function hasBoundStrategyReview(
+  run: DanglingStrategyRunLike,
+  context: Record<string, unknown>,
+  reviews: ApprovalContinuationApproval[]
+): boolean {
+  const lineage = readStrategyApprovalLineage(context);
+  for (const review of reviews) {
+    if (review.approvalType !== "strategy_review") continue;
+    if (review.status !== "pending" && review.status !== "approved") continue;
+    const reviewContext =
+      review.context && typeof review.context === "object"
+        ? (review.context as Record<string, unknown>)
+        : null;
+    if (reviewContext && Number(reviewContext.strategyRunId) === run.id) return true;
+    if (
+      lineage &&
+      lineage.approvalRequestId === review.id &&
+      Number(lineage.strategyRunId) === run.id
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function defaultListCompletedStrategyRuns(input: {
+  cutoff: Date;
+  limit: number;
+}): Promise<DanglingStrategyRunLike[]> {
+  const db = getDb();
+  return db
+    .select({
+      id: agentRuns.id,
+      userId: agentRuns.userId,
+      campaignId: agentRuns.campaignId,
+      agentType: agentRuns.agentType,
+      status: agentRuns.status,
+      completedAt: agentRuns.completedAt,
+    })
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.agentType, "strategy"),
+        eq(agentRuns.status, "completed"),
+        gte(agentRuns.completedAt, input.cutoff)
+      )
+    )
+    .orderBy(desc(agentRuns.completedAt))
+    .limit(input.limit) as Promise<DanglingStrategyRunLike[]>;
+}
+
+async function defaultRollbackStrategyTransition(input: {
+  campaignId: number;
+  userId: number;
+}): Promise<void> {
+  const { transitionCampaignState } = await import("./engine");
+  await transitionCampaignState(input.campaignId, input.userId, "request_strategy_changes");
+}
+
+/**
+ * Re-drives strategy runs whose completion persisted but whose forward state
+ * update was lost ("restart after execution but before state update"):
+ *
+ * - campaign still in strategy_pending: the completion trigger never ran —
+ *   re-drive onAgentRunComplete (state-guarded branch + A2-2 review dedup).
+ * - campaign in strategy_generated with NO strategy_review approval bound to
+ *   the run: the transition applied but review creation/lineage binding was
+ *   lost — roll the dangling transition back through the governed
+ *   request_strategy_changes action, then re-drive (which recreates the
+ *   review + lineage exactly once).
+ *
+ * Everything else (advanced state, bound review, missing campaign) is
+ * skipped. Sequential with per-item error isolation; never throws past the
+ * caller.
+ */
+export async function reconcileDanglingStrategyRunCompletions(input: {
+  windowHours?: number;
+  limit?: number;
+  deps?: ReconcileDanglingStrategyRunDeps;
+} = {}): Promise<ApprovalContinuationSweepSummary> {
+  const windowHours = input.windowHours ?? 24;
+  const limit = input.limit ?? 200;
+  const cutoff = new Date(Date.now() - windowHours * 60 * 60 * 1000);
+
+  const listRuns = input.deps?.listCompletedStrategyRuns ?? defaultListCompletedStrategyRuns;
+  const loadCampaign = input.deps?.loadCampaign ?? defaultLoadCampaign;
+  const listReviews =
+    input.deps?.listStrategyReviews ?? defaultListStrategyReviews;
+  const onRunComplete = input.deps?.onRunComplete ?? defaultOnRunComplete;
+  const rollback =
+    input.deps?.rollbackStrategyTransition ?? defaultRollbackStrategyTransition;
+
+  const runs = await listRuns({ cutoff, limit });
+  const summary: ApprovalContinuationSweepSummary = {
+    scanned: runs.length,
+    reconciled: 0,
+    failed: 0,
+    skipped: 0,
+  };
+
+  for (const run of runs) {
+    try {
+      if (run.agentType !== "strategy" || run.status !== "completed" || !run.campaignId) {
+        summary.skipped += 1;
+        continue;
+      }
+      const campaign = await loadCampaign({ campaignId: run.campaignId, userId: run.userId });
+      if (!campaign) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      if (campaign.workflowState === "strategy_pending") {
+        await onRunComplete(run.id);
+        summary.reconciled += 1;
+        continue;
+      }
+
+      if (campaign.workflowState === "strategy_generated") {
+        const context = readWorkflowContext(campaign.workflowContext);
+        const reviews = await listReviews({
+          campaignId: campaign.id,
+          userId: campaign.userId,
+        });
+        if (hasBoundStrategyReview(run, context, reviews)) {
+          summary.skipped += 1;
+          continue;
+        }
+        // The transition applied but its review/lineage side effects did not:
+        // roll the dangling transition back, then re-drive the existing
+        // strategy_pending pathway. A2-2 dedup keeps the re-drive exactly-once
+        // even under a concurrent recovery.
+        await rollback({ campaignId: campaign.id, userId: campaign.userId });
+        await onRunComplete(run.id);
+        summary.reconciled += 1;
+        continue;
+      }
+
+      summary.skipped += 1;
+    } catch (error) {
+      summary.failed += 1;
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[ApprovalContinuation] Dangling strategy-run reconcile failed for run ${run.id}:`,
+        message
+      );
+    }
+  }
+
+  return summary;
+}
+
+async function defaultListStrategyReviews(input: {
+  campaignId: number;
+  userId: number;
+}): Promise<ApprovalContinuationApproval[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(approvalRequests)
+    .where(
+      and(
+        eq(approvalRequests.campaignId, input.campaignId),
+        eq(approvalRequests.userId, input.userId),
+        eq(approvalRequests.approvalType, "strategy_review")
+      )
+    ) as Promise<ApprovalContinuationApproval[]>;
+}
+
+async function defaultOnRunComplete(runId: number): Promise<void> {
+  const { onAgentRunComplete } = await import("./triggers");
+  await onAgentRunComplete(runId);
+}
+
 // ── Boot-time recovery sweep ───────────────────────────────────────────────
 
 /** Approval types worth classifying in the sweep (the rest are always none). */
@@ -502,13 +758,15 @@ export interface ApprovalContinuationSweepSummary {
 
 /**
  * Crash-recovery sweep: reconcile every recently-decided approval that could
- * owe a continuation. Sequential, per-item error isolated, and side-effect
- * free unless a dangling continuation is found. Wired once at boot; it must
- * never crash the server.
+ * owe a continuation AND every dangling strategy-run completion ("restart
+ * after execution but before state update"). Sequential, per-item error
+ * isolated, and side-effect free unless a dangling continuation is found.
+ * Wired once at boot; it must never crash the server.
  */
 export async function runApprovalContinuationSweep(input: {
   limit?: number;
   decidedWithinHours?: number;
+  deps?: ReconcileApprovalContinuationDeps & ReconcileDanglingStrategyRunDeps;
 } = {}): Promise<ApprovalContinuationSweepSummary> {
   const limit = input.limit ?? 200;
   const decidedWithinHours = input.decidedWithinHours ?? 24;
@@ -537,7 +795,7 @@ export async function runApprovalContinuationSweep(input: {
 
   for (const row of rows) {
     try {
-      const result = await reconcileApprovalContinuation(row.id);
+      const result = await reconcileApprovalContinuation(row.id, input.deps);
       if (result.reconciled) {
         summary.reconciled += 1;
       } else if (result.error) {
@@ -555,6 +813,16 @@ export async function runApprovalContinuationSweep(input: {
       );
     }
   }
+
+  const runSummary = await reconcileDanglingStrategyRunCompletions({
+    windowHours: decidedWithinHours,
+    limit,
+    deps: input.deps,
+  });
+  summary.scanned += runSummary.scanned;
+  summary.reconciled += runSummary.reconciled;
+  summary.failed += runSummary.failed;
+  summary.skipped += runSummary.skipped;
 
   return summary;
 }
