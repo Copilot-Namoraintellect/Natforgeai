@@ -162,12 +162,19 @@ export async function runDistributionAgent({
     .select({
       contentPostId: publishingQueue.contentPostId,
       platform: publishingQueue.platform,
+      status: publishingQueue.status,
     })
     .from(publishingQueue)
     .where(and(eq(publishingQueue.userId, userId), eq(publishingQueue.campaignId, campaignId)));
   const liveRowKeys = new Set(
     existingRows
-      .filter((r) => r.contentPostId !== null && r.platform !== null)
+      .filter(
+        (r) =>
+          r.contentPostId !== null &&
+          r.platform !== null &&
+          r.status !== null &&
+          r.status !== "failed"
+      )
       .map((r) => `${r.contentPostId}:${r.platform}`)
   );
 
