@@ -149,27 +149,11 @@ export async function pauseWorkflowForCostLimit(
     .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
     .limit(1);
 
-  // Update campaign workflow state
-  await db
-    .update(campaigns)
-    .set({
-      workflowState: "launch_approval_required",
-      status: "paused",
-    })
-    .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)));
-
-  // Create approval request
-  await db.insert(approvalRequests).values({
-    userId,
-    campaignId,
-    approvalType: "budget_increase",
-    title: "Autonomous Workflow Paused: Credit Limit Reached",
-    description: `The autonomous workflow for this campaign has been paused because: ${reason}. Please review your credit balance or upgrade your plan to resume autonomous operations.`,
-    aiRecommendation: "Consider upgrading to a higher tier or purchasing additional credits.",
-    riskLevel: "medium",
-    status: "pending",
-  });
-
+  // Record the durable resume provenance BEFORE clobbering the workflow
+  // state. A crash after this write leaves a restorable pause (the resume
+  // claim restores the recorded state and re-dispatches idempotent targets);
+  // a crash between a state clobber and a later provenance record would
+  // strand the campaign paused with no continuation coordinates at all.
   if (continuation) {
     await recordWorkflowCostPause({
       userId,
@@ -180,6 +164,46 @@ export async function pauseWorkflowForCostLimit(
         reason,
         workflowState: campaign?.workflowState ?? "strategy_pending",
       }),
+    });
+  }
+
+  // Update campaign workflow state
+  await db
+    .update(campaigns)
+    .set({
+      workflowState: "launch_approval_required",
+      status: "paused",
+    })
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)));
+
+  // Create a budget_increase approval request. Concurrent triggers can all
+  // observe insufficient credits in the same instant; only the first pending
+  // request is created so a campaign never accumulates duplicate budget asks
+  // for a single pause. (Best-effort under a true insert race — the unique
+  // authorities live on the billing ledger, not on governance rows.)
+  const [existingPendingBudgetApproval] = await db
+    .select({ id: approvalRequests.id })
+    .from(approvalRequests)
+    .where(
+      and(
+        eq(approvalRequests.userId, userId),
+        eq(approvalRequests.campaignId, campaignId),
+        eq(approvalRequests.approvalType, "budget_increase"),
+        eq(approvalRequests.status, "pending")
+      )
+    )
+    .limit(1);
+
+  if (!existingPendingBudgetApproval) {
+    await db.insert(approvalRequests).values({
+      userId,
+      campaignId,
+      approvalType: "budget_increase",
+      title: "Autonomous Workflow Paused: Credit Limit Reached",
+      description: `The autonomous workflow for this campaign has been paused because: ${reason}. Please review your credit balance or upgrade your plan to resume autonomous operations.`,
+      aiRecommendation: "Consider upgrading to a higher tier or purchasing additional credits.",
+      riskLevel: "medium",
+      status: "pending",
     });
   }
 }
@@ -204,7 +228,13 @@ export async function canRunAutonomousWorkflow(
     return { allowed: false, reason: "Campaign not found" };
   }
 
-  if (campaign.status === "paused") {
+  // Forward-dispatch gates — every caller that drives NEW autonomous work
+  // passes a continuation — must never run a paused campaign. Calls without
+  // a continuation are bare affordability probes (the budget-resume
+  // affordability recheck runs while the campaign is still cost-paused); for
+  // them the paused status is not a rejection reason, otherwise an approved
+  // budget increase could never resume a paused workflow.
+  if (continuation && campaign.status === "paused") {
     return { allowed: false, reason: "Campaign is paused" };
   }
 
