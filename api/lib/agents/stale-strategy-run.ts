@@ -35,7 +35,16 @@ export const STALE_STRATEGY_RUN_TTL_MS = 30 * 60 * 1000;
  * Audience-intelligence runs persist agentType "audience" and are covered
  * by that entry.
  */
-export const STALE_AGENT_RUN_TYPES: readonly string[] = [
+export type GovernedAgentRunType =
+  | "strategy"
+  | "creative"
+  | "audience"
+  | "distribution"
+  | "engagement"
+  | "sales"
+  | "optimisation";
+
+export const STALE_AGENT_RUN_TYPES: readonly GovernedAgentRunType[] = [
   "strategy",
   "creative",
   "audience",
@@ -84,10 +93,10 @@ export function isStaleStrategyRun(input: {
   startedAt: unknown;
   now: Date;
   ttlMs?: number;
-  agentTypes?: readonly string[];
+  agentTypes?: readonly GovernedAgentRunType[];
 }): boolean {
   const eligibleTypes = input.agentTypes ?? ["strategy"];
-  if (!eligibleTypes.includes(input.agentType)) return false;
+  if (!eligibleTypes.includes(input.agentType as GovernedAgentRunType)) return false;
   if (input.status !== "running") return false;
   const startedAt = toEpochMillis(input.startedAt);
   if (startedAt === null) return false;
@@ -112,7 +121,7 @@ export async function terminaliseStaleStrategyRuns(input: {
   campaignId: number;
   now?: Date;
   ttlMs?: number;
-  agentTypes?: readonly string[];
+  agentTypes?: readonly GovernedAgentRunType[];
   executor?: StaleStrategyRunDbExecutor;
 }): Promise<StaleStrategyRunSummary> {
   const executor = input.executor ?? getDb();

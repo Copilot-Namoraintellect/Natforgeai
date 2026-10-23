@@ -3,7 +3,7 @@ import { createRouter, authedQuery, aiActionQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { generatedImages, contentPosts, businesses, campaigns } from "@db/schema";
 import { eq, and, desc } from "drizzle-orm";
-import { checkCredits, deductCredits, recordAiUsage, adminAdjustCredits } from "./lib/billing/credit-engine";
+import { deductCredits, recordAiUsage, adminAdjustCredits } from "./lib/billing/credit-engine";
 import { enforceCostControl } from "./lib/billing/cost-control";
 import { calculateFixedCost } from "./lib/billing/cost-tracker";
 import { generateBasicDraftLeaflet, generatePremiumLeaflet, generateCaptionPack } from "./lib/creative/service";

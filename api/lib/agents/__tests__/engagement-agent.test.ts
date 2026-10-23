@@ -475,7 +475,7 @@ describe("handleNewMessage governed billing identity threading", () => {
     await handleNewMessage({ ...baseInput, campaignId: 30 });
 
     expect(runAgent).toHaveBeenCalledTimes(1);
-    const runArgs = vi.mocked(runAgent).mock.calls[0][0] as Record<
+    const runArgs = vi.mocked(runAgent).mock.calls[0][0] as unknown as Record<
       string,
       unknown
     >;
