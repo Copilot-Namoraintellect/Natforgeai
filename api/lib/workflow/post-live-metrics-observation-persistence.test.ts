@@ -126,10 +126,18 @@ function createFakeDb() {
           return builder;
         },
         orderBy(col: unknown) {
-          orderCol = columnName(col);
-          // drizzle's desc() wrapper is branded by its constructor name; the
-          // only ordered read here is `desc(analytics.date)`.
-          orderDesc = (col as object)?.constructor?.name === "_SD";
+          // drizzle's desc() is a plain SQL wrapper; the column and the
+          // " desc" keyword both ride inside queryChunks.
+          const chunks = ((col as { queryChunks?: unknown[] }).queryChunks ?? []);
+          orderCol = columnName(chunks.find((c) => (c as { name?: string })?.name));
+          const text = chunks
+            .map((c) =>
+              Array.isArray((c as { value?: unknown }).value)
+                ? ((c as { value: string[] }).value ?? []).join("")
+                : ""
+            )
+            .join("");
+          orderDesc = /\bdesc\b/i.test(text);
           return builder;
         },
         limit(n: number) {
