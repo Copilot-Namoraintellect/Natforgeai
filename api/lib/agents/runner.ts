@@ -5,6 +5,12 @@ import { getDb } from "../../queries/connection";
 import { agentRuns } from "@db/schema";
 import { eq } from "drizzle-orm";
 import { deductCredits, recordAiUsage, checkCredits, adminAdjustCredits } from "../billing/credit-engine";
+import {
+  releaseWalletCredits,
+  reserveWalletCredits,
+  settleWalletCredits,
+} from "../billing/credit-reservation-engine";
+import { CreditReservationError } from "../billing/credit-reservation";
 import { getEstimatedAgentCost, calculateTokenCost } from "../billing/cost-tracker";
 import { enforceCostControl } from "../billing/cost-control";
 import { TRPCError } from "@trpc/server";
@@ -59,6 +65,19 @@ export interface AgentRunResult<TOutput> {
   estimatedCostUsdMicro?: number;
 }
 
+/**
+ * Deterministic settle/release keys for the governed reservation authority
+ * (WBS-R3.1 / GAP18). Pure functions of the caller-stable billing identity,
+ * so a retried logical step reconciles the same reservation at most once.
+ */
+export function buildAgentRunBillingSettleKey(billingIdempotencyKey: string): string {
+  return `${billingIdempotencyKey}:settle`;
+}
+
+export function buildAgentRunBillingReleaseKey(billingIdempotencyKey: string): string {
+  return `${billingIdempotencyKey}:release`;
+}
+
 export async function runAgent<TOutput>({
   userId,
   campaignId,
@@ -77,6 +96,7 @@ export async function runAgent<TOutput>({
 
   // Pre-flight billing check with cost control enforcement
   let creditsDeducted = 0;
+  let reservationId: string | null = null;
   if (!shouldSkipBilling) {
     const estimatedCost = getEstimatedAgentCost(agentType);
 
@@ -89,22 +109,50 @@ export async function runAgent<TOutput>({
       });
     }
 
-    const preCheck = await checkCredits(userId, estimatedCost);
-    if (!preCheck.hasCredits) {
-      throw new TRPCError({
-        code: "PAYMENT_REQUIRED",
-        message: `Insufficient credits. You have ${preCheck.balance} credits. This operation requires ${estimatedCost} credits. Upgrade your plan or purchase more credits.`,
+    if (billingIdempotencyKey) {
+      // Governed hold for the caller-stable forward billing identity
+      // (WBS-R3.1 / GAP18): reserve -> settle on chargeable completion or
+      // release on the existing refund classes. Replaces the legacy up-front
+      // keyed deduction on this path only; settlement still deducts through
+      // the accepted deductCredits ledger inside settleWalletCredits.
+      try {
+        const { reservation } = await reserveWalletCredits({
+          userId,
+          campaignId: campaignId ?? null,
+          reservationReference: billingIdempotencyKey,
+          externalIdempotencyKey: billingIdempotencyKey,
+          amount: estimatedCost,
+          reason: `${agentType} agent execution`,
+          agentType,
+          asOf: new Date().toISOString(),
+        });
+        reservationId = reservation.reservationId;
+      } catch (error) {
+        if (error instanceof CreditReservationError) {
+          throw new TRPCError({
+            code: "PAYMENT_REQUIRED",
+            message: error.message,
+          });
+        }
+        throw error;
+      }
+    } else {
+      const preCheck = await checkCredits(userId, estimatedCost);
+      if (!preCheck.hasCredits) {
+        throw new TRPCError({
+          code: "PAYMENT_REQUIRED",
+          message: `Insufficient credits. You have ${preCheck.balance} credits. This operation requires ${estimatedCost} credits. Upgrade your plan or purchase more credits.`,
+        });
+      }
+      await deductCredits({
+        userId,
+        amount: estimatedCost,
+        type: "agent_deduction",
+        description: `${agentType} agent execution`,
+        metadata: { agentType, campaignId, estimatedCost },
       });
+      creditsDeducted = estimatedCost;
     }
-    await deductCredits({
-      userId,
-      amount: estimatedCost,
-      type: "agent_deduction",
-      description: `${agentType} agent execution`,
-      metadata: { agentType, campaignId, estimatedCost },
-      ...(billingIdempotencyKey ? { idempotencyKey: billingIdempotencyKey } : {}),
-    });
-    creditsDeducted = estimatedCost;
   }
 
   // Create agent run record
@@ -149,6 +197,19 @@ export async function runAgent<TOutput>({
 
     // Record AI usage
     if (!shouldSkipBilling) {
+      if (reservationId && billingIdempotencyKey) {
+        // Chargeable completion: settle the governed hold. The deduction is
+        // idempotent under the deterministic settle key; a failure here is
+        // propagated (fail closed) — the hold stays reserved and is
+        // reconciled by an idempotent retry of the same billing identity.
+        const { reservation } = await settleWalletCredits({
+          reservationId,
+          settleKey: buildAgentRunBillingSettleKey(billingIdempotencyKey),
+          description: `${agentType} agent execution`,
+          asOf: new Date().toISOString(),
+        });
+        creditsDeducted = reservation.settledAmount ?? creditsDeducted;
+      }
       await recordAiUsage({
         userId,
         campaignId,
@@ -202,7 +263,39 @@ export async function runAgent<TOutput>({
 
     const isQuotaError = isInsufficientQuotaError(error);
 
-    if ((isSchemaError || isProviderError) && creditsDeducted > 0 && !shouldSkipBilling) {
+    if (billingIdempotencyKey && reservationId) {
+      // Governed reconciliation (WBS-R3.1 / GAP18): mirror the legacy refund
+      // classes exactly — provider/schema failures release the hold (no
+      // charge); any other failure settles (charge retained, as the legacy
+      // path retained the up-front deduction). Best-effort + logged, matching
+      // the existing refund convention; the original error always propagates.
+      try {
+        if (isSchemaError || isProviderError) {
+          await releaseWalletCredits({
+            reservationId,
+            releaseKey: buildAgentRunBillingReleaseKey(billingIdempotencyKey),
+            reason: isQuotaError
+              ? "provider_quota_error"
+              : isProviderError
+                ? "provider_error"
+                : "schema_error",
+            asOf: new Date().toISOString(),
+          });
+        } else {
+          await settleWalletCredits({
+            reservationId,
+            settleKey: buildAgentRunBillingSettleKey(billingIdempotencyKey),
+            description: `${agentType} agent execution`,
+            asOf: new Date().toISOString(),
+          });
+        }
+      } catch (billingErr: any) {
+        console.error(
+          `[AgentRunner] Reservation reconciliation failed for user ${userId}:`,
+          billingErr?.message
+        );
+      }
+    } else if ((isSchemaError || isProviderError) && creditsDeducted > 0 && !shouldSkipBilling) {
       // Refund credits for internal failures
       try {
         await adminAdjustCredits({

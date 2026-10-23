@@ -12,6 +12,48 @@ vi.mock("../billing/credit-engine", () => ({
   adminAdjustCredits: vi.fn(),
 }));
 
+// WBS-R3.1 / GAP18: the keyed forward path is now realised by the governed
+// reservation authority instead of a direct keyed deduction.
+vi.mock("../billing/credit-reservation-engine", () => ({
+  reserveWalletCredits: vi.fn(async (input: any) => ({
+    reservation: {
+      reservationId: `res:${input.externalIdempotencyKey}`,
+      idempotencyKey: input.externalIdempotencyKey,
+      state: "reserved",
+      amount: input.amount,
+      settledAmount: null,
+      releasedAmount: null,
+      attribution: { userId: input.userId, campaignId: input.campaignId ?? null },
+      reason: input.reason,
+      createdAt: null,
+      settledAt: null,
+      releasedAt: null,
+    },
+    duplicateClassification: "none",
+    walletBalance: 100,
+    reservedAmount: input.amount,
+    availableBalance: 93,
+  })),
+  settleWalletCredits: vi.fn(async () => ({
+    reservation: {
+      reservationId: "res:x",
+      idempotencyKey: "x",
+      state: "settled",
+      amount: 7,
+      settledAmount: 7,
+      releasedAmount: null,
+      attribution: { userId: 10, campaignId: 1 },
+      reason: "audience agent execution",
+      createdAt: null,
+      settledAt: null,
+      releasedAt: null,
+    },
+    duplicateClassification: "none",
+    newBalance: 93,
+  })),
+  releaseWalletCredits: vi.fn(),
+}));
+
 vi.mock("../billing/cost-control", () => ({
   enforceCostControl: vi.fn(async () => ({ allowed: true })),
 }));
@@ -28,6 +70,11 @@ vi.mock("../../queries/connection", () => ({
 import { generateObject } from "ai";
 import { getDb } from "../../queries/connection";
 import { deductCredits } from "../billing/credit-engine";
+import {
+  releaseWalletCredits,
+  reserveWalletCredits,
+  settleWalletCredits,
+} from "../billing/credit-reservation-engine";
 import { runAgent } from "./runner";
 
 function createMockDb() {
@@ -45,7 +92,7 @@ function createMockDb() {
 
 const schema = z.object({ text: z.string() });
 
-describe("runAgent caller-stable billing identity (WBS-R1.3)", () => {
+describe("runAgent caller-stable billing identity (WBS-R1.3 via WBS-R3.1 reservation authority)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getDb).mockReturnValue(createMockDb() as any);
@@ -55,7 +102,7 @@ describe("runAgent caller-stable billing identity (WBS-R1.3)", () => {
     } as any);
   });
 
-  it("records the deduction under the caller-provided idempotency key", async () => {
+  it("anchors the charge to the caller-provided identity through reserve -> settle", async () => {
     await runAgent({
       userId: 10,
       campaignId: 1,
@@ -66,14 +113,26 @@ describe("runAgent caller-stable billing identity (WBS-R1.3)", () => {
       billingIdempotencyKey: "agent-audience-abc123",
     });
 
-    expect(deductCredits).toHaveBeenCalledWith(
+    expect(reserveWalletCredits).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 10,
+        campaignId: 1,
         amount: 7,
-        type: "agent_deduction",
-        idempotencyKey: "agent-audience-abc123",
+        reservationReference: "agent-audience-abc123",
+        externalIdempotencyKey: "agent-audience-abc123",
+        agentType: "audience",
       })
     );
+    expect(settleWalletCredits).toHaveBeenCalledTimes(1);
+    expect(settleWalletCredits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reservationId: "res:agent-audience-abc123",
+        settleKey: "agent-audience-abc123:settle",
+      })
+    );
+    // The legacy up-front deduction is fully replaced on the keyed path.
+    expect(deductCredits).not.toHaveBeenCalled();
+    expect(releaseWalletCredits).not.toHaveBeenCalled();
   });
 
   it("preserves the legacy unkeyed deduction when no identity is provided", async () => {
@@ -89,9 +148,11 @@ describe("runAgent caller-stable billing identity (WBS-R1.3)", () => {
     expect(deductCredits).toHaveBeenCalledTimes(1);
     const call = vi.mocked(deductCredits).mock.calls[0][0] as Record<string, unknown>;
     expect("idempotencyKey" in call).toBe(false);
+    expect(reserveWalletCredits).not.toHaveBeenCalled();
+    expect(settleWalletCredits).not.toHaveBeenCalled();
   });
 
-  it("never deducts under a key when billing is skipped", async () => {
+  it("never reserves or deducts under a key when billing is skipped", async () => {
     await runAgent({
       userId: 10,
       campaignId: 1,
@@ -103,5 +164,7 @@ describe("runAgent caller-stable billing identity (WBS-R1.3)", () => {
     });
 
     expect(deductCredits).not.toHaveBeenCalled();
+    expect(reserveWalletCredits).not.toHaveBeenCalled();
+    expect(settleWalletCredits).not.toHaveBeenCalled();
   });
 });
