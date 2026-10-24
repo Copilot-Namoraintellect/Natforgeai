@@ -55,6 +55,23 @@ export interface R5ListeningEvidence {
   bindings: R5ListeningBindingEvidence[];
 }
 
+/**
+ * Platform-wide listening rollup for the R5-F readiness surface (F3).
+ * Narrower than `R5ListeningEvidence`: counts only, no per-binding detail,
+ * no payload content. The information_schema guard runs once; each present
+ * table contributes a single bounded aggregate query.
+ */
+export interface R5ListeningRollup {
+  available: boolean;
+  reason?: string;
+  /** Bindings currently ingesting without an open failure. */
+  active: number;
+  /** Bindings currently blocked. */
+  blocked: number;
+  /** Signals observed across all bindings in the trailing 24h window. */
+  signalsLast24h: number;
+}
+
 const LISTENING_TABLE = "social_listening_states";
 const SIGNALS_TABLE = "social_signals";
 const SIGNAL_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -176,4 +193,59 @@ export async function readR5ListeningEvidence(
   });
 
   return { available: true, bindings };
+}
+
+/**
+ * Roll listening evidence up to platform-level counts for the readiness
+ * surface. Read-only; counts only; safe to call when A's migration has not
+ * run (returns `available: false`, never throws for absent tables). Raw
+ * store errors propagate so callers can map them honestly.
+ */
+export async function readR5ListeningRollup(
+  db: Db,
+  now: Date
+): Promise<R5ListeningRollup> {
+  const listeningExists = await tableExists(db, LISTENING_TABLE);
+  if (!listeningExists) {
+    return {
+      available: false,
+      reason: "stream_tables_absent",
+      active: 0,
+      blocked: 0,
+      signalsLast24h: 0,
+    };
+  }
+  const signalsExists = await tableExists(db, SIGNALS_TABLE);
+
+  const statesResult = await db.execute(sql`
+    SELECT status, COUNT(*) AS c
+    FROM ${sql.raw(LISTENING_TABLE)}
+    GROUP BY status
+  `);
+  const stateRows =
+    (statesResult[0] as unknown as
+      | { status?: string | null; c?: number | string | bigint }[]
+      | undefined) ?? [];
+  let active = 0;
+  let blocked = 0;
+  for (const row of stateRows) {
+    const c = Number(row.c ?? 0);
+    if (row.status === "active") active += c;
+    else if (row.status === "blocked") blocked += c;
+  }
+
+  let signalsLast24h = 0;
+  if (signalsExists) {
+    const signalResult = await db.execute(sql`
+      SELECT COUNT(*) AS c
+      FROM ${sql.raw(SIGNALS_TABLE)}
+      WHERE observedAt >= ${new Date(now.getTime() - SIGNAL_WINDOW_MS)}
+    `);
+    const signalRows = signalResult[0] as unknown as
+      | { c?: number | string | bigint }[]
+      | undefined;
+    signalsLast24h = Number(signalRows?.[0]?.c ?? 0);
+  }
+
+  return { available: true, active, blocked, signalsLast24h };
 }
