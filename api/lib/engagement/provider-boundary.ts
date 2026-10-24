@@ -341,7 +341,7 @@ const META_GRAPH_API_BASE = "https://graph.facebook.com/v18.0";
  */
 export function createMetaTransport(fetchImpl: typeof fetch = fetch): MetaTransport {
   return {
-    async postComment({ pageId, accessToken, commentObjectId, message }) {
+    async postComment({ accessToken, commentObjectId, message }) {
       const response = await fetchImpl(
         `${META_GRAPH_API_BASE}/${encodeURIComponent(commentObjectId)}/comments`,
         {
@@ -367,7 +367,7 @@ export function createMetaTransport(fetchImpl: typeof fetch = fetch): MetaTransp
       }
       throw new ProviderPermanentError(`Meta reply rejected (HTTP ${status}): ${text}`);
     },
-    async probeComment({ pageId, accessToken, commentObjectId }) {
+    async probeComment({ accessToken, commentObjectId }) {
       const response = await fetchImpl(
         `${META_GRAPH_API_BASE}/${encodeURIComponent(commentObjectId)}?fields=id&access_token=${encodeURIComponent(accessToken)}`,
         { method: "GET" }

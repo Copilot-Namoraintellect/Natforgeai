@@ -91,10 +91,7 @@ const CONFIDENCE_VALUE: Readonly<Record<InterpretationConfidence, number>> = {
   unknown: 0.2,
 };
 
-const PERSONAL_DATA_FLAGS = new Set([
-  "privacy_sensitive",
-  "legal_compliance_sensitive",
-]);
+const PERSONAL_DATA_FLAGS = new Set(["privacy_sensitive", "legal_compliance_sensitive"]);
 
 /**
  * Closed injection-marker list applied to interpretation evidence/explanation
@@ -142,9 +139,9 @@ export function deriveAuthoritativeIntelligence(
       ? interpretation.sentiment
       : "neutral";
 
-  const riskFlagNames = new Set(interpretation.riskFlags.map((entry) => entry.flag));
-  const containsPersonalData =
-    riskFlagNames.has("privacy_sensitive") || riskFlagNames.has("legal_compliance_sensitive");
+  const containsPersonalData = interpretation.riskFlags.some((entry) =>
+    PERSONAL_DATA_FLAGS.has(entry.flag)
+  );
 
   const flagEvidenceText = interpretation.riskFlags
     .map((entry) => entry.evidence ?? "")

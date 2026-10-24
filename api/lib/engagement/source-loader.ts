@@ -106,6 +106,7 @@ export function createDrizzleSourceAuthority(db?: DbLike): EngagementSourceAutho
         provider: row.provider,
         platform: row.platform,
         providerEvidenceHash: row.providerEvidenceHash,
+        contentText: row.contentText,
       };
     },
 

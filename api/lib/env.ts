@@ -125,6 +125,13 @@ export const env = {
     300_000
   ),
 
+  // R5-C autonomous engagement provider transport. Deliberately default-OFF:
+  // no live provider call can occur until an operator explicitly enables it.
+  // With the transport disabled, provider-capable engagement executions fail
+  // closed (blocked configuration) instead of touching a provider.
+  engagementProviderTransportEnabled:
+    process.env.ENGAGEMENT_PROVIDER_TRANSPORT_ENABLED === "true",
+
   bannerbearApiKey: process.env.BANNERBEAR_API_KEY ?? "",
   bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
   bannerbearTemplateServiceBusinessPromo: process.env.BANNERBEAR_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",

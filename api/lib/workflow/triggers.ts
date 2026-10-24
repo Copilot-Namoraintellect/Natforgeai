@@ -43,6 +43,8 @@ import {
 import { getLaunchApprovalStatus, buildLaunchApprovalLineage } from "./launch-approval";
 import { InMemoryWorkflowOperationRegistry } from "./workflow-operation";
 import { resolveCreativeEntryStrategyAuthority } from "../creative/creative-entry-authority";
+import { MARKETING_ACTION_APPROVAL_TYPE } from "../policy/marketing-action-approval";
+import { resumeEngagementContinuationForApproval } from "../engagement/continuation";
 import type { CreativeStrategySnapshotInput } from "../creative/strategy-snapshot-input";
 import { getStrategySnapshotByStrategyRunId } from "../strategy/strategy-snapshot-db-store";
 import {
@@ -517,6 +519,28 @@ export async function onApprovalResolved(approvalId: number, decision: "approved
 
   if (!request) {
     throw new Error("Approval request not found");
+  }
+
+  // WBS-R5-C: a resolved marketing_action approval resumes (approved) or
+  // permanently blocks (rejected) the bound engagement action through the
+  // full gated execution path — the R5-E gate re-validates the exact binding
+  // at execution time. Engagement approvals carry no campaignId, so this
+  // branch runs before the campaign-scoped continuations below. Failures are
+  // logged loud and never break the approval decision flow.
+  if (request.approvalType === MARKETING_ACTION_APPROVAL_TYPE) {
+    try {
+      await resumeEngagementContinuationForApproval({
+        approvalRequestId: approvalId,
+        userId,
+        decision,
+      });
+    } catch (err) {
+      console.error(
+        `[Engagement] Approval continuation failed for approval ${approvalId}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+    return;
   }
 
   const campaignId = request.campaignId;

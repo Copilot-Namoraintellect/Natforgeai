@@ -23,6 +23,7 @@ import { videoRouter } from "./video-router";
 import { learningRouter } from "./learning-router";
 import { learningPromotionRouter } from "./learning-promotion-router";
 import { policyRouter } from "./policy-router";
+import { engagementRouter } from "./engagement-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -71,6 +72,7 @@ export const appRouter = createRouter({
   learning: learningRouter,
   learningPromotion: learningPromotionRouter,
   policy: policyRouter,
+  engagement: engagementRouter,
 });
 
 export type AppRouter = typeof appRouter;

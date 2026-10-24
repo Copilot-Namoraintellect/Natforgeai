@@ -74,6 +74,8 @@ export interface EngagementSourceSignal {
   platform: string;
   /** sha256 of the sanitized aligned signal (R5-B signalContentHash input). */
   providerEvidenceHash: string;
+  /** Bounded original social text — untrusted evidence for generation. */
+  contentText?: string | null;
 }
 
 /** Read-only view of the R5-B interpretation fields C binds to. */
