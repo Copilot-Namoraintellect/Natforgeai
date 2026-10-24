@@ -21,82 +21,9 @@ vi.mock("./lib/logger", () => ({
 import { getDb } from "./queries/connection";
 import { operationsRouter } from "./operations-router";
 import { readR5ListeningEvidence } from "./lib/governance/r5-stream-evidence";
+import { buildCtx, createFakeDb } from "./r5-test-support";
 
 const mockedListening = vi.mocked(readR5ListeningEvidence);
-
-function tableName(table: unknown): string {
-  return (table as Record<symbol, string>)[Symbol.for("drizzle:Name")] ?? "unknown";
-}
-
-function unwrapParam(value: any): any {
-  if (value && typeof value === "object" && !Array.isArray(value) && "value" in value) {
-    return value.value;
-  }
-  return value;
-}
-
-function evalCond(cond: any, row: any): boolean {
-  const chunks: any[] = cond?.queryChunks ?? [];
-  if (chunks.length === 0) return true;
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    if (chunk && Array.isArray(chunk.queryChunks)) {
-      if (!evalCond(chunk, row)) return false;
-      continue;
-    }
-    if (chunk && typeof chunk === "object" && typeof chunk.name === "string" && chunk.table) {
-      const value = unwrapParam(chunks[i + 2]);
-      if (Array.isArray(value)) {
-        const values = value.map(unwrapParam);
-        if (!values.includes(row[chunk.name])) return false;
-      } else if (row[chunk.name] !== value) {
-        return false;
-      }
-      i += 2;
-      continue;
-    }
-  }
-  return true;
-}
-
-/**
- * In-memory drizzle-SQL evaluator over table-name-keyed seed rows. Supports
- * select().from().where(eq/and/inArray).orderBy(desc id).limit().offset();
- * every chain stage is awaitable. `execute` is a vi.fn for raw-SQL control.
- */
-function createFakeDb(seed: Record<string, Record<string, unknown>[]>) {
-  const exec = (rows: any[], state: { cond?: any; orderDesc?: boolean; limit?: number; offset?: number }) => {
-    let out = rows;
-    if (state.cond) out = out.filter((r) => evalCond(state.cond, r));
-    if (state.orderDesc) out = [...out].sort((a, b) => Number(b.id) - Number(a.id));
-    if (state.offset) out = out.slice(state.offset);
-    if (state.limit != null) out = out.slice(0, state.limit);
-    return Promise.resolve(out);
-  };
-  const chain = (rows: any[], state: any): any => ({
-    where: (cond: any) => chain(rows, { ...state, cond }),
-    orderBy: (_order: any) => chain(rows, { ...state, orderDesc: true }),
-    limit: (n: number) => chain(rows, { ...state, limit: n }),
-    offset: (n: number) => chain(rows, { ...state, offset: n }),
-    then: (onF: any, onR: any) => exec(rows, state).then(onF, onR),
-  });
-  const db = {
-    select: (_fields?: unknown) => ({
-      from: (table: unknown) => chain(seed[tableName(table)] ?? [], {}),
-    }),
-    execute: vi.fn(),
-  };
-  return { db, seed };
-}
-
-function buildCtx(user: Record<string, unknown> | null) {
-  return {
-    req: new Request("http://localhost/api/trpc"),
-    resHeaders: new Headers(),
-    user,
-    session: user ? { userId: user.id, type: "local", verified: true } : undefined,
-  } as never;
-}
 
 const ADMIN = { id: 7, role: "admin" };
 const NOW = new Date("2026-10-24T12:00:00.000Z");

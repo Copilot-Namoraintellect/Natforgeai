@@ -19,173 +19,19 @@ import {
   operationsRouter,
 } from "./operations-router";
 import type { StrategyApprovalLineage } from "./lib/workflow/strategy-approval";
+import {
+  buildCtx,
+  createFakeDb,
+  type FakeDbOptions,
+} from "./r5-test-support";
 
-/* ── In-memory drizzle evaluator (table-name-keyed), extended with
-     update().set().where() and insert().values() so the REAL delegated
-     authorities (terminal replay D1, next-cycle persistence/dispatcher) run
-     against it. No authority module is mocked. ── */
-
-function tableName(table: unknown): string {
-  return (table as Record<symbol, string>)[Symbol.for("drizzle:Name")] ?? "unknown";
-}
-
-/** Extract the first column ref and `$.json.path` inside a sql`` fragment. */
-function extractRef(sql: any): { col: string | null; path: string | null } {
-  let col: string | null = null;
-  let path: string | null = null;
-  for (const chunk of sql?.queryChunks ?? []) {
-    if (chunk && typeof chunk === "object") {
-      if (typeof chunk.name === "string" && chunk.table) {
-        col = chunk.name;
-      } else if (Array.isArray(chunk.value)) {
-        const m = chunk.value.join("").match(/\$\.([A-Za-z0-9_.]+)/);
-        if (m) path = m[1];
-      }
-    }
-  }
-  return { col, path };
-}
-
-function getPathValue(value: unknown, path: string | null): unknown {
-  if (!path) return value;
-  let current: unknown = value;
-  for (const key of path.split(".")) {
-    if (current === null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
-}
-
-/**
- * Evaluates eq()/and()/isNull() where-clauses. Nested sql fragments (the
- * workflowContext JSON_EXTRACT CAS guards) are recursed into and their
- * column/path ref retained for a following param comparison. Everything is
- * ANDed (the governed authorities only use and()).
- */
-function evalCond(cond: any, row: any): boolean {
-  const chunks: any[] = cond?.queryChunks ?? [];
-  let ok = true;
-  let col: string | null = null;
-  let path: string | null = null;
-  for (const chunk of chunks) {
-    if (chunk == null) continue;
-    if (Array.isArray(chunk.queryChunks)) {
-      if (!evalCond(chunk, row)) ok = false;
-      const ref = extractRef(chunk);
-      if (ref.col) col = ref.col;
-      if (ref.path) path = ref.path;
-      continue;
-    }
-    if (typeof chunk !== "object") continue;
-    if (typeof chunk.name === "string" && chunk.table) {
-      col = chunk.name;
-      continue;
-    }
-    if (Array.isArray(chunk.value)) {
-      const text = chunk.value.join("");
-      if (/is\s+null/i.test(text)) {
-        if (getPathValue(row[col ?? ""], path) != null) ok = false;
-        col = null;
-        path = null;
-      }
-      continue;
-    }
-    if ("value" in chunk) {
-      if (getPathValue(row[col ?? ""], path) !== chunk.value) ok = false;
-      col = null;
-      path = null;
-      continue;
-    }
-  }
-  return ok;
-}
-
-interface FakeDbOptions {
-  /** When set, the next audit_events insert fails with this error (fail-closed audit test). */
-  failAuditInsert?: Error | null;
-}
-
-function createFakeDb(
-  seed: Record<string, Record<string, unknown>[]>,
-  options: FakeDbOptions = {}
-) {
-  const exec = (
-    rows: any[],
-    state: { cond?: any; orderDesc?: boolean; limit?: number; offset?: number }
-  ) => {
-    let out = rows;
-    if (state.cond) out = out.filter((r) => evalCond(state.cond, r));
-    if (state.orderDesc) out = [...out].sort((a, b) => Number(b.id) - Number(a.id));
-    if (state.offset) out = out.slice(state.offset);
-    if (state.limit != null) out = out.slice(0, state.limit);
-    return Promise.resolve(out);
-  };
-  const chain = (rows: any[], state: any): any => ({
-    where: (cond: any) => chain(rows, { ...state, cond }),
-    orderBy: (_order: any) => chain(rows, { ...state, orderDesc: true }),
-    limit: (n: number) => chain(rows, { ...state, limit: n }),
-    offset: (n: number) => chain(rows, { ...state, offset: n }),
-    then: (onF: any, onR: any) => exec(rows, state).then(onF, onR),
-  });
-  const duplicateKeyError = (message: string) => {
-    const err = new Error(message) as Error & { code: string };
-    err.code = "ER_DUP_ENTRY";
-    return err;
-  };
-  const db = {
-    select: (_fields?: unknown) => ({
-      from: (table: unknown) => chain(seed[tableName(table)] ?? [], {}),
-    }),
-    update: (table: unknown) => ({
-      set: (values: Record<string, unknown>) => ({
-        where: async (cond: any) => {
-          const rows = seed[tableName(table)] ?? [];
-          let affected = 0;
-          for (const row of rows) {
-            if (evalCond(cond, row)) {
-              Object.assign(row, values);
-              affected += 1;
-            }
-          }
-          return [{ affectedRows: affected }];
-        },
-      }),
-    }),
-    insert: (table: unknown) => ({
-      values: async (row: Record<string, unknown>) => {
-        const name = tableName(table);
-        const rows = seed[name] ?? (seed[name] = []);
-        if (name === "queue_replay_requests") {
-          if (rows.some((r) => r.replayKey === row.replayKey)) {
-            throw duplicateKeyError("Duplicate entry 'replayKey'");
-          }
-        }
-        if (name === "audit_events") {
-          if (options.failAuditInsert) throw options.failAuditInsert;
-          if (rows.some((r) => r.eventFingerprint === row.eventFingerprint)) {
-            throw duplicateKeyError("Duplicate entry 'eventFingerprint'");
-          }
-        }
-        const id = rows.reduce((max, r) => Math.max(max, Number(r.id) || 0), 0) + 1;
-        rows.push({ ...row, id });
-        return [{ insertId: id, affectedRows: 1 }];
-      },
-    }),
-    execute: vi.fn(),
-  };
-  return { db, seed };
-}
+/* The in-memory drizzle evaluator lives in ./r5-test-support (shared with
+   the F4 and F8 suites); it supports update()/insert() with ER_DUP_ENTRY
+   simulation so the REAL delegated authorities (terminal replay D1,
+   next-cycle persistence/dispatcher, audit store) run against it. No
+   authority module is mocked. */
 
 /* ── Fixtures ─────────────────────────────────────────────────────────── */
-
-function buildCtx(user: Record<string, unknown> | null) {
-  return {
-    req: new Request("http://localhost/api/trpc"),
-    resHeaders: new Headers(),
-    user,
-    session: user ? { userId: user.id, type: "local", verified: true } : undefined,
-  } as never;
-}
 
 const ADMIN = { id: 7, role: "admin" };
 const OWNER_USER_ID = 18;
