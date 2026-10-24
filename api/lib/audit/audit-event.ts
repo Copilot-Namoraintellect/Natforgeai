@@ -47,6 +47,10 @@ export const AUDIT_EVENT_TYPES = [
   // R4-F: privileged/admin mutations recorded by the operator control plane.
   // One material type; the specific action lives in sanitized metadata.
   "admin_mutation",
+  // R5-E: a governed marketing-action policy decision was durably recorded.
+  // The decision, policy version, reason codes and gate outcomes live in
+  // sanitized metadata — never raw social content.
+  "policy_decision",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

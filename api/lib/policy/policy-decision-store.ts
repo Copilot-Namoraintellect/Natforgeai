@@ -57,9 +57,8 @@ function isDuplicateKeyError(err: unknown): boolean {
   return code === "ER_DUP_ENTRY" || /Duplicate entry/i.test(message);
 }
 
-function rowToDecision(row: PolicyDecisionRow): PolicyDecision {
-  // The durable row is the authority for reads; reconstruct the frozen
-  // decision shape consumers expect (identity + explainability fields).
+/** Reconstruct the frozen decision shape from a durable row (read path). */
+export function policyDecisionRowToDecision(row: PolicyDecisionRow): PolicyDecision {
   return Object.freeze({
     policyDecisionId: row.policyDecisionId,
     policyId: row.policyId,
@@ -167,7 +166,7 @@ export async function getDecisionById(
     .from(policyDecisions)
     .where(eq(policyDecisions.policyDecisionId, policyDecisionId))
     .limit(1);
-  return rows[0] ? rowToDecision(rows[0]) : null;
+  return rows[0] ? policyDecisionRowToDecision(rows[0]) : null;
 }
 
 export async function getDecisionByScope(
@@ -180,7 +179,7 @@ export async function getDecisionByScope(
     .from(policyDecisions)
     .where(eq(policyDecisions.decisionScopeKey, buildScopeKey(actionRequestId, policyVersion)))
     .limit(1);
-  return rows[0] ? rowToDecision(rows[0]) : null;
+  return rows[0] ? policyDecisionRowToDecision(rows[0]) : null;
 }
 
 export interface ListDecisionsFilter {
@@ -203,7 +202,7 @@ export async function listDecisions(
     .where(and(...conditions))
     .orderBy(desc(policyDecisions.evaluatedAt))
     .limit(Math.min(filter.limit ?? 100, 500));
-  return rows.map(rowToDecision);
+  return rows.map(policyDecisionRowToDecision);
 }
 
 /**

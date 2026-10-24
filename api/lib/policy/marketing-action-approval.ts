@@ -218,6 +218,11 @@ function parseBinding(context: unknown): MarketingActionApprovalBinding | null {
   return b as unknown as MarketingActionApprovalBinding;
 }
 
+/** Read the durable binding from an approval row context (null when absent). */
+export function readMarketingActionApprovalBinding(context: unknown): MarketingActionApprovalBinding | null {
+  return parseBinding(context);
+}
+
 export type MarketingActionExecutionVerdict =
   | {
       executable: true;
