@@ -81,11 +81,11 @@ export function classifyListeningFailure(err: unknown): ListeningFailure {
     };
   }
 
-  // Missing/revoked permission scopes need an operator to re-authorize.
-  if (/permission|scope/i.test(message)) {
+  // Missing/revoked/expired authorization needs an operator to re-authorize.
+  if (/permission|scope|token|credential|session|authoriz|unauthor/i.test(message)) {
     return {
       class: "OPERATOR_ACTION",
-      code: "provider_scope_missing",
+      code: /expired|revok|invalid/i.test(message) ? "provider_auth" : "provider_scope_missing",
       reason: message,
     };
   }
