@@ -1,5 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { runInterpretation, type InterpretationDeps } from "./interpreter";
+import {
+  InMemoryInterpretationRegistry,
+  runInterpretation,
+  type InterpretationDeps,
+} from "./interpreter";
 import {
   InterpretationTamperError,
   type ModelInterpretation,
@@ -423,3 +427,81 @@ describe("runInterpretation — audit event shape", () => {
 function resultId(h: Harness): string | undefined {
   return (h.state.rows[0]?.record as SocialInterpretation | undefined)?.interpretationId;
 }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("in-flight registry — concurrent duplicate collapse", () => {
+  it("two concurrent calls share one evaluation: same record, one model call; post-completion call replays", async () => {
+    const h = createHarness();
+    const gate = deferred<ModelInterpretation>();
+    h.runModel.mockImplementation(() => gate.promise);
+    const registry = new InMemoryInterpretationRegistry();
+
+    const args = { userId: 7, businessId: 7, signal: AMBIGUOUS_SIGNAL };
+    const first = runInterpretation(args, { ...h.deps, registry });
+    const second = runInterpretation(args, { ...h.deps, registry });
+
+    gate.resolve(MODEL_FIXTURE);
+    const [r1, r2] = await Promise.all([first, second]);
+
+    expect(h.runModel).toHaveBeenCalledTimes(1);
+    expect(r1.replayed).toBe(false);
+    expect(r2.record.interpretationId).toBe(r1.record.interpretationId);
+    expect(r2.record).toEqual(r1.record);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.audits).toHaveLength(1);
+
+    // After completion the registry slot is cleared and the store is the
+    // replay authority: a third call replays without a second model call.
+    h.runModel.mockImplementation(async () => MODEL_FIXTURE);
+    const third = await runInterpretation(args, { ...h.deps, registry });
+    expect(third.replayed).toBe(true);
+    expect(third.record.interpretationId).toBe(r1.record.interpretationId);
+    expect(h.runModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("a rejected evaluation clears its slot: waiters see the failure, a later call retries", async () => {
+    const h = createHarness();
+    const boom = new Error("provider timeout");
+    h.runModel.mockRejectedValueOnce(boom);
+    const registry = new InMemoryInterpretationRegistry();
+
+    const args = { userId: 7, businessId: 7, signal: AMBIGUOUS_SIGNAL };
+    const first = runInterpretation(args, { ...h.deps, registry });
+    const second = runInterpretation(args, { ...h.deps, registry });
+    await expect(first).rejects.toBe(boom);
+    await expect(second).rejects.toBe(boom);
+    expect(h.runModel).toHaveBeenCalledTimes(1);
+    expect(h.state.rows).toHaveLength(0);
+    expect(h.state.audits).toHaveLength(0);
+
+    // Slot forgotten: retry evaluates again (the runner's reservation
+    // authority reconciles the retried billing identity to at most one charge).
+    h.runModel.mockResolvedValueOnce(MODEL_FIXTURE);
+    const retried = await runInterpretation(args, { ...h.deps, registry });
+    expect(retried.replayed).toBe(false);
+    expect(h.runModel).toHaveBeenCalledTimes(2);
+    expect(h.state.rows).toHaveLength(1);
+  });
+
+  it("registry FIFO-evicts at its cap", () => {
+    const registry = new InMemoryInterpretationRegistry(2);
+    const p1 = Promise.resolve({} as any);
+    const p2 = Promise.resolve({} as any);
+    const p3 = Promise.resolve({} as any);
+    registry.register("a", p1);
+    registry.register("b", p2);
+    registry.register("c", p3); // evicts "a"
+    expect(registry.lookup("a")).toBeUndefined();
+    expect(registry.lookup("b")).toBe(p2);
+    expect(registry.lookup("c")).toBe(p3);
+  });
+});

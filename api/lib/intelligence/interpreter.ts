@@ -57,6 +57,55 @@ import {
   type InterpretationDbExecutor,
 } from "./interpretation-store";
 
+/**
+ * In-flight evaluation registry: concurrent duplicates of the same
+ * interpretation identity in one process collapse onto ONE evaluation
+ * promise (the caller-stable billing identity means a second concurrent
+ * evaluation would double-bill). Sync Map get/set is atomic under the JS
+ * event loop: two concurrent callers cannot both win registration.
+ */
+export interface InFlightInterpretationRegistry {
+  lookup(id: string): Promise<RunInterpretationResult> | undefined;
+  register(id: string, p: Promise<RunInterpretationResult>): Promise<RunInterpretationResult>;
+  forget(id: string): void;
+}
+
+/**
+ * Process-local in-flight registry with FIFO eviction at a fixed cap. A
+ * registered entry is the single shared evaluation promise; forget() runs in
+ * a finally so a rejected evaluation still clears the slot and a later call
+ * can retry. Entries are transient coordination only — the durable authority
+ * for replay remains the store.
+ */
+export class InMemoryInterpretationRegistry implements InFlightInterpretationRegistry {
+  private readonly entries = new Map<string, Promise<RunInterpretationResult>>();
+  private readonly maxEntries: number;
+
+  constructor(maxEntries = 1000) {
+    this.maxEntries = maxEntries;
+  }
+
+  lookup(id: string): Promise<RunInterpretationResult> | undefined {
+    return this.entries.get(id);
+  }
+
+  register(id: string, p: Promise<RunInterpretationResult>): Promise<RunInterpretationResult> {
+    if (this.entries.size >= this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest !== undefined) this.entries.delete(oldest);
+    }
+    this.entries.set(id, p);
+    return p;
+  }
+
+  forget(id: string): void {
+    this.entries.delete(id);
+  }
+}
+
+/** Shared default registry; tests may inject their own (e.g. fresh instance). */
+const sharedInFlightRegistry = new InMemoryInterpretationRegistry();
+
 /** Injectable seams: defaults hit the real store/model; tests substitute fakes. */
 export interface InterpretationDeps {
   /** Owner-scoped Business DNA snapshot; null/absent = context-free (§9). */
@@ -74,6 +123,8 @@ export interface InterpretationDeps {
   readonly now?: () => Date;
   /** Store executor seam (fake in tests). */
   readonly executor?: InterpretationDbExecutor;
+  /** In-flight collapse seam; defaults to the module-level shared registry. */
+  readonly registry?: InFlightInterpretationRegistry;
 }
 
 export interface RunInterpretationArgs {
@@ -206,7 +257,9 @@ async function finalizeAndAccept(
 /**
  * Interpret one canonical social signal for one business. Replay-safe,
  * fail-closed, single-authority per evaluation (contract §12): exactly one
- * of the rules path or the model path writes the record.
+ * of the rules path or the model path writes the record. Concurrent
+ * duplicates collapse onto one in-flight evaluation; a failed evaluation
+ * rejects its waiters and clears the slot so a later call can retry.
  */
 export async function runInterpretation(
   args: RunInterpretationArgs,
@@ -224,6 +277,42 @@ export async function runInterpretation(
     signalContentHash,
     classifierVersion: CLASSIFIER_VERSION,
   });
+
+  // b. Replay short-circuit: existing row → no model call, no billing, no audit.
+  const existing = await getInterpretationById(interpretationId, deps.executor);
+  if (existing) {
+    return { record: assertValidInterpretationRecord(existing.record), replayed: true };
+  }
+
+  // In-flight collapse: lookup→register has no await between, so concurrent
+  // duplicates in this process share exactly one evaluation promise.
+  const registry = deps.registry ?? sharedInFlightRegistry;
+  const inflight = registry.lookup(interpretationId);
+  if (inflight) return inflight;
+
+  const evaluation = evaluateAndAccept(args, deps, {
+    signal,
+    signalContentHash,
+    interpretationId,
+  }).finally(() => registry.forget(interpretationId));
+  return registry.register(interpretationId, evaluation);
+}
+
+/**
+ * Single-evaluation body: rule-first routing, governed model path,
+ * normalization and durable acceptance. Never called concurrently for the
+ * same interpretationId within one process (registry).
+ */
+async function evaluateAndAccept(
+  args: RunInterpretationArgs,
+  deps: InterpretationDeps,
+  ctx: {
+    readonly signal: ReturnType<typeof sanitizeSignalText>;
+    readonly signalContentHash: string;
+    readonly interpretationId: string;
+  }
+): Promise<RunInterpretationResult> {
+  const { signal, signalContentHash, interpretationId } = ctx;
   const billingIdentity = buildInterpretationBillingIdentity({
     businessId: args.businessId,
     signalId: signal.signalId,
@@ -231,12 +320,6 @@ export async function runInterpretation(
     signalContentHash,
     classifierVersion: CLASSIFIER_VERSION,
   });
-
-  // b. Replay short-circuit: existing row → no model call, no billing, no audit.
-  const existing = await getInterpretationById(interpretationId, deps.executor);
-  if (existing) {
-    return { record: assertValidInterpretationRecord(existing.record), replayed: true };
-  }
 
   const identity = {
     userId: args.userId,
