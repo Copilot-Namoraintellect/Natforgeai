@@ -267,7 +267,7 @@ export function buildMarketingActionRequest(input: MarketingActionRequestInput):
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     fail("INVALID_ACTION_REQUEST", "Action request must be a structured object.");
   }
-  const raw = input as Record<string, unknown>;
+  const raw = input as unknown as Record<string, unknown>;
   assertNoClientAuthorityFields(raw);
 
   const actionType = assertMember<MarketingActionType>(raw.actionType, MARKETING_ACTION_TYPE_SET, "actionType");
