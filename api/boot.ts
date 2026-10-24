@@ -10,6 +10,8 @@ import { startCreditRenewalScheduler } from "./lib/jobs/credit-renewal";
 import { startPostLiveLifecycleScheduler } from "./lib/workflow/post-live-lifecycle-scheduler";
 import { startPostLiveMetricsObservationScheduler } from "./lib/workflow/post-live-metrics-observation-scheduler";
 import { runApprovalContinuationSweep } from "./lib/workflow/approval-continuation";
+import { runEngagementContinuationSweep } from "./lib/engagement/continuation";
+import { runEngagementReconciliationSweep } from "./lib/engagement/execution";
 import { connectRedis, isRedisConfigured } from "./lib/redis";
 import { startPublishingWorker } from "./lib/queue/publishing-worker";
 import { startContentGenerationWorker } from "./lib/queue/content-generation-worker";
@@ -87,6 +89,37 @@ void runApprovalContinuationSweep()
   .catch((err) => {
     console.error(
       "[ApprovalContinuation] Boot sweep failed:",
+      err instanceof Error ? err.message : err
+    );
+  });
+
+// WBS-R5-C: crash-recovery for governed engagement. The continuation sweep
+// re-drives approved marketing_action continuations and enforces rejected
+// blocks; the reconciliation sweep probes ambiguous/crashed executions by
+// provider operation identity. Both are fire-and-forget, durable-idempotent,
+// and never touch a provider unless the operator-enabled transport exists.
+void runEngagementContinuationSweep({ limit: 50 })
+  .then((summary) => {
+    console.log(
+      `[Engagement] Continuation sweep complete: ${summary.scanned} scanned, ${summary.resumed} resumed, ${summary.blocked} blocked, ${summary.failed} failed.`
+    );
+  })
+  .catch((err) => {
+    console.error(
+      "[Engagement] Continuation sweep failed:",
+      err instanceof Error ? err.message : err
+    );
+  });
+
+void runEngagementReconciliationSweep({ limit: 50 })
+  .then((summary) => {
+    console.log(
+      `[Engagement] Reconciliation sweep complete: ${summary.scanned} scanned, ${summary.reconciled} reconciled, ${summary.executed} executed, ${summary.failed} failed.`
+    );
+  })
+  .catch((err) => {
+    console.error(
+      "[Engagement] Reconciliation sweep failed:",
       err instanceof Error ? err.message : err
     );
   });

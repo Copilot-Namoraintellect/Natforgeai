@@ -25,6 +25,7 @@ import { learningPromotionRouter } from "./learning-promotion-router";
 import { listeningRouter } from "./lib/social-listening/listening-router";
 import { intelligenceRouter } from "./intelligence-router";
 import { policyRouter } from "./policy-router";
+import { engagementRouter } from "./engagement-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -75,6 +76,7 @@ export const appRouter = createRouter({
   listening: listeningRouter,
   intelligence: intelligenceRouter,
   policy: policyRouter,
+  engagement: engagementRouter,
 });
 
 export type AppRouter = typeof appRouter;

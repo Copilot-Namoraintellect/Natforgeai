@@ -54,6 +54,13 @@ export const AUDIT_EVENT_TYPES = [
   // The decision, policy version, reason codes and gate outcomes live in
   // sanitized metadata — never raw social content.
   "policy_decision",
+  // R5-C: a governed engagement action reached a terminal non-receipt state
+  // (blocked / never-executed / failed). Identity references + bounded reason
+  // only — never raw social content or reply text.
+  "engagement_execution",
+  // R5-C: an immutable engagement receipt was accepted. Carries opaque
+  // identity references (ids, hashes, bounded provider acknowledgement).
+  "engagement_receipt",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

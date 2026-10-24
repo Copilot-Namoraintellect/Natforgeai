@@ -225,6 +225,13 @@
       "when": 1792844231858,
       "tag": "0031_policy_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "5",
+      "when": 1792844585987,
+      "tag": "0032_engagement_execution_foundation",
+      "breakpoints": true
     }
   ]
 }
