@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-05-29  
+> **Last updated:** 2026-06-28 (added §17 Marketing Action Policy, WBS-R5-E)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -604,10 +604,51 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `banking` | `api/banking-router.ts` | Payment method CRUD |
 | `business` | `api/business-router.ts` | Business profile CRUD |
 | `learning` | `api/learning-router.ts` | Phase 1 Learning engine: governed, idempotent campaign-learning evaluation (`evaluate`, `records`, `record`) |
+| `policy` | `api/policy-router.ts` | WBS-R5-E governed policy layer: marketing-action evaluation, versioned business policies, durable auditable decisions (`evaluateActionRequest`, `getDecision`, `explainDecision`, `listDecisions`, `getPolicy`, `adoptDefaultPolicy`, `setPolicy`, `adminListDecisions`) |
 
 ### Context
 
 Every authenticated request has `ctx.user` attached (full `User` row from DB). The token is verified via `jose` library, then the user is looked up by `userId` from the token payload.
+
+---
+
+## 17. Marketing Action Policy (WBS-R5-E)
+
+The governed policy layer that decides what NatForgeAI may do autonomously in
+response to marketing/social intelligence. Owns decision policy only — not
+social ingestion (R5-A), interpretation (R5-B), engagement execution (R5-C),
+opportunity detection (R5-D) or publishing.
+
+**Required principle:** no autonomous marketing action may execute unless a
+server-side policy decision explicitly authorizes it.
+
+- Core modules: `api/lib/policy/` (`action-request`, `policy-model`,
+  `risk-classification`, `decision-engine`, `cost-governance`,
+  `marketing-action-approval`, `policy-store`, `policy-decision-store`,
+  `policy-authority-resolver`, `policy-audit`, `policy-types`).
+- Action types (closed): `observe_only`, `classify`, `reply_publicly`,
+  `reply_privately`, `react`, `escalate_to_human`,
+  `create_opportunity_candidate`, `schedule_follow_up`, `nurture_candidate`,
+  `suppress_action`.
+- Decisions (closed): `ALLOW_AUTONOMOUS`, `REQUIRE_APPROVAL`, `DENY`,
+  `ESCALATE`, `NO_ACTION`. Risk tiers `low < medium < high < critical` can
+  only reduce autonomy.
+- Fail closed on: missing policy, unknown action, ownership mismatch,
+  unverified provider binding/capability, budget/quota/rate limits, stale
+  policy version, expired bindings. Clients can never supply risk,
+  decision, approval or billing identity.
+- One action request + one policy version → one durable, immutable,
+  audited decision (`policy_decisions`); retries/concurrency converge.
+  Approvals bind the exact decision + policy version + context
+  (`approval_requests.approvalType = "marketing_action"`); human rejection
+  permanently blocks the action identity.
+- Denied/suppressed/escalated actions are non-billable; billable actions
+  carry one stable deterministic billing identity, settled later by the R4
+  billing authority (policy never charges).
+- Handoff contract: `docs/contracts/marketing-action-policy-contract.md`.
+  Schema: `business_policies` + `policy_decisions` tables (migration
+  `0029_sad_donald_blake.sql`, artefact only — see
+  `docs/recovery/r5-e-unexecuted-migrations.md`).
 
 ---
 
