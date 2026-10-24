@@ -99,6 +99,7 @@ export function getEstimatedAgentCost(agentType: string): number {
     engagement: 1, // ~$0.01
     sales: 1, // ~$0.01
     optimisation: 2, // ~$0.02
+    interpretation: 1, // ~$0.01
     safety_check: 1, // ~$0.01
     image_generation: 2, // ~$0.02
     video_generation: 10, // ~$0.10

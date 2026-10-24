@@ -157,13 +157,10 @@ export async function runAgent<TOutput>({
   }
 
   // Create agent run record
-  // R5-B: "interpretation" widens AgentType before the agent_runs.agentType
-  // mysqlEnum migration lands (store slice, contract §13); cast is removed
-  // with that migration.
   const [insertResult] = await db.insert(agentRuns).values({
     userId,
     campaignId: campaignId ?? null,
-    agentType: agentType as (typeof agentRuns.$inferInsert)["agentType"],
+    agentType,
     status: "running",
     input: { prompt, system },
     startedAt: new Date(),

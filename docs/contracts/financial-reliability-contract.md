@@ -51,6 +51,7 @@ Security invariants (normative):
 | Audience step | `agent-audience-${sha256("workflow/agent-billing@v1:audience:{campaignId}:{creativeRunId}")}` | upstream completed run id | agent-billing-identity |
 | Distribution step | `agent-distribution-${sha256("workflow/agent-billing@v1:distribution:{campaignId}:{audienceRunId}")}` | upstream completed run id | agent-billing-identity |
 | Audience-intelligence (PROPOSED — pending Stream A plumbing) | `agent-audience-intel-${sha256("workflow/agent-billing@v1:audience-intel:{campaignId}:{continuationId}")}` | dispatch continuation id | contract only |
+| Interpretation model charge | `interpretation:${sha256("intelligence/interpretation-billing@v1:{businessId}:{signalId}:{signalVersion}:{signalContentHash}:{classifierVersion}")}` | trigger-boundary mint, passed as runAgent billingIdempotencyKey | model-boundary |
 | Engagement webhook reply | `engagement-reply:{provider}:{externalEventId}` | webhook event identity | engagement-agent |
 | Publishing attempt charge | `publishing:{queueItemId}` | publishing queue row id | publishing-runner |
 | Premium video completion | `premium-video:{providerJobId}` | provider render job id | creative service |
