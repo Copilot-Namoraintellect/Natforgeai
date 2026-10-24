@@ -115,7 +115,10 @@ function toInsertRow(signal: CanonicalSocialSignal) {
 }
 
 /** Material-content comparison: a replayed signal must match the durable row
- *  on every evidence-bearing field, not merely on the natural key. */
+ *  on every evidence-bearing field, not merely on the natural key.
+ *  observedAt/createdAt are acceptance-attempt metadata (a redelivery is
+ *  observed later by definition) and are deliberately excluded — the durable
+ *  row keeps the FIRST observation. */
 function rowMatchesSignal(row: SocialSignal, signal: CanonicalSocialSignal): boolean {
   return (
     row.signalKey === signal.signalKey &&
@@ -130,7 +133,6 @@ function rowMatchesSignal(row: SocialSignal, signal: CanonicalSocialSignal): boo
     nullableEqual(row.parentExternalObjectId, signal.parentExternalObjectId) &&
     row.signalType === signal.signalType &&
     timeMs(row.occurredAt) === timeMs(signal.occurredAt) &&
-    timeMs(row.observedAt) === timeMs(signal.observedAt) &&
     nullableEqual(row.sourceCampaignId, signal.sourceCampaignId) &&
     nullableEqual(row.sourcePublicationId, signal.sourcePublicationId) &&
     nullableEqual(row.sourcePublicationReceiptId, signal.sourcePublicationReceiptId) &&

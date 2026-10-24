@@ -15,6 +15,8 @@ import { startPublishingWorker } from "./lib/queue/publishing-worker";
 import { startContentGenerationWorker } from "./lib/queue/content-generation-worker";
 import { handleOAuthCallback } from "./lib/integrations/oauth-callback";
 import { processInboundWebhook } from "./lib/engagement/inbound";
+import { processListeningWebhook } from "./lib/social-listening/webhook-ingest";
+import { startListeningPollingScheduler } from "./lib/social-listening/polling-scheduler";
 import { getDb } from "./queries/connection";
 import { videoRenderJobs } from "@db/schema";
 import { eq } from "drizzle-orm";
@@ -59,6 +61,15 @@ if (env.postLiveLifecycleEnabled) {
 if (env.postLiveMetricsObservationEnabled) {
   startPostLiveMetricsObservationScheduler({
     intervalMs: env.postLiveMetricsObservationIntervalMs,
+  });
+}
+
+// WBS-R5-A social listening polling is default-off and runs only against
+// operator-configured provider fetch seams; without them the pass fails
+// closed with OPERATOR_ACTION rather than faking success.
+if (env.socialListeningPollingEnabled) {
+  startListeningPollingScheduler({
+    intervalMs: env.socialListeningPollingIntervalMs,
   });
 }
 
@@ -142,11 +153,30 @@ app.post("/api/webhooks/:platform", async (c) => {
 
   // Inbound engagement ingestion (facebook / instagram / whatsapp).
   const outcome = await processInboundWebhook({ platform, rawBody, signature });
+
+  // WBS-R5-A canonical listening evidence layer (additive): same verified
+  // Meta delivery also becomes canonical social signals. The engagement
+  // pipeline above is unchanged; listening has its own exact-once dedup.
+  let listening: unknown = null;
+  if (["facebook", "instagram", "whatsapp", "linkedin"].includes(platform)) {
+    try {
+      listening = await processListeningWebhook({
+        platform,
+        rawBody,
+        signature,
+        appSecret: env.metaAppSecret || process.env.FACEBOOK_APP_SECRET || "",
+      });
+    } catch (err: any) {
+      console.error(`[Webhook ${platform}] listening ingestion error:`, err?.message);
+    }
+  }
+
   return c.json(
     {
       received: outcome.received,
       platform,
       results: outcome.dispositions,
+      listening,
       error: outcome.error,
     },
     outcome.httpStatus as 200 | 401
