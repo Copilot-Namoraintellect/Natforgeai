@@ -18,8 +18,6 @@ import {
   buildBusinessPolicyConfig,
   buildDefaultPolicyConfig,
   buildPolicyConfigHash,
-  buildPolicyId,
-  buildPolicyVersion,
   buildVersionedPolicy,
   type BusinessPolicyConfig,
   type VersionedBusinessPolicy,
@@ -49,14 +47,6 @@ function toVersioned(row: BusinessPolicyRow): VersionedBusinessPolicy {
     Number(row.businessId),
     row.version,
     buildBusinessPolicyConfig(row.config)
-  );
-}
-
-function rowMatches(row: BusinessPolicyRow, policy: VersionedBusinessPolicy): boolean {
-  return (
-    row.policyId === policy.policyId &&
-    row.policyVersion === policy.policyVersion &&
-    row.configHash === buildPolicyConfigHash(policy.config)
   );
 }
 
