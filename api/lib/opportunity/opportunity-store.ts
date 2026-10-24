@@ -96,6 +96,7 @@ export function assertEvidenceIntegrity(row: OpportunityEvidenceRow): void {
 export async function findEvidenceByInterpretation(
   userId: number,
   interpretationId: string,
+  kind: "signal_interpretation" | "engagement_receipt" = "signal_interpretation",
   executor?: OpportunityStoreExecutor
 ): Promise<OpportunityEvidenceRow | null> {
   const db = resolveDb(executor);
@@ -105,7 +106,8 @@ export async function findEvidenceByInterpretation(
     .where(
       and(
         eq(opportunityEvidence.userId, userId),
-        eq(opportunityEvidence.interpretationId, interpretationId)
+        eq(opportunityEvidence.interpretationId, interpretationId),
+        eq(opportunityEvidence.kind, kind)
       )
     )
     .limit(1);
@@ -158,6 +160,7 @@ export async function insertEvidence(
     const existing = await findEvidenceByInterpretation(
       Number(row.userId),
       row.interpretationId,
+      row.kind as "signal_interpretation" | "engagement_receipt",
       executor
     );
     if (existing) {
@@ -168,6 +171,7 @@ export async function insertEvidence(
   const inserted = await findEvidenceByInterpretation(
     Number(row.userId),
     row.interpretationId,
+    row.kind as "signal_interpretation" | "engagement_receipt",
     executor
   );
   return { row: inserted!, inserted: true, duplicateClassification: "none" };

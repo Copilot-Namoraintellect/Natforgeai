@@ -1751,10 +1751,16 @@ export const opportunityEvidence = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => ({
-    // Replay/concurrency anchor: one interpretation → one contribution.
-    interpretationUnique: uniqueIndex("oe_interpretation_uidx").on(table.interpretationId),
+    // Replay/concurrency anchor: one signal interpretation contributes at most
+    // once per kind (a signal row plus, optionally, one engagement-receipt row
+    // sharing the interpretationId).
+    interpretationKindUnique: uniqueIndex("oe_interpretation_kind_uidx").on(
+      table.interpretationId,
+      table.kind
+    ),
+    // Exactly-once enrichment anchor for R5-C receipts (NULLs distinct in MySQL).
+    receiptUnique: uniqueIndex("oe_receipt_uidx").on(table.engagementReceiptId),
     candidateIdx: index("oe_candidate_idx").on(table.candidateId),
-    receiptIdx: index("oe_receipt_idx").on(table.engagementReceiptId),
   })
 );
 

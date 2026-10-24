@@ -211,11 +211,13 @@ export async function evaluateOpportunity(
   const interpretation = toCanonicalInterpretation(input.interpretation);
   await assertOwnership(interpretation, input.userId, executor);
 
-  // Replay checks first: one interpretation produces at most one durable
-  // outcome ever (unique interpretationId on evidence and suppressions).
+  // Replay checks first: one signal interpretation produces at most one
+  // durable outcome ever (unique (interpretationId, kind) on evidence;
+  // unique interpretationId on suppressions).
   const existingEvidence = await store.findEvidenceByInterpretation(
     input.userId,
     interpretation.interpretationId,
+    "signal_interpretation",
     executor
   );
   if (existingEvidence) {
@@ -638,17 +640,28 @@ function recomputeCandidateState(
 }
 
 function initialStrength(interpretation: CanonicalInterpretation): "LOW" | "MEDIUM" | "HIGH" | "UNKNOWN" {
-  // Single-evidence baseline: explicit + high/relevant → HIGH baseline is NOT
-  // granted (repeat is required for HIGH); medium+ → MEDIUM; else LOW/UNKNOWN.
+  // Single-evidence baseline derived through the SAME §6 rule table that the
+  // post-append recompute uses, so the inserted state can never disagree with
+  // the recomputed state (a fresh single explicit medium/relevant signal is
+  // MEDIUM → status candidate; repeat is required for HIGH).
+  const contributes = !isContradiction(
+    {
+      kind: "signal_interpretation",
+      opportunityTypeAtEvaluation: "", // type-agnostic at insert; refined at append
+      intent: interpretation.intent,
+      overallConfidence: interpretation.overallConfidence,
+      relevance: interpretation.relevance,
+      sentiment: interpretation.sentiment,
+      urgency: interpretation.urgency,
+      contributesToStrength: true,
+    },
+    "purchase_interest"
+  );
+  if (!contributes) return "LOW";
+  if (interpretation.relevance === "not_relevant") return "LOW";
   if (interpretation.overallConfidence === "unknown") return "UNKNOWN";
   if (interpretation.overallConfidence === "low") return "LOW";
-  if (interpretation.overallConfidence === "medium" || interpretation.overallConfidence === "high") {
-    if (interpretation.relevance === "not_relevant") return "LOW";
-    return interpretation.overallConfidence === "high" && interpretation.relevance === "relevant"
-      ? "MEDIUM"
-      : "LOW";
-  }
-  return "LOW";
+  return "MEDIUM";
 }
 
 function buildEvidenceRow(

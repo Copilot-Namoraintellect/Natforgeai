@@ -55,7 +55,8 @@ CREATE TABLE `opportunity_evidence` (
 	`evidenceHash` varchar(64) NOT NULL,
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	CONSTRAINT `opportunity_evidence_id` PRIMARY KEY(`id`),
-	CONSTRAINT `oe_interpretation_uidx` UNIQUE(`interpretationId`)
+	CONSTRAINT `oe_interpretation_kind_uidx` UNIQUE(`interpretationId`,`kind`),
+	CONSTRAINT `oe_receipt_uidx` UNIQUE(`engagementReceiptId`)
 );
 --> statement-breakpoint
 CREATE TABLE `opportunity_handoffs` (
@@ -94,6 +95,5 @@ CREATE INDEX `oc_user_status_idx` ON `opportunity_candidates` (`userId`,`opportu
 CREATE INDEX `oc_user_actor_idx` ON `opportunity_candidates` (`userId`,`actorKey`);--> statement-breakpoint
 CREATE INDEX `oc_user_thread_idx` ON `opportunity_candidates` (`userId`,`threadKey`);--> statement-breakpoint
 CREATE INDEX `oe_candidate_idx` ON `opportunity_evidence` (`candidateId`);--> statement-breakpoint
-CREATE INDEX `oe_receipt_idx` ON `opportunity_evidence` (`engagementReceiptId`);--> statement-breakpoint
 CREATE INDEX `os_user_thread_idx` ON `opportunity_suppressions` (`userId`,`threadKey`);--> statement-breakpoint
 CREATE INDEX `os_user_reason_idx` ON `opportunity_suppressions` (`userId`,`reason`);

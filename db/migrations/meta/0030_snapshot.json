@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "abc5cdde-f645-4eab-8491-9e5461d3c2aa",
+  "id": "6a328f76-d4bd-48e0-b979-7cbf4bb50a97",
   "prevId": "2696bc82-4b53-437b-89c5-6cc34dd59d89",
   "tables": {
     "agent_runs": {
@@ -4184,10 +4184,18 @@
         }
       },
       "indexes": {
-        "oe_interpretation_uidx": {
-          "name": "oe_interpretation_uidx",
+        "oe_interpretation_kind_uidx": {
+          "name": "oe_interpretation_kind_uidx",
           "columns": [
-            "interpretationId"
+            "interpretationId",
+            "kind"
+          ],
+          "isUnique": true
+        },
+        "oe_receipt_uidx": {
+          "name": "oe_receipt_uidx",
+          "columns": [
+            "engagementReceiptId"
           ],
           "isUnique": true
         },
@@ -4195,13 +4203,6 @@
           "name": "oe_candidate_idx",
           "columns": [
             "candidateId"
-          ],
-          "isUnique": false
-        },
-        "oe_receipt_idx": {
-          "name": "oe_receipt_idx",
-          "columns": [
-            "engagementReceiptId"
           ],
           "isUnique": false
         }

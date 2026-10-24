@@ -152,8 +152,9 @@ OpportunityEvidence {
   id: serial;                          // row pointer only
   candidateId: number;                 // FK-by-convention to opportunity_candidates.id
   userId: number;                      // tenant anchor
-  interpretationId: string;            // R5-B identity — UNIQUE (one interpretation →
-                                       //   at most one candidate contribution)
+  interpretationId: string;            // R5-B identity; UNIQUE per kind
+                                       //   (one signal row + optionally one
+                                       //   engagement-receipt row per interpretation)
   signalId: string;                    // R5-A signalKey (opaque)
   signalVersion: number;
   kind: "signal_interpretation" | "engagement_receipt";
@@ -174,7 +175,10 @@ OpportunityEvidence {
 
 - Evidence rows have **no update path** (R5-A §5 discipline). `evidenceHash`
   proves byte-stability; drift between retained evidence and its hash is
-  tampering evidence and fails closed.
+  tampering evidence and fails closed. Unique anchors: `(interpretationId,
+  kind)` (one signal contribution plus, optionally, one validated
+  engagement-receipt row per interpretation) and `engagementReceiptId`
+  (exactly-once R5-C enrichment).
 - Replay of an already-accepted `interpretationId` returns the existing
   outcome (`idempotent_replay`) — no second candidate, no second suppression,
   no second audit event (§7).
