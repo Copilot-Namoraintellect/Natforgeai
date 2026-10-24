@@ -81,6 +81,15 @@ export function classifyListeningFailure(err: unknown): ListeningFailure {
     };
   }
 
+  // Missing/revoked permission scopes need an operator to re-authorize.
+  if (/permission|scope/i.test(message)) {
+    return {
+      class: "OPERATOR_ACTION",
+      code: "provider_scope_missing",
+      reason: message,
+    };
+  }
+
   const { category, code, retryable } = classifyProviderErrorMessage(message);
   return {
     class: CATEGORY_CLASS[category],

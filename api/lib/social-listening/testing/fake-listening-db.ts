@@ -21,31 +21,58 @@ export interface ListeningSeed {
   listeningStates?: any[];
 }
 
-function extractParams(cond: any, out: any[] = []): any[] {
+/** Tagged WHERE criteria: eq (field equals value) or in (field within values). */
+type Criterion = { eq: unknown } | { in: unknown[] };
+
+function extractCriteria(cond: any, out: Criterion[] = []): Criterion[] {
   if (cond === null || cond === undefined) return out;
+  if (cond instanceof Date) {
+    out.push({ eq: cond });
+    return out;
+  }
   if (Array.isArray(cond.queryChunks)) {
-    for (const chunk of cond.queryChunks) extractParams(chunk, out);
+    for (const chunk of cond.queryChunks) extractCriteria(chunk, out);
     return out;
   }
   if (Array.isArray(cond.conditions)) {
-    for (const c of cond.conditions) extractParams(c, out);
+    for (const c of cond.conditions) extractCriteria(c, out);
     return out;
   }
   if (cond?.constructor?.name === "Param" && Object.prototype.hasOwnProperty.call(cond, "value")) {
-    out.push(cond.value);
+    out.push({ eq: cond.value });
     return out;
   }
-  // inArray() emits a raw array chunk of values.
+  // inArray() emits an array chunk of Param values (OR-semantics per field).
   if (Array.isArray(cond)) {
+    const paramValues =
+      cond.length > 0 && cond.every((item) => item?.constructor?.name === "Param")
+        ? cond.map((item) => item.value)
+        : null;
+    if (paramValues) {
+      out.push({ in: paramValues });
+      return out;
+    }
     for (const item of cond) {
       if (item === null || ["string", "number", "boolean"].includes(typeof item)) {
-        out.push(item);
+        out.push({ eq: item });
       } else {
-        extractParams(item, out);
+        extractCriteria(item, out);
       }
     }
   }
   return out;
+}
+
+function rowMatchesCriteria(row: any, criteria: Criterion[]): boolean {
+  return criteria.every((c) => {
+    if ("eq" in c) {
+      if (c.eq instanceof Date) {
+        return !(row.observedAt instanceof Date) || row.observedAt >= c.eq;
+      }
+      return Object.values(row).some((v) => v === c.eq);
+    }
+    return Object.values(row).some((v) => (c.in as unknown[]).includes(v));
+  });
 }
 
 function signalKeyOf(row: any): string {
@@ -82,47 +109,49 @@ export function createListeningFakeDb(seed: ListeningSeed = {}) {
     select: () => ({
       from: (table: any) => {
         const name = tableName(table);
+        const allRows =
+          name === "social_integrations"
+            ? integrations
+            : name === "publishing_queue"
+              ? queue
+              : name === "audit_events"
+                ? receipts
+                : name === "social_signals"
+                  ? [...signals.values()]
+                  : name === "social_listening_states"
+                    ? [...states.values()]
+                    : [];
+
+        // Generic predicate over tagged WHERE criteria (eq / in).
+        const matchRows = (criteria: Criterion[]) =>
+          allRows.filter((r) => rowMatchesCriteria(r, criteria));
+
+        const groupedCounts = (matched: any[]) => {
+          const byIntegration = new Map<number, number>();
+          for (const r of matched) {
+            byIntegration.set(r.integrationId, (byIntegration.get(r.integrationId) ?? 0) + 1);
+          }
+          return [...byIntegration.entries()].map(([integrationId, count]) => ({
+            integrationId,
+            count,
+          }));
+        };
+
         const query: any = {
           where: (...conds: any[]) => {
-            const params = extractParams(conds.length === 1 ? conds[0] : conds);
-            const rows =
-              name === "social_integrations"
-                ? integrations.filter(
-                    (r) => r.status === "connected" && params.includes(r.platform)
-                  )
-                : name === "publishing_queue"
-                  ? queue.filter(
-                      (r) =>
-                        r.status === "published" &&
-                        (!params.length ||
-                          (params.includes(r.externalPostId) &&
-                            params.includes(r.platform)))
-                    )
-                  : name === "audit_events"
-                    ? receipts.filter(
-                        (r) =>
-                          params.includes(r.eventType ?? "publication_success") &&
-                          (!r.userId || params.includes(r.userId))
-                      )
-                    : name === "social_signals"
-                      ? [...signals.values()].filter(
-                          (r) =>
-                            params.includes(r.provider) &&
-                            params.includes(r.providerAccountId) &&
-                            params.includes(r.externalEventId)
-                        )
-                      : name === "social_listening_states"
-                        ? [...states.values()].filter((r) =>
-                            params.includes(r.integrationId)
-                          )
-                        : [];
+            const criteria = extractCriteria(conds.length === 1 ? conds[0] : conds);
+            const matched = matchRows(criteria);
             return {
-              limit: async (_n: number) => rows,
+              limit: async (_n: number) => matched,
               orderBy: () => ({
-                limit: async (_n: number) => rows,
+                limit: async (_n: number) => matched,
               }),
+              // groupBy() executes the aggregate directly (no limit follows).
+              groupBy: () => groupedCounts(matched),
             };
           },
+          limit: async (_n: number) => allRows,
+          orderBy: () => ({ limit: async (_n: number) => allRows }),
         };
         return query;
       },
@@ -171,9 +200,10 @@ export function createListeningFakeDb(seed: ListeningSeed = {}) {
       const name = tableName(table);
       const target = {
         where: async (...conds: any[]) => {
-          const params = extractParams(conds.length === 1 ? conds[0] : conds);
+          const criteria = extractCriteria(conds.length === 1 ? conds[0] : conds);
+          const eqValues = criteria.flatMap((c) => ("eq" in c ? [c.eq] : c.in));
           if (name === "social_listening_states") {
-            const state = states.get(Number(params[0]));
+            const state = states.get(Number(eqValues[0]));
             if (state) {
               stateUpdates.push({ integrationId: state.integrationId, set: { ...setValues } });
               for (const [key, value] of Object.entries(setValues)) {

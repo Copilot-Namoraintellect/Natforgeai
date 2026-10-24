@@ -21,7 +21,6 @@ import {
   normalizeExternalIdentity,
   timestampFromEpochSeconds,
   timestampFromIsoDateTime,
-  SignalContractError,
   type SocialSignalPlatform,
   type SocialSignalType,
 } from "../signal-contract";

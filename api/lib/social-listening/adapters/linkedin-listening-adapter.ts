@@ -30,8 +30,11 @@ export type LinkedInPollingFetcher = (
 export class LinkedInListeningAdapter implements SocialListeningAdapter {
   readonly provider = "linkedin" as const;
   readonly capabilities = CAPABILITIES;
+  private readonly fetcher?: LinkedInPollingFetcher;
 
-  constructor(private readonly fetcher?: LinkedInPollingFetcher) {}
+  constructor(fetcher?: LinkedInPollingFetcher) {
+    this.fetcher = fetcher;
+  }
 
   capabilityFor(platform: string): PlatformListeningCapability | null {
     return CAPABILITIES.find((c) => c.platform === platform) ?? null;
