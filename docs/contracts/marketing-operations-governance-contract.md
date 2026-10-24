@@ -118,9 +118,9 @@ audit. Nothing here invents new authority:
 
 | Action | Delegates to | Convergence |
 |---|---|---|
-| `operations.retryOperation` (publishing queue item) | existing publishing retry semantics (`status`/`retryCount`/`nextRetryAt`) | conditional state guard; duplicate/concurrent retry collapses to `already_retrying`/`noop` |
-| `operations.retryOperation` (next-cycle instruction) | `retryFailedNextCycleInstruction` + `dispatchNextCycleInstruction` | CAS on exact instructionId |
-| `operations.retryOperation` (terminal failure → replay) | existing terminal replay D1/D2 authorities | `replayKey` uniqueness + active-claim mutex |
+| `operations.retryOperation` — `publishing_queue_item` | existing terminal replay D1 authority (durable failure anchors the replay) | deterministic `replayKey` uniqueness + active-claim mutex |
+| `operations.retryOperation` — `terminal_failure` | existing terminal replay D1 authority | deterministic `replayKey` uniqueness + active-claim mutex |
+| `operations.retryOperation` — `next_cycle_instruction` | `retryFailedNextCycleInstruction` + `dispatchNextCycleInstruction` | CAS on exact instructionId |
 
 Every action: server-authorized; binds to the exact operation + owning
 business; validates current state before acting; rejects stale requests
