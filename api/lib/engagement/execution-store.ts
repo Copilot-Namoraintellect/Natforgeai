@@ -87,6 +87,25 @@ export async function getReceiptByOperationIdentity(
   return row ?? null;
 }
 
+/**
+ * Read-only lookup by `engagementReceiptId` — the seam-facing lookup required
+ * by the opportunity contract (§13(c)). R5-X wires this into R5-D's
+ * engagement-evidence seam so only receipts minted by this authority (never
+ * client-crafted material) can strengthen an opportunity candidate.
+ */
+export async function getReceiptByEngagementReceiptId(
+  engagementReceiptId: string,
+  executor?: EngagementStoreExecutor
+): Promise<EngagementReceiptRecord | null> {
+  const db = executor ?? (getDb() as unknown as EngagementStoreExecutor);
+  const [row] = (await db
+    .select()
+    .from(engagementReceipts)
+    .where(eq(engagementReceipts.engagementReceiptId, engagementReceiptId))
+    .limit(1)) as EngagementReceiptRecord[];
+  return row ?? null;
+}
+
 export type InsertExecution = typeof engagementExecutions.$inferInsert;
 
 /** Insert-first acceptance; duplicate actionRequestId converges to the row. */

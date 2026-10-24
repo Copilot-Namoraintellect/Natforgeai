@@ -180,7 +180,14 @@ export function createFakeDb(
               affected += 1;
             }
           }
-          return [{ affectedRows: affected }];
+          // Dual-shape result header: governed stores read either
+          // `result.affectedRows` (mysql2 ResultSetHeader shape, e.g.
+          // opportunity-store CAS guard) or `result[0].affectedRows`
+          // ([ResultSetHeader, ...] shape, e.g. workflow next-cycle/budget
+          // CAS). Both conventions resolve correctly from one header.
+          const header = { affectedRows: affected } as { affectedRows: number; 0?: unknown };
+          header[0] = header;
+          return header;
         },
       }),
     }),

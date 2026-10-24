@@ -10,9 +10,9 @@
 
 import { z } from "zod";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
+import { attachEngagementReceiptById } from "./lib/opportunity/engagement-evidence-binding";
 import {
   evaluateOpportunity,
-  attachEngagementEvidence,
   suppressCandidate,
   unsuppressCandidate,
   escalateCandidate,
@@ -38,13 +38,18 @@ export const opportunityRouter = createRouter({
       });
     }),
 
-  /** Attach an R5-C engagement receipt (validated seam) as enrichment evidence. */
+  /**
+   * Attach an R5-C engagement receipt as enrichment evidence. The public
+   * boundary accepts ONLY an opaque server-minted receipt id — the receipt is
+   * fetched server-side through R5-C's read-only store (never client material)
+   * and validated through the engagement-evidence seam (contract §13).
+   */
   attachEngagementEvidence: authedQuery
-    .input(z.object({ opportunityId: z.string().min(1), receipt: z.unknown() }))
+    .input(z.object({ opportunityId: z.string().min(1), engagementReceiptId: z.string().min(1).max(128) }))
     .mutation(async ({ ctx, input }) => {
-      return attachEngagementEvidence({
+      return attachEngagementReceiptById({
         opportunityId: input.opportunityId,
-        receipt: input.receipt,
+        engagementReceiptId: input.engagementReceiptId,
         userId: ctx.user.id,
       });
     }),
