@@ -265,6 +265,9 @@ export function assertMarketingActionExecutable(input: {
   if (Number.isNaN(nowMs)) fail("INVALID_EVALUATION_CLOCK", `now must be a valid ISO timestamp, got ${String(now)}.`);
 
   if (decision.decision === "ALLOW_AUTONOMOUS") {
+    if (currentPolicyVersion !== decision.policyVersion) {
+      return deny("STALE_POLICY_VERSION");
+    }
     if (decision.expiresAt && Date.parse(decision.expiresAt) <= nowMs) {
       return deny("EXPIRED_DECISION");
     }

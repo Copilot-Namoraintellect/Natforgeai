@@ -488,7 +488,13 @@ export function evaluateMarketingActionPolicy(input: PolicyEvaluationInput): Pol
     intelligenceVersion: intelligence.intelligenceVersion,
   });
 
-  const billingIdentity = buildBillingIdentity(request, derivedCostClass);
+  // Billing identity exists only for decisions that can actually settle a
+  // charge: denied, escalated and suppressed actions are non-billable by
+  // construction and carry no billing identity at all.
+  const billingIdentity =
+    out.decision === "ALLOW_AUTONOMOUS" || out.decision === "REQUIRE_APPROVAL"
+      ? buildBillingIdentity(request, derivedCostClass)
+      : null;
 
   const approvalBinding: ApprovalBinding | null =
     out.decision === "REQUIRE_APPROVAL"
@@ -515,7 +521,10 @@ export function evaluateMarketingActionPolicy(input: PolicyEvaluationInput): Pol
     riskClass,
     intelligenceVersion: intelligence.intelligenceVersion,
     estimatedCostClass: derivedCostClass,
-    estimatedCredits: cost.estimatedCredits,
+    estimatedCredits:
+      out.decision === "ALLOW_AUTONOMOUS" || out.decision === "REQUIRE_APPROVAL"
+        ? cost.estimatedCredits
+        : 0,
     billingIdentity,
     approvalBinding,
     costEligible: cost.costEligible,
@@ -575,7 +584,6 @@ function finalize(args: {
       costEligible: args.costEligible,
       rateEligible: args.rateEligible,
       providerEligible: args.providerEligible,
-      expiresAt: args.expiresAt,
     })
   );
 
