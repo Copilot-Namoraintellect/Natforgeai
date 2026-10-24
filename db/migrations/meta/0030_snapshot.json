@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "82f9a93f-9aab-44d9-b547-ef22335ad0b4",
-  "prevId": "2696bc82-4b53-437b-89c5-6cc34dd59d89",
+  "id": "08301600-e1f2-417e-b52c-e17d26a2b9f8",
+  "prevId": "a24454f9-fee7-4f18-85e3-f9ddcb242906",
   "tables": {
     "agent_runs": {
       "name": "agent_runs",

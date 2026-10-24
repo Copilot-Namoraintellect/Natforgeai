@@ -732,6 +732,9 @@ export const approvalRequests = mysqlTable("approval_requests", {
     "shutdown",
     "brand_risk",
     "strategy_review",
+    // WBS-R5-E: governed marketing-action approvals/escalations bound to an
+    // exact policy decision + policy version + context fingerprint.
+    "marketing_action",
   ]).notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   description: text("description"),
@@ -1830,3 +1833,96 @@ export const socialInterpretations = mysqlTable(
 );
 
 export type SocialInterpretationRow = typeof socialInterpretations.$inferSelect;
+// ─── Business Policies (WBS-R5-E2) ───
+// Versioned, typed policy authority per business. Rows are immutable once
+// written: a config change inserts a new version and moves the active
+// pointer. policyId is deterministic per business; policyVersion binds any
+// policy decision to exactly one config hash.
+export const businessPolicies = mysqlTable(
+  "business_policies",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic per business: pol_<sha256(businessId)[:16]>.
+    policyId: varchar("policyId", { length: 32 }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    // Monotonic version number per policyId.
+    version: int("version").notNull(),
+    // v<version>-<configHash[:12]>; binds decisions to exact authority.
+    policyVersion: varchar("policyVersion", { length: 64 }).notNull(),
+    configHash: varchar("configHash", { length: 64 }).notNull(),
+    // Validated BusinessPolicyConfig JSON (typed, no scripting).
+    config: json("config").notNull(),
+    isActive: boolean("isActive").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    policyVersionUnique: uniqueIndex("bp_policy_version_idx").on(table.policyId, table.version),
+    businessIdx: index("bp_business_idx").on(table.businessId),
+    activeIdx: index("bp_active_idx").on(table.policyId, table.isActive),
+  })
+);
+
+export type BusinessPolicyRow = typeof businessPolicies.$inferSelect;
+export type InsertBusinessPolicyRow = typeof businessPolicies.$inferInsert;
+
+// ─── Policy Decisions (WBS-R5-E3/E7) ───
+// Durable, immutable policy decisions. The deterministic policyDecisionId is
+// the unique convergence anchor: one action request + one policy version ->
+// one stable decision. Rows carry explainability (reasonCodes, thresholds,
+// gate outcomes) and never store raw social content or secrets — only
+// opaque references (signal/interpretation ids, fingerprints).
+export const policyDecisions = mysqlTable(
+  "policy_decisions",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic: pdec_<sha256(...)[:40]>; unique convergence anchor.
+    policyDecisionId: varchar("policyDecisionId", { length: 48 }).notNull(),
+    policyId: varchar("policyId", { length: 32 }),
+    policyVersion: varchar("policyVersion", { length: 64 }),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    actionRequestId: varchar("actionRequestId", { length: 128 }).notNull(),
+    // "<actionRequestId>|<policyVersion ?? NO_POLICY>" — durable unique
+    // scope so duplicate/concurrent evaluations converge to one row.
+    decisionScopeKey: varchar("decisionScopeKey", { length: 200 }).notNull(),
+    actionType: varchar("actionType", { length: 32 }).notNull(),
+    platform: varchar("platform", { length: 32 }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    sourceSignalId: varchar("sourceSignalId", { length: 128 }),
+    sourceInterpretationId: varchar("sourceInterpretationId", { length: 128 }),
+    intelligenceVersion: varchar("intelligenceVersion", { length: 128 }),
+    decision: varchar("decision", { length: 24 }).notNull(),
+    reasonCodes: json("reasonCodes").notNull(),
+    riskClass: varchar("riskClass", { length: 16 }).notNull(),
+    approvalRequired: boolean("approvalRequired").default(false).notNull(),
+    costEligible: boolean("costEligible").default(false).notNull(),
+    rateEligible: boolean("rateEligible").default(false).notNull(),
+    providerEligible: boolean("providerEligible").default(false).notNull(),
+    estimatedCostClass: varchar("estimatedCostClass", { length: 16 }).notNull(),
+    estimatedCredits: int("estimatedCredits").default(0).notNull(),
+    // One logical billable action -> one stable billing identity.
+    billingIdentity: varchar("billingIdentity", { length: 48 }),
+    // ApprovalBinding JSON for REQUIRE_APPROVAL decisions.
+    approvalBinding: json("approvalBinding"),
+    // Bounded snapshot of the thresholds used at evaluation time.
+    thresholds: json("thresholds").notNull(),
+    expiresAt: timestamp("expiresAt"),
+    // ISO 8601 stored verbatim (like audit_events.occurredAt).
+    evaluatedAt: varchar("evaluatedAt", { length: 32 }).notNull(),
+    evaluationFingerprint: varchar("evaluationFingerprint", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    decisionIdUnique: uniqueIndex("pd_decision_id_idx").on(table.policyDecisionId),
+    scopeUnique: uniqueIndex("pd_scope_idx").on(table.decisionScopeKey),
+    businessIdx: index("pd_business_idx").on(table.businessId),
+    userIdx: index("pd_user_idx").on(table.userId),
+    campaignIdx: index("pd_campaign_idx").on(table.campaignId),
+    decisionIdx: index("pd_decision_idx").on(table.decision),
+    evaluatedAtIdx: index("pd_evaluated_idx").on(table.evaluatedAt),
+  })
+);
+
+export type PolicyDecisionRow = typeof policyDecisions.$inferSelect;
+export type InsertPolicyDecisionRow = typeof policyDecisions.$inferInsert;

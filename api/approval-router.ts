@@ -30,6 +30,13 @@ import {
   COST_PAUSE_CONTEXT_KEY,
   parseCostPauseProvenance,
 } from "./lib/workflow/cost-pause";
+import { policyDecisions, businessPolicies } from "@db/schema";
+import {
+  MARKETING_ACTION_APPROVAL_TYPE,
+  readMarketingActionApprovalBinding,
+  validateMarketingActionApprovalAuthorizable,
+} from "./lib/policy/marketing-action-approval";
+import { policyDecisionRowToDecision } from "./lib/policy/policy-decision-store";
 
 type ApprovalDb = ReturnType<typeof getDb>;
 
@@ -555,6 +562,54 @@ async function syncPendingApprovals(userId: number) {
   }
 }
 
+/**
+ * WBS-R5-E: authorising a `marketing_action` approval requires the bound
+ * policy decision to still exist with the same policy version (the business
+ * policy must be unchanged since evaluation) and the same action context;
+ * the binding must not have expired. Runs inside the decision transaction.
+ * Rejection is always permitted — a human may reject anything pending.
+ */
+async function validateMarketingActionApprovalForDecision(
+  request: { id: number; status: string; context: unknown },
+  executor: ApprovalDbExecutor,
+  now: Date
+): Promise<void> {
+  const binding = readMarketingActionApprovalBinding(request.context);
+  if (binding === null) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "APPROVAL_BINDING_MISMATCH: this approval carries no marketing action binding.",
+    });
+  }
+  const [row] = await executor
+    .select()
+    .from(policyDecisions)
+    .where(eq(policyDecisions.policyDecisionId, binding.policyDecisionId))
+    .limit(1);
+  const decision = row ? policyDecisionRowToDecision(row) : null;
+
+  const [activePolicy] = await executor
+    .select({ policyVersion: businessPolicies.policyVersion })
+    .from(businessPolicies)
+    .where(and(eq(businessPolicies.businessId, binding.businessId), eq(businessPolicies.isActive, true)))
+    .orderBy(desc(businessPolicies.version))
+    .limit(1);
+
+  try {
+    validateMarketingActionApprovalAuthorizable({
+      approval: { id: request.id, status: request.status as "pending", context: request.context },
+      decision,
+      currentPolicyVersion: activePolicy?.policyVersion ?? null,
+      now: now.toISOString(),
+    });
+  } catch (err) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: (err as Error).message,
+    });
+  }
+}
+
 type ApprovalDecisionKind = "approve" | "reject" | "edit";
 
 interface ApprovalDecisionResult {
@@ -667,6 +722,23 @@ async function executeApprovalDecision(
       await validateLearningPromotionApprovalBinding(
         { request, decisionKind: kind, executor: tx }
       );
+    }
+
+    // WBS-R5-E: a marketing_action approval binds one exact policy decision
+    // + policy version + context. Authorising is fail-closed on stale policy,
+    // changed context, missing decision or expired binding; edited approvals
+    // are never valid (editing would break the exact context binding).
+    // Rejection is always permitted.
+    if (request.approvalType === MARKETING_ACTION_APPROVAL_TYPE) {
+      if (kind === "edit") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Marketing action approvals cannot be edited; approve or reject the exact bound action.",
+        });
+      }
+      if (kind !== "reject") {
+        await validateMarketingActionApprovalForDecision(request, tx, new Date());
+      }
     }
 
     // ONE decision timestamp, shared by the approval row and the audit event.

@@ -55,6 +55,8 @@ describe("audit-event taxonomy", () => {
       "learning_promotion_resolved",
       "admin_mutation",
       "interpretation_recorded",
+      // R5-E: governed marketing-action policy decisions.
+      "policy_decision",
     ]);
   });
 

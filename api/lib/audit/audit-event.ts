@@ -50,6 +50,10 @@ export const AUDIT_EVENT_TYPES = [
   // R5-B: one accepted intent & sentiment interpretation record; idempotent
   // replays return the existing row and do not re-emit the event.
   "interpretation_recorded",
+  // R5-E: a governed marketing-action policy decision was durably recorded.
+  // The decision, policy version, reason codes and gate outcomes live in
+  // sanitized metadata — never raw social content.
+  "policy_decision",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
