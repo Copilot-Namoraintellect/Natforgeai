@@ -606,6 +606,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `learning` | `api/learning-router.ts` | Phase 1 Learning engine: governed, idempotent campaign-learning evaluation (`evaluate`, `records`, `record`) |
 | `listening` | `api/lib/social-listening/listening-router.ts` | WBS-R5-A social listening: tenant-scoped listening status (`getOverview`), canonical signal read view (`listSignals`), operator overview (`adminGetOverview`) |
 | `policy` | `api/policy-router.ts` | WBS-R5-E governed policy layer: marketing-action evaluation, versioned business policies, durable auditable decisions (`evaluateActionRequest`, `getDecision`, `explainDecision`, `listDecisions`, `getPolicy`, `adoptDefaultPolicy`, `setPolicy`, `adminListDecisions`) |
+| `opportunity` | `api/opportunity-router.ts` | R5-D opportunity detection: rule-first, evidence-backed pre-lead candidate evaluation from R5-B interpretations; aggregation, confidence, lifecycle, expiry, exactly-once R6 handoff (`evaluate`, `attachEngagementEvidence`, `list`, `get`, `suppress`, `unsuppress`, `escalate`, `sweepExpiry` admin, `handoffToR6`, `listHandoffs`). Never creates leads/CRM rows. Contract: `docs/contracts/opportunity-candidate-contract.md` |
 
 ### Context
 

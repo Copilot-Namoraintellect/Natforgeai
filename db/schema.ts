@@ -2096,3 +2096,208 @@ export const engagementReceipts = mysqlTable(
 
 export type EngagementReceiptRow = typeof engagementReceipts.$inferSelect;
 export type InsertEngagementReceiptRow = typeof engagementReceipts.$inferInsert;
+// ─── R5-D Opportunity Candidates ───
+// Durable evidence-backed opportunity candidates (pre-lead marketing/business
+// signals). Identity is deterministic and server-derived: opportunityKey =
+// sha256(canonicalJson(threadCoordinates)) with tenantUserId INSIDE the
+// coordinates, so cross-tenant collision/correlation is impossible. The raw
+// external actor reference is never stored — actorKey is a keyed hash only.
+// See docs/contracts/opportunity-candidate-contract.md. Provisional migration
+// 0030_opportunity_detection_foundation (R5-X owns canonical sequencing).
+export const opportunityCandidates = mysqlTable(
+  "opportunity_candidates",
+  {
+    id: serial("id").primaryKey(),
+    // "opp1:" + 64-hex thread identity; server-minted only.
+    opportunityId: varchar("opportunityId", { length: 69 }).notNull(),
+    // 64-hex thread coordinates hash (tenant-anchored).
+    opportunityKey: varchar("opportunityKey", { length: 64 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    opportunityType: mysqlEnum("opportunityType", [
+      "purchase_interest",
+      "service_enquiry",
+      "demo_or_consultation_interest",
+      "partnership_interest",
+      "repeat_interest",
+      "retention_risk",
+      "churn_risk",
+      "referral_or_advocacy",
+      "unresolved_complaint_opportunity",
+      "support_to_sales_transition",
+      "unknown",
+    ]).notNull(),
+    opportunityStatus: mysqlEnum("opportunityStatus", [
+      "candidate",
+      "strengthening",
+      "weak",
+      "suppressed",
+      "expired",
+      "escalated",
+      "handed_off_to_r6",
+    ]).notNull(),
+    confidenceClass: mysqlEnum("confidenceClass", ["LOW", "MEDIUM", "HIGH", "UNKNOWN"]).notNull(),
+    evidenceStrength: mysqlEnum("evidenceStrength", ["LOW", "MEDIUM", "HIGH", "UNKNOWN"]).notNull(),
+    urgency: mysqlEnum("urgency", ["low", "normal", "high", "critical"]).notNull(),
+    topic: varchar("topic", { length: 48 }),
+    topicKey: varchar("topicKey", { length: 64 }).notNull(),
+    actorKey: varchar("actorKey", { length: 64 }).notNull(),
+    threadKey: varchar("threadKey", { length: 64 }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    publicationId: varchar("publicationId", { length: 255 }),
+    provider: mysqlEnum("provider", ["meta", "linkedin", "twitter", "tiktok"]),
+    // Always null in R5-D storage (privacy minimization; actorKey is the hash).
+    externalActorReference: varchar("externalActorReference", { length: 255 }),
+    firstEvidence: json("firstEvidence").notNull(),
+    latestEvidence: json("latestEvidence").notNull(),
+    // ISO 8601 provider event times, stored verbatim as text.
+    firstObservedAt: varchar("firstObservedAt", { length: 32 }).notNull(),
+    lastObservedAt: varchar("lastObservedAt", { length: 32 }).notNull(),
+    evidenceCount: int("evidenceCount").notNull(),
+    contradictionCount: int("contradictionCount").notNull(),
+    detectorRulesVersion: varchar("detectorRulesVersion", { length: 64 }).notNull(),
+    classifierVersions: json("classifierVersions").notNull(),
+    // Optimistic CAS guard for guarded state transitions.
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+    statusChangedAt: timestamp("statusChangedAt").defaultNow().notNull(),
+    handedOffAt: timestamp("handedOffAt"),
+  },
+  (table) => ({
+    // One logical opportunity thread → one durable candidate (D4).
+    userOpportunityUnique: uniqueIndex("oc_user_opportunity_uidx").on(
+      table.userId,
+      table.opportunityKey
+    ),
+    userStatusIdx: index("oc_user_status_idx").on(table.userId, table.opportunityStatus),
+    userActorIdx: index("oc_user_actor_idx").on(table.userId, table.actorKey),
+    userThreadIdx: index("oc_user_thread_idx").on(table.userId, table.threadKey),
+  })
+);
+
+export type OpportunityCandidateRow = typeof opportunityCandidates.$inferSelect;
+export type InsertOpportunityCandidateRow = typeof opportunityCandidates.$inferInsert;
+
+// ─── R5-D Opportunity Evidence (immutable, append-only) ───
+// One interpretation contributes to at most one candidate (or one suppression);
+// engagement receipts (R5-C seam) enrich an existing candidate only. No update
+// path — evidenceHash proves byte-stability; drift fails closed.
+export const opportunityEvidence = mysqlTable(
+  "opportunity_evidence",
+  {
+    id: serial("id").primaryKey(),
+    candidateId: bigint("candidateId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    interpretationId: varchar("interpretationId", { length: 64 }).notNull(),
+    signalId: varchar("signalId", { length: 128 }).notNull(),
+    signalVersion: int("signalVersion").notNull(),
+    kind: mysqlEnum("kind", ["signal_interpretation", "engagement_receipt"]).notNull(),
+    engagementReceiptId: varchar("engagementReceiptId", { length: 128 }),
+    opportunityTypeAtEvaluation: mysqlEnum("opportunityTypeAtEvaluation", [
+      "purchase_interest",
+      "service_enquiry",
+      "demo_or_consultation_interest",
+      "partnership_interest",
+      "repeat_interest",
+      "retention_risk",
+      "churn_risk",
+      "referral_or_advocacy",
+      "unresolved_complaint_opportunity",
+      "support_to_sales_transition",
+      "unknown",
+    ]).notNull(),
+    // Immutable copies of the R5-B labels as evaluated.
+    intent: varchar("intent", { length: 32 }).notNull(),
+    overallConfidence: varchar("overallConfidence", { length: 16 }).notNull(),
+    relevance: varchar("relevance", { length: 32 }).notNull(),
+    sentiment: varchar("sentiment", { length: 16 }).notNull(),
+    urgency: mysqlEnum("urgency", ["low", "normal", "high", "critical"]).notNull(),
+    sourceCampaignId: bigint("sourceCampaignId", { mode: "number", unsigned: true }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    contributesToStrength: boolean("contributesToStrength").notNull(),
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    // Replay/concurrency anchor: one signal interpretation contributes at most
+    // once per kind (a signal row plus, optionally, one engagement-receipt row
+    // sharing the interpretationId).
+    interpretationKindUnique: uniqueIndex("oe_interpretation_kind_uidx").on(
+      table.interpretationId,
+      table.kind
+    ),
+    // Exactly-once enrichment anchor for R5-C receipts (NULLs distinct in MySQL).
+    receiptUnique: uniqueIndex("oe_receipt_uidx").on(table.engagementReceiptId),
+    candidateIdx: index("oe_candidate_idx").on(table.candidateId),
+  })
+);
+
+export type OpportunityEvidenceRow = typeof opportunityEvidence.$inferSelect;
+export type InsertOpportunityEvidenceRow = typeof opportunityEvidence.$inferInsert;
+
+// ─── R5-D Opportunity Suppressions (durable evaluation rejections) ───
+// Spam/irrelevant/risk-gated/policy-gated evaluations land here — never in
+// candidates. Keyed unique by interpretationId so replays converge and floods
+// are bounded per interpretation. Thread coordinates enable R9/R10
+// thread-history aggregation.
+export const opportunitySuppressions = mysqlTable(
+  "opportunity_suppressions",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    interpretationId: varchar("interpretationId", { length: 64 }).notNull(),
+    signalId: varchar("signalId", { length: 128 }).notNull(),
+    reason: mysqlEnum("reason", [
+      "SAFETY_ESCALATION",
+      "RISK_GATED",
+      "POLICY_SUPPRESSED",
+      "NOT_OPPORTUNITY_SIGNAL",
+      "INSUFFICIENT_CLASSIFICATION",
+      "NO_OPPORTUNITY_CLASSIFICATION",
+      "LOW_RELEVANCE",
+      "FLOOD_GUARDED",
+    ]).notNull(),
+    detail: varchar("detail", { length: 255 }),
+    actorKey: varchar("actorKey", { length: 64 }),
+    threadKey: varchar("threadKey", { length: 64 }),
+    intent: varchar("intent", { length: 32 }).notNull(),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    interpretationUnique: uniqueIndex("os_interpretation_uidx").on(table.interpretationId),
+    userThreadIdx: index("os_user_thread_idx").on(table.userId, table.threadKey),
+    userReasonIdx: index("os_user_reason_idx").on(table.userId, table.reason),
+  })
+);
+
+export type OpportunitySuppressionRow = typeof opportunitySuppressions.$inferSelect;
+export type InsertOpportunitySuppressionRow = typeof opportunitySuppressions.$inferInsert;
+
+// ─── R5-D Opportunity Handoffs (durable exact-once R6 envelopes) ───
+// Unique (userId, opportunityId) → exactly-once; replay returns the existing
+// envelope. References + bounded labels only: no social text, no raw actor
+// references, no model reasoning. R5-D never creates the R6 lead.
+export const opportunityHandoffs = mysqlTable(
+  "opportunity_handoffs",
+  {
+    id: serial("id").primaryKey(),
+    handoffId: varchar("handoffId", { length: 69 }).notNull(),
+    opportunityId: varchar("opportunityId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    envelope: json("envelope").notNull(),
+    evidenceSnapshotHash: varchar("evidenceSnapshotHash", { length: 64 }).notNull(),
+    handedOffAt: timestamp("handedOffAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    opportunityUnique: uniqueIndex("oh_user_opportunity_uidx").on(table.userId, table.opportunityId),
+    handoffIdIdx: uniqueIndex("oh_handoff_id_idx").on(table.handoffId),
+  })
+);
+
+export type OpportunityHandoffRow = typeof opportunityHandoffs.$inferSelect;
+export type InsertOpportunityHandoffRow = typeof opportunityHandoffs.$inferInsert;

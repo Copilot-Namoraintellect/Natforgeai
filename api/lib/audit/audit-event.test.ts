@@ -62,6 +62,11 @@ describe("audit-event taxonomy", () => {
       // R5-C: engagement terminal states + immutable receipts.
       "engagement_execution",
       "engagement_receipt",
+      // R5-D: opportunity detection durable effects (pre-lead candidates only).
+      "opportunity_detected",
+      "opportunity_suppressed",
+      "opportunity_state_changed",
+      "opportunity_handed_off",
     ]);
   });
 

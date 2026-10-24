@@ -61,6 +61,12 @@ export const AUDIT_EVENT_TYPES = [
   // R5-C: an immutable engagement receipt was accepted. Carries opaque
   // identity references (ids, hashes, bounded provider acknowledgement).
   "engagement_receipt",
+  // R5-D: opportunity detection durable effects (pre-lead candidates only).
+  // One canonical event per durable effect; ids/labels/hashes in metadata only.
+  "opportunity_detected",
+  "opportunity_suppressed",
+  "opportunity_state_changed",
+  "opportunity_handed_off",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
