@@ -65,36 +65,47 @@ describe("sanitizeSignalText", () => {
       signalId: "sig-1",
       signalVersion: 2,
       signalType: "reaction",
+      provider: "meta",
       platform: "facebook",
-      text: null,
+      attributionType: "business",
+      contentText: null,
+      actorReference: null,
     });
     const sanitized = sanitizeSignalText(signal);
-    expect(sanitized.text).toBe("");
+    expect(sanitized.contentText).toBe("");
     expect(sanitized.signalId).toBe("sig-1");
     expect(sanitized.signalVersion).toBe(2);
-    expect(sanitized.actorHandle).toBeNull();
+    expect(sanitized.actorReference).toBeNull();
+    expect(sanitized.actorDisplayName).toBeNull();
     expect(sanitized.occurredAt).toBeNull();
+    expect(sanitized.providerEvidenceHash).toBeNull();
   });
 
-  it("sanitizes present text and rejects oversize text", () => {
+  it("sanitizes present text; the aligned schema enforces the 1024-char bound before the sanitizer", () => {
     const signal = toCanonicalSignal({
       signalId: "sig-2",
       signalVersion: 1,
       signalType: "comment",
+      provider: "meta",
       platform: "twitter",
-      text: "hi\u200B there",
+      attributionType: "unattributed",
+      contentText: "hi\u200B there",
     });
-    expect(sanitizeSignalText(signal).text).toBe("hi there");
-    const oversize = toCanonicalSignal({
-      signalId: "sig-3",
-      signalVersion: 1,
-      signalType: "comment",
-      platform: "twitter",
-      text: "b".repeat(MAX_SOCIAL_TEXT_CHARS + 1),
-    });
-    expect(() => sanitizeSignalText(oversize)).toThrowError(
-      expect.objectContaining({ code: "OVERSIZED_INPUT" })
-    );
+    expect(sanitizeSignalText(signal).contentText).toBe("hi there");
+    // The frozen R5-A 1024-char bound rejects at the schema boundary, so the
+    // 4000-char sanitizer cap stays defense-in-depth (exercised directly
+    // against sanitizeSocialText above).
+    expect(() =>
+      toCanonicalSignal({
+        signalId: "sig-3",
+        signalVersion: 1,
+        signalType: "comment",
+        provider: "meta",
+        platform: "twitter",
+        attributionType: "unattributed",
+        contentText: "b".repeat(1025),
+      })
+    ).toThrowError(expect.objectContaining({ code: "INVALID_SIGNAL_INPUT" }));
   });
 });
 

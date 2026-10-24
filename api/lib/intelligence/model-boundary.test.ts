@@ -37,11 +37,14 @@ function signal(text: string): SanitizedSocialSignal {
       signalId: "sig-model-1",
       signalVersion: 1,
       signalType: "comment",
+      provider: "meta",
       platform: "instagram",
-      actorHandle: "@prospect",
-      text,
+      attributionType: "business",
+      actorReference: "actor-42",
+      actorDisplayName: "@prospect",
+      contentText: text,
       occurredAt: "2026-06-01T10:00:00Z",
-      metadata: { provider: "fixture" },
+      providerEvidenceHash: "b".repeat(64),
     })
   );
 }
@@ -100,14 +103,16 @@ describe("buildInterpretationModelPrompt", () => {
     expect(prompt).toContain("No business context available.");
   });
 
-  it("labels signalType/platform/actorHandle as data-only fields", () => {
+  it("labels signalType/provider/platform/actor fields as data-only fields", () => {
     const prompt = buildInterpretationModelPrompt({
       signal: signal("hello"),
       dnaContext: null,
     });
     expect(prompt).toContain("signalType: comment");
+    expect(prompt).toContain("provider: meta");
     expect(prompt).toContain("platform: instagram");
-    expect(prompt).toContain("@prospect");
+    expect(prompt).toContain("actorDisplayName: @prospect");
+    expect(prompt).toContain("attributionType: business");
     expect(prompt).toContain("DATA ONLY");
   });
 

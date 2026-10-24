@@ -26,8 +26,10 @@ function makeRecord(overrides: Partial<SocialInterpretation> = {}): SocialInterp
       signalId: overrides.signalId ?? "sig-store-1",
       signalVersion: overrides.signalVersion ?? 1,
       signalType: "comment",
+      provider: "meta",
       platform: "instagram",
-      text: "store fixture text",
+      attributionType: "business",
+      contentText: "store fixture text",
     })
   );
   const signalContentHash = computeSignalContentHash(signal);
@@ -103,14 +105,15 @@ function createFakeExecutor(initialRows: any[] = []) {
           const filtered = state.rows.filter((r) =>
             wanted.every((v) => Object.values(r).includes(v))
           );
-          return {
-            limit: vi.fn(async () => filtered.slice(0, 1)),
-            orderBy: vi.fn(async () =>
-              [...filtered].sort(
-                (a, b) => a.signalVersion - b.signalVersion || String(a.classifierVersion).localeCompare(String(b.classifierVersion))
-              )
-            ),
+          const sorted = [...filtered].sort(
+            (a, b) => a.signalVersion - b.signalVersion || String(a.classifierVersion).localeCompare(String(b.classifierVersion))
+          );
+          const chain: any = {
+            limit: vi.fn(async () => sorted.slice(0, 1)),
+            orderBy: vi.fn(() => chain),
+            then: (resolve: any, reject: any) => Promise.resolve(sorted).then(resolve, reject),
           };
+          return chain;
         }),
       })),
     })),
@@ -324,3 +327,126 @@ function toRow(record: SocialInterpretation) {
     createdAt: new Date(record.createdAt),
   };
 }
+
+describe("NULL businessId natural-key authority (application layer)", () => {
+  function nullBusinessRecord(overrides: Partial<SocialInterpretation> = {}): SocialInterpretation {
+    const signalContentHash = overrides.signalContentHash ?? "e".repeat(64);
+    return makeRecord({
+      userId: 8,
+      signalContentHash,
+      interpretationId: computeInterpretationId({
+        schemaVersion: SOCIAL_INTELLIGENCE_SCHEMA_VERSION,
+        businessId: null,
+        signalId: "sig-store-1",
+        signalVersion: 1,
+        signalContentHash,
+        classifierVersion: CLASSIFIER,
+      }),
+      ...overrides,
+      businessId: null,
+    });
+  }
+
+  it("(a) sequential tamper with NULL businessId → InterpretationTamperError, first row intact, exactly one row", async () => {
+    const { db, state } = createFakeExecutor();
+    const first = nullBusinessRecord();
+    const accepted = await acceptInterpretation(first, db);
+    expect(accepted.replayed).toBe(false);
+    expect(state.rows).toHaveLength(1);
+
+    const tampered = nullBusinessRecord({ signalContentHash: "f".repeat(64) });
+    expect(tampered.interpretationId).not.toBe(first.interpretationId);
+    try {
+      await acceptInterpretation(tampered, db);
+      expect.unreachable("expected tamper rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(InterpretationTamperError);
+      expect((error as InterpretationTamperError).code).toBe("SIGNAL_CONTENT_HASH_MISMATCH");
+    }
+    expect(state.rows).toHaveLength(1);
+    expect(state.rows[0].signalContentHash).toBe(first.signalContentHash);
+    expect(state.rows[0].interpretationId).toBe(first.interpretationId);
+    expect(state.inserts).toHaveLength(1);
+  });
+
+  it("(b) NULL businessId exact replay resolves via the pre-select: replayed, one insert", async () => {
+    const { db, state } = createFakeExecutor();
+    const record = nullBusinessRecord();
+    const first = await acceptInterpretation(record, db);
+    const second = await acceptInterpretation(record, db);
+    expect(first.replayed).toBe(false);
+    expect(second.replayed).toBe(true);
+    expect(second.record).toEqual(record);
+    expect(state.inserts).toHaveLength(1);
+    expect(state.rows[0].businessId).toBeNull();
+  });
+
+  it("(c) lost-race path still resolves: empty pre-selects, ER_DUP_ENTRY on insert, committed row wins", async () => {
+    const record = nullBusinessRecord();
+    const committedRow = toRow(record);
+
+    function raceExecutor(committed: any) {
+      let selectCalls = 0;
+      return {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => {
+              selectCalls++;
+              const outcome = selectCalls <= 2 ? [] : [committed];
+              const chain: any = {
+                limit: vi.fn(async () => outcome.slice(0, 1)),
+                orderBy: vi.fn(() => chain),
+                then: (resolve: any, reject: any) =>
+                  Promise.resolve(outcome).then(resolve, reject),
+              };
+              return chain;
+            }),
+          })),
+        })),
+        insert: vi.fn(() => ({
+          values: vi.fn(async () => {
+            const error: any = new Error("Duplicate entry");
+            error.code = "ER_DUP_ENTRY";
+            error.errno = 1062;
+            throw error;
+          }),
+        })),
+      };
+    }
+
+    // Identical record: race collapses to idempotent replay.
+    const replayed = await acceptInterpretation(record, raceExecutor(committedRow));
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.record.interpretationId).toBe(record.interpretationId);
+
+    // Tampered record under the same natural key: race fails closed.
+    const tampered = nullBusinessRecord({ signalContentHash: "f".repeat(64) });
+    await expect(
+      acceptInterpretation(tampered, raceExecutor(committedRow))
+    ).rejects.toBeInstanceOf(InterpretationTamperError);
+  });
+
+  it("(d) non-null businessId tamper still throws (regression)", async () => {
+    const { db, state } = createFakeExecutor();
+    const original = makeRecord();
+    await acceptInterpretation(original, db);
+
+    const tampered = makeRecord({
+      businessId: 3,
+      signalContentHash: "f".repeat(64),
+      interpretationId: computeInterpretationId({
+        schemaVersion: SOCIAL_INTELLIGENCE_SCHEMA_VERSION,
+        businessId: 3,
+        signalId: "sig-store-1",
+        signalVersion: 1,
+        signalContentHash: "f".repeat(64),
+        classifierVersion: CLASSIFIER,
+      }),
+    });
+    await expect(acceptInterpretation(tampered, db)).rejects.toBeInstanceOf(
+      InterpretationTamperError
+    );
+    expect(state.rows).toHaveLength(1);
+    expect(state.rows[0].signalContentHash).toBe(original.signalContentHash);
+  });
+});

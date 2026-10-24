@@ -77,8 +77,9 @@ export function sanitizeSocialText(raw: string): string {
  * through untouched.
  */
 export function sanitizeSignalText(signal: CanonicalSocialSignal): SanitizedSocialSignal {
-  const text = signal.text === null ? "" : sanitizeSocialText(signal.text);
-  return Object.freeze({ ...signal, text });
+  const contentText =
+    signal.contentText === null ? "" : sanitizeSocialText(signal.contentText);
+  return Object.freeze({ ...signal, contentText });
 }
 
 /**

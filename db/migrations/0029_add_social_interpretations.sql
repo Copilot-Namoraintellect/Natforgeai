@@ -1,7 +1,7 @@
 CREATE TABLE `social_interpretations` (
 	`id` serial AUTO_INCREMENT NOT NULL,
 	`userId` bigint unsigned NOT NULL,
-	`businessId` bigint unsigned NOT NULL,
+	`businessId` bigint unsigned,
 	`signalId` varchar(128) NOT NULL,
 	`signalVersion` int NOT NULL,
 	`signalContentHash` varchar(64) NOT NULL,

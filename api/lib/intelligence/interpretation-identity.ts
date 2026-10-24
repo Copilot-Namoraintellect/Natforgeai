@@ -76,27 +76,40 @@ function requirePositiveInt(value: number, field: string): number {
   return value;
 }
 
+function requireNullablePositiveInt(value: number | null, field: string): number | null {
+  if (value === null) return null;
+  return requirePositiveInt(value, field);
+}
+
 /**
- * sha256 of the sanitized canonical signal content (§5). signalId is
- * deliberately excluded: the hash detects content drift for one logical
- * signal identity. Metadata is hashed as supplied (already normalized by
- * toCanonicalSignal).
+ * sha256 of the sanitized canonical signal content (§5). `signalId`
+ * (R5-A signalKey) is deliberately excluded: the hash detects content drift
+ * for one logical signal identity. All R5-A-consumable content fields
+ * participate, including the provider evidence hash, so any evidence drift
+ * under one identity is a tamper signal.
  */
 export function computeSignalContentHash(signal: SanitizedSocialSignal): string {
   return hashCanonical({
     signalVersion: signal.signalVersion,
     signalType: signal.signalType,
+    provider: signal.provider,
     platform: signal.platform,
-    actorHandle: signal.actorHandle,
-    text: signal.text,
+    actorReference: signal.actorReference,
+    actorDisplayName: signal.actorDisplayName,
+    contentText: signal.contentText,
     occurredAt: signal.occurredAt,
-    metadata: signal.metadata,
+    observedAt: signal.observedAt,
+    attributionType: signal.attributionType,
+    sourceCampaignId: signal.sourceCampaignId,
+    parentExternalObjectId: signal.parentExternalObjectId,
+    providerEvidenceHash: signal.providerEvidenceHash,
   });
 }
 
 export interface InterpretationIdInput {
   readonly schemaVersion: string;
-  readonly businessId: number;
+  /** Null = unattributed tenant-scoped interpretation; participates as JSON null. */
+  readonly businessId: number | null;
   readonly signalId: string;
   readonly signalVersion: number;
   readonly signalContentHash: string;
@@ -107,7 +120,7 @@ export interface InterpretationIdInput {
 export function computeInterpretationId(args: InterpretationIdInput): string {
   return hashCanonical({
     schemaVersion: requireIdentityField(args.schemaVersion, "schemaVersion"),
-    businessId: requirePositiveInt(args.businessId, "businessId"),
+    businessId: requireNullablePositiveInt(args.businessId, "businessId"),
     signalId: requireIdentityField(args.signalId, "signalId"),
     signalVersion: requirePositiveInt(args.signalVersion, "signalVersion"),
     signalContentHash: requireIdentityField(args.signalContentHash, "signalContentHash"),
@@ -116,7 +129,8 @@ export function computeInterpretationId(args: InterpretationIdInput): string {
 }
 
 export interface InterpretationBillingIdentityInput {
-  readonly businessId: number;
+  /** Null = unattributed tenant-scoped interpretation; participates as JSON null. */
+  readonly businessId: number | null;
   readonly signalId: string;
   readonly signalVersion: number;
   readonly signalContentHash: string;
@@ -131,7 +145,7 @@ export interface InterpretationBillingIdentityInput {
 export function buildInterpretationBillingIdentity(
   args: InterpretationBillingIdentityInput
 ): string {
-  const businessId = requirePositiveInt(args.businessId, "businessId");
+  const businessId = requireNullablePositiveInt(args.businessId, "businessId");
   const signalId = requireIdentityField(args.signalId, "signalId");
   const signalVersion = requirePositiveInt(args.signalVersion, "signalVersion");
   const signalContentHash = requireIdentityField(args.signalContentHash, "signalContentHash");

@@ -5,6 +5,8 @@
 > **Branch:** `feature/r5-b-intent-sentiment` (base `e4493a8`)
 > **Status:** ACCEPTED — downstream interpretation authority
 > **Rule:** R5-C and R5-D must consume, not redefine, interpretation authority.
+> **Upstream (frozen, consumed not merged):** R5-A signal contracts,
+> branch `feature/r5-a-social-listening` @ `c9a930e` (§2 identity mapping)
 
 ---
 
@@ -18,10 +20,16 @@
 
 ## 2. Source signal identity
 
-- `signalId` (≤128 chars, server-authoritative from the canonical signal owner R5-A)
-  + `signalVersion` (integer ≥1) + `signalContentHash` (sha256 of sanitized signal).
-- `signalType` ∈ `comment|message|mention|reaction|share|dm|post_interaction|unknown`;
-  `platform` ∈ `facebook|instagram|linkedin|tiktok|twitter|other`.
+- `signalId` = R5-A `signalKey` (`"sigv1:" + sha256(provider|providerAccountId|externalEventId)`,
+  server-minted only) + `signalVersion` = R5-A `ingestionVersion` (integer ≥1) +
+  `signalContentHash` (sha256 of the sanitized aligned signal, including R5-A's
+  `providerEvidenceHash`).
+- `signalType` is R5-A's frozen 11-value set: `comment|reply|mention|reaction|
+  direct_message|repost|follow|unfollow|campaign_response|inbound_message|unknown`;
+  `platform` ∈ `facebook|instagram|whatsapp|linkedin|twitter|tiktok`;
+  `provider` ∈ `meta|linkedin|twitter|tiktok`.
+- `businessId` is `number | null`: null mirrors R5-A unattributed signals
+  (tenant-scoped, context-free interpretation — never a fabricated linkage).
 - One `(businessId, signalId, signalVersion, classifierVersion)` maps to exactly one
   accepted interpretation. A new `signalVersion` or `classifierVersion` mints a new
   `interpretationId`; historical rows are never mutated.
@@ -169,12 +177,18 @@ owned solely by R5-B. Downstream metadata belongs in their own stores keyed by
 
 - `social_interpretations` table (migration `0029_add_social_interpretations`,
   **generated, not executed** as of this contract) — columns mirror §1–§15 query dims;
-  full canonical record in the `record` JSON column.
+  full canonical record in the `record` JSON column; `businessId` nullable (§2).
 - `agent_runs.agentType` / `ai_usage.agentType` enums extended with `interpretation`
   (same unexecuted migration). Migration execution confirmation = FALSE; R5-F or an
   operator must execute before deployment.
 - `AUDIT_EVENT_TYPES` now includes `interpretation_recorded` (code-level, no
   migration needed).
+- **R5-X convergence item:** R5-A's provisional `0029_social_listening_foundation`
+  (creating `social_signals`/`social_listening_states`) and this stream's provisional
+  `0029_add_social_interpretations` **collide at journal idx 29** across the two
+  branches. R5-B did not execute, renumber, or duplicate the R5-A artefact. R5-X owns
+  final renumbering/journal convergence at integration; downstream must not execute
+  either 0029 until then.
 
 ## 21. Overlap-risk files
 

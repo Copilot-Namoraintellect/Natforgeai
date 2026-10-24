@@ -9,7 +9,7 @@
 // different content fails closed with InterpretationTamperError and the
 // committed row stays untouched.
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
 import { socialInterpretations, type SocialInterpretationRow } from "@db/schema";
 import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
@@ -49,17 +49,27 @@ async function loadByNaturalKey(
   db: InterpretationDbExecutor,
   record: SocialInterpretation
 ): Promise<SocialInterpretationRow | null> {
+  // businessId predicate: `businessId = X`, or `businessId IS NULL` when X is
+  // null (the folded form of `businessId = X OR (businessId IS NULL AND X IS
+  // NULL)`). SQL NULL would otherwise never match `= NULL`, leaving the
+  // unattributed scope unprotected at the application layer.
+  const businessCondition =
+    record.businessId === null
+      ? isNull(socialInterpretations.businessId)
+      : eq(socialInterpretations.businessId, record.businessId);
   const [row] = await db
     .select()
     .from(socialInterpretations)
     .where(
       and(
-        eq(socialInterpretations.businessId, record.businessId),
+        businessCondition,
         eq(socialInterpretations.signalId, record.signalId),
         eq(socialInterpretations.signalVersion, record.signalVersion),
         eq(socialInterpretations.classifierVersion, record.classifierVersion)
       )
     )
+    // Oldest committed row is the authority when more than one is visible.
+    .orderBy(asc(socialInterpretations.id))
     .limit(1);
   return (row as SocialInterpretationRow | undefined) ?? null;
 }
@@ -131,10 +141,12 @@ function toInsertRow(record: SocialInterpretation) {
 }
 
 /**
- * Accept one canonical interpretation record durably (exact-once under both
- * unique keys). Idempotent replay returns the stored record; a colliding
- * natural key with different content fails closed with
- * {@link InterpretationTamperError}.
+ * Accept one canonical interpretation record durably. Idempotent replay
+ * returns the stored record; a colliding natural key with different content
+ * fails closed with {@link InterpretationTamperError}. The natural key is
+ * resolved in the application layer before insert (MySQL NULL semantics make
+ * the unique index alone insufficient for the unattributed scope); the
+ * unique keys back the non-null path and the concurrent race.
  */
 export async function acceptInterpretation(
   record: SocialInterpretation,
@@ -147,6 +159,18 @@ export async function acceptInterpretation(
   if (existing) {
     assertCommittedMatchesIncoming(existing, validated);
     return { record: recordFromRow(existing), replayed: true };
+  }
+
+  // Pre-insert natural-key check (deterministic and businessId-NULL-safe):
+  // MySQL treats NULLs as distinct in unique indexes, so the database alone
+  // cannot block a tamper insert under (NULL, signalId, signalVersion,
+  // classifierVersion). The application layer resolves the natural key
+  // before insert; for non-null businessId this is simply an earlier,
+  // clearer fail-closed ahead of the unique key.
+  const colliding = await loadByNaturalKey(db, validated);
+  if (colliding) {
+    assertCommittedMatchesIncoming(colliding, validated);
+    return { record: recordFromRow(colliding), replayed: true };
   }
 
   try {

@@ -36,6 +36,7 @@ import {
   HANDLING_VALUES,
   INTENT_VALUES,
   InterpretationInputError,
+  InterpretationTamperError,
   InterpretationValidationError,
   OPPORTUNITY_INDICATOR_VALUES,
   RELEVANCE_VALUES,
@@ -65,11 +66,15 @@ function fixture(overrides: Partial<CanonicalSocialSignalInput> = {}): Canonical
     signalId: "sig-accept-1",
     signalVersion: 1,
     signalType: "comment",
+    provider: "meta",
     platform: "instagram",
-    actorHandle: "@commenter",
-    text: "Fixture text",
+    attributionType: "business",
+    actorReference: "actor-accept-1",
+    actorDisplayName: "@commenter",
+    contentText: "Fixture text",
     occurredAt: "2026-06-30T18:00:00Z",
-    metadata: { provider: "acceptance-fixture" },
+    observedAt: "2026-06-30T18:00:05Z",
+    providerEvidenceHash: "a".repeat(64),
     ...overrides,
   };
 }
@@ -170,16 +175,17 @@ function createHarness(options: { dna?: BusinessDNASnapshot | null } = {}) {
           const filtered = state.rows.filter((r) =>
             wanted.every((v) => Object.values(r).includes(v))
           );
-          return {
-            limit: vi.fn(async () => filtered.slice(0, 1)),
-            orderBy: vi.fn(async () =>
-              [...filtered].sort(
-                (a, b) =>
-                  a.signalVersion - b.signalVersion ||
-                  String(a.classifierVersion).localeCompare(String(b.classifierVersion))
-              )
-            ),
+          const sorted = [...filtered].sort(
+            (a, b) =>
+              a.signalVersion - b.signalVersion ||
+              String(a.classifierVersion).localeCompare(String(b.classifierVersion))
+          );
+          const chain: any = {
+            limit: vi.fn(async () => sorted.slice(0, 1)),
+            orderBy: vi.fn(() => chain),
+            then: (resolve: any, reject: any) => Promise.resolve(sorted).then(resolve, reject),
           };
+          return chain;
         }),
       })),
     })),
@@ -276,7 +282,7 @@ describe("B8 acceptance — intent & sentiment scenarios", () => {
     const result = await runInterpretation(
       {
         ...OWNER,
-        signal: fixture({ text: "Absolutely love your handmade soy candles, the scent is amazing!" }),
+        signal: fixture({ contentText: "Absolutely love your handmade soy candles, the scent is amazing!" }),
       },
       h.deps
     );
@@ -298,7 +304,7 @@ describe("B8 acceptance — intent & sentiment scenarios", () => {
     const result = await runInterpretation(
       {
         ...OWNER,
-        signal: fixture({ text: "This is unacceptable, I want a refund for my melted order" }),
+        signal: fixture({ contentText: "This is unacceptable, I want a refund for my melted order" }),
       },
       h.deps
     );
@@ -316,7 +322,7 @@ describe("B8 acceptance — intent & sentiment scenarios", () => {
     const result = await runInterpretation(
       {
         ...OWNER,
-        signal: fixture({ text: "Do your handmade soy candles come in gift packaging?" }),
+        signal: fixture({ contentText: "Do your handmade soy candles come in gift packaging?" }),
       },
       h.deps
     );
@@ -334,7 +340,7 @@ describe("B8 acceptance — intent & sentiment scenarios", () => {
       modelScript({ intent: "purchase_interest", sentiment: "positive", modelConfidence: "medium" })
     );
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: "How much for a dozen candles, do you ship?" }) },
+      { ...OWNER, signal: fixture({ contentText: "How much for a dozen candles, do you ship?" }) },
       h.deps
     );
     const r = result.record;
@@ -347,7 +353,7 @@ describe("B8 acceptance — intent & sentiment scenarios", () => {
     const h = createHarness({ dna: CANDLE_DNA });
     h.runModel.mockResolvedValue(modelScript({ intent: "support_request", sentiment: "neutral" }));
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: "I cannot log into my account, the reset email never arrives" }) },
+      { ...OWNER, signal: fixture({ contentText: "I cannot log into my account, the reset email never arrives" }) },
       h.deps
     );
     const r = result.record;
@@ -361,7 +367,7 @@ describe("B8 acceptance — intent & sentiment scenarios", () => {
       modelScript({ intent: "product_question", sentiment: "mixed" })
     );
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: "Great candles but my last order arrived late" }) },
+      { ...OWNER, signal: fixture({ contentText: "Great candles but my last order arrived late" }) },
       h.deps
     );
     const r = result.record;
@@ -376,7 +382,7 @@ describe("B8 acceptance — routing & authority scenarios", () => {
   it("7 — spam → RULE path, null billingIdentity, model not called, no_action", async () => {
     const h = createHarness({ dna: CANDLE_DNA });
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: "Double your bitcoin, claim your airdrop today" }) },
+      { ...OWNER, signal: fixture({ contentText: "Double your bitcoin, claim your airdrop today" }) },
       h.deps
     );
     const r = result.record;
@@ -393,7 +399,7 @@ describe("B8 acceptance — routing & authority scenarios", () => {
       modelScript({ intent: "unknown", modelConfidence: "low", relevanceHint: undefined })
     );
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: "blue elephant Tuesday?" }) },
+      { ...OWNER, signal: fixture({ contentText: "blue elephant Tuesday?" }) },
       h.deps
     );
     const r = result.record;
@@ -415,7 +421,7 @@ describe("B8 acceptance — routing & authority scenarios", () => {
       })
     );
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: "maybe interested in candles?" }) },
+      { ...OWNER, signal: fixture({ contentText: "maybe interested in candles?" }) },
       h.deps
     );
     const r = result.record;
@@ -429,7 +435,7 @@ describe("B8 acceptance — routing & authority scenarios", () => {
   it("10 — empty-text rule-only interpretation → irrelevant, deterministic_rule, no model, non-billable", async () => {
     const h = createHarness({ dna: CANDLE_DNA });
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: "   " }) },
+      { ...OWNER, signal: fixture({ contentText: "   " }) },
       h.deps
     );
     const r = result.record;
@@ -445,7 +451,7 @@ describe("B8 acceptance — routing & authority scenarios", () => {
   it("11 — AI-required interpretation with DNA → MODEL, billing identity format, model exactly once", async () => {
     const h = createHarness({ dna: CANDLE_DNA });
     h.runModel.mockResolvedValue(modelScript({ intent: "product_question" }));
-    const args = { ...OWNER, signal: fixture({ text: "Are your wax melts safe around pets?" }) };
+    const args = { ...OWNER, signal: fixture({ contentText: "Are your wax melts safe around pets?" }) };
     const result = await runInterpretation(args, h.deps);
     const r = result.record;
     expect(r.source).toBe("MODEL");
@@ -463,7 +469,7 @@ describe("B8 acceptance — routing & authority scenarios", () => {
 describe("B8 acceptance — exactness & replay scenarios", () => {
   const args = {
     ...OWNER,
-    signal: fixture({ signalId: "sig-accept-dup", text: "What candle sizes do you stock?" }),
+    signal: fixture({ signalId: "sig-accept-dup", contentText: "What candle sizes do you stock?" }),
   };
 
   it("12 — sequential duplicate → replayed, same interpretationId, model once, one row", async () => {
@@ -561,7 +567,7 @@ describe("B8 acceptance — malformed model output scenarios", () => {
 
     try {
       await runInterpretation(
-        { ...OWNER, signal: fixture({ text: "ambiguous provider-stressing text" }) },
+        { ...OWNER, signal: fixture({ contentText: "ambiguous provider-stressing text" }) },
         depsViaRealModelBoundary(h)
       );
       expect.unreachable("expected MODEL_OUTPUT_INVALID");
@@ -592,7 +598,7 @@ describe("B8 acceptance — malformed model output scenarios", () => {
 
     await expect(
       runInterpretation(
-        { ...OWNER, signal: fixture({ text: "ambiguous label-invention text" }) },
+        { ...OWNER, signal: fixture({ contentText: "ambiguous label-invention text" }) },
         depsViaRealModelBoundary(h)
       )
     ).rejects.toMatchObject({ code: "MODEL_OUTPUT_INVALID" });
@@ -631,7 +637,7 @@ describe("B8 acceptance — prompt-injection containment scenarios", () => {
     } as Awaited<ReturnType<typeof runAgent>>);
 
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: INJECTION_TEXT }) },
+      { ...OWNER, signal: fixture({ contentText: INJECTION_TEXT }) },
       depsViaRealModelBoundary(h)
     );
     containmentAssertions(INJECTION_TEXT);
@@ -650,7 +656,7 @@ describe("B8 acceptance — prompt-injection containment scenarios", () => {
     } as Awaited<ReturnType<typeof runAgent>>);
 
     await runInterpretation(
-      { ...OWNER, signal: fixture({ text: extraction }) },
+      { ...OWNER, signal: fixture({ contentText: extraction }) },
       depsViaRealModelBoundary(h)
     );
     containmentAssertions(extraction);
@@ -663,17 +669,17 @@ describe("B8 acceptance — prompt-injection containment scenarios", () => {
 // ─── Scenario 20: input safety ───
 
 describe("B8 acceptance — input safety scenarios", () => {
-  it("20 — oversized input → OVERSIZED_INPUT, store untouched, model not called", async () => {
+  it("20 — oversized contentText (>1024, the frozen R5-A bound) → schema-bound InterpretationInputError, store untouched, model not called", async () => {
     const h = createHarness({ dna: CANDLE_DNA });
     try {
       await runInterpretation(
-        { ...OWNER, signal: fixture({ text: "a".repeat(4001) }) },
+        { ...OWNER, signal: fixture({ contentText: "a".repeat(1025) }) },
         h.deps
       );
-      expect.unreachable("expected OVERSIZED_INPUT");
+      expect.unreachable("expected schema-bound input rejection");
     } catch (error) {
       expect(error).toBeInstanceOf(InterpretationInputError);
-      expect((error as InterpretationInputError).code).toBe("OVERSIZED_INPUT");
+      expect((error as InterpretationInputError).code).toBe("INVALID_SIGNAL_INPUT");
     }
     expect(h.state.rows).toHaveLength(0);
     expect(h.state.audits).toHaveLength(0);
@@ -716,14 +722,14 @@ describe("B8 acceptance — tenant isolation scenarios", () => {
       session: { verified: true },
     } as any);
     await expect(
-      foreignCaller.interpret({ businessId: 7, signal: fixture({ text: "hello?" }) })
+      foreignCaller.interpret({ businessId: 7, signal: fixture({ contentText: "hello?" }) })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     // Store level: same signalId, two businesses → distinct identities and
     // owner-scoped listing.
     const h = createHarness({ dna: CANDLE_DNA });
     h.runModel.mockResolvedValue(modelScript({ intent: "product_question" }));
-    const sharedSignal = fixture({ signalId: "sig-xbiz-1", text: "Do you offer bulk ordering?" });
+    const sharedSignal = fixture({ signalId: "sig-xbiz-1", contentText: "Do you offer bulk ordering?" });
     const r7 = await runInterpretation({ userId: 22, businessId: 7, signal: sharedSignal }, h.deps);
     const r8 = await runInterpretation({ userId: 23, businessId: 8, signal: sharedSignal }, h.deps);
     expect(r7.record.interpretationId).not.toBe(r8.record.interpretationId);
@@ -744,7 +750,7 @@ describe("B8 acceptance — tamper & versioning scenarios", () => {
     const yText = "Do you offer bulk discounts for event planners?";
 
     const v1 = await runInterpretation(
-      { ...OWNER, signal: fixture({ signalId: "sig-tamper-1", text: xText }) },
+      { ...OWNER, signal: fixture({ signalId: "sig-tamper-1", contentText: xText }) },
       h.deps
     );
     expect(v1.replayed).toBe(false);
@@ -753,7 +759,7 @@ describe("B8 acceptance — tamper & versioning scenarios", () => {
     // Same signal version, different content: fail-closed tamper rejection.
     try {
       await runInterpretation(
-        { ...OWNER, signal: fixture({ signalId: "sig-tamper-1", text: yText }) },
+        { ...OWNER, signal: fixture({ signalId: "sig-tamper-1", contentText: yText }) },
         h.deps
       );
       expect.unreachable("expected tamper rejection");
@@ -767,7 +773,7 @@ describe("B8 acceptance — tamper & versioning scenarios", () => {
 
     // New signal version: brand-new interpretation; version-1 row untouched.
     const v2 = await runInterpretation(
-      { ...OWNER, signal: fixture({ signalId: "sig-tamper-1", signalVersion: 2, text: yText }) },
+      { ...OWNER, signal: fixture({ signalId: "sig-tamper-1", signalVersion: 2, contentText: yText }) },
       h.deps
     );
     expect(v2.replayed).toBe(false);
@@ -790,7 +796,7 @@ describe("B8 acceptance — relevance context scenarios", () => {
     } as Awaited<ReturnType<typeof runAgent>>);
 
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: " blue elephant Tuesday? " }) },
+      { ...OWNER, signal: fixture({ contentText: " blue elephant Tuesday? " }) },
       depsViaRealModelBoundary(h)
     );
     const r = result.record;
@@ -810,7 +816,7 @@ describe("B8 acceptance — relevance context scenarios", () => {
     } as Awaited<ReturnType<typeof runAgent>>);
 
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: "Are your handmade soy candles priced per pair or singly?" }) },
+      { ...OWNER, signal: fixture({ contentText: "Are your handmade soy candles priced per pair or singly?" }) },
       depsViaRealModelBoundary(h)
     );
     const r = result.record;
@@ -843,7 +849,7 @@ describe("B8 acceptance — high-risk classification scenarios", () => {
     const result = await runInterpretation(
       {
         ...OWNER,
-        signal: fixture({ text: "I demand a full refund NOW, my order arrived destroyed" }),
+        signal: fixture({ contentText: "I demand a full refund NOW, my order arrived destroyed" }),
       },
       h.deps
     );
@@ -859,7 +865,7 @@ describe("B8 acceptance — high-risk classification scenarios", () => {
   it("25b — self-harm marker → RULE safety path, non-billable, safety_escalation", async () => {
     const h = createHarness({ dna: CANDLE_DNA });
     const result = await runInterpretation(
-      { ...OWNER, signal: fixture({ text: "I want to die, nothing helps anymore" }) },
+      { ...OWNER, signal: fixture({ contentText: "I want to die, nothing helps anymore" }) },
       h.deps
     );
     const r = result.record;
@@ -870,4 +876,138 @@ describe("B8 acceptance — high-risk classification scenarios", () => {
     expect(h.runModel).not.toHaveBeenCalled();
     expectDownstreamReady(r);
   });
+});
+
+// ─── R5-A alignment additions ───
+
+describe("B8 acceptance — R5-A alignment additions", () => {
+  it("A1 — unattributed interpretation (businessId null): interpreter accepts, DNA loader never invoked", async () => {
+    const h = createHarness({ dna: CANDLE_DNA });
+    h.runModel.mockResolvedValue(modelScript({ relevanceHint: undefined }));
+    const result = await runInterpretation(
+      { userId: OWNER.userId, businessId: null, signal: fixture({ signalId: "sig-unattributed-1" }) },
+      h.deps
+    );
+    const r = result.record;
+    expect(r.businessId).toBeNull();
+    expect(r.businessDnaSnapshotId).toBeNull();
+    expect(r.relevance).toBe("unknown");
+    expect(r.relevanceConfidence).toBe("low");
+    expect(h.loadOwnedBusinessDnaSnapshot).not.toHaveBeenCalled();
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0].businessId).toBeNull();
+    expectDownstreamReady(r);
+  });
+
+  it("A2 — router accepts interpret without businessId (tenant scope = ctx.user.id), no businesses select", async () => {
+    const db = routerLikeDb([]);
+    getDbMock.mockReturnValue(db);
+    const caller = intelligenceRouter.createCaller({
+      resHeaders: new Headers(),
+      user: { id: 22 },
+      session: { verified: true },
+    } as any);
+    const result = await caller.interpret({
+      signal: fixture({ signalId: "sig-router-unattributed", contentText: "Is this thing on?" }),
+    });
+    expect(result.replayed).toBe(false);
+    expect((result.record as SocialInterpretation).businessId).toBeNull();
+    expect((result.record as SocialInterpretation).source).toBe("MODEL");
+    expect((result.record as SocialInterpretation).businessDnaSnapshotId).toBeNull();
+    expect(db.state.insertTables).toContain("social_interpretations");
+  });
+
+  it("A3 — providerEvidenceHash drift under one identity → tamper, first record intact", async () => {
+    const h = createHarness({ dna: CANDLE_DNA });
+    h.runModel.mockResolvedValue(modelScript({ intent: "product_question" }));
+    const base = fixture({
+      signalId: "sig-evhash-1",
+      contentText: "Do you stock seasonal candle scents?",
+    });
+
+    const first = await runInterpretation({ ...OWNER, signal: base }, h.deps);
+    expect(first.replayed).toBe(false);
+    const firstHash = first.record.signalContentHash;
+
+    // Identical visible fields; only the R5-A evidence hash differs.
+    let tamperError: unknown = null;
+    try {
+      await runInterpretation(
+        { ...OWNER, signal: { ...base, providerEvidenceHash: "9".repeat(64) } },
+        h.deps
+      );
+    } catch (error) {
+      tamperError = error;
+    }
+    expect(tamperError).toBeInstanceOf(InterpretationTamperError);
+    expect(h.state.rows).toHaveLength(1);
+    expect(h.state.rows[0].signalContentHash).toBe(firstHash);
+    expect(h.state.rows[0].interpretationId).toBe(first.record.interpretationId);
+  });
+
+  function routerLikeDb(businessesRows: any[]) {
+    const state = { insertTables: [] as string[], insertedRows: [] as any[] };
+    const interpretationRows: any[] = [];
+    const db: any = {
+      state,
+      select: vi.fn(() => ({
+        from: vi.fn((table: unknown) => {
+          const name = (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol];
+          const base =
+            name === "businesses"
+              ? businessesRows
+              : name === "social_interpretations"
+                ? interpretationRows
+                : [];
+          return {
+            where: vi.fn((...conds: unknown[]) => {
+              const wanted = collectPredicateValues(conds);
+              const filtered = base.filter((r: any) =>
+                wanted.every((v) => Object.values(r).includes(v))
+              );
+              const chain: any = {
+                limit: vi.fn(async () => filtered.slice(0, 1)),
+                orderBy: vi.fn(() => chain),
+                then: (resolve: any, reject: any) =>
+                  Promise.resolve(filtered).then(resolve, reject),
+              };
+              return chain;
+            }),
+            orderBy: vi.fn(async () => base),
+          };
+        }),
+      })),
+      insert: vi.fn((table: unknown) => {
+        const name = String(
+          (table as Record<symbol, unknown>)[Symbol.for("drizzle:Name") as symbol]
+        );
+        state.insertTables.push(name);
+        return {
+          values: vi.fn(async (row: any) => {
+            if (name === "social_interpretations") {
+              const dup =
+                interpretationRows.some((r) => r.interpretationId === row.interpretationId) ||
+                interpretationRows.some(
+                  (r) =>
+                    r.businessId === row.businessId &&
+                    r.signalId === row.signalId &&
+                    r.signalVersion === row.signalVersion &&
+                    r.classifierVersion === row.classifierVersion
+                );
+              if (dup) {
+                const error: any = new Error("Duplicate entry");
+                error.code = "ER_DUP_ENTRY";
+                error.errno = 1062;
+                throw error;
+              }
+              interpretationRows.push(row);
+            }
+            state.insertedRows.push({ table: name, row });
+            return [{ insertId: 1000 + state.insertedRows.length, affectedRows: 1 }];
+          }),
+        };
+      }),
+    };
+    return db;
+  }
 });

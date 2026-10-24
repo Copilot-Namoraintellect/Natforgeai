@@ -27,19 +27,25 @@ const SPAM_SIGNAL: CanonicalSocialSignalInput = {
   signalId: "sig-int-1",
   signalVersion: 1,
   signalType: "comment",
+  provider: "meta",
   platform: "instagram",
-  text: "Double your Bitcoin in 7 days, claim your airdrop now",
+  attributionType: "unattributed",
+  contentText: "Double your Bitcoin in 7 days, claim your airdrop now",
 };
 
 const AMBIGUOUS_SIGNAL: CanonicalSocialSignalInput = {
   signalId: "sig-int-2",
   signalVersion: 1,
-  signalType: "message",
+  signalType: "inbound_message",
+  provider: "meta",
   platform: "instagram",
-  actorHandle: "@prospect",
-  text: "Do you deliver artisan coffee beans on weekends?",
+  attributionType: "business",
+  actorReference: "actor-77",
+  actorDisplayName: "@prospect",
+  contentText: "Do you deliver artisan coffee beans on weekends?",
   occurredAt: "2026-06-14T10:00:00Z",
-  metadata: { provider: "fixture" },
+  observedAt: "2026-06-14T10:00:05Z",
+  providerEvidenceHash: "c".repeat(64),
 };
 
 const MODEL_FIXTURE: ModelInterpretation = {
@@ -135,16 +141,17 @@ function createHarness(options: { dna?: BusinessDNASnapshot | null } = {}): Harn
           const filtered = state.rows.filter((r) =>
             wanted.every((v) => Object.values(r).includes(v))
           );
-          return {
-            limit: vi.fn(async () => filtered.slice(0, 1)),
-            orderBy: vi.fn(async () =>
-              [...filtered].sort(
-                (a, b) =>
-                  a.signalVersion - b.signalVersion ||
-                  String(a.classifierVersion).localeCompare(String(b.classifierVersion))
-              )
-            ),
+          const sorted = [...filtered].sort(
+            (a, b) =>
+              a.signalVersion - b.signalVersion ||
+              String(a.classifierVersion).localeCompare(String(b.classifierVersion))
+          );
+          const chain: any = {
+            limit: vi.fn(async () => sorted.slice(0, 1)),
+            orderBy: vi.fn(() => chain),
+            then: (resolve: any, reject: any) => Promise.resolve(sorted).then(resolve, reject),
           };
+          return chain;
         }),
       })),
     })),
@@ -374,7 +381,7 @@ describe("runInterpretation — replay & tamper", () => {
 
     const tamperedSignal: CanonicalSocialSignalInput = {
       ...AMBIGUOUS_SIGNAL,
-      text: "completely different content with same identity",
+      contentText: "completely different content with same identity",
     };
     // Pre-seed exactly the tamper scenario: same natural key, different content.
     const signal = sanitizeSignalText(toCanonicalSignal(tamperedSignal));

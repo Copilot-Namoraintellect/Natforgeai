@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "859f9e6a-a718-416e-9e15-e418710ba107",
+  "id": "48263906-3130-4421-acf0-0b5444dfb51d",
   "prevId": "2696bc82-4b53-437b-89c5-6cc34dd59d89",
   "tables": {
     "agent_runs": {
@@ -5106,7 +5106,7 @@
           "name": "businessId",
           "type": "bigint unsigned",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "signalId": {

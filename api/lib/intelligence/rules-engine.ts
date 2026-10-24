@@ -190,7 +190,7 @@ export function evaluateRules(signal: SanitizedSocialSignal): RuleVerdict {
   if (signal.signalType === "unknown") {
     return REJECT_UNSUPPORTED;
   }
-  if (typeof signal.text !== "string") {
+  if (typeof signal.contentText !== "string") {
     return Object.freeze({ kind: "reject", reason: "invalid_signal" });
   }
 
@@ -216,7 +216,7 @@ export function evaluateRules(signal: SanitizedSocialSignal): RuleVerdict {
   }
 
   // (c) Empty text on a text-bearing type: deterministic, never a model call.
-  if (signal.text.trim().length === 0) {
+  if (signal.contentText.trim().length === 0) {
     return definitive({
       intent: "irrelevant",
       intentConfidence: "high",
@@ -236,7 +236,7 @@ export function evaluateRules(signal: SanitizedSocialSignal): RuleVerdict {
     });
   }
 
-  const text = signal.text;
+  const text = signal.contentText;
 
   // (d) Spam markers / excessive links: definitive spam classification.
   const spamHits = matchedSpamMarkers(text);

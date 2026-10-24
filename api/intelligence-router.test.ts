@@ -157,16 +157,22 @@ const SPAM_SIGNAL = {
   signalId: "sig-router-1",
   signalVersion: 1,
   signalType: "comment" as const,
+  provider: "meta" as const,
   platform: "instagram" as const,
-  text: "Double your Bitcoin, claim your airdrop now",
+  attributionType: "unattributed" as const,
+  contentText: "Double your Bitcoin, claim your airdrop now",
 };
 
 const AMBIGUOUS_SIGNAL = {
   signalId: "sig-router-2",
   signalVersion: 1,
-  signalType: "message" as const,
+  signalType: "inbound_message" as const,
+  provider: "meta" as const,
   platform: "instagram" as const,
-  text: "Do you deliver on weekends?",
+  attributionType: "business" as const,
+  actorDisplayName: "@curious",
+  contentText: "Do you deliver on weekends?",
+  providerEvidenceHash: "a".repeat(64),
 };
 
 describe("intelligenceRouter", () => {
@@ -211,6 +217,20 @@ describe("intelligenceRouter", () => {
     expect(result.record.source).toBe("MODEL");
     expect(result.record.billingIdentity).toBe(call.billingIdempotencyKey);
     expect(result.record.businessDnaSnapshotId).toBeNull();
+  });
+
+  it("interpret without businessId is tenant-scoped and accepts an unattributed record", async () => {
+    const db = createMockDb({ businessesRows: [] });
+    vi.mocked(getDb).mockReturnValue(db);
+
+    const caller = intelligenceRouter.createCaller(buildCtx());
+    const result = await caller.interpret({ signal: AMBIGUOUS_SIGNAL });
+
+    expect(result.replayed).toBe(false);
+    expect(result.record.businessId).toBeNull();
+    expect(result.record.businessDnaSnapshotId).toBeNull();
+    expect(result.record.source).toBe("MODEL");
+    expect(db.state.insertTables).toContain("social_interpretations");
   });
 
   it("interpret replays an identical call without a second runner invocation", async () => {

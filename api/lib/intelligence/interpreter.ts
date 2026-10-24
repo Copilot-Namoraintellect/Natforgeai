@@ -108,7 +108,9 @@ const sharedInFlightRegistry = new InMemoryInterpretationRegistry();
 
 /** Injectable seams: defaults hit the real store/model; tests substitute fakes. */
 export interface InterpretationDeps {
-  /** Owner-scoped Business DNA snapshot; null/absent = context-free (§9). */
+  /** Owner-scoped Business DNA snapshot; null/absent = context-free (§9).
+   * Only invoked when args.businessId is non-null (unattributed signals skip
+   * DNA context entirely). */
   readonly loadOwnedBusinessDnaSnapshot?: (args: {
     userId: number;
     businessId: number;
@@ -129,7 +131,7 @@ export interface InterpretationDeps {
 
 export interface RunInterpretationArgs {
   readonly userId: number;
-  readonly businessId: number;
+  readonly businessId: number | null;
   readonly signal: CanonicalSocialSignalInput;
   readonly campaignId?: number;
 }
@@ -214,7 +216,7 @@ interface RecordBody {
 async function finalizeAndAccept(
   identity: {
     readonly userId: number;
-    readonly businessId: number;
+    readonly businessId: number | null;
     readonly signalId: string;
     readonly signalVersion: number;
     readonly signalContentHash: string;
@@ -373,10 +375,15 @@ async function evaluateAndAccept(
     );
   }
 
-  // e. Governed model path.
-  const dna = deps.loadOwnedBusinessDnaSnapshot
-    ? await deps.loadOwnedBusinessDnaSnapshot({ userId: args.userId, businessId: args.businessId })
-    : null;
+  // e. Governed model path. Unattributed (businessId null) evaluations never
+  // fetch DNA context (contract §9): relevance stays context-free.
+  const dna =
+    args.businessId !== null && deps.loadOwnedBusinessDnaSnapshot
+      ? await deps.loadOwnedBusinessDnaSnapshot({
+          userId: args.userId,
+          businessId: args.businessId,
+        })
+      : null;
   const dnaContext = dna
     ? {
         businessName: dna.businessName,
@@ -403,7 +410,7 @@ async function evaluateAndAccept(
   const sentimentConfidence = mapModelConfidence(model.modelConfidence);
 
   const riskFlags = classifyRisks({
-    text: signal.text,
+    text: signal.contentText,
     intent,
     sentiment,
     urgency,
@@ -413,7 +420,7 @@ async function evaluateAndAccept(
   // Deterministic Business DNA relevance wins when a snapshot exists (§9);
   // otherwise the validated model hint bounds an honest context-free result.
   const assessment = dna
-    ? assessRelevanceWithContext(signal.text, dna)
+    ? assessRelevanceWithContext(signal.contentText, dna)
     : assessRelevanceWithoutContext(model.relevanceHint);
   const relevance = assessment.relevance;
   const relevanceConfidence = assessment.relevanceConfidence;
@@ -440,11 +447,11 @@ async function evaluateAndAccept(
   const recommendedHandling = gateHandling(overallConfidence, desiredHandling);
 
   const evidenceReferences: EvidenceReference[] = [];
-  if (signal.text.trim().length > 0) {
+  if (signal.contentText.trim().length > 0) {
     evidenceReferences.push({
       kind: "signal_excerpt",
       ref: signal.signalId,
-      excerpt: excerptOf(signal.text, 160),
+      excerpt: excerptOf(signal.contentText, 160),
     });
   }
   if (assessment.evidence) evidenceReferences.push(assessment.evidence);

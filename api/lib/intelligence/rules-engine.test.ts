@@ -10,7 +10,7 @@ import {
 import { computeInterpretationId, computeSignalContentHash } from "./interpretation-identity";
 
 function signal(
-  text: string | null,
+  contentText: string | null,
   overrides: Record<string, unknown> = {}
 ): SanitizedSocialSignal {
   return sanitizeSignalText(
@@ -18,9 +18,11 @@ function signal(
       signalId: "sig-rules-1",
       signalVersion: 1,
       signalType: "comment",
+      provider: "meta",
       platform: "instagram",
-      actorHandle: "@actor",
-      text,
+      attributionType: "business",
+      actorReference: "actor-1",
+      contentText,
       ...overrides,
     })
   );
@@ -121,7 +123,7 @@ describe("evaluateRules — rule classes a–f", () => {
   });
 
   it("(c) null text on a text-bearing type follows the same empty-text rule", () => {
-    const verdict = expectDefinitive(evaluateRules(signal(null, { signalType: "dm" })));
+    const verdict = expectDefinitive(evaluateRules(signal(null, { signalType: "direct_message" })));
     expect(verdict.intent).toBe("irrelevant");
     expect(verdict.recommendedHandling).toBe("no_action");
   });
@@ -177,7 +179,7 @@ describe("evaluateRules — rule classes a–f", () => {
 
   it("definitive rule verdicts conform to the canonical record schema", () => {
     const cases: DefinitiveRuleVerdict[] = [
-      expectDefinitive(evaluateRules(signal("x", { signalType: "share" }))),
+      expectDefinitive(evaluateRules(signal("x", { signalType: "repost" }))),
       expectDefinitive(evaluateRules(signal(""))),
       expectDefinitive(evaluateRules(signal("claim your airdrop now"))),
       expectDefinitive(evaluateRules(signal("I know where you live"))),

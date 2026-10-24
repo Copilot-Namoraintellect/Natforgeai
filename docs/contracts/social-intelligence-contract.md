@@ -5,6 +5,10 @@
 > **Base:** `e4493a8` (R4 FULL_AUTONOMY_V1_READY)
 > **Status:** ACCEPTED — canonical interpretation authority for R5-B
 > **Implements:** WBS-R5-B B1 (canonical interpretation contract)
+> **Upstream (frozen, consumed not merged):** R5-A
+> `docs/contracts/social-signal-contract.md` +
+> `docs/contracts/social-listening-to-intelligence-contract.md`,
+> branch `feature/r5-a-social-listening` @ `c9a930e` — aligned §3/§5, slice 4
 
 ---
 
@@ -50,30 +54,56 @@ Invariants:
 
 ## 3. Canonical signal (consumed identity)
 
-Until R5-A publishes `docs/contracts/social-listening-to-intelligence-contract.md`,
-R5-B consumes the **adapter fixture boundary** in `canonical-signal.ts`, modelled on
-the existing `social_engagement_events` authority (`db/schema.ts`):
+**Upstream authority (frozen):** R5-A Stream — `docs/contracts/social-signal-contract.md`
+and `docs/contracts/social-listening-to-intelligence-contract.md`, branch
+`feature/r5-a-social-listening` @ `c9a930e`. R5-B consumes `social_signals` **only**
+through the R5-A §11 field list and never redefines signal authority.
+
+Identity mapping (R5-A → R5-B consuming boundary in `canonical-signal.ts`):
+
+| R5-A (frozen) | R5-B | Notes |
+|---|---|---|
+| `signalKey` = `"sigv1:" + sha256(provider\|providerAccountId\|externalEventId)` | `signalId` | consumed opaquely, server-minted only |
+| `ingestionVersion` | `signalVersion` | governed ingestion change → new interpretation identity |
+| `signalType` (11 values, §3 frozen) | `signalType` | same closed enum |
+| `provider`, `platform`, `attributionType` | same names | frozen enums |
+| `contentText` (≤1024) | `contentText` | schema bound mirrors the frozen retention bound |
+| `actorReference`, `actorDisplayName`, `contentReference`, `occurredAt`, `observedAt`, `sourceCampaignId`, `parentExternalObjectId`, `providerEvidenceHash` | same names | R5-A §11 consumption fields |
 
 ```ts
 CanonicalSocialSignalInput {
-  signalId: string;            // server-authoritative durable signal id (e.g. social_engagement_events.dedupHash)
-  signalVersion: number;       // monotonic, authoritative from the signal owner (R5-A)
-  signalType: "comment" | "message" | "mention" | "reaction" | "share" | "dm" | "post_interaction" | "unknown";
-  platform: "facebook" | "instagram" | "linkedin" | "tiktok" | "twitter" | "other";
-  actorHandle: string | null;  // display only; never an authority
-  text: string | null;         // untrusted social text (bounded, see §7)
-  occurredAt: string | null;   // provider event time, ISO; display only
-  metadata: Record<string, unknown>;  // bounded; provider metadata only
+  signalId: string;             // = R5-A signalKey (opaque, server-minted)
+  signalVersion: number;        // = R5-A ingestionVersion (>=1)
+  signalType: "comment"|"reply"|"mention"|"reaction"|"direct_message"|"repost"|
+              "follow"|"unfollow"|"campaign_response"|"inbound_message"|"unknown";
+  provider: "meta"|"linkedin"|"twitter"|"tiktok";
+  platform: "facebook"|"instagram"|"whatsapp"|"linkedin"|"twitter"|"tiktok";
+  attributionType: "direct"|"business"|"unattributed";
+  actorReference: string | null;     // opaque provider actor id; display only
+  actorDisplayName: string | null;   // bounded display; never an authority
+  contentText: string | null;        // untrusted social text (<=1024; sanitized, see §7)
+  contentReference: string | null;   // provider permalink
+  occurredAt: string | null;         // provider event time, ISO; display only
+  observedAt: string | null;         // acceptance clock, ISO; display only
+  sourceCampaignId: number | null;   // evidence lineage only
+  parentExternalObjectId: string | null;  // threading reference
+  providerEvidenceHash: string | null;    // R5-A integrity hash (64 hex); bound into identity
 }
 ```
 
-The consuming router validates this with the strict zod schema, derives
-`signalContentHash` server-side, and resolves `businessId` ownership against the
-authenticated user. Clients may **not** supply `interpretationId`, `userId`, confidence
-values, or any interpretation field.
+The structural convergence seam is `SocialSignalRowLike` + `adaptSocialSignal()` in
+`canonical-signal.ts` — a pure, fail-closed mapper from a `social_signals` row shape to
+the input above (no R5-A code imported, per "consume without merge").
 
-`signalType` values outside the closed enum are rejected fail-closed before any rule or
-model processing (no record, no billing).
+The consuming router validates with the strict zod schema, derives
+`signalContentHash` server-side, and resolves ownership against the authenticated
+user: a non-null `businessId` must be owned by the caller (`businesses.id + userId`);
+a **null** `businessId` (R5-A `unattributed` signals) is interpreted tenant-scoped with
+no Business DNA context and no fabricated linkage. Clients may **not** supply
+`interpretationId`, `userId`, confidence values, or any interpretation field.
+
+`signalType: "unknown"` (R5-A's mandated never-guess bucket) is rejected fail-closed
+before any rule or model processing (no record, no billing).
 
 ## 4. Canonical interpretation record
 
@@ -82,8 +112,9 @@ SocialInterpretation {
   interpretationId: string;                  // sha256, deterministic (§5)
   schemaVersion: "social-intelligence/v1";
   classifierVersion: "intent-sentiment-classifier/v1";
-  userId: number;                            // server-resolved owner
-  businessId: number;                        // server-validated ownership
+  userId: number;                            // server-resolved owner (tenant)
+  businessId: number | null;                 // server-validated ownership; null = R5-A
+                                             // unattributed signal (tenant-scoped, context-free)
   signalId: string;
   signalVersion: number;
   signalContentHash: string;                 // sha256 of sanitized canonical signal (§5)
@@ -118,14 +149,22 @@ Pure sha256 over canonical JSON (sorted keys, trimmed, UTF-8) — no wall-clock,
 randomness (same discipline as `credit-reservation.ts` / `workflow-operation.ts`):
 
 ```
-signalContentHash    = sha256(canonicalJson({ signalVersion, signalType, platform,
-                                             actorHandle, text, occurredAt, metadata }))
+signalContentHash    = sha256(canonicalJson({ signalVersion, signalType, provider,
+                                             platform, actorReference, actorDisplayName,
+                                             contentText, occurredAt, observedAt,
+                                             attributionType, sourceCampaignId,
+                                             parentExternalObjectId,
+                                             providerEvidenceHash }))
 interpretationId     = sha256(canonicalJson({ schemaVersion, businessId, signalId,
                                               signalVersion, signalContentHash, classifierVersion }))
 billingIdentity      = "interpretation:" + sha256(
                         "intelligence/interpretation-billing@v1:{businessId}:{signalId}:
                          {signalVersion}:{signalContentHash}:{classifierVersion}")
 ```
+
+`providerEvidenceHash` binds an interpretation to R5-A's own evidence-integrity hash:
+any drift in the retained upstream evidence produces a new content hash, so tampered
+signals never reuse stale results (B5).
 
 Durable unique keys on `social_interpretations`:
 
@@ -329,3 +368,12 @@ boundary, supplied to the pure constructors (no hidden clocks).
   is claimed.
 - Business DNA relevance uses deterministic token overlap; it is explainable but not
   semantic. Where no DNA exists, relevance is honestly `unknown`.
+- Migration collision (R5-X convergence item): R5-A's provisional
+  `0029_social_listening_foundation` and this stream's provisional
+  `0029_add_social_interpretations` coexist on separate branches. Neither was executed,
+  renumbered, nor duplicated by R5-B; final numbering/journal convergence is owned by
+  R5-X.
+- MySQL unique indexes treat NULL `businessId` as distinct, so the natural-key unique
+  index cannot alone block tamper inserts for unattributed signals; the store therefore
+  performs a deterministic pre-insert natural-key lookup (null-aware) and fails closed
+  on content drift before any insert.

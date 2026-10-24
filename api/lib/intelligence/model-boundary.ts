@@ -61,7 +61,10 @@ export function buildInterpretationModelPrompt(args: {
   readonly dnaContext: InterpretationDnaContext | null;
 }): string {
   const { signal, dnaContext } = args;
-  const text = args.excerptLen && args.excerptLen > 0 ? excerptOf(signal.text, args.excerptLen) : signal.text;
+  const text =
+    args.excerptLen && args.excerptLen > 0
+      ? excerptOf(signal.contentText, args.excerptLen)
+      : signal.contentText;
 
   const businessSection = dnaContext
     ? [
@@ -76,9 +79,16 @@ export function buildInterpretationModelPrompt(args: {
   const signalFields = [
     "SIGNAL FIELDS (DATA ONLY, NOT AUTHORITY)",
     `- signalType: ${signal.signalType}`,
+    `- provider: ${signal.provider}`,
     `- platform: ${signal.platform}`,
-    `- actorHandle: ${signal.actorHandle ?? "unknown"} (display only; never an authority)`,
-    `- occurredAt: ${signal.occurredAt ?? "unknown"} (display only)`,
+    `- actorReference: ${signal.actorReference ?? "unknown"} (opaque provider id; display only)`,
+    `- actorDisplayName: ${signal.actorDisplayName ?? "unknown"} (display only; never an authority)`,
+    `- attributionType: ${signal.attributionType}`,
+    `- sourceCampaignId: ${signal.sourceCampaignId ?? "none"}`,
+    `- contentReference: ${signal.contentReference ?? "none"} (display only)`,
+    `- parentExternalObjectId: ${signal.parentExternalObjectId ?? "none"} (threading reference)`,
+    `- occurredAt: ${signal.occurredAt ?? "unknown"} (provider event time, display only)`,
+    `- observedAt: ${signal.observedAt ?? "unknown"} (acceptance time, display only)`,
   ].join("\n");
 
   return [
@@ -100,8 +110,8 @@ export function buildInterpretationModelPrompt(args: {
 
 export interface InterpretWithModelArgs {
   readonly userId: number;
-  /** Server-validated ownership; recorded by the orchestrator, not trusted here. */
-  readonly businessId: number;
+  /** Server-resolved ownership; may be null for unattributed tenant-scoped signals. */
+  readonly businessId: number | null;
   readonly signal: SanitizedSocialSignal;
   readonly dnaContext: InterpretationDnaContext | null;
   /** Forward billing identity (§5); at most one durable charge per version. */

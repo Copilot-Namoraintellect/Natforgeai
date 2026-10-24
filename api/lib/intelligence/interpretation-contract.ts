@@ -189,7 +189,10 @@ export interface SocialInterpretation {
   readonly schemaVersion: typeof SOCIAL_INTELLIGENCE_SCHEMA_VERSION;
   readonly classifierVersion: typeof CLASSIFIER_VERSION;
   readonly userId: number;
-  readonly businessId: number;
+  /** Server-validated owner business; null = unattributed tenant-scoped
+   * interpretation (R5-A attributionType "unattributed"/"business" without a
+   * bound business). DNA context is never fetched when null. */
+  readonly businessId: number | null;
   readonly signalId: string;
   readonly signalVersion: number;
   readonly signalContentHash: string;
@@ -235,18 +238,21 @@ export const SocialInterpretationSchema = z.strictObject({
   schemaVersion: z.literal(SOCIAL_INTELLIGENCE_SCHEMA_VERSION),
   classifierVersion: z.literal(CLASSIFIER_VERSION),
   userId: z.number().int().positive(),
-  businessId: z.number().int().positive(),
+  businessId: z.number().int().positive().nullable(),
   signalId: z.string().min(1).max(128),
   signalVersion: z.number().int().min(1),
   signalContentHash: z.string().regex(/^[a-f0-9]{64}$/),
   signalType: z.enum([
     "comment",
-    "message",
+    "reply",
     "mention",
     "reaction",
-    "share",
-    "dm",
-    "post_interaction",
+    "direct_message",
+    "repost",
+    "follow",
+    "unfollow",
+    "campaign_response",
+    "inbound_message",
     "unknown",
   ]),
   source: ModelOrRuleSourceEnum,

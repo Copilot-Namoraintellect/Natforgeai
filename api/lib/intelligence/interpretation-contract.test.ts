@@ -37,11 +37,13 @@ function sanitizedSignal(text = "How much does the starter plan cost?") {
       signalId: "sig-contract-1",
       signalVersion: 1,
       signalType: "comment",
+      provider: "meta",
       platform: "instagram",
-      actorHandle: "@jane_doe",
-      text,
+      attributionType: "business",
+      actorDisplayName: "Jane Doe",
+      contentText: text,
       occurredAt: "2026-06-01T10:00:00Z",
-      metadata: { provider: "test-fixture" },
+      providerEvidenceHash: "a".repeat(64),
     })
   );
 }

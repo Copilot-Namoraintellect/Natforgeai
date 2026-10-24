@@ -22,11 +22,14 @@ function sanitized(overrides: Record<string, unknown> = {}): SanitizedSocialSign
       signalId: "sig-id-1",
       signalVersion: 3,
       signalType: "comment",
+      provider: "meta",
       platform: "instagram",
-      actorHandle: "@someone",
-      text: "Hello there, quick question about pricing",
+      attributionType: "business",
+      actorDisplayName: "Someone",
+      contentText: "Hello there, quick question about pricing",
       occurredAt: "2026-06-01T09:30:00Z",
-      metadata: { provider: "fixture", lang: "en" },
+      observedAt: "2026-06-01T09:31:00Z",
+      providerEvidenceHash: "e".repeat(64),
       ...overrides,
     })
   );
@@ -61,12 +64,13 @@ describe("computeSignalContentHash", () => {
     expect(h1).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("distinguishes tiny content changes, including metadata", () => {
+  it("distinguishes tiny content changes across the aligned R5-A field set", () => {
     const base = computeSignalContentHash(sanitized());
-    expect(computeSignalContentHash(sanitized({ text: "Hello there, quick question about pricing!" }))).not.toBe(base);
+    expect(computeSignalContentHash(sanitized({ contentText: "Hello there, quick question about pricing!" }))).not.toBe(base);
     expect(computeSignalContentHash(sanitized({ signalVersion: 4 }))).not.toBe(base);
-    expect(computeSignalContentHash(sanitized({ actorHandle: "@someone_else" }))).not.toBe(base);
-    expect(computeSignalContentHash(sanitized({ metadata: { provider: "fixture", lang: "en-US" } }))).not.toBe(base);
+    expect(computeSignalContentHash(sanitized({ actorDisplayName: "Someone Else" }))).not.toBe(base);
+    expect(computeSignalContentHash(sanitized({ providerEvidenceHash: "f".repeat(64) }))).not.toBe(base);
+    expect(computeSignalContentHash(sanitized({ attributionType: "unattributed" }))).not.toBe(base);
   });
 
   it("ignores signalId, since the hash binds content to one logical signal", () => {

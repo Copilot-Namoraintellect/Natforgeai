@@ -1641,7 +1641,10 @@ export const socialInterpretations = mysqlTable(
   {
     id: serial("id").primaryKey(),
     userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    // Null = unattributed tenant-scoped interpretation (R5-A attribution
+    // without a bound business); participates in the identity unique key as
+    // SQL NULL, so distinct null-business signals never collide on it.
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
     signalId: varchar("signalId", { length: 128 }).notNull(),
     signalVersion: int("signalVersion").notNull(),
     signalContentHash: varchar("signalContentHash", { length: 64 }).notNull(),
