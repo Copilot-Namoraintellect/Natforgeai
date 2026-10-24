@@ -204,6 +204,13 @@
       "when": 1792751248158,
       "tag": "0028_add_campaign_interest_signal_actor_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "5",
+      "when": 1792835311361,
+      "tag": "0030_opportunity_detection_foundation",
+      "breakpoints": true
     }
   ]
 }

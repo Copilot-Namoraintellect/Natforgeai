@@ -194,7 +194,7 @@ neither a client nor an external model can set them (adversarial case 17).
 | Class | Exact rule (in-window evidence set E) |
 |---|---|
 | `HIGH` | `contradictionCount = 0` AND `repeatSignal` (≥2 distinct interpretations) AND (`explicitHigh` present OR (`explicitMedium` present AND `engagementBoost` present)) |
-| `MEDIUM` | `contradictionCount = 0` AND (`explicitHigh` present OR (`explicitMedium` present AND `repeatSignal`) OR (`explicitMedium` AND `engagementBoost`) OR (`repeatSignal` AND ≥1 engagement-receipt evidence)) |
+| `MEDIUM` | `contradictionCount = 0` AND (`explicitHigh` present OR `explicitMedium` present OR (`repeatSignal` AND `engagementBoost`)) |
 | `LOW` | Any qualifying evidence not reaching MEDIUM (e.g. a single weak/low-confidence signal), or any evidence with `contradictionCount > 0` (capped) |
 | `UNKNOWN` | No qualifying evidence basis |
 
