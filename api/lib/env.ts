@@ -125,6 +125,16 @@ export const env = {
     300_000
   ),
 
+  // Social listening polling (WBS-R5-A) is DEFAULT OFF. The pass only runs
+  // against operator-configured provider fetch seams; enabling it without
+  // those seams produces honest OPERATOR_ACTION failures, never fake success.
+  socialListeningPollingEnabled:
+    process.env.SOCIAL_LISTENING_POLLING_ENABLED === "true",
+  socialListeningPollingIntervalMs: parsePositiveInteger(
+    process.env.SOCIAL_LISTENING_POLLING_INTERVAL_MS,
+    300_000
+  ),
+
   bannerbearApiKey: process.env.BANNERBEAR_API_KEY ?? "",
   bannerbearTemplateRetailProductPromo: process.env.BANNERBEAR_TEMPLATE_RETAIL_PRODUCT_PROMO ?? "",
   bannerbearTemplateServiceBusinessPromo: process.env.BANNERBEAR_TEMPLATE_SERVICE_BUSINESS_PROMO ?? "",

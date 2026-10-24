@@ -34,7 +34,6 @@
  *   fail-closed in production (log-only in non-production).
  */
 
-import { createHmac, timingSafeEqual, createHash } from "crypto";
 import { getDb } from "../../queries/connection";
 import {
   socialIntegrations,
@@ -47,6 +46,14 @@ import { isMySqlDuplicateKeyError } from "../billing/credit-engine";
 import { handleNewMessage } from "../agents/engagement-agent";
 import { logInfo, logError } from "../logger";
 import { env } from "../env";
+import {
+  sha256Hex,
+  verifyMetaWebhookSignature,
+} from "../integrations/webhook-authenticity";
+
+// Re-exported for existing callers/tests of this module; the implementation
+// lives in ../integrations/webhook-authenticity (shared with R5-A listening).
+export { sha256Hex, verifyMetaWebhookSignature };
 
 const META_PLATFORMS = new Set(["facebook", "instagram", "whatsapp"]);
 
@@ -81,22 +88,6 @@ export interface InboundWebhookOutcome {
   received: boolean;
   dispositions: InboundEventDisposition[];
   error?: string;
-}
-
-export function sha256Hex(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-export function verifyMetaWebhookSignature(
-  rawBody: string,
-  signature: string,
-  appSecret: string
-): boolean {
-  if (!appSecret || !signature) return false;
-  const expected = `sha256=${createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex")}`;
-  const a = Buffer.from(signature);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function asRecord(value: unknown): Record<string, any> {

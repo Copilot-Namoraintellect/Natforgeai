@@ -604,6 +604,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `banking` | `api/banking-router.ts` | Payment method CRUD |
 | `business` | `api/business-router.ts` | Business profile CRUD |
 | `learning` | `api/learning-router.ts` | Phase 1 Learning engine: governed, idempotent campaign-learning evaluation (`evaluate`, `records`, `record`) |
+| `listening` | `api/lib/social-listening/listening-router.ts` | WBS-R5-A social listening: tenant-scoped listening status (`getOverview`), canonical signal read view (`listSignals`), operator overview (`adminGetOverview`) |
 
 ### Context
 

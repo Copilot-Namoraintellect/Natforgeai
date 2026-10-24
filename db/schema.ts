@@ -1626,3 +1626,158 @@ export const auditEvents = mysqlTable(
 
 export type AuditEventRow = typeof auditEvents.$inferSelect;
 export type InsertAuditEventRow = typeof auditEvents.$inferInsert;
+
+// ─── Social Signals (WBS-R5-A canonical listening evidence) ───
+//
+// One immutable, replay-safe canonical row per logical provider event. This is
+// the governed evidence layer consumed by R5-B/R5-C/R5-D; see
+// docs/contracts/social-signal-contract.md. Ingestion/normalization only — no
+// sentiment, scoring, or business-action interpretation happens here.
+//
+// Exact-once: the unique natural key (provider, providerAccountId,
+// externalEventId) makes one logical provider event durable exactly once at
+// the database level; signalKey is the deterministic server-derived identity
+// derived from that same triple (see api/lib/social-listening/signal-contract.ts).
+// Rows are immutable after acceptance — there is no update path.
+export const socialSignals = mysqlTable(
+  "social_signals",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic server-derived identity:
+    //   "sigv1:" + sha256(provider | providerAccountId | externalEventId)
+    // Minted only by the server; clients can never supply or influence it.
+    signalKey: varchar("signalKey", { length: 64 }).notNull(),
+    // Authoritative tenant/business context, bound from social_integrations
+    // and (for direct attribution) publication receipts — never from the client.
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    // Provider family + surface (e.g. meta/facebook, meta/instagram,
+    // linkedin/linkedin). Unknown providers/platforms fail closed before here.
+    provider: varchar("provider", { length: 32 }).notNull(),
+    platform: varchar("platform", { length: 32 }).notNull(),
+    // The authoritative binding the signal was accepted under.
+    integrationId: bigint("integrationId", { mode: "number", unsigned: true }).notNull(),
+    // Provider-side account (page id / account id) the event arrived on.
+    providerAccountId: varchar("providerAccountId", { length: 255 }).notNull(),
+    // Provider event identity (message mid, comment id, poll event id...).
+    externalEventId: varchar("externalEventId", { length: 255 }).notNull(),
+    // Provider object the event refers to (post id), and its parent
+    // (thread/parent comment) where the provider supplies one.
+    externalObjectId: varchar("externalObjectId", { length: 255 }),
+    parentExternalObjectId: varchar("parentExternalObjectId", { length: 255 }),
+    signalType: mysqlEnum("signalType", [
+      "comment",
+      "reply",
+      "mention",
+      "reaction",
+      "direct_message",
+      "repost",
+      "follow",
+      "unfollow",
+      "campaign_response",
+      "inbound_message",
+      "unknown",
+    ]).notNull(),
+    // Provider event time (safe-converted) and server acceptance time.
+    occurredAt: timestamp("occurredAt").notNull(),
+    observedAt: timestamp("observedAt").notNull(),
+    // Authoritative lineage where evidence permits (never fabricated):
+    // DIRECT attribution fills these from the publication receipt /
+    // publishing_queue success row the provider object resolves to.
+    sourceCampaignId: bigint("sourceCampaignId", { mode: "number", unsigned: true }),
+    sourcePublicationId: varchar("sourcePublicationId", { length: 255 }),
+    sourcePublicationReceiptId: varchar("sourcePublicationReceiptId", { length: 128 }),
+    // Opaque provider actor reference + bounded display name (PII minimized;
+    // no emails/phones are retained from provider payloads).
+    actorReference: varchar("actorReference", { length: 255 }),
+    actorDisplayName: varchar("actorDisplayName", { length: 255 }),
+    // Provider perma-reference (comment URL etc.) and bounded sanitized
+    // textual evidence (see contract for the justification and bound).
+    contentReference: varchar("contentReference", { length: 255 }),
+    contentText: text("contentText"),
+    // sha256 over the canonical provider evidence fragment accepted at
+    // ingestion; proves the durable evidence is byte-stable under replay.
+    providerEvidenceHash: varchar("providerEvidenceHash", { length: 64 }).notNull(),
+    // direct = provider object maps to a known NatForgeAI publication receipt;
+    // business = provider account maps to a business only;
+    // unattributed = connected account but no publication linkage.
+    attributionType: mysqlEnum("attributionType", ["direct", "business", "unattributed"])
+      .notNull()
+      .default("unattributed"),
+    // Readiness of the evidence row. R5-A accepts exactly once; downstream
+    // streams derive their own state and must not mutate this row.
+    status: mysqlEnum("status", ["accepted"]).notNull().default("accepted"),
+    ingestionVersion: int("ingestionVersion").notNull().default(1),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    // Exact-once natural identity: one logical provider event, one row,
+    // enforced at the database level (concurrent inserts race to one row).
+    naturalKeyUnique: uniqueIndex("ss_natural_key_uidx").on(
+      table.provider,
+      table.providerAccountId,
+      table.externalEventId
+    ),
+    signalKeyUnique: uniqueIndex("ss_signal_key_uidx").on(table.signalKey),
+    userObservedIdx: index("ss_user_observed_idx").on(table.userId, table.observedAt),
+    integrationOccurredIdx: index("ss_integration_occurred_idx").on(
+      table.integrationId,
+      table.occurredAt
+    ),
+    campaignIdx: index("ss_campaign_idx").on(table.sourceCampaignId),
+  })
+);
+
+export type SocialSignal = typeof socialSignals.$inferSelect;
+export type InsertSocialSignal = typeof socialSignals.$inferInsert;
+
+// ─── Social Listening States (per-binding checkpoint + operational status) ───
+//
+// Durable, restart-safe listening progress and operational visibility for one
+// social_integrations binding (WBS-R5-A A5/A6). Operational counters only —
+// canonical evidence lives exclusively in social_signals.
+export const socialListeningStates = mysqlTable(
+  "social_listening_states",
+  {
+    id: serial("id").primaryKey(),
+    // One listening state per authoritative binding.
+    integrationId: bigint("integrationId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    platform: varchar("platform", { length: 32 }).notNull(),
+    providerAccountId: varchar("providerAccountId", { length: 255 }).notNull(),
+    // How this binding is listened to; unsupported bindings fail closed.
+    mechanism: mysqlEnum("mechanism", ["webhook", "polling", "unsupported"]).notNull(),
+    status: mysqlEnum("status", ["active", "blocked", "unsupported", "stale"])
+      .notNull()
+      .default("active"),
+    // Opaque provider cursor/checkpoint for polling; monotonic per provider.
+    cursor: varchar("cursor", { length: 255 }),
+    cursorUpdatedAt: timestamp("cursorUpdatedAt"),
+    lastSuccessAt: timestamp("lastSuccessAt"),
+    lastFailureAt: timestamp("lastFailureAt"),
+    lastFailureClass: mysqlEnum("lastFailureClass", [
+      "AUTO_RECOVER",
+      "OPERATOR_ACTION",
+      "FAIL_CLOSED",
+    ]),
+    lastFailureCode: varchar("lastFailureCode", { length: 64 }),
+    lastFailureReason: varchar("lastFailureReason", { length: 255 }),
+    acceptedCount: int("acceptedCount").notNull().default(0),
+    duplicateCount: int("duplicateCount").notNull().default(0),
+    rejectedCount: int("rejectedCount").notNull().default(0),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    integrationUnique: uniqueIndex("sls_integration_uidx").on(table.integrationId),
+    userIdx: index("sls_user_idx").on(table.userId),
+  })
+);
+
+export type SocialListeningState = typeof socialListeningStates.$inferSelect;
+export type InsertSocialListeningState = typeof socialListeningStates.$inferInsert;
