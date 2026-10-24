@@ -1,10 +1,12 @@
 // ─── R5-B Intent & Sentiment Intelligence — canonical social signal boundary ───
 //
-// PURE adapter module aligned with the frozen R5-A social-signal contract
-// (docs/contracts/social-signal-contract.md @ c9a930e). It consumes the
+// PURE adapter module consuming the integrated R5-A social-signal authority
+// (api/lib/social-listening/signal-contract.ts, frozen at c9a930e; contract:
+// docs/contracts/social-signal-contract.md). The closed vocabularies below are
+// DERIVED from that module — R5-A is the sole canonical signal source and any
+// R5-A contract bump propagates here automatically. It consumes the
 // R5-A-consumable field set (§11 of the social-listening contract) and
-// normalizes it into the canonical signal interpreted by R5-B. No R5-A code
-// is imported; the structural mirror below is the only coupling.
+// normalizes it into the canonical signal interpreted by R5-B.
 //
 // Identity mappings (R5-A → R5-B):
 //   signalId      = R5-A signalKey        ("sigv1:" + sha256, consumed opaquely)
@@ -14,37 +16,25 @@
 // processing (no record, no billing). No I/O, no clock, no logging.
 
 import { z } from "zod";
+import {
+  SIGNAL_CONTENT_TEXT_MAX,
+  SOCIAL_SIGNAL_ATTRIBUTION_TYPES,
+  SOCIAL_SIGNAL_PLATFORMS,
+  SOCIAL_SIGNAL_PROVIDERS,
+  SOCIAL_SIGNAL_TYPES,
+} from "../social-listening/signal-contract";
 import { InterpretationInputError } from "./interpretation-contract";
 
 export const CANONICAL_SIGNAL_CONTRACT_VERSION = "canonical-social-signal/v1" as const;
 
-/** Frozen R5-A signal types (social-signal-contract §3). */
-export const SIGNAL_TYPE_VALUES = [
-  "comment",
-  "reply",
-  "mention",
-  "reaction",
-  "direct_message",
-  "repost",
-  "follow",
-  "unfollow",
-  "campaign_response",
-  "inbound_message",
-  "unknown",
-] as const;
+/** Frozen R5-A signal types (social-signal-contract §3) — derived from R5-A authority. */
+export const SIGNAL_TYPE_VALUES = SOCIAL_SIGNAL_TYPES;
 
-export const PROVIDER_VALUES = ["meta", "linkedin", "twitter", "tiktok"] as const;
+export const PROVIDER_VALUES = SOCIAL_SIGNAL_PROVIDERS;
 
-export const PLATFORM_VALUES = [
-  "facebook",
-  "instagram",
-  "whatsapp",
-  "linkedin",
-  "twitter",
-  "tiktok",
-] as const;
+export const PLATFORM_VALUES = SOCIAL_SIGNAL_PLATFORMS;
 
-export const ATTRIBUTION_TYPE_VALUES = ["direct", "business", "unattributed"] as const;
+export const ATTRIBUTION_TYPE_VALUES = SOCIAL_SIGNAL_ATTRIBUTION_TYPES;
 
 export type CanonicalSignalType = (typeof SIGNAL_TYPE_VALUES)[number];
 export type CanonicalProvider = (typeof PROVIDER_VALUES)[number];
@@ -94,9 +84,10 @@ export const CanonicalSocialSignalInputSchema = z.strictObject({
   actorReference: z.string().min(1).max(255).nullable().optional(),
   /** Bounded display name; PII minimized. */
   actorDisplayName: z.string().min(1).max(255).nullable().optional(),
-  /** Untrusted social text; bounded by the frozen R5-A 1024-char cap here and
-   * by the 4000-char sanitizer cap in input-safety (defense in depth). */
-  contentText: z.string().max(1024).nullable().optional(),
+  /** Untrusted social text; bounded by the frozen R5-A content cap
+   * (SIGNAL_CONTENT_TEXT_MAX = 1024) here and by the 4000-char sanitizer cap
+   * in input-safety (defense in depth). */
+  contentText: z.string().max(SIGNAL_CONTENT_TEXT_MAX).nullable().optional(),
   /** Provider perma-link (comment URL…); display only. */
   contentReference: z.string().min(1).max(255).nullable().optional(),
   /** Provider event time, ISO 8601; display only. */
