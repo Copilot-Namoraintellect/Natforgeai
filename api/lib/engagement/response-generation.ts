@@ -319,7 +319,7 @@ export async function generateEngagementResponse(
   if (!validation.valid) {
     throw new EngagementGenerationError(
       "GENERATED_RESPONSE_REJECTED",
-      `Generated response failed deterministic validation: ${validation.reason}`
+      `GENERATED_RESPONSE_REJECTED: generated response failed deterministic validation: ${validation.reason}`
     );
   }
 

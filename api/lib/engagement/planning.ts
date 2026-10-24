@@ -58,9 +58,10 @@ import { deriveAuthoritativeIntelligence, type EngagementInterpretationView } fr
 import {
   generateEngagementResponse,
   buildDeterministicEngagementNote,
+  deriveResponseContentId,
   type EngagementBrandContext,
 } from "./response-generation";
-import { persistEngagementResponseContent } from "./response-store";
+import { persistEngagementResponseContent, getEngagementResponseContent } from "./response-store";
 import {
   assertEngagementCapabilitySupported,
   isEngagementProviderCapable,
@@ -360,41 +361,62 @@ export async function planEngagementAction(
   const executableDisposition =
     decision.decision === "ALLOW_AUTONOMOUS" || decision.decision === "REQUIRE_APPROVAL";
 
-  // C2: generation only for executable-in-principle dispositions.
+  // C2: generation only for executable-in-principle dispositions. A replayed
+  // decision reuses the already-accepted immutable content — no second model
+  // call, no second billing attempt (frozen B replay semantics).
   let responseContentId: string | null = null;
   let responseContentVersion: number | null = null;
   if (executableDisposition) {
+    const contentIdentity = {
+      actionRequestId: request.actionRequestId,
+      interpretationId: input.interpretation.interpretationId,
+      responseContextVersion,
+    };
     if (input.actionType === "reply_publicly") {
-      const generated = await generateEngagementResponse(
-        {
+      const existingId = deriveResponseContentId(contentIdentity);
+      const existing = await getEngagementResponseContent(existingId, 1, executor);
+      if (existing) {
+        responseContentId = existing.responseContentId;
+        responseContentVersion = existing.version;
+      } else {
+        const generated = await generateEngagementResponse(
+          {
+            userId: input.userId,
+            businessId: input.businessId,
+            actionRequestId: request.actionRequestId,
+            actionType: input.actionType,
+            platform: input.platform,
+            responseContextVersion,
+            interpretation: input.interpretation,
+            socialText: input.signal.contentText ?? null,
+            brand: input.brand,
+          },
+          deps?.runModel ? { runModel: deps.runModel } : undefined
+        );
+        responseContentId = generated.responseContentId;
+        responseContentVersion = generated.version;
+      }
+    } else {
+      // escalate_to_human / suppress_action: deterministic non-executable note.
+      const existingId = deriveResponseContentId(contentIdentity);
+      const existing = await getEngagementResponseContent(existingId, 1, executor);
+      if (existing) {
+        responseContentId = existing.responseContentId;
+        responseContentVersion = existing.version;
+      } else {
+        const note = buildDeterministicEngagementNote({
+          actionType: input.actionType,
+          interpretation: input.interpretation,
+          responseContextVersion,
           userId: input.userId,
           businessId: input.businessId,
           actionRequestId: request.actionRequestId,
-          actionType: input.actionType,
           platform: input.platform,
-          responseContextVersion,
-          interpretation: input.interpretation,
-          socialText: input.signal.contentText ?? null,
-          brand: input.brand,
-        },
-        deps?.runModel ? { runModel: deps.runModel } : undefined
-      );
-      responseContentId = generated.responseContentId;
-      responseContentVersion = generated.version;
-    } else {
-      // escalate_to_human / suppress_action: deterministic non-executable note.
-      const note = buildDeterministicEngagementNote({
-        actionType: input.actionType,
-        interpretation: input.interpretation,
-        responseContextVersion,
-        userId: input.userId,
-        businessId: input.businessId,
-        actionRequestId: request.actionRequestId,
-        platform: input.platform,
-      });
-      await persistEngagementResponseContent(note, executor);
-      responseContentId = note.responseContentId;
-      responseContentVersion = note.version;
+        });
+        await persistEngagementResponseContent(note, executor);
+        responseContentId = note.responseContentId;
+        responseContentVersion = note.version;
+      }
     }
   }
 

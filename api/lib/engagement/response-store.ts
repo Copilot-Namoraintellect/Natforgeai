@@ -38,6 +38,26 @@ function isDuplicateKeyError(err: unknown): boolean {
   return code === "ER_DUP_ENTRY" || /Duplicate entry/i.test(message);
 }
 
+/** Read one immutable content row by identity+version (read-only). */
+export async function getEngagementResponseContent(
+  responseContentId: string,
+  version: number,
+  executor?: EngagementStoreExecutor
+): Promise<EngagementResponseContentRecord | null> {
+  const db = executor ?? (getDb() as unknown as EngagementStoreExecutor);
+  const [row] = (await db
+    .select()
+    .from(engagementResponseContents)
+    .where(
+      and(
+        eq(engagementResponseContents.responseContentId, responseContentId),
+        eq(engagementResponseContents.version, version)
+      )
+    )
+    .limit(1)) as EngagementResponseContentRecord[];
+  return row ?? null;
+}
+
 /**
  * Exact-once durable acceptance of generated response content. The unique
  * (responseContentId, version) key is the convergence anchor: a retried

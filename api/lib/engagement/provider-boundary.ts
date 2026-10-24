@@ -129,7 +129,7 @@ export function assertEngagementCapabilitySupported(input: {
   if (!capability) {
     throw new EngagementProviderError(
       "UNSUPPORTED_PROVIDER_CAPABILITY",
-      `Engagement action ${input.actionType} on ${input.platform} has no repository transport seam; failing closed.`
+      `UNSUPPORTED_PROVIDER_CAPABILITY: engagement action ${input.actionType} on ${input.platform} has no repository transport seam; failing closed.`
     );
   }
   return capability;
@@ -196,31 +196,31 @@ export async function resolveEngagementBinding(
   if (!row) {
     throw new EngagementProviderError(
       "PROVIDER_BINDING_MISMATCH",
-      "Provider account binding not found; failing closed."
+      "PROVIDER_BINDING_MISMATCH: provider account binding not found; failing closed."
     );
   }
   if (row.userId !== input.userId) {
     throw new EngagementProviderError(
       "OWNERSHIP_MISMATCH",
-      "Provider account binding belongs to a different tenant; failing closed."
+      "OWNERSHIP_MISMATCH: provider account binding belongs to a different tenant; failing closed."
     );
   }
   if (row.businessId == null || row.businessId !== input.businessId) {
     throw new EngagementProviderError(
       "OWNERSHIP_MISMATCH",
-      "Provider account binding is not owned by the acting business; failing closed."
+      "OWNERSHIP_MISMATCH: provider account binding is not owned by the acting business; failing closed."
     );
   }
   if (row.platform !== input.platform) {
     throw new EngagementProviderError(
       "PROVIDER_BINDING_MISMATCH",
-      "Provider account binding platform does not match the action platform; failing closed."
+      "PROVIDER_BINDING_MISMATCH: provider account binding platform does not match the action platform; failing closed."
     );
   }
   if (row.status !== "connected") {
     throw new EngagementProviderError(
       "PROVIDER_BINDING_MISMATCH",
-      `Provider account binding is not connected (status: ${row.status}); failing closed.`
+      `PROVIDER_BINDING_MISMATCH: provider account binding is not connected (status: ${row.status}); failing closed.`
     );
   }
 
@@ -228,7 +228,7 @@ export async function resolveEngagementBinding(
   if (!provider) {
     throw new EngagementProviderError(
       "UNSUPPORTED_PROVIDER_CAPABILITY",
-      `Platform ${row.platform} has no provider mapping; failing closed.`
+      `UNSUPPORTED_PROVIDER_CAPABILITY: platform ${row.platform} has no provider mapping; failing closed.`
     );
   }
 
@@ -427,7 +427,7 @@ export function createFakeEngagementGateway(input?: {
     transportId: "meta_comment_reply",
     async replyToComment(request) {
       calls.push({ operationIdentity: request.operationIdentity, content: request.content });
-      const entry = script[request.operationIdentity] ?? { outcome: "success" as const };
+      const entry = script[request.operationIdentity] ?? script["*"] ?? { outcome: "success" as const };
       if (entry.outcome === "transient") {
         throw new ProviderTransientError("fake transient provider failure");
       }

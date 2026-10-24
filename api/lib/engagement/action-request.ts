@@ -201,31 +201,31 @@ export function buildEngagementActionRequest(
   if (input.signal.businessId == null) {
     throw new EngagementActionRequestError(
       "UNATTRIBUTED_SIGNAL",
-      "Signal carries no authoritative business attribution; engagement actions require a business-bound signal."
+      `UNATTRIBUTED_SIGNAL: signal carries no authoritative business attribution; engagement actions require a business-bound signal.`
     );
   }
   if (input.signal.businessId !== input.businessId) {
     throw new EngagementActionRequestError(
       "OWNERSHIP_MISMATCH",
-      "Signal belongs to a different business; cross-business engagement is fail closed."
+      `OWNERSHIP_MISMATCH: signal belongs to a different business; cross-business engagement is fail closed.`
     );
   }
   if (input.signal.userId !== input.userId) {
     throw new EngagementActionRequestError(
       "OWNERSHIP_MISMATCH",
-      "Signal belongs to a different tenant; cross-tenant engagement is fail closed."
+      `OWNERSHIP_MISMATCH: signal belongs to a different tenant; cross-tenant engagement is fail closed.`
     );
   }
   if (input.interpretation.signalId !== input.signal.signalId) {
     throw new EngagementActionRequestError(
       "INTELLIGENCE_BINDING_MISMATCH",
-      "Interpretation does not describe the bound signal; forged interpretation rejected."
+      `INTELLIGENCE_BINDING_MISMATCH: interpretation does not describe the bound signal; forged interpretation rejected.`
     );
   }
   if (input.interpretation.signalVersion !== input.signal.signalVersion) {
     throw new EngagementActionRequestError(
       "INTELLIGENCE_BINDING_MISMATCH",
-      "Interpretation signal version does not match the bound signal version."
+      `INTELLIGENCE_BINDING_MISMATCH: interpretation signal version does not match the bound signal version.`
     );
   }
   if (
@@ -234,13 +234,13 @@ export function buildEngagementActionRequest(
   ) {
     throw new EngagementActionRequestError(
       "OWNERSHIP_MISMATCH",
-      "Interpretation belongs to a different business; cross-business engagement is fail closed."
+      `OWNERSHIP_MISMATCH: interpretation belongs to a different business; cross-business engagement is fail closed.`
     );
   }
   if (typeof input.externalTarget !== "string" || input.externalTarget.trim().length === 0) {
     throw new EngagementActionRequestError(
       "INVALID_EXTERNAL_TARGET",
-      "Engagement actions require a non-empty external target (object/thread id)."
+      `INVALID_EXTERNAL_TARGET: engagement actions require a non-empty external target (object/thread id).`
     );
   }
 

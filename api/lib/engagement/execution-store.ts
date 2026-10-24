@@ -133,10 +133,11 @@ export async function insertEngagementExecution(
 /**
  * Atomic single-writer claim. The conditional UPDATE is the sole concurrency
  * authority over who may invoke the provider for this action: exactly one
- * caller observes a changed row, even under concurrent triggers. Claimable:
- * pending/failed_retryable rows, and executing rows whose lease expired
- * (crashed attempt). Ambiguous rows are NEVER claimed here — they route to
- * the reconciler for a provider probe first.
+ * caller observes a changed row, even under concurrent triggers. Two
+ * sequential guarded updates cover the claimable states and the crashed-
+ * attempt stale lease; each UPDATE is independently atomic, so single-winner
+ * semantics are preserved. Ambiguous rows are NEVER claimed here — they
+ * route to the reconciler for a provider probe first.
  */
 export async function claimEngagementExecution(
   input: {
@@ -152,30 +153,38 @@ export async function claimEngagementExecution(
   const db = executor ?? (getDb() as unknown as EngagementStoreExecutor);
   const now = new Date();
   const claimExpiresAt = new Date(now.getTime() + input.leaseMs);
+  const set = {
+    status: "executing",
+    attempt: input.attempt,
+    claimedAt: now,
+    claimExpiresAt,
+  };
 
-  const staleLeaseCondition = input.staleLeaseNow
-    ? [and(eq(engagementExecutions.status, "executing"), lt(engagementExecutions.claimExpiresAt, input.staleLeaseNow))]
-    : [];
-
-  const result = (await db
+  const first = (await db
     .update(engagementExecutions)
-    .set({
-      status: "executing",
-      attempt: input.attempt,
-      claimedAt: now,
-      claimExpiresAt,
-    })
+    .set(set)
     .where(
       and(
         eq(engagementExecutions.executionId, input.executionId),
-        or(
-          inArray(engagementExecutions.status, [...input.claimableStatuses]),
-          ...staleLeaseCondition
-        )
+        inArray(engagementExecutions.status, [...input.claimableStatuses])
       )
-    )) as { affectedRows?: number }[];
+    )) as unknown as [{ affectedRows?: number }];
+  let affected = Number(first?.[0]?.affectedRows ?? 0);
 
-  const affected = Number((result as unknown as { affectedRows?: number })?.affectedRows ?? 0);
+  if (affected === 0 && input.staleLeaseNow) {
+    const second = (await db
+      .update(engagementExecutions)
+      .set(set)
+      .where(
+        and(
+          eq(engagementExecutions.executionId, input.executionId),
+          eq(engagementExecutions.status, "executing"),
+          lt(engagementExecutions.claimExpiresAt, input.staleLeaseNow)
+        )
+      )) as unknown as [{ affectedRows?: number }];
+    affected = Number(second?.[0]?.affectedRows ?? 0);
+  }
+
   if (affected === 0) {
     const current = await getExecutionById(input.executionId, db);
     return { claimed: false, record: current };
