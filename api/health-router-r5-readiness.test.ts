@@ -65,8 +65,10 @@ vi.mock("./lib/logger", () => ({
 import { getDb } from "./queries/connection";
 import { healthRouter } from "./health-router";
 import {
+  readR5InterpretationRollup,
   readR5ListeningEvidence,
   readR5ListeningRollup,
+  readR5OpportunityRollup,
 } from "./lib/governance/r5-stream-evidence";
 
 const mockedListening = vi.mocked(readR5ListeningEvidence);
@@ -146,6 +148,124 @@ function buildCtx(user: Record<string, unknown> | null) {
   } as never;
 }
 
+/**
+ * Rebuild `{ text, params }` from a drizzle SQL object (this drizzle build
+ * embeds interpolated values raw into `queryChunks`: StringChunk arrays carry
+ * text, primitives/Date values are the params).
+ */
+function describeExecuteQuery(query: any): { text: string; params: unknown[] } {
+  const params: unknown[] = [];
+  const walk = (chunks: any[]): string =>
+    chunks
+      .map((chunk) => {
+        if (chunk === null || chunk === undefined) return "";
+        if (Array.isArray(chunk?.value)) return String(chunk.value.join(""));
+        if (Array.isArray(chunk?.queryChunks)) return walk(chunk.queryChunks);
+        if (typeof chunk === "object") {
+          if (typeof chunk.name === "string" && chunk.table) return String(chunk.name);
+          params.push(chunk);
+          return "?";
+        }
+        params.push(chunk);
+        return "?";
+      })
+      .join("");
+  return { text: walk(query?.queryChunks ?? []), params };
+}
+
+/**
+ * Seed-backed db.execute dispatch for every stream-bridge query
+ * (information_schema guards + bounded aggregates), routed off the SQL text
+ * instead of call ORDER — concurrent readiness areas and per-business
+ * summary projections would otherwise skew mockResolvedValueOnce queues.
+ * Tables absent from the seed report "absent" exactly like unexecuted
+ * migrations (guard returns `{ c: 0 }`).
+ */
+function mockR5StreamBridgeExecute(fake: ReturnType<typeof createFakeDb>) {
+  const time = (v: unknown) => new Date(String(v)).getTime();
+  (fake.db.execute as ReturnType<typeof vi.fn>).mockImplementation((query: any) => {
+    const { text, params } = describeExecuteQuery(query);
+    if (text.includes("information_schema.tables")) {
+      const table = String(params[params.length - 1]);
+      return Promise.resolve([[{ c: fake.seed[table] != null ? 1 : 0 }]]);
+    }
+    const from = /FROM\s+([a-z0-9_]+)/i.exec(text)?.[1] ?? "";
+    const rows = (fake.seed[from] ?? []) as Record<string, unknown>[];
+    const windowStart = time(params.find((p) => p instanceof Date) ?? Date.now());
+    if (from === "social_listening_states") {
+      const byStatus = new Map<string, number>();
+      for (const row of rows) {
+        const key = String(row.status);
+        byStatus.set(key, (byStatus.get(key) ?? 0) + 1);
+      }
+      return Promise.resolve(
+        [[...byStatus.entries()].map(([status, c]) => ({ status, c }))]
+      );
+    }
+    if (from === "social_signals") {
+      return Promise.resolve([
+        [{ c: rows.filter((r) => time(r.observedAt) >= windowStart).length }],
+      ]);
+    }
+    if (from === "social_interpretations") {
+      if (text.includes("COUNT(*) AS total")) {
+        const last24h = rows.filter((r) => time(r.createdAt) >= windowStart);
+        return Promise.resolve([
+          [
+            {
+              total: rows.length,
+              last24h: last24h.length,
+              modelCount24h: last24h.filter((r) => r.modelOrRuleSource === "MODEL").length,
+              ruleCount24h: last24h.filter((r) => r.modelOrRuleSource === "RULE").length,
+              latestObservedAt: rows.length
+                ? new Date(Math.max(...rows.map((r) => time(r.createdAt))))
+                : null,
+            },
+          ],
+        ]);
+      }
+      const [businessId, userId] = params;
+      return Promise.resolve([
+        [
+          {
+            c: rows.filter(
+              (r) =>
+                (Number(r.businessId) === Number(businessId) ||
+                  (r.businessId == null && Number(r.userId) === Number(userId))) &&
+                time(r.createdAt) >= windowStart
+            ).length,
+          },
+        ],
+      ]);
+    }
+    if (from === "opportunity_candidates") {
+      const scoped = text.includes("businessId")
+        ? rows.filter(
+            (r) =>
+              Number(r.businessId) === Number(params[0]) ||
+              (r.businessId == null && Number(r.userId) === Number(params[1]))
+          )
+        : rows;
+      const count = (pred: (r: Record<string, unknown>) => boolean) =>
+        scoped.filter(pred).length;
+      return Promise.resolve([
+        [
+          {
+            candidates: scoped.length,
+            openCandidates: count((r) => r.opportunityStatus !== "handed_off_to_r6"),
+            handedOff: count((r) => r.opportunityStatus === "handed_off_to_r6"),
+            last24h: count((r) => time(r.createdAt) >= windowStart),
+            latestObservedAt: scoped.length
+              ? new Date(Math.max(...scoped.map((r) => time(r.updatedAt))))
+              : null,
+          },
+        ],
+      ]);
+    }
+    return Promise.resolve([[]]);
+  });
+}
+
 const ADMIN = { id: 7, role: "admin" };
 const NOW = new Date("2026-10-24T12:00:00.000Z");
 const HOUR_MS = 60 * 60 * 1000;
@@ -181,6 +301,21 @@ function baseSeed() {
     ],
     social_integrations: [
       { id: 8001, businessId: 11, userId: 101, platform: "instagram", status: "expired" },
+    ],
+    // Stream-bridge aggregates are evaluated from these rows by
+    // mockR5StreamBridgeExecute (timestamps relative to the real clock
+    // because getR5OperationsReadiness derives its own `now`).
+    social_listening_states: [
+      { id: 8001, status: "active" },
+      { id: 8002, status: "active" },
+      { id: 8003, status: "blocked" },
+    ],
+    social_signals: [
+      ...Array.from({ length: 7 }, (_, i) => ({
+        id: 9000 + i,
+        observedAt: new Date(Date.now() - (i + 1) * 60 * 60 * 1000),
+      })),
+      { id: 9099, observedAt: new Date(Date.now() - 48 * 60 * 60 * 1000) },
     ],
     credit_wallets: [
       { id: 1, userId: 101, balance: 0 },
@@ -239,15 +374,6 @@ function baseSeed() {
   } as Record<string, Record<string, unknown>[]>;
 }
 
-/** Queue db.execute results for the present-listening-tables path. */
-function mockListeningTablesPresent(fake: ReturnType<typeof createFakeDb>) {
-  (fake.db.execute as ReturnType<typeof vi.fn>)
-    .mockResolvedValueOnce([[{ c: 1 }]]) // information_schema: listening table present
-    .mockResolvedValueOnce([[{ c: 1 }]]) // information_schema: signals table present
-    .mockResolvedValueOnce([[{ status: "active", c: 2 }, { status: "blocked", c: 1 }]]) // binding rollup
-    .mockResolvedValueOnce([[{ c: 7 }]]); // 24h signal count
-}
-
 function useSeed(seed: Record<string, Record<string, unknown>[]>) {
   const fake = createFakeDb(seed);
   vi.mocked(getDb).mockReturnValue(fake.db as never);
@@ -262,7 +388,7 @@ describe("health router — R5 readiness authorization (F3)", () => {
 
   it("rejects unauthenticated and non-admin callers", async () => {
     const fake = useSeed(baseSeed());
-    mockListeningTablesPresent(fake);
+    mockR5StreamBridgeExecute(fake);
 
     await expect(
       healthRouter.createCaller(buildCtx(null)).getR5OperationsReadiness()
@@ -281,7 +407,7 @@ describe("health router — getR5OperationsReadiness (F3)", () => {
 
   it("rolls up components, counters and severity-ordered top blockers", async () => {
     const fake = useSeed(baseSeed());
-    mockListeningTablesPresent(fake);
+    mockR5StreamBridgeExecute(fake);
 
     const result = await healthRouter
       .createCaller(buildCtx(ADMIN))
@@ -291,9 +417,9 @@ describe("health router — getR5OperationsReadiness (F3)", () => {
     expect(Number.isNaN(Date.parse(result.generatedAt))).toBe(false);
     expect(result.components).toEqual({
       listening: "blocked", // one blocked binding
-      interpretation: "unsupported",
+      interpretation: "unavailable", // B tables not seeded (migration unexecuted)
       engagement: "blocked", // safety_blocked item present
-      opportunity: "unsupported",
+      opportunity: "unavailable", // D tables not seeded (migration unexecuted)
       policy: "attention", // 2 pending approvals
       queueRecovery: "attention", // 1 open terminal failure
       billingQuota: "blocked", // 2 exhausted wallets
@@ -304,6 +430,8 @@ describe("health router — getR5OperationsReadiness (F3)", () => {
       listeningBindingsActive: 2,
       listeningBindingsBlocked: 1,
       signalsLast24h: 7,
+      interpretationsLast24h: 0,
+      opportunityCandidatesOpen: 0,
       pendingApprovals: 2,
       safetyBlockedItems: 1,
       retryingItems: 1,
@@ -335,8 +463,11 @@ describe("health router — getR5OperationsReadiness (F3)", () => {
   });
 
   it("reports listening as unavailable when A's tables are absent", async () => {
-    const fake = useSeed(baseSeed());
-    (fake.db.execute as ReturnType<typeof vi.fn>).mockResolvedValueOnce([[{ c: 0 }]]);
+    const seed = baseSeed();
+    delete seed.social_listening_states;
+    delete seed.social_signals;
+    const fake = useSeed(seed);
+    mockR5StreamBridgeExecute(fake);
 
     const result = await healthRouter
       .createCaller(buildCtx(ADMIN))
@@ -361,12 +492,10 @@ describe("health router — getR5OperationsReadiness (F3)", () => {
     seed.social_integrations = [];
     seed.campaigns = [];
     seed.businesses = [{ id: 20, userId: 200, name: "Solo" }];
+    seed.social_listening_states = [{ id: 8001, status: "active" }];
+    delete seed.social_signals;
     const fake = useSeed(seed);
-    (fake.db.execute as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce([[{ c: 1 }]])
-      .mockResolvedValueOnce([[{ c: 1 }]])
-      .mockResolvedValueOnce([[{ status: "active", c: 1 }]])
-      .mockResolvedValueOnce([[{ c: 3 }]]);
+    mockR5StreamBridgeExecute(fake);
 
     const result = await healthRouter
       .createCaller(buildCtx(ADMIN))
@@ -390,7 +519,7 @@ describe("health router — getR5OperationsReadiness (F3)", () => {
 
   it("bounds the projected business window and flags truncation", async () => {
     const fake = useSeed(baseSeed());
-    mockListeningTablesPresent(fake);
+    mockR5StreamBridgeExecute(fake);
 
     const result = await healthRouter
       .createCaller(buildCtx(ADMIN))
@@ -404,7 +533,7 @@ describe("health router — getR5OperationsReadiness (F3)", () => {
 
   it("rejects out-of-range businessLimit values", async () => {
     const fake = useSeed(baseSeed());
-    mockListeningTablesPresent(fake);
+    mockR5StreamBridgeExecute(fake);
     const caller = healthRouter.createCaller(buildCtx(ADMIN));
     await expect(caller.getR5OperationsReadiness({ businessLimit: 0 })).rejects.toMatchObject({
       code: "BAD_REQUEST",
@@ -412,6 +541,57 @@ describe("health router — getR5OperationsReadiness (F3)", () => {
     await expect(caller.getR5OperationsReadiness({ businessLimit: 101 })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
+  });
+
+  it("reads interpretation and opportunity rollups when B/D tables are present", async () => {
+    const seed = baseSeed();
+    seed.approval_requests = [];
+    seed.publishing_queue = [];
+    seed.queue_terminal_failures = [];
+    seed.queue_replay_requests = [];
+    seed.credit_wallets = [];
+    seed.social_integrations = [];
+    seed.campaigns = [];
+    seed.businesses = [{ id: 20, userId: 200, name: "Solo" }];
+    seed.social_interpretations = [
+      { id: 1, userId: 200, businessId: 20, modelOrRuleSource: "MODEL", createdAt: new Date(Date.now() - 2 * HOUR_MS) },
+      { id: 2, userId: 200, businessId: 20, modelOrRuleSource: "RULE", createdAt: new Date(Date.now() - 5 * HOUR_MS) },
+      { id: 3, userId: 200, businessId: 20, modelOrRuleSource: "MODEL", createdAt: new Date(Date.now() - 48 * HOUR_MS) },
+      // Tenant-scoped row (businessId null) attributed by userId only.
+      { id: 4, userId: 200, businessId: null, modelOrRuleSource: "RULE", createdAt: new Date(Date.now() - HOUR_MS) },
+    ];
+    seed.opportunity_candidates = [
+      { id: 1, userId: 200, businessId: 20, opportunityStatus: "candidate", createdAt: new Date(Date.now() - 3 * HOUR_MS), updatedAt: new Date(Date.now() - 3 * HOUR_MS) },
+      { id: 2, userId: 200, businessId: 20, opportunityStatus: "escalated", createdAt: new Date(Date.now() - 30 * HOUR_MS), updatedAt: new Date(Date.now() - 2 * HOUR_MS) },
+      { id: 3, userId: 200, businessId: 20, opportunityStatus: "handed_off_to_r6", createdAt: new Date(Date.now() - 50 * HOUR_MS), updatedAt: new Date(Date.now() - 50 * HOUR_MS) },
+      // Tenant-scoped candidate (businessId null) attributed by userId only.
+      { id: 4, userId: 200, businessId: null, opportunityStatus: "candidate", createdAt: new Date(Date.now() - HOUR_MS), updatedAt: new Date(Date.now() - HOUR_MS) },
+    ];
+    const fake = useSeed(seed);
+    mockR5StreamBridgeExecute(fake);
+
+    const result = await healthRouter
+      .createCaller(buildCtx(ADMIN))
+      .getR5OperationsReadiness();
+
+    expect(result.components.interpretation).toBe("ready");
+    expect(result.components.opportunity).toBe("ready");
+    // Rows 1, 2 and 4 are inside the 24h window; row 3 is stale.
+    expect(result.counters.interpretationsLast24h).toBe(3);
+    // Rows 1, 2 and 4 are open (!= handed_off_to_r6); row 3 is handed off.
+    expect(result.counters.opportunityCandidatesOpen).toBe(3);
+
+    // The per-business projection reads the same B/D scope, so a business
+    // whose only R5 activity is B/D counts as a live capability (HEALTHY)
+    // instead of UNSUPPORTED "await_capability_integration".
+    expect(result.topBlockedBusinesses).toEqual([
+      { businessId: 20, health: "HEALTHY", blockerClasses: [] },
+    ]);
+
+    const serialized = JSON.stringify(result);
+    for (const forbidden of ["accessToken", "refreshToken", "password", "secret", "contentText"]) {
+      expect(serialized).not.toContain(forbidden);
+    }
   });
 });
 
@@ -457,5 +637,95 @@ describe("readR5ListeningRollup — information_schema guarded aggregate", () =>
 
     expect(rollup).toEqual({ available: true, active: 1, blocked: 0, signalsLast24h: 0 });
     expect(fake.db.execute).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("readR5InterpretationRollup — information_schema guarded aggregate", () => {
+  it("returns bounded counts when the table is present", async () => {
+    const fake = createFakeDb({});
+    (fake.db.execute as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([[{ c: 1 }]])
+      .mockResolvedValueOnce([[{
+        total: 12,
+        last24h: 5,
+        modelCount24h: 3,
+        ruleCount24h: 2,
+        latestObservedAt: new Date(NOW.getTime() - HOUR_MS),
+      }]]);
+
+    const rollup = await readR5InterpretationRollup(fake.db as never, NOW);
+
+    expect(rollup).toEqual({
+      available: true,
+      total: 12,
+      last24h: 5,
+      modelCount24h: 3,
+      ruleCount24h: 2,
+      latestObservedAt: new Date(NOW.getTime() - HOUR_MS),
+    });
+    expect(fake.db.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns available:false when B's migration has not run", async () => {
+    const fake = createFakeDb({});
+    (fake.db.execute as ReturnType<typeof vi.fn>).mockResolvedValueOnce([[{ c: 0 }]]);
+
+    const rollup = await readR5InterpretationRollup(fake.db as never, NOW);
+
+    expect(rollup).toEqual({
+      available: false,
+      reason: "stream_tables_absent",
+      total: 0,
+      last24h: 0,
+      modelCount24h: 0,
+      ruleCount24h: 0,
+      latestObservedAt: null,
+    });
+    expect(fake.db.execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("readR5OpportunityRollup — information_schema guarded aggregate", () => {
+  it("returns bounded status-class counts when the table is present", async () => {
+    const fake = createFakeDb({});
+    (fake.db.execute as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([[{ c: 1 }]])
+      .mockResolvedValueOnce([[{
+        candidates: 9,
+        openCandidates: 6,
+        handedOff: 3,
+        last24h: 4,
+        latestObservedAt: new Date(NOW.getTime() - HOUR_MS),
+      }]]);
+
+    const rollup = await readR5OpportunityRollup(fake.db as never, NOW);
+
+    expect(rollup).toEqual({
+      available: true,
+      candidates: 9,
+      openCandidates: 6,
+      handedOff: 3,
+      last24h: 4,
+      latestObservedAt: new Date(NOW.getTime() - HOUR_MS),
+    });
+    expect(fake.db.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns available:false when D's migration has not run", async () => {
+    const fake = createFakeDb({});
+    (fake.db.execute as ReturnType<typeof vi.fn>).mockResolvedValueOnce([[{ c: 0 }]]);
+
+    const rollup = await readR5OpportunityRollup(fake.db as never, NOW);
+
+    expect(rollup).toEqual({
+      available: false,
+      reason: "stream_tables_absent",
+      candidates: 0,
+      openCandidates: 0,
+      handedOff: 0,
+      last24h: 0,
+      latestObservedAt: null,
+    });
+    expect(fake.db.execute).toHaveBeenCalledTimes(1);
   });
 });

@@ -50,8 +50,10 @@ The canonical R5 operational read model is
 Precedence (worst wins): `FAIL_CLOSED` > `BLOCKED_OPERATOR` >
 `BLOCKED_CONFIGURATION` > `AUTO_RECOVERING` > `DEGRADED` > `HEALTHY`;
 `UNSUPPORTED` applies only when zero capability evidence exists.
-`interpretation` (R5-B) and `opportunity` (R5-D) areas report
-`{ supported: false }` until those streams land.
+`interpretation` (R5-B) and `opportunity` (R5-D) areas read their streams
+through the same guarded information-schema bridge as A (§11); while the B/D
+migrations are unexecuted those tables report `available:false` and the
+readiness components report `unavailable` — never an error, never guessed.
 
 ## 3. Blocker taxonomy
 
@@ -171,9 +173,9 @@ acceptance suite asserts no such procedure exists on the operations router.
 | Stream | Fields consumed (read-only) |
 |---|---|
 | R5-A | `social_listening_states.{integrationId,provider,platform,providerAccountId,mechanism,status,cursorUpdatedAt,lastSuccessAt,lastFailureAt,lastFailureClass,lastFailureCode,lastFailureReason,acceptedCount,duplicateCount,rejectedCount}`; `social_signals` 24h rollup `{integrationId,count,MAX(observedAt)}` — via `api/lib/governance/r5-stream-evidence.ts` |
-| R5-B | none yet; area reports `supported:false` |
+| R5-B | `social_interpretations` counts only: per-business 24h count on scope `(businessId = ? OR (businessId IS NULL AND userId = ?)) AND createdAt >= now-24h`; platform rollup `{total,last24h,modelCount24h,ruleCount24h,MAX(createdAt)}` via guarded information_schema check — `api/lib/governance/r5-stream-evidence.ts` (never the `record` JSON) |
 | R5-C | R4 engagement authorities today: `publishing_queue`, `campaigns.workflowState`, `creative_generation_claims` |
-| R5-D | none yet; area reports `supported:false` |
+| R5-D | `opportunity_candidates` status-class counts only: per-business open (`opportunityStatus != handed_off_to_r6`) / handed-off / 24h-created counts on the same guarded scope; platform rollup `{candidates,openCandidates,handedOff,last24h,MAX(updatedAt)}` via guarded information_schema check — `api/lib/governance/r5-stream-evidence.ts` (never evidence payloads) |
 | R5-E | policy backlog proxied from `approval_requests` (pending rows) + `publishing_queue.safety_blocked`; billing/quota from `credit_wallets`, `credit_reservations`, `user_usage`, `subscription_tiers` |
 
 ## 12. Fields F must not own or mutate
@@ -192,16 +194,22 @@ tables and **no** mutable state of its own.
   connection strings, webhook secrets, password hashes, banking details.
 - `social_signals.contentText` (provider payload) is never projected;
   listening evidence is counts/freshness/class only.
+- `social_interpretations.record` (canonical interpretation JSON) and
+  `opportunity_candidates.{firstEvidence,latestEvidence}` (evidence
+  payloads) are never read; B/D bridge reads are bounded aggregates over
+  identity/status/timestamp columns only.
 - `providerAccountId` is surfaced as binding identity only (A already
   stores it; F treats it as opaque identifier).
 - Error responses carry bounded mapped messages only.
 
 ## 14. Schema dependencies
 
-None added by F. The projection reads existing R4 tables and A's tables via
-the guarded information-schema check (absence ⇒ `available:false`, never an
-error). A's migration `0029` remains A-owned and unexecuted; F created no
-migrations and executes none.
+None added by F. The projection reads existing R4 tables plus A's, B's and
+D's tables through the same guarded information-schema check in
+`api/lib/governance/r5-stream-evidence.ts` (absence ⇒ `available:false`,
+never an error). A's migration `0029` and the B/D migrations remain
+stream-owned and unexecuted; F created no migrations and executes none — the
+bridge degrades to unavailable until each migration runs.
 
 ## 15. Overlap-risk files
 

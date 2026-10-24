@@ -43,8 +43,18 @@ function evidence(
     business: { id: 10, userId: 7, name: "Acme" },
     areasUnavailable: [],
     listening: { available: true, bindings: [binding()] },
-    interpretation: { supported: false },
-    opportunity: { supported: false },
+    interpretation: {
+      available: false,
+      reason: "stream_tables_absent",
+      interpretationsLast24h: 0,
+    },
+    opportunity: {
+      available: false,
+      reason: "stream_tables_absent",
+      openCandidates: 0,
+      handedOff: 0,
+      candidatesLast24h: 0,
+    },
     policy: { pendingApprovals: [] },
     engagement: {
       campaignIds: [101],
@@ -156,6 +166,31 @@ describe("R5 operations projection — health classification", () => {
     const result = classify(e);
     expect(result.health).toBe("UNSUPPORTED");
     expect(result.safeNextAction).toBe("await_capability_integration");
+  });
+
+  it("interpretation/opportunity-only activity is capability evidence, not UNSUPPORTED", () => {
+    const e = evidence({
+      listening: { available: false, reason: "stream_tables_absent", bindings: [] },
+      interpretation: { available: true, interpretationsLast24h: 3 },
+      opportunity: { available: true, openCandidates: 1, handedOff: 0, candidatesLast24h: 1 },
+      policy: { pendingApprovals: [] },
+      engagement: {
+        campaignIds: [],
+        workflowStates: {},
+        costPausedCount: 0,
+        queueCounts: {},
+        safetyBlockedCount: 0,
+        retryingItems: [],
+        failedItems: [],
+        staleClaimCount: 0,
+        runningClaimCount: 0,
+      },
+      providers: { integrations: [], expiredCount: 0, disconnectedCount: 0 },
+    });
+    const result = classify(e);
+    expect(result.health).toBe("HEALTHY");
+    expect(result.capabilitiesPresent).toBe(2);
+    expect(result.blockers).toEqual([]);
   });
 
   it("unavailable listening authority with other capabilities does not guess listening state", () => {

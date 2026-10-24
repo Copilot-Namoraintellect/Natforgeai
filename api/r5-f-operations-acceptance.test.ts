@@ -9,6 +9,8 @@ vi.mock("./queries/connection", () => ({
 vi.mock("./lib/governance/r5-stream-evidence", () => ({
   readR5ListeningEvidence: vi.fn(),
   readR5ListeningRollup: vi.fn(),
+  readR5InterpretationEvidence: vi.fn(),
+  readR5OpportunityEvidence: vi.fn(),
 }));
 
 vi.mock("./lib/logger", () => ({
@@ -20,7 +22,11 @@ vi.mock("./lib/logger", () => ({
 
 import { getDb } from "./queries/connection";
 import { operationsRouter } from "./operations-router";
-import { readR5ListeningEvidence } from "./lib/governance/r5-stream-evidence";
+import {
+  readR5InterpretationEvidence,
+  readR5ListeningEvidence,
+  readR5OpportunityEvidence,
+} from "./lib/governance/r5-stream-evidence";
 import { R5_SAFE_NEXT_ACTIONS } from "./lib/governance/r5-operations-projection";
 import {
   buildCtx,
@@ -30,6 +36,8 @@ import {
 } from "./r5-test-support";
 
 const mockedListening = vi.mocked(readR5ListeningEvidence);
+const mockedInterpretation = vi.mocked(readR5InterpretationEvidence);
+const mockedOpportunity = vi.mocked(readR5OpportunityEvidence);
 
 /* ── Shared fixtures / helpers ────────────────────────────────────────── */
 
@@ -40,6 +48,18 @@ const DAY_MS = 24 * HOUR_MS;
 const ENV_KEY = "R5_OPERATION_RETRY_ADMIN_ENABLED";
 const ORIGINAL_ENV = process.env[ENV_KEY];
 const LISTENING_ABSENT = { available: false, reason: "stream_tables_absent", bindings: [] };
+const INTERPRETATION_ABSENT = {
+  available: false,
+  reason: "stream_tables_absent",
+  interpretationsLast24h: 0,
+};
+const OPPORTUNITY_ABSENT = {
+  available: false,
+  reason: "stream_tables_absent",
+  openCandidates: 0,
+  handedOff: 0,
+  candidatesLast24h: 0,
+};
 
 beforeAll(() => {
   process.env[ENV_KEY] = "true";
@@ -54,6 +74,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env[ENV_KEY] = "true";
   mockedListening.mockResolvedValue(LISTENING_ABSENT as never);
+  mockedInterpretation.mockResolvedValue(INTERPRETATION_ABSENT as never);
+  mockedOpportunity.mockResolvedValue(OPPORTUNITY_ABSENT as never);
 });
 
 function emptySeed() {
@@ -305,16 +327,16 @@ describe("WBS-R5-F8 acceptance — listening projection (F8.1-F8.4, F8.10)", () 
     expect(blocker?.blockerClass).toBe("STALE_OPERATION");
   });
 
-  it("F8.4 — interpretation capability reported honestly as unsupported", async () => {
+  it("F8.4 — interpretation/opportunity areas report stream_tables_absent until B/D migrations run", async () => {
     const seed = emptySeed();
     addBusiness(seed, 10, 100);
     useSeed(seed);
 
     const projection = await adminCaller().getBusinessOperations({ businessId: 10 });
     expect("interpretation" in projection).toBe(true);
-    expect(projection.interpretation).toEqual({ supported: false });
+    expect(projection.interpretation).toEqual(INTERPRETATION_ABSENT);
     expect("opportunity" in projection).toBe(true);
-    expect(projection.opportunity).toEqual({ supported: false });
+    expect(projection.opportunity).toEqual(OPPORTUNITY_ABSENT);
   });
 
   it("F8.10 — unsupported provider capability: BLOCKED_CONFIGURATION", async () => {

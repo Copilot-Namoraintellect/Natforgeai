@@ -26,7 +26,11 @@ import {
   extractAdminRequestId,
   recordAdminMutationAudit,
 } from "./lib/governance/admin-audit";
-import { readR5ListeningRollup } from "./lib/governance/r5-stream-evidence";
+import {
+  readR5InterpretationRollup,
+  readR5ListeningRollup,
+  readR5OpportunityRollup,
+} from "./lib/governance/r5-stream-evidence";
 import {
   clampR5BusinessLimit,
   summarizeR5Operations,
@@ -315,7 +319,7 @@ export const healthRouter = createRouter({
       const now = new Date();
       const businessLimit = clampR5BusinessLimit(input?.businessLimit);
 
-      const [listeningRollup, businessIdRows, queueStatusRows, terminalFailureRows, replayRequestRows, walletRows, pendingApprovalRows, integrationStatusRows, summary] =
+      const [listeningRollup, businessIdRows, queueStatusRows, terminalFailureRows, replayRequestRows, walletRows, pendingApprovalRows, integrationStatusRows, interpretationRollup, opportunityRollup, summary] =
         await Promise.all([
           safeR5ReadinessArea("listening", () => readR5ListeningRollup(db, now)),
           safeR5ReadinessArea("businesses", () =>
@@ -356,6 +360,12 @@ export const healthRouter = createRouter({
               .select({ id: socialIntegrations.id, status: socialIntegrations.status })
               .from(socialIntegrations)
           ),
+          safeR5ReadinessArea("interpretation", () =>
+            readR5InterpretationRollup(db, now)
+          ),
+          safeR5ReadinessArea("opportunity", () =>
+            readR5OpportunityRollup(db, now)
+          ),
           safeR5ReadinessArea("business_summary", () =>
             summarizeR5Operations(db, now, businessLimit)
           ),
@@ -378,11 +388,13 @@ export const healthRouter = createRouter({
       const pendingApprovals = (pendingApprovalRows.value ?? []).length;
 
       const rollup = listeningRollup.value;
+      const interpretationAreaRollup = interpretationRollup.value;
+      const opportunityAreaRollup = opportunityRollup.value;
       const components: {
         listening: "ready" | "degraded" | "blocked" | "unsupported" | "unavailable";
-        interpretation: "unsupported";
+        interpretation: "ready" | "unavailable";
         engagement: "ready" | "degraded" | "blocked";
-        opportunity: "unsupported";
+        opportunity: "ready" | "unavailable";
         policy: "ready" | "attention";
         queueRecovery: "ready" | "attention";
         billingQuota: "ready" | "blocked" | "unknown";
@@ -394,7 +406,10 @@ export const healthRouter = createRouter({
             : rollup.blocked > 0
               ? "blocked"
               : "ready",
-        interpretation: "unsupported",
+        interpretation:
+          !interpretationRollup.ok || !interpretationAreaRollup || !interpretationAreaRollup.available
+            ? "unavailable"
+            : "ready",
         engagement: !queueStatusRows.ok
           ? "degraded"
           : safetyBlockedItems > 0
@@ -402,7 +417,10 @@ export const healthRouter = createRouter({
             : retryingItems > 0
               ? "degraded"
               : "ready",
-        opportunity: "unsupported",
+        opportunity:
+          !opportunityRollup.ok || !opportunityAreaRollup || !opportunityAreaRollup.available
+            ? "unavailable"
+            : "ready",
         policy: !pendingApprovalRows.ok || pendingApprovals > 0 ? "attention" : "ready",
         queueRecovery:
           !terminalFailureRows.ok || openTerminalFailures > 0 ? "attention" : "ready",
@@ -423,6 +441,14 @@ export const healthRouter = createRouter({
           listeningBindingsActive: rollup && listeningRollup.ok ? rollup.active : 0,
           listeningBindingsBlocked: rollup && listeningRollup.ok ? rollup.blocked : 0,
           signalsLast24h: rollup && listeningRollup.ok ? rollup.signalsLast24h : 0,
+          interpretationsLast24h:
+            interpretationAreaRollup && interpretationRollup.ok
+              ? interpretationAreaRollup.last24h
+              : 0,
+          opportunityCandidatesOpen:
+            opportunityAreaRollup && opportunityRollup.ok
+              ? opportunityAreaRollup.openCandidates
+              : 0,
           pendingApprovals,
           safetyBlockedItems: queueStatusRows.ok ? safetyBlockedItems : 0,
           retryingItems: queueStatusRows.ok ? retryingItems : 0,

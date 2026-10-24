@@ -12,9 +12,8 @@
  *   mutable operational state.
  * - Read-only: never writes anything, never transitions anything, never
  *   "heals" what it observes.
- * - Honest: a capability stream that has not landed (interpretation B,
- *   opportunity D) or a table that does not exist yet (A's listening state
- *   before its migration runs) surfaces as unsupported/unavailable — never
+ * - Honest: a stream whose migration has not run yet (A/B/D tables absent)
+ *   or an authority that cannot be read surfaces as unavailable — never
  *   guessed, never silently substituted.
  * - Deterministic: explicit-clock pure derivation over normalized evidence;
  *   blocker classification is a pure function (zero I/O).
@@ -51,8 +50,12 @@ import {
   type R5RecoveryClass,
 } from "./r5-blocker-taxonomy";
 import {
+  readR5InterpretationEvidence,
   readR5ListeningEvidence,
+  readR5OpportunityEvidence,
+  type R5InterpretationEvidence,
   type R5ListeningEvidence,
+  type R5OpportunityEvidence,
 } from "./r5-stream-evidence";
 
 // ─── Public vocabulary ───
@@ -132,10 +135,10 @@ export interface R5OperationsEvidence {
   /** Authority areas that could not be read at all. */
   areasUnavailable: string[];
   listening: R5ListeningEvidence;
-  /** Interpretation (R5-B) — not integrated yet; surfaced honestly. */
-  interpretation: { supported: false };
-  /** Opportunity detection (R5-D) — not integrated yet; surfaced honestly. */
-  opportunity: { supported: false };
+  /** Interpretation (R5-B) 24h activity, read-only via the guarded bridge. */
+  interpretation: R5InterpretationEvidence;
+  /** Opportunity detection (R5-D) candidate counts, read-only via the guarded bridge. */
+  opportunity: R5OpportunityEvidence;
   policy: { pendingApprovals: R5PendingApprovalEvidence[] };
   engagement: {
     campaignIds: number[];
@@ -421,8 +424,10 @@ export interface R5OperationalStateDerivation {
 /**
  * Classify operational health from evidence + open blockers. Priority:
  * fail_closed > operator > configuration > auto > none; UNSUPPORTED only when
- * no R5 capability evidence exists at all; DEGRADED when a recent failure
- * left traces but nothing is currently blocked.
+ * no R5 capability evidence exists at all (listening bindings, recent
+ * interpretation activity, open/handed-off opportunity candidates, policy
+ * backlog, engagement campaigns or provider integrations); DEGRADED when a
+ * recent failure left traces but nothing is currently blocked.
  */
 export function deriveR5OperationalState(
   evidence: R5OperationsEvidence,
@@ -432,6 +437,9 @@ export function deriveR5OperationalState(
   const notes: string[] = [];
   const capabilityAreas = [
     evidence.listening.available && evidence.listening.bindings.length > 0,
+    evidence.interpretation.available && evidence.interpretation.interpretationsLast24h > 0,
+    evidence.opportunity.available &&
+      (evidence.opportunity.openCandidates > 0 || evidence.opportunity.handedOff > 0),
     evidence.policy.pendingApprovals.length > 0,
     evidence.engagement.campaignIds.length > 0,
     evidence.providers.integrations.length > 0,
@@ -533,8 +541,8 @@ export interface R5BusinessOperationsProjection {
   safeNextAction: R5SafeNextAction;
   staleness: { isStale: boolean; lastActivityAgeMs: number | null; thresholdMs: number };
   listening: R5ListeningEvidence;
-  interpretation: { supported: false };
-  opportunity: { supported: false };
+  interpretation: R5InterpretationEvidence;
+  opportunity: R5OpportunityEvidence;
   policy: { pendingCount: number; pendingApprovals: R5PendingApprovalEvidence[] };
   engagement: R5OperationsEvidence["engagement"];
   queueRecovery: {
@@ -596,8 +604,18 @@ export async function collectR5BusinessEvidence(
       business: null,
       areasUnavailable,
       listening: { available: false, reason: "business_not_found", bindings: [] },
-      interpretation: { supported: false },
-      opportunity: { supported: false },
+      interpretation: {
+        available: false,
+        reason: "business_not_found",
+        interpretationsLast24h: 0,
+      },
+      opportunity: {
+        available: false,
+        reason: "business_not_found",
+        openCandidates: 0,
+        handedOff: 0,
+        candidatesLast24h: 0,
+      },
       policy: { pendingApprovals: [] },
       engagement: {
         campaignIds: [],
@@ -630,7 +648,7 @@ export async function collectR5BusinessEvidence(
 
   const userId = business.userId;
 
-  const [listening, campaignRows, integrationRows, approvalRows, walletRows, usageRows, subscriptionRows] =
+  const [listening, interpretation, opportunity, campaignRows, integrationRows, approvalRows, walletRows, usageRows, subscriptionRows] =
     await Promise.all([
       readR5ListeningEvidence(db, businessId, userId, now).catch((err) => {
         areasUnavailable.push("listening");
@@ -638,6 +656,24 @@ export async function collectR5BusinessEvidence(
           available: false as const,
           reason: `listening_authority_unavailable:${String(err).slice(0, 80)}`,
           bindings: [],
+        };
+      }),
+      readR5InterpretationEvidence(db, businessId, userId, now).catch((err) => {
+        areasUnavailable.push("interpretation");
+        return {
+          available: false as const,
+          reason: `interpretation_authority_unavailable:${String(err).slice(0, 80)}`,
+          interpretationsLast24h: 0,
+        };
+      }),
+      readR5OpportunityEvidence(db, businessId, userId, now).catch((err) => {
+        areasUnavailable.push("opportunity");
+        return {
+          available: false as const,
+          reason: `opportunity_authority_unavailable:${String(err).slice(0, 80)}`,
+          openCandidates: 0,
+          handedOff: 0,
+          candidatesLast24h: 0,
         };
       }),
       db
@@ -887,8 +923,8 @@ export async function collectR5BusinessEvidence(
     business,
     areasUnavailable,
     listening,
-    interpretation: { supported: false },
-    opportunity: { supported: false },
+    interpretation,
+    opportunity,
     policy: { pendingApprovals },
     engagement,
     queueRecovery,

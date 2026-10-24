@@ -9,6 +9,8 @@ vi.mock("./queries/connection", () => ({
 vi.mock("./lib/governance/r5-stream-evidence", () => ({
   readR5ListeningEvidence: vi.fn(),
   readR5ListeningRollup: vi.fn(),
+  readR5InterpretationEvidence: vi.fn(),
+  readR5OpportunityEvidence: vi.fn(),
 }));
 
 vi.mock("./lib/logger", () => ({
@@ -20,16 +22,41 @@ vi.mock("./lib/logger", () => ({
 
 import { getDb } from "./queries/connection";
 import { operationsRouter } from "./operations-router";
-import { readR5ListeningEvidence } from "./lib/governance/r5-stream-evidence";
+import {
+  readR5InterpretationEvidence,
+  readR5ListeningEvidence,
+  readR5OpportunityEvidence,
+} from "./lib/governance/r5-stream-evidence";
 import { buildCtx, createFakeDb } from "./r5-test-support";
 
 const mockedListening = vi.mocked(readR5ListeningEvidence);
+const mockedInterpretation = vi.mocked(readR5InterpretationEvidence);
+const mockedOpportunity = vi.mocked(readR5OpportunityEvidence);
 
 const ADMIN = { id: 7, role: "admin" };
 const NOW = new Date("2026-10-24T12:00:00.000Z");
 const HOUR_MS = 60 * 60 * 1000;
 
 const LISTENING_ABSENT = { available: false, reason: "stream_tables_absent", bindings: [] };
+const INTERPRETATION_ABSENT = {
+  available: false,
+  reason: "stream_tables_absent",
+  interpretationsLast24h: 0,
+};
+const OPPORTUNITY_ABSENT = {
+  available: false,
+  reason: "stream_tables_absent",
+  openCandidates: 0,
+  handedOff: 0,
+  candidatesLast24h: 0,
+};
+
+/** All stream-authority readers report absent (migrations unexecuted). */
+function mockStreamAuthoritiesAbsent() {
+  mockedListening.mockResolvedValue(LISTENING_ABSENT as never);
+  mockedInterpretation.mockResolvedValue(INTERPRETATION_ABSENT as never);
+  mockedOpportunity.mockResolvedValue(OPPORTUNITY_ABSENT as never);
+}
 
 /**
  * Business fixture set:
@@ -118,7 +145,7 @@ function useSeed(seed: Record<string, Record<string, unknown>[]>) {
 describe("operations router — authorization (F4)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedListening.mockResolvedValue(LISTENING_ABSENT as never);
+    mockStreamAuthoritiesAbsent();
   });
 
   it.each([
@@ -147,7 +174,7 @@ describe("operations router — authorization (F4)", () => {
 describe("operations router — getBusinessOperations (F4)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedListening.mockResolvedValue(LISTENING_ABSENT as never);
+    mockStreamAuthoritiesAbsent();
   });
 
   it("returns the canonical projection for an admin caller", async () => {
@@ -277,7 +304,7 @@ describe("operations router — getBusinessOperations (F4)", () => {
 describe("operations router — listOperationalStates (F4)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedListening.mockResolvedValue(LISTENING_ABSENT as never);
+    mockStreamAuthoritiesAbsent();
   });
 
   it("lists projected states most-recent-first with full blockers", async () => {
@@ -349,7 +376,7 @@ describe("operations router — listOperationalStates (F4)", () => {
 describe("operations router — getOperationsSummary (F4)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedListening.mockResolvedValue(LISTENING_ABSENT as never);
+    mockStreamAuthoritiesAbsent();
   });
 
   it("counts projected businesses by health and blocker class", async () => {
