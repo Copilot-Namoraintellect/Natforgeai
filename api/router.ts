@@ -23,6 +23,7 @@ import { videoRouter } from "./video-router";
 import { learningRouter } from "./learning-router";
 import { learningPromotionRouter } from "./learning-promotion-router";
 import { listeningRouter } from "./lib/social-listening/listening-router";
+import { intelligenceRouter } from "./intelligence-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -71,6 +72,7 @@ export const appRouter = createRouter({
   learning: learningRouter,
   learningPromotion: learningPromotionRouter,
   listening: listeningRouter,
+  intelligence: intelligenceRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -619,6 +619,7 @@ export const agentRuns = mysqlTable("agent_runs", {
     "engagement",
     "sales",
     "optimisation",
+    "interpretation",
   ]).notNull(),
   status: mysqlEnum("status", ["pending", "running", "completed", "failed"])
     .default("pending")
@@ -1253,6 +1254,7 @@ export const aiUsage = mysqlTable("ai_usage", {
     "engagement",
     "sales",
     "optimisation",
+    "interpretation",
     "safety_check",
     "image_generation",
     "video_generation",
@@ -1781,3 +1783,50 @@ export const socialListeningStates = mysqlTable(
 
 export type SocialListeningState = typeof socialListeningStates.$inferSelect;
 export type InsertSocialListeningState = typeof socialListeningStates.$inferInsert;
+// ─── Social Interpretations (R5-B) ───
+// Immutable intent & sentiment interpretation records (contract §4/§5).
+// One row per logical interpretation: interpretationId is globally unique and
+// (businessId, signalId, signalVersion, classifierVersion) pins exactly one
+// accepted interpretation per signal version per classifier. The full
+// canonical record is stored in `record`; identity columns exist so replay,
+// tamper detection and owner-scoped reads never parse JSON.
+export const socialInterpretations = mysqlTable(
+  "social_interpretations",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    // Null = unattributed tenant-scoped interpretation (R5-A attribution
+    // without a bound business); participates in the identity unique key as
+    // SQL NULL, so distinct null-business signals never collide on it.
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    signalId: varchar("signalId", { length: 128 }).notNull(),
+    signalVersion: int("signalVersion").notNull(),
+    signalContentHash: varchar("signalContentHash", { length: 64 }).notNull(),
+    classifierVersion: varchar("classifierVersion", { length: 64 }).notNull(),
+    interpretationId: varchar("interpretationId", { length: 64 }).notNull(),
+    modelOrRuleSource: mysqlEnum("modelOrRuleSource", ["RULE", "MODEL"]).notNull(),
+    intent: varchar("intent", { length: 48 }).notNull(),
+    sentiment: varchar("sentiment", { length: 24 }).notNull(),
+    urgency: varchar("urgency", { length: 16 }).notNull(),
+    relevance: varchar("relevance", { length: 24 }).notNull(),
+    overallConfidence: varchar("overallConfidence", { length: 16 }).notNull(),
+    recommendedHandling: varchar("recommendedHandling", { length: 48 }).notNull(),
+    // Null on the non-billable RULE path (contract §13).
+    billingIdentity: varchar("billingIdentity", { length: 80 }),
+    record: json("record").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("social_interpretation_identity_uidx").on(t.interpretationId),
+    uniqueIndex("social_interpretation_signal_classifier_uidx").on(
+      t.businessId,
+      t.signalId,
+      t.signalVersion,
+      t.classifierVersion
+    ),
+    index("social_interpretation_user_idx").on(t.userId),
+    index("social_interpretation_signal_idx").on(t.signalId),
+  ]
+);
+
+export type SocialInterpretationRow = typeof socialInterpretations.$inferSelect;

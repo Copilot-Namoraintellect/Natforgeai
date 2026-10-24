@@ -54,6 +54,7 @@ describe("audit-event taxonomy", () => {
       "strategy_snapshot_materialized",
       "learning_promotion_resolved",
       "admin_mutation",
+      "interpretation_recorded",
     ]);
   });
 

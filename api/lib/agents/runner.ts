@@ -36,7 +36,8 @@ export type AgentType =
   | "distribution"
   | "engagement"
   | "sales"
-  | "optimisation";
+  | "optimisation"
+  | "interpretation";
 
 export interface AgentRunOptions<TOutput> {
   userId: number;

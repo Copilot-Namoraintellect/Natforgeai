@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "a24454f9-fee7-4f18-85e3-f9ddcb242906",
+  "id": "82f9a93f-9aab-44d9-b547-ef22335ad0b4",
   "prevId": "2696bc82-4b53-437b-89c5-6cc34dd59d89",
   "tables": {
     "agent_runs": {
@@ -30,7 +30,7 @@
         },
         "agentType": {
           "name": "agentType",
-          "type": "enum('strategy','creative','audience','distribution','engagement','sales','optimisation')",
+          "type": "enum('strategy','creative','audience','distribution','engagement','sales','optimisation','interpretation')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -126,7 +126,7 @@
         },
         "agentType": {
           "name": "agentType",
-          "type": "enum('strategy','creative','audience','distribution','engagement','sales','optimisation','safety_check','image_generation','video_generation')",
+          "type": "enum('strategy','creative','audience','distribution','engagement','sales','optimisation','interpretation','safety_check','image_generation','video_generation')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -5077,6 +5077,182 @@
       "compositePrimaryKeys": {
         "social_integrations_id": {
           "name": "social_integrations_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "social_interpretations": {
+      "name": "social_interpretations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "signalId": {
+          "name": "signalId",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "signalVersion": {
+          "name": "signalVersion",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "signalContentHash": {
+          "name": "signalContentHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "classifierVersion": {
+          "name": "classifierVersion",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "interpretationId": {
+          "name": "interpretationId",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "modelOrRuleSource": {
+          "name": "modelOrRuleSource",
+          "type": "enum('RULE','MODEL')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "intent": {
+          "name": "intent",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sentiment": {
+          "name": "sentiment",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "urgency": {
+          "name": "urgency",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "relevance": {
+          "name": "relevance",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "overallConfidence": {
+          "name": "overallConfidence",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "recommendedHandling": {
+          "name": "recommendedHandling",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "billingIdentity": {
+          "name": "billingIdentity",
+          "type": "varchar(80)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "record": {
+          "name": "record",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "social_interpretation_identity_uidx": {
+          "name": "social_interpretation_identity_uidx",
+          "columns": [
+            "interpretationId"
+          ],
+          "isUnique": true
+        },
+        "social_interpretation_signal_classifier_uidx": {
+          "name": "social_interpretation_signal_classifier_uidx",
+          "columns": [
+            "businessId",
+            "signalId",
+            "signalVersion",
+            "classifierVersion"
+          ],
+          "isUnique": true
+        },
+        "social_interpretation_user_idx": {
+          "name": "social_interpretation_user_idx",
+          "columns": [
+            "userId"
+          ],
+          "isUnique": false
+        },
+        "social_interpretation_signal_idx": {
+          "name": "social_interpretation_signal_idx",
+          "columns": [
+            "signalId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "social_interpretations_id": {
+          "name": "social_interpretations_id",
           "columns": [
             "id"
           ]

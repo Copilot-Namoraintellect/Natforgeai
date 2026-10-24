@@ -47,6 +47,9 @@ export const AUDIT_EVENT_TYPES = [
   // R4-F: privileged/admin mutations recorded by the operator control plane.
   // One material type; the specific action lives in sanitized metadata.
   "admin_mutation",
+  // R5-B: one accepted intent & sentiment interpretation record; idempotent
+  // replays return the existing row and do not re-emit the event.
+  "interpretation_recorded",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
