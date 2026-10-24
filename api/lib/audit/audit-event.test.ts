@@ -54,6 +54,11 @@ describe("audit-event taxonomy", () => {
       "strategy_snapshot_materialized",
       "learning_promotion_resolved",
       "admin_mutation",
+      // R5-E: governed marketing-action policy decisions.
+      "policy_decision",
+      // R5-C: engagement terminal states + immutable receipts.
+      "engagement_execution",
+      "engagement_receipt",
     ]);
   });
 

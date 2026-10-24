@@ -1723,3 +1723,173 @@ export const policyDecisions = mysqlTable(
 
 export type PolicyDecisionRow = typeof policyDecisions.$inferSelect;
 export type InsertPolicyDecisionRow = typeof policyDecisions.$inferInsert;
+
+// ─── Engagement Response Contents (WBS-R5-C2) ───
+// Governed, immutable AI response content for an engagement action.
+// responseContentId is deterministic (server-derived from actionRequestId +
+// interpretationId + responseContextVersion) so retried generation converges
+// to one durable row and one billing identity. Content is bounded at the
+// contract layer (platform max); social source text is never stored here —
+// only the generated response bound to its authoritative interpretation.
+export const engagementResponseContents = mysqlTable(
+  "engagement_response_contents",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic: egen_<sha256(...)[:40]>; unique per logical generation.
+    responseContentId: varchar("responseContentId", { length: 64 }).notNull(),
+    // Content version within one responseContentId (approval binding pins it).
+    version: int("version").notNull(),
+    // sha256 of the accepted content — the context fingerprint ingredient.
+    contentHash: varchar("contentHash", { length: 64 }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    actionRequestId: varchar("actionRequestId", { length: 128 }).notNull(),
+    interpretationId: varchar("interpretationId", { length: 128 }).notNull(),
+    platform: varchar("platform", { length: 32 }).notNull(),
+    actionType: varchar("actionType", { length: 32 }).notNull(),
+    // Bounded generated text (platform max enforced at contract layer).
+    content: text("content").notNull(),
+    // accepted = executable-bound content; internal_note = non-executable
+    // deterministic note (escalation/no-action routing evidence).
+    status: varchar("status", { length: 24 }).notNull(),
+    model: varchar("model", { length: 64 }),
+    promptTokens: int("promptTokens"),
+    completionTokens: int("completionTokens"),
+    // Caller-stable generation billing identity (engen:...); exact-once
+    // through the governed agent-run reservation path.
+    billingIdentity: varchar("billingIdentity", { length: 128 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    contentVersionUnique: uniqueIndex("erc_content_version_idx").on(
+      table.responseContentId,
+      table.version
+    ),
+    businessIdx: index("erc_business_idx").on(table.businessId),
+    actionRequestIdx: index("erc_action_request_idx").on(table.actionRequestId),
+  })
+);
+
+export type EngagementResponseContentRow = typeof engagementResponseContents.$inferSelect;
+export type InsertEngagementResponseContentRow = typeof engagementResponseContents.$inferInsert;
+
+// ─── Engagement Executions (WBS-R5-C6) ───
+// Durable exact-once execution authority for governed engagement actions.
+// One row per actionRequestId (unique). The conditional claim on
+// (status, claim lease) is the single concurrency authority; the durable
+// receipt is the terminal evidence. policy/approval staleness is re-checked
+// at execution time through the R5-E gate — this table records outcomes,
+// never authority.
+export const engagementExecutions = mysqlTable(
+  "engagement_executions",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic: eex_<sha256(...)[:40]>.
+    executionId: varchar("executionId", { length: 64 }).notNull(),
+    // One execution per governed action request — the convergence anchor.
+    actionRequestId: varchar("actionRequestId", { length: 128 }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    signalId: varchar("signalId", { length: 128 }).notNull(),
+    signalVersion: int("signalVersion").notNull(),
+    interpretationId: varchar("interpretationId", { length: 128 }).notNull(),
+    policyDecisionId: varchar("policyDecisionId", { length: 48 }).notNull(),
+    approvalRequestId: int("approvalRequestId"),
+    responseContentId: varchar("responseContentId", { length: 64 }).notNull(),
+    responseContentVersion: int("responseContentVersion").notNull(),
+    provider: varchar("provider", { length: 16 }).notNull(),
+    platform: varchar("platform", { length: 32 }).notNull(),
+    actionType: varchar("actionType", { length: 32 }).notNull(),
+    // social_integrations row id (opaque binding identity — never tokens).
+    integrationId: bigint("integrationId", { mode: "number", unsigned: true }),
+    // External object/thread id being replied to.
+    externalTarget: varchar("externalTarget", { length: 255 }).notNull(),
+    // pending_claim | executing | pending_retry | succeeded | failed_retryable |
+    // failed_terminal | ambiguous | blocked | never_execute | internal_only
+    status: varchar("status", { length: 24 }).notNull(),
+    attempt: int("attempt").default(0).notNull(),
+    maxRetries: int("maxRetries").default(3).notNull(),
+    // Stable provider operation identity (eop_:...) — unique so a replayed
+    // logical operation can never produce two provider effects.
+    providerOperationIdentity: varchar("providerOperationIdentity", { length: 64 }),
+    claimedAt: timestamp("claimedAt"),
+    claimExpiresAt: timestamp("claimExpiresAt"),
+    nextRetryAt: timestamp("nextRetryAt"),
+    // none | needed | in_progress | resolved
+    reconciliationState: varchar("reconciliationState", { length: 24 }).notNull(),
+    // transient | permanent | ambiguous | governance | unsupported
+    failureClass: varchar("failureClass", { length: 24 }),
+    // Held billing reservation (execution settlement authority). Deterministic
+    // per billing identity; recorded so crash/reconcile paths settle at most once.
+    billingReservationId: varchar("billingReservationId", { length: 64 }),
+    lastError: varchar("lastError", { length: 512 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    actionRequestUnique: uniqueIndex("ee_action_request_idx").on(table.actionRequestId),
+    operationIdentityUnique: uniqueIndex("ee_operation_identity_idx").on(
+      table.providerOperationIdentity
+    ),
+    businessIdx: index("ee_business_idx").on(table.businessId),
+    statusIdx: index("ee_status_idx").on(table.status),
+    reconciliationIdx: index("ee_reconciliation_idx").on(table.reconciliationState),
+  })
+);
+
+export type EngagementExecutionRow = typeof engagementExecutions.$inferSelect;
+export type InsertEngagementExecutionRow = typeof engagementExecutions.$inferInsert;
+
+// ─── Engagement Receipts (WBS-R5-C7) ───
+// Immutable evidence of an external engagement effect. One row per
+// execution (unique executionId) and per provider operation identity, so
+// crash-after-provider-success replay converges to the existing row with
+// zero duplicate provider effects. Carries opaque identity references only
+// (ids, hashes, bounded external references) — never provider tokens,
+// secrets, or raw social content.
+export const engagementReceipts = mysqlTable(
+  "engagement_receipts",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic: erec_<sha256(...)[:40]>.
+    engagementReceiptId: varchar("engagementReceiptId", { length: 64 }).notNull(),
+    executionId: varchar("executionId", { length: 64 }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    signalId: varchar("signalId", { length: 128 }).notNull(),
+    interpretationId: varchar("interpretationId", { length: 128 }).notNull(),
+    actionRequestId: varchar("actionRequestId", { length: 128 }).notNull(),
+    policyDecisionId: varchar("policyDecisionId", { length: 48 }).notNull(),
+    approvalRequestId: int("approvalRequestId"),
+    responseContentId: varchar("responseContentId", { length: 64 }).notNull(),
+    responseContentVersion: int("responseContentVersion").notNull(),
+    provider: varchar("provider", { length: 16 }).notNull(),
+    // Provider account binding as opaque identity (integration row id) —
+    // token material lives only in social_integrations and is never copied.
+    integrationId: bigint("integrationId", { mode: "number", unsigned: true }),
+    providerAccountRef: varchar("providerAccountRef", { length: 255 }),
+    externalTarget: varchar("externalTarget", { length: 255 }).notNull(),
+    providerOperationIdentity: varchar("providerOperationIdentity", { length: 64 }).notNull(),
+    // Bounded provider acknowledgement reference (comment id etc.), safe subset.
+    providerExternalReceipt: varchar("providerExternalReceipt", { length: 512 }),
+    // ISO 8601 verbatim.
+    executedAt: varchar("executedAt", { length: 32 }).notNull(),
+    // succeeded
+    status: varchar("status", { length: 24 }).notNull(),
+    // none | resolved
+    reconciliationState: varchar("reconciliationState", { length: 24 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    receiptIdUnique: uniqueIndex("er_receipt_id_idx").on(table.engagementReceiptId),
+    executionUnique: uniqueIndex("er_execution_idx").on(table.executionId),
+    operationIdentityUnique: uniqueIndex("er_operation_identity_idx").on(
+      table.providerOperationIdentity
+    ),
+    businessIdx: index("er_business_idx").on(table.businessId),
+    signalIdx: index("er_signal_idx").on(table.signalId),
+  })
+);
+
+export type EngagementReceiptRow = typeof engagementReceipts.$inferSelect;
+export type InsertEngagementReceiptRow = typeof engagementReceipts.$inferInsert;
