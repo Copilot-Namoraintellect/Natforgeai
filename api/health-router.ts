@@ -1,11 +1,22 @@
 import { z } from "zod";
 import { createRouter, publicQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { agentRuns, publishingQueue, aiUsage } from "@db/schema";
-import { eq, sql, gte, desc } from "drizzle-orm";
+import {
+  agentRuns,
+  aiUsage,
+  approvalRequests,
+  businesses,
+  creditWallets,
+  publishingQueue,
+  queueReplayRequests,
+  queueTerminalFailures,
+  socialIntegrations,
+} from "@db/schema";
+import { eq, sql, gte, desc, inArray } from "drizzle-orm";
 import { isRedisConfigured, getRedisClient } from "./lib/redis";
 import { getPublishingQueueStats, getPublishingWorker } from "./lib/queue/bullmq";
 import { env } from "./lib/env";
+import { logError } from "./lib/logger";
 import { getPostLiveLifecycleSchedulerStatus } from "./lib/workflow/post-live-lifecycle-scheduler";
 import { resolvePostLiveLifecycleSchedulerHealth } from "./lib/workflow/post-live-lifecycle-health";
 import { getPostLiveMetricsObservationSchedulerStatus } from "./lib/workflow/post-live-metrics-observation-scheduler";
@@ -15,6 +26,33 @@ import {
   extractAdminRequestId,
   recordAdminMutationAudit,
 } from "./lib/governance/admin-audit";
+import { readR5ListeningRollup } from "./lib/governance/r5-stream-evidence";
+import {
+  clampR5BusinessLimit,
+  summarizeR5Operations,
+} from "./lib/governance/r5-operations-summary";
+
+/**
+ * Per-area isolation for the R5 readiness rollup: a failing area read yields
+ * `{ ok: false }` so the caller can report an honest unavailable/zero/attention
+ * contribution instead of failing the whole rollup. Failures are logged with
+ * structured fields only (bounded, no payloads).
+ */
+async function safeR5ReadinessArea<T>(
+  area: string,
+  fn: () => Promise<T>
+): Promise<{ ok: boolean; value: T | null }> {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (err) {
+    logError("[R5] Readiness area read failed", {
+      event: "r5_readiness_area_failed",
+      area,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { ok: false, value: null };
+  }
+}
 
 export const healthRouter = createRouter({
   getSystemHealth: publicQuery.query(async () => {
@@ -256,6 +294,146 @@ export const healthRouter = createRouter({
       recentFailures,
     };
   }),
+
+  // ─── R5-F3: Marketing operations readiness ───
+  // Bounded, secret-free rollup over the R5 operational authorities. Every
+  // counter comes from an allow-listed id/status-column read aggregated in
+  // JS; per-business health comes ONLY from the shared bounded projection
+  // window (never a full projection of every business). A failing area
+  // degrades to an honest unavailable/zero/attention contribution instead of
+  // failing the whole rollup.
+  getR5OperationsReadiness: adminQuery
+    .input(
+      z
+        .object({
+          businessLimit: z.number().int().min(1).max(100).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ input }) => {
+      const db = getDb();
+      const now = new Date();
+      const businessLimit = clampR5BusinessLimit(input?.businessLimit);
+
+      const [listeningRollup, businessIdRows, queueStatusRows, terminalFailureRows, replayRequestRows, walletRows, pendingApprovalRows, integrationStatusRows, summary] =
+        await Promise.all([
+          safeR5ReadinessArea("listening", () => readR5ListeningRollup(db, now)),
+          safeR5ReadinessArea("businesses", () =>
+            db.select({ id: businesses.id }).from(businesses)
+          ),
+          safeR5ReadinessArea("engagement_queue", () =>
+            db
+              .select({ id: publishingQueue.id, status: publishingQueue.status })
+              .from(publishingQueue)
+          ),
+          safeR5ReadinessArea("queue_terminal_failures", () =>
+            db
+              .select({ id: queueTerminalFailures.id })
+              .from(queueTerminalFailures)
+              .where(eq(queueTerminalFailures.status, "open"))
+          ),
+          safeR5ReadinessArea("queue_replay_requests", () =>
+            db
+              .select({ id: queueReplayRequests.id })
+              .from(queueReplayRequests)
+              .where(
+                inArray(queueReplayRequests.status, ["requested", "claimed", "enqueued"])
+              )
+          ),
+          safeR5ReadinessArea("credit_wallets", () =>
+            db
+              .select({ id: creditWallets.id, balance: creditWallets.balance })
+              .from(creditWallets)
+          ),
+          safeR5ReadinessArea("policy_approvals", () =>
+            db
+              .select({ id: approvalRequests.id })
+              .from(approvalRequests)
+              .where(eq(approvalRequests.status, "pending"))
+          ),
+          safeR5ReadinessArea("provider_integrations", () =>
+            db
+              .select({ id: socialIntegrations.id, status: socialIntegrations.status })
+              .from(socialIntegrations)
+          ),
+          safeR5ReadinessArea("business_summary", () =>
+            summarizeR5Operations(db, now, businessLimit)
+          ),
+        ]);
+
+      const safetyBlockedItems = (queueStatusRows.value ?? []).filter(
+        (r) => r.status === "safety_blocked"
+      ).length;
+      const retryingItems = (queueStatusRows.value ?? []).filter(
+        (r) => r.status === "retrying"
+      ).length;
+      const walletsExhausted = (walletRows.value ?? []).filter(
+        (w) => w.balance <= 0
+      ).length;
+      const degradedProviders = (integrationStatusRows.value ?? []).filter(
+        (s) => s.status === "expired" || s.status === "disconnected"
+      ).length;
+      const openTerminalFailures = (terminalFailureRows.value ?? []).length;
+      const openReplayRequests = (replayRequestRows.value ?? []).length;
+      const pendingApprovals = (pendingApprovalRows.value ?? []).length;
+
+      const rollup = listeningRollup.value;
+      const components: {
+        listening: "ready" | "degraded" | "blocked" | "unsupported" | "unavailable";
+        interpretation: "unsupported";
+        engagement: "ready" | "degraded" | "blocked";
+        opportunity: "unsupported";
+        policy: "ready" | "attention";
+        queueRecovery: "ready" | "attention";
+        billingQuota: "ready" | "blocked" | "unknown";
+        providerSupport: "ready" | "attention";
+      } = {
+        listening:
+          !listeningRollup.ok || !rollup || !rollup.available
+            ? "unavailable"
+            : rollup.blocked > 0
+              ? "blocked"
+              : "ready",
+        interpretation: "unsupported",
+        engagement: !queueStatusRows.ok
+          ? "degraded"
+          : safetyBlockedItems > 0
+            ? "blocked"
+            : retryingItems > 0
+              ? "degraded"
+              : "ready",
+        opportunity: "unsupported",
+        policy: !pendingApprovalRows.ok || pendingApprovals > 0 ? "attention" : "ready",
+        queueRecovery:
+          !terminalFailureRows.ok || openTerminalFailures > 0 ? "attention" : "ready",
+        billingQuota: !walletRows.ok
+          ? "unknown"
+          : walletsExhausted > 0
+            ? "blocked"
+            : "ready",
+        providerSupport:
+          !integrationStatusRows.ok || degradedProviders > 0 ? "attention" : "ready",
+      };
+
+      return {
+        generatedAt: now.toISOString(),
+        components,
+        counters: {
+          businesses: (businessIdRows.value ?? []).length,
+          listeningBindingsActive: rollup && listeningRollup.ok ? rollup.active : 0,
+          listeningBindingsBlocked: rollup && listeningRollup.ok ? rollup.blocked : 0,
+          signalsLast24h: rollup && listeningRollup.ok ? rollup.signalsLast24h : 0,
+          pendingApprovals,
+          safetyBlockedItems: queueStatusRows.ok ? safetyBlockedItems : 0,
+          retryingItems: queueStatusRows.ok ? retryingItems : 0,
+          openTerminalFailures: terminalFailureRows.ok ? openTerminalFailures : 0,
+          openReplayRequests: replayRequestRows.ok ? openReplayRequests : 0,
+          walletsExhausted: walletRows.ok ? walletsExhausted : 0,
+        },
+        topBlockedBusinesses: summary.value?.topBlocked ?? [],
+        truncated: summary.value?.truncated ?? false,
+      };
+    }),
 
   // ─── Alert Management ───
   listAlerts: adminQuery

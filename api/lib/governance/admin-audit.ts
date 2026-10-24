@@ -64,6 +64,9 @@ export const ADMIN_AUDIT_ACTIONS = [
   "admin.campaign_budget_resume",
   "admin.stale_creative_claim_sweep",
   "admin.publish_due_posts_executed",
+  // R5-F6: governed operator recovery actions on the R5 operations surface.
+  // Failed attempts are recorded via outcome: "failed" (no new action entry).
+  "admin.r5_operation_retry",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
@@ -84,6 +87,8 @@ export const ADMIN_AUDIT_TARGET_TYPES = [
   "campaign",
   "diagnostic_harness",
   "publishing_queue",
+  // R5-F6: target authority for operations.retryOperation recovery actions.
+  "r5_operation",
 ] as const;
 
 export type AdminAuditTargetType = (typeof ADMIN_AUDIT_TARGET_TYPES)[number];
