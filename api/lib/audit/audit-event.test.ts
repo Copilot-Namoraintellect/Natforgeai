@@ -54,6 +54,11 @@ describe("audit-event taxonomy", () => {
       "strategy_snapshot_materialized",
       "learning_promotion_resolved",
       "admin_mutation",
+      // R5-D: opportunity detection durable effects (pre-lead candidates only).
+      "opportunity_detected",
+      "opportunity_suppressed",
+      "opportunity_state_changed",
+      "opportunity_handed_off",
     ]);
   });
 
