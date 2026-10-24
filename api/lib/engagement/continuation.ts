@@ -30,6 +30,39 @@ import {
 } from "./execution-store";
 export const ENGAGEMENT_CONTINUATION_CONTRACT_VERSION = "engagement/continuation@v1";
 
+/**
+ * Re-queue a governance-blocked execution for the gated path.
+ *
+ * The disposition resolver treats `blocked` as terminal, but a non-permanent
+ * gate denial (e.g. an execution attempt that raced ahead of the human
+ * approval and was marked APPROVAL_PENDING) must not dead-end the bound
+ * action: the approval decision is the recovery authority for exactly these
+ * blocks. Resetting to `pending_claim` is safe because the R5-E gate
+ * re-asserts the CURRENT policy version, approval binding, context and
+ * expiry at execution time — a still-unauthorized action simply re-blocks
+ * with the current reason. Capability (`unsupported`) blocks are not
+ * approval-recoverable and stay terminal.
+ */
+async function resetGovernanceBlockedExecution(
+  execution: EngagementExecutionRecord,
+  executor: EngagementStoreExecutor
+): Promise<void> {
+  if (execution.status !== "blocked" || execution.failureClass !== "governance") return;
+  await updateEngagementExecutionState(
+    {
+      executionId: execution.executionId,
+      expectedStatus: "blocked",
+      patch: {
+        status: "pending_claim",
+        nextRetryAt: null,
+        failureClass: null,
+        lastError: null,
+      },
+    },
+    executor
+  );
+}
+
 export interface EngagementContinuationDeps extends EngagementExecutionDeps {
   executor?: EngagementStoreExecutor;
 }
@@ -95,6 +128,7 @@ export async function resumeEngagementContinuationForApproval(
     // Approved: resume through the full gated path. The R5-E gate
     // re-asserts the exact binding (policy version, context, approval) —
     // a stale or tampered approval still fails closed inside.
+    await resetGovernanceBlockedExecution(execution, executor);
     const outcome = await executeEngagementAction(
       { actionRequestId: execution.actionRequestId },
       deps
@@ -137,6 +171,13 @@ export async function runEngagementContinuationSweep(
 
       for (const execution of executions) {
         if (approval.status === "approved" && ["pending_claim", "pending_retry", "failed_retryable", "ambiguous"].includes(execution.status)) {
+          const outcome = await executeEngagementAction(
+            { actionRequestId: execution.actionRequestId },
+            deps
+          );
+          if (outcome.kind === "executed") resumed += 1;
+        } else if (approval.status === "approved" && execution.status === "blocked") {
+          await resetGovernanceBlockedExecution(execution, executor);
           const outcome = await executeEngagementAction(
             { actionRequestId: execution.actionRequestId },
             deps
