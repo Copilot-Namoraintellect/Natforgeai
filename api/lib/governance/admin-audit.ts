@@ -67,6 +67,10 @@ export const ADMIN_AUDIT_ACTIONS = [
   // R5-F6: governed operator recovery actions on the R5 operations surface.
   // Failed attempts are recorded via outcome: "failed" (no new action entry).
   "admin.r5_operation_retry",
+  // R6-F: governed lead privacy transitions and retention reconciliation on
+  // the lead governance surface. Failed attempts use outcome: "failed".
+  "admin.lead_privacy_state_changed",
+  "admin.lead_retention_sweep",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
@@ -89,6 +93,10 @@ export const ADMIN_AUDIT_TARGET_TYPES = [
   "publishing_queue",
   // R5-F6: target authority for operations.retryOperation recovery actions.
   "r5_operation",
+  // R6-F: target authorities for lead governance mutations.
+  "lead",
+  "lead_privacy_state",
+  "lead_operation",
 ] as const;
 
 export type AdminAuditTargetType = (typeof ADMIN_AUDIT_TARGET_TYPES)[number];

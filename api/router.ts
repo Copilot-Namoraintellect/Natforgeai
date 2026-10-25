@@ -20,6 +20,7 @@ import { conversationRouter } from "./conversation-router";
 import { billingRouter } from "./billing-router";
 import { healthRouter } from "./health-router";
 import { operationsRouter } from "./operations-router";
+import { leadGovernanceRouter } from "./lead-governance-router";
 import { videoRouter } from "./video-router";
 import { learningRouter } from "./learning-router";
 import { learningPromotionRouter } from "./learning-promotion-router";
@@ -73,6 +74,7 @@ export const appRouter = createRouter({
   billing: billingRouter,
   health: healthRouter,
   operations: operationsRouter,
+  leadGovernance: leadGovernanceRouter,
   video: videoRouter,
   learning: learningRouter,
   learningPromotion: learningPromotionRouter,
