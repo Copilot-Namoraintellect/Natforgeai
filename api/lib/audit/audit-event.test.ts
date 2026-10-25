@@ -57,8 +57,6 @@ describe("audit-event taxonomy", () => {
       "interpretation_recorded",
       // R5-E: governed marketing-action policy decisions.
       "policy_decision",
-      // R5-E: governed marketing-action policy decisions.
-      "policy_decision",
       // R5-C: engagement terminal states + immutable receipts.
       "engagement_execution",
       "engagement_receipt",
