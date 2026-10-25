@@ -267,6 +267,27 @@ R6-C consumes the read-only projection defined in
 overwrite scores, alter weights, equate score with qualification, or mutate
 evidence snapshots.
 
+## 12. AI-augmented feature extraction decision (B4)
+
+**Verdict: NOT USED.** Deterministic R5-B/R5-D evidence fully covers the v1
+feature model; no legitimate gap exists that would justify a model in the
+scoring path. Consequences, affirmed:
+
+- The scoring path contains no `runAgent` call, no prompt, no model output —
+  prompt-injection and malformed-model-output adversarial classes are
+  structurally impossible here (acceptance case 23/24).
+- Non-billable: no reservation, no `ai_usage` row, no `agent_runs` entry;
+  retries cannot double-charge because nothing is charged.
+- If a future governed need emerges, AI may assist feature extraction only
+  under these standing constraints: structured output validated against a
+  strict schema; untrusted text delimited and never concatenated into
+  instructions; bounded effect on the final score (weights remain
+  server-owned and deterministic); no hidden reasoning persisted; failure
+  falls back to UNKNOWN/insufficient evidence, never invented confidence;
+  stable server-derived model operation identity with exact-once billing per
+  R4/R5 financial policy. The deterministic score computation itself must
+  remain non-billable and unchanged in authority.
+
 ---
 
 **R6-C/R6-X: consume lead scores through this contract. Do not redefine

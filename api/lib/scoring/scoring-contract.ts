@@ -29,6 +29,7 @@ export const SNAPSHOT_ID_PREFIX = "lss1:" as const;
 // ─── Closed vocabularies (scoring contract §3, §6, §7 — closed) ───
 
 export const SCORE_BAND_VALUES = ["VERY_LOW", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"] as const;
+export type ScoreBand = (typeof SCORE_BAND_VALUES)[number];
 export const SCORE_CONFIDENCE_VALUES = ["LOW", "MEDIUM", "HIGH", "UNKNOWN"] as const;
 
 export const COMPONENT_KEYS = ["fit", "intent", "engagement", "recency", "opportunity"] as const;

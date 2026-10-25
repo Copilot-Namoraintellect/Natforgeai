@@ -8,7 +8,6 @@
 // verbatim here.
 
 import {
-  SCORE_BAND_VALUES,
   SCORE_REASON_CODE_VALUES,
   SCORING_WEIGHTS,
   ScoringValidationError,
@@ -103,7 +102,13 @@ function computeOpportunity(v: ScoringFeatureVector): number {
 
 // ─── Reason codes (contract §7 — bounded, deterministic priority) ───
 
-function deriveReasonCodes(v: ScoringFeatureVector, components: Record<ComponentKey, number>, ageHours: number | null): ScoreReasonCode[] {
+function deriveReasonCodes(
+  v: ScoringFeatureVector,
+  components: Record<ComponentKey, number>,
+  contributions: Record<ComponentKey, number>,
+  overallScore: number,
+  ageHours: number | null
+): ScoreReasonCode[] {
   const codes: ScoreReasonCode[] = [];
   const push = (code: ScoreReasonCode) => {
     if (codes.length < MAX_REASON_CODES && REASON_CODE_SET.has(code) && !codes.includes(code)) {
@@ -116,17 +121,23 @@ function deriveReasonCodes(v: ScoringFeatureVector, components: Record<Component
     return codes;
   }
 
-  // Dominant positive drivers (weighted contribution order).
+  // Dominant positive drivers: emit a code for every component whose weighted
+  // contribution is material (≥ 20% of the overall score), in contribution
+  // order — the codes must explain the dominant factors, not just the top one.
   const ordered = (Object.keys(components) as ComponentKey[]).sort((a, b) => components[b] - components[a]);
-  const top = ordered[0];
-  if (top === "intent" && v.explicitHighCount > 0) {
-    if (v.primaryOpportunityType === "service_enquiry") push("EXPLICIT_SERVICE_ENQUIRY");
-    else if (v.primaryOpportunityType === "partnership_interest") push("PARTNERSHIP_INTEREST");
-    else push("STRONG_PURCHASE_INTENT");
-  } else if (top === "fit" && v.fitCampaignAlignment >= 1) {
-    push("CAMPAIGN_ALIGNED");
-  } else if (top === "opportunity" && v.evidenceStrengthOrdinal === "HIGH") {
-    push("HIGH_EVIDENCE_STRENGTH");
+  if (overallScore > 0) {
+    for (const key of ordered) {
+      if (contributions[key] / overallScore < 0.2) continue;
+      if (key === "intent" && v.explicitHighCount > 0) {
+        if (v.primaryOpportunityType === "service_enquiry") push("EXPLICIT_SERVICE_ENQUIRY");
+        else if (v.primaryOpportunityType === "partnership_interest") push("PARTNERSHIP_INTEREST");
+        else push("STRONG_PURCHASE_INTENT");
+      } else if (key === "fit" && v.fitCampaignAlignment >= 1) {
+        push("CAMPAIGN_ALIGNED");
+      } else if (key === "opportunity" && v.evidenceStrengthOrdinal === "HIGH") {
+        push("HIGH_EVIDENCE_STRENGTH");
+      }
+    }
   }
 
   if (v.distinctInterpretationCount >= 2) push("REPEATED_INTENT_SIGNALS");
@@ -188,7 +199,7 @@ export function computeScore(
 
   const ageHours =
     vector.latestObservedAtMs === null ? null : Math.max(0, (nowMs - vector.latestObservedAtMs) / 3.6e6);
-  const reasonCodes = deriveReasonCodes(vector, components, ageHours);
+  const reasonCodes = deriveReasonCodes(vector, components, contributions, overallScore, ageHours);
   const confidence = deriveScoreConfidence(vector, { nowMs });
 
   return {

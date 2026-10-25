@@ -806,14 +806,14 @@ describe("R6-B cases 9–14 — exact-once, versioning, immutability (B7)", () =
   it("case 14: scoring-version change creates a new immutable score", async () => {
     const fake = seeded();
     const v1 = await scoreLead({ userId: 1, leadId: 1, now: T0 });
-    const stored = fake.tables.lead_score_snapshots[0];
+    const stored = { ...fake.tables.lead_score_snapshots[0] } as Record<string, unknown>;
     // A future engine bump re-keys the durable convergence anchor.
     await scoringStore.insertScore(
       {
-        ...(stored as never),
+        ...stored,
         id: undefined,
         scoringVersion: "lead-scoring-engine/v2",
-        leadScoreId: stored.leadScoreId.replace("lsc1:", "lsc2:"),
+        leadScoreId: String(stored.leadScoreId).replace("lsc1:", "lsc2:"),
       } as never,
       fake.db as never
     );
