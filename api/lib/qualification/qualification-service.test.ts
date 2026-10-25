@@ -260,6 +260,14 @@ function extractEqConditions(cond: unknown): { field: string; value: unknown }[]
   return out;
 }
 
+function tableNameOf(table: unknown): string {
+  return (
+    (table as Record<symbol, string>)[Symbol.for("drizzle:Name")] ??
+    (table as { tableName?: string }).tableName ??
+    "unknown"
+  );
+}
+
 function evaluateWhere(row: Row, cond: unknown): boolean {
   if (isStorePredicate(cond)) return evaluatePredicate(row, cond);
   const conditions = extractEqConditions(cond);
@@ -313,7 +321,7 @@ function makeFakeDb(): { executor: QualificationStoreExecutor; state: FakeDbStat
     select: () => ({
       from: (table) => {
         if ((table as unknown) === auditEvents) return targetFor(state.auditRows);
-        if (table.tableName === "lead_qualifications") return targetFor(state.qualifications);
+        if (tableNameOf(table) === "lead_qualifications") return targetFor(state.qualifications);
         return targetFor(state.reviews);
       },
     }),
@@ -329,7 +337,7 @@ function makeFakeDb(): { executor: QualificationStoreExecutor; state: FakeDbStat
           return [{ affectedRows: 1 }];
         }
         state.insertAttempts += 1;
-        if (table.tableName === "lead_qualifications") {
+        if (tableNameOf(table) === "lead_qualifications") {
           if (
             state.qualifications.some(
               (existing) => existing.userId === row.userId && existing.qualificationId === row.qualificationId
@@ -358,7 +366,7 @@ function makeFakeDb(): { executor: QualificationStoreExecutor; state: FakeDbStat
           const rows =
             (table as unknown) === auditEvents
               ? state.auditRows
-              : table.tableName === "lead_qualifications"
+              : tableNameOf(table) === "lead_qualifications"
                 ? state.qualifications
                 : state.reviews;
           let affected = 0;
@@ -559,26 +567,28 @@ describe("evaluateQualificationForLead — fail-closed inputs", () => {
     ).rejects.toMatchObject({ name: "QualificationInputError", code: "STALE_SCORE" });
   });
 
-  it("rejects a score bound to a different lead with SCORE_TAMPERED", async () => {
+  it("rejects a score under a different business scope with SCORE_TAMPERED", async () => {
     const provider = makeProvider();
-    provider.identities.set(OTHER_LEAD_ID, identityProjection({ leadId: OTHER_LEAD_ID }));
-    provider.scores.set(OTHER_SCORE_ID, scorePayload({ leadScoreId: OTHER_SCORE_ID, leadId: OTHER_LEAD_ID }));
-    await expect(
-      evaluateQualificationForLead(
-        evaluateInput({ leadScoreId: OTHER_SCORE_ID }),
-        deps(provider),
-        makeFakeDb().executor
-      )
-    ).rejects.toMatchObject({ name: "QualificationTamperError", code: "SCORE_TAMPERED" });
-  });
-
-  it("rejects a score under a different identity version with SCORE_TAMPERED", async () => {
-    const seamVersion = `lead-identity-seam/v1:${G64}`;
-    const provider = makeProvider();
-    provider.scores.set(SCORE_ID, scorePayload({ leadIdentityVersion: seamVersion }));
+    provider.scores.set(SCORE_ID, scorePayload({ businessId: 99 }));
     await expect(
       evaluateQualificationForLead(evaluateInput(), deps(provider), makeFakeDb().executor)
     ).rejects.toMatchObject({ name: "QualificationTamperError", code: "SCORE_TAMPERED" });
+  });
+
+  it("accepts a score bound through the R6-B seam identity version", async () => {
+    // R6-B keys on the legacy numeric leads.id and binds
+    // lead-identity-seam/v1:<hash> until R6-A publishes: C binds score to
+    // identity by tenant + business scope, never by leadId/version equality.
+    const seamVersion = `lead-identity-seam/v1:${G64}`;
+    const provider = makeProvider();
+    provider.scores.set(SCORE_ID, scorePayload({ leadIdentityVersion: seamVersion }));
+    const result = await evaluateQualificationForLead(
+      evaluateInput(),
+      deps(provider),
+      makeFakeDb().executor
+    );
+    expect(result.qualification.decision).toBe("QUALIFIED");
+    expect(result.qualification.leadScoreId).toBe(SCORE_ID);
   });
 
   it("rejects an unknown policy version with UNKNOWN_POLICY_VERSION", async () => {

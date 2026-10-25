@@ -2301,3 +2301,87 @@ export const opportunityHandoffs = mysqlTable(
 
 export type OpportunityHandoffRow = typeof opportunityHandoffs.$inferSelect;
 export type InsertOpportunityHandoffRow = typeof opportunityHandoffs.$inferInsert;
+
+// ─── R6-C Lead Qualifications (governed deterministic decision authority) ───
+// Immutable, insert-only qualification decisions. Unique (userId,
+// qualificationId) is the exact-once convergence anchor: retries/concurrent
+// duplicates re-read the committed row and converge (idempotent_replay).
+// References + hashes + closed vocabularies only — no PII, no raw evidence.
+// Provisional migration 0034_lead_qualification_autonomy (artefacts only —
+// NOT executed; see docs/recovery/r6-c-unexecuted-migrations.md; R6-X owns
+// canonical sequencing).
+export const leadQualifications = mysqlTable(
+  "lead_qualifications",
+  {
+    id: serial("id").primaryKey(),
+    qualificationId: varchar("qualificationId", { length: 69 }).notNull(),
+    contractVersion: varchar("contractVersion", { length: 40 }).notNull(),
+    engineVersion: varchar("engineVersion", { length: 64 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    leadId: varchar("leadId", { length: 69 }).notNull(),
+    leadIdentityVersion: varchar("leadIdentityVersion", { length: 96 }).notNull(),
+    identityReference: varchar("identityReference", { length: 64 }).notNull(),
+    leadScoreId: varchar("leadScoreId", { length: 69 }).notNull(),
+    scoringVersion: varchar("scoringVersion", { length: 64 }).notNull(),
+    scoreContentHash: varchar("scoreContentHash", { length: 64 }).notNull(),
+    qualificationPolicyVersion: varchar("qualificationPolicyVersion", { length: 96 }).notNull(),
+    evidenceSnapshotHash: varchar("evidenceSnapshotHash", { length: 64 }).notNull(),
+    evidenceSnapshot: json("evidenceSnapshot").notNull(),
+    decision: mysqlEnum("decision", [
+      "QUALIFIED",
+      "NOT_QUALIFIED",
+      "REVIEW_REQUIRED",
+      "INSUFFICIENT_EVIDENCE",
+      "BLOCKED",
+    ]).notNull(),
+    reasonCodes: json("reasonCodes").notNull(),
+    confidenceScore: int("confidenceScore").notNull(),
+    reviewRequired: boolean("reviewRequired").notNull(),
+    evaluatedAt: varchar("evaluatedAt", { length: 32 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("lqd_convergence_uidx").on(t.userId, t.qualificationId),
+    index("lqd_user_lead_idx").on(t.userId, t.leadId),
+    index("lqd_user_business_idx").on(t.userId, t.businessId),
+  ]
+);
+
+export type LeadQualificationsRow = typeof leadQualifications.$inferSelect;
+export type InsertLeadQualificationsRow = typeof leadQualifications.$inferInsert;
+
+// ─── R6-C Lead Qualification Reviews (one governed review per decision) ───
+// Exactly one review per decision: unique (userId, reviewId) + (userId,
+// qualificationId). Resolution is optimistic-CAS guarded (version) — a review
+// resolves at most once and never mutates the immutable decision. Bound to
+// the exact decision via decisionBindingHash; drift ⇒ REVIEW_STALE_BINDING.
+export const leadQualificationReviews = mysqlTable(
+  "lead_qualification_reviews",
+  {
+    id: serial("id").primaryKey(),
+    reviewId: varchar("reviewId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    leadId: varchar("leadId", { length: 69 }).notNull(),
+    qualificationId: varchar("qualificationId", { length: 69 }).notNull(),
+    decisionBindingHash: varchar("decisionBindingHash", { length: 64 }).notNull(),
+    status: mysqlEnum("status", ["pending", "progress_authorized", "progression_rejected"]).notNull(),
+    triggerReasonCodes: json("triggerReasonCodes").notNull(),
+    resolvedBy: bigint("resolvedBy", { mode: "number", unsigned: true }),
+    resolvedAt: varchar("resolvedAt", { length: 32 }),
+    resolutionReason: varchar("resolutionReason", { length: 500 }),
+    version: int("version").notNull().default(1),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("lqr_review_uidx").on(t.userId, t.reviewId),
+    uniqueIndex("lqr_qualification_uidx").on(t.userId, t.qualificationId),
+    index("lqr_user_lead_idx").on(t.userId, t.leadId),
+  ]
+);
+
+export type LeadQualificationReviewsRow = typeof leadQualificationReviews.$inferSelect;
+export type InsertLeadQualificationReviewsRow = typeof leadQualificationReviews.$inferInsert;

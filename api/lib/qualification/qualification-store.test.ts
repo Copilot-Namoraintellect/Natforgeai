@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { leadQualificationReviews, leadQualifications } from "@db/schema";
 import {
   and,
   asc,
   desc,
   eq,
-  leadQualificationReviewsTable,
-  leadQualificationsTable,
   getLatestQualification,
   getQualification,
   getReview,
@@ -21,6 +20,15 @@ import {
   type StoreOrderTerm,
   type StorePredicate,
 } from "./qualification-store";
+
+/** Real Drizzle tables carry Symbol.for("drizzle:Name"); the fake keys on it. */
+function tableNameOf(table: unknown): string {
+  return (
+    (table as Record<symbol, string>)[Symbol.for("drizzle:Name")] ??
+    (table as { tableName?: string }).tableName ??
+    "unknown"
+  );
+}
 
 const H64 = "ab".repeat(32);
 const G64 = "cd".repeat(32);
@@ -100,14 +108,14 @@ function makeFakeDb(): { executor: QualificationStoreExecutor; state: FakeDbStat
   const executor: QualificationStoreExecutor = {
     select: () => ({
       from: (table) =>
-        table.tableName === "lead_qualifications"
+        tableNameOf(table) === "lead_qualifications"
           ? targetFor(state.qualifications)
           : targetFor(state.reviews),
     }),
     insert: (table) => ({
       values: async (row: Row) => {
         state.insertAttempts += 1;
-        if (table.tableName === "lead_qualifications") {
+        if (tableNameOf(table) === "lead_qualifications") {
           if (
             state.qualifications.some(
               (existing) => existing.userId === row.userId && existing.qualificationId === row.qualificationId
@@ -138,7 +146,7 @@ function makeFakeDb(): { executor: QualificationStoreExecutor; state: FakeDbStat
       set: (patch: Row) => ({
         where: async (predicate: StorePredicate) => {
           state.updateCalls += 1;
-          const rows = table.tableName === "lead_qualifications" ? state.qualifications : state.reviews;
+          const rows = tableNameOf(table) === "lead_qualifications" ? state.qualifications : state.reviews;
           let affected = 0;
           for (const row of rows) {
             if (evaluatePredicate(row, predicate)) {
@@ -426,7 +434,7 @@ describe("qualification store — predicate helpers", () => {
   });
 
   it("exposes the R6-C table handles", () => {
-    expect(leadQualificationsTable.tableName).toBe("lead_qualifications");
-    expect(leadQualificationReviewsTable.tableName).toBe("lead_qualification_reviews");
+    expect(tableNameOf(leadQualifications)).toBe("lead_qualifications");
+    expect(tableNameOf(leadQualificationReviews)).toBe("lead_qualification_reviews");
   });
 });

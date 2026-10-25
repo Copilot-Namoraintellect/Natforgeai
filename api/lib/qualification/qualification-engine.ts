@@ -11,7 +11,6 @@ import {
   MAX_REASON_CODES,
   QUALIFICATION_REASON_CODE_VALUES,
   SCORE_BAND_ORDINAL,
-  SCORE_CONFIDENCE_ORDINAL,
   type NormalizedIdentityEvidence,
   type NormalizedPrivacyState,
   type NormalizedScoreEvidence,
@@ -78,10 +77,6 @@ function identityConfidenceOrdinal(identityConfidence: string): number {
 
 function scoreBandOrdinal(scoreBand: ScoreBand): number {
   return SCORE_BAND_ORDINAL[scoreBand];
-}
-
-function scoreConfidenceOrdinal(scoreConfidence: ScoreConfidence): number {
-  return SCORE_CONFIDENCE_ORDINAL[scoreConfidence];
 }
 
 /**

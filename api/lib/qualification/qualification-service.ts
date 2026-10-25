@@ -13,6 +13,7 @@ import {
   canonicalJson,
   deriveQualificationId,
   LEAD_QUALIFICATION_CONTRACT_VERSION,
+  QualificationError,
   QualificationInputError,
   QualificationOwnershipError,
   QualificationStateConflictError,
@@ -22,6 +23,7 @@ import {
   type NormalizedIdentityEvidence,
   type QualificationDuplicateClassification,
 } from "./qualification-contract";
+import { ProviderAuthorityUnavailable } from "./qualification-bridge";
 import { getQualificationPolicy } from "./qualification-policy";
 import { buildEvidenceSnapshot } from "./qualification-evidence";
 import { evaluateQualification } from "./qualification-engine";
@@ -120,6 +122,12 @@ async function fetchIdentity(
     if (err instanceof ProviderLeadNotFound) {
       throw new QualificationInputError("LEAD_NOT_FOUND", `lead ${leadId} not found`);
     }
+    if (err instanceof ProviderAuthorityUnavailable) {
+      throw new QualificationError(
+        "QUALIFICATION_AUTHORITY_UNAVAILABLE",
+        `qualification authority unavailable: ${err.message}`
+      );
+    }
     throw err;
   }
   return validateIdentityProjection(raw);
@@ -195,13 +203,25 @@ export async function evaluateQualificationForLead(
     );
   }
 
-  // (5) Score — re-validated, then cross-bound to this identity and tenant.
+  // (5) Score — re-validated, then cross-bound to this tenant + business
+  //     scope. R6-B's score surface keys on the LEGACY numeric leads.id and
+  //     carries the seam identity version (lead-identity-seam/v1:<hash>), so
+  //     score↔identity leadId/version equality is meaningless here; the
+  //     binding is tenant (userId, below) + business scope (below). R6-X
+  //     reconciles the id spaces. Allowed-version validation lives in the
+  //     scoring seam.
   let rawScore: unknown;
   try {
     rawScore = await deps.provider.getScorePayload(input.leadScoreId);
   } catch (err) {
     if (err instanceof ProviderScoreNotFound) {
       throw new QualificationInputError("SCORE_NOT_FOUND", `score ${input.leadScoreId} not found`);
+    }
+    if (err instanceof ProviderAuthorityUnavailable) {
+      throw new QualificationError(
+        "QUALIFICATION_AUTHORITY_UNAVAILABLE",
+        `qualification authority unavailable: ${err.message}`
+      );
     }
     throw err;
   }
@@ -210,26 +230,13 @@ export async function evaluateQualificationForLead(
     // Cross-tenant scores are indistinguishable from absent ones.
     throw new QualificationInputError("SCORE_NOT_FOUND", `score ${input.leadScoreId} not found`);
   }
-  if (score.leadId !== identity.leadId) {
+  const businessScopes = [identity.businessId, score.businessId, input.businessId ?? null].filter(
+    (scope): scope is number => scope !== null
+  );
+  if (businessScopes.some((scope) => scope !== businessScopes[0])) {
     throw new QualificationTamperError(
       "SCORE_TAMPERED",
-      `score is bound to lead ${score.leadId}, not ${identity.leadId}`
-    );
-  }
-  if (score.leadIdentityVersion !== identity.leadIdentityVersion) {
-    throw new QualificationTamperError(
-      "SCORE_TAMPERED",
-      `score identity version ${score.leadIdentityVersion} disagrees with identity ${identity.leadIdentityVersion}`
-    );
-  }
-  if (
-    score.businessId !== null &&
-    identity.businessId !== null &&
-    score.businessId !== identity.businessId
-  ) {
-    throw new QualificationTamperError(
-      "SCORE_TAMPERED",
-      `score business scope ${score.businessId} disagrees with identity business scope ${identity.businessId}`
+      `score, identity and input business scopes disagree (identity=${String(identity.businessId)}, score=${String(score.businessId)}, input=${String(input.businessId ?? null)})`
     );
   }
 

@@ -8,33 +8,35 @@
 // are new decisions. Review resolution is optimistic-CAS guarded (version);
 // stale writes fail closed (REVIEW_ALREADY_RESOLVED).
 //
-// The module binds no default connection: the schema tables are provisional
-// artefacts until the R6-X/bridge slice lands (see
-// docs/recovery/r6-c-unexecuted-migrations.md), so every call site supplies
-// an executor through the structural seam below — the same select/insert/
-// update chain shape a Drizzle client or transaction callback provides. The
-// bridge slice binds the real schema to these handles; tests bind the
-// in-memory fake.
+// The canonical tables live in @db/schema (single source of truth; the 0034
+// migration artefact is provisional — NOT executed; see
+// docs/recovery/r6-c-unexecuted-migrations.md; R6-X owns canonical
+// sequencing). Every call site supplies an executor through the structural
+// seam below — the same select/insert/update chain shape a Drizzle client or
+// transaction callback provides. The bridge binds a real client/tx to these
+// handles (translating the local predicate descriptors to Drizzle SQL);
+// tests bind the in-memory fake.
 
+import {
+  leadQualificationReviews,
+  leadQualifications,
+} from "@db/schema";
 import {
   QualificationInputError,
   QualificationStateConflictError,
   type QualificationDuplicateClassification,
 } from "./qualification-contract";
 
-// ─── Table handles ───
+// ─── Table handles (canonical @db/schema imports — single source of truth) ───
 
-export interface QualificationTableHandle {
-  readonly tableName: "lead_qualifications" | "lead_qualification_reviews";
-}
-
-export const leadQualificationsTable: QualificationTableHandle = Object.freeze({
-  tableName: "lead_qualifications",
-});
-
-export const leadQualificationReviewsTable: QualificationTableHandle = Object.freeze({
-  tableName: "lead_qualification_reviews",
-});
+/**
+ * The R6-C schema tables. Rows travel the seam as `unknown` and are viewed
+ * through the structural row types below; real Drizzle tables carry
+ * Symbol.for("drizzle:Name"), which the executor implementations key on.
+ */
+export type QualificationTableHandle =
+  | typeof leadQualifications
+  | typeof leadQualificationReviews;
 
 // ─── Predicate model (Drizzle-style, owned locally per repo convention) ───
 
@@ -79,9 +81,10 @@ export interface QualificationSelectTarget {
 }
 
 /**
- * Structural seam: a Drizzle client / transaction callback satisfies this
- * select/insert/update chain shape once the bridge binds the real schema
- * handles; tests bind the table-name-keyed in-memory fake.
+ * Structural seam: the bridge binds a Drizzle client / transaction callback
+ * to this select/insert/update chain shape (translating the local predicate
+ * descriptors below into Drizzle SQL over the canonical @db/schema tables);
+ * tests bind the table-name-keyed in-memory fake.
  */
 export interface QualificationStoreExecutor {
   readonly select: () => { readonly from: (table: QualificationTableHandle) => QualificationSelectTarget };
@@ -181,7 +184,7 @@ async function findQualificationRow(
 ): Promise<LeadQualificationRow | null> {
   const [row] = (await executor
     .select()
-    .from(leadQualificationsTable)
+    .from(leadQualifications)
     .where(and(eq("userId", userId), eq("qualificationId", qualificationId)))
     .limit(1)) as unknown[];
   return (row as LeadQualificationRow | undefined) ?? null;
@@ -197,7 +200,7 @@ export async function insertQualification(
   executor: QualificationStoreExecutor
 ): Promise<QualificationWriteResult> {
   try {
-    await executor.insert(leadQualificationsTable).values({ ...row });
+    await executor.insert(leadQualifications).values({ ...row });
   } catch (err) {
     if (!isDuplicateKeyError(err)) throw err;
     const existing = await findQualificationRow(Number(row.userId), row.qualificationId, executor);
@@ -232,7 +235,7 @@ export async function listQualificationHistory(
 ): Promise<LeadQualificationRow[]> {
   const rows = await executor
     .select()
-    .from(leadQualificationsTable)
+    .from(leadQualifications)
     .where(and(eq("userId", userId), eq("leadId", leadId)))
     .orderBy(asc("evaluatedAt"), asc("qualificationId"))
     .all();
@@ -247,7 +250,7 @@ export async function getLatestQualification(
 ): Promise<LeadQualificationRow | null> {
   const [row] = (await executor
     .select()
-    .from(leadQualificationsTable)
+    .from(leadQualifications)
     .where(and(eq("userId", userId), eq("leadId", leadId)))
     .orderBy(desc("evaluatedAt"), desc("qualificationId"))
     .limit(1)) as unknown[];
@@ -263,7 +266,7 @@ async function findReviewRow(
 ): Promise<LeadQualificationReviewRow | null> {
   const [row] = (await executor
     .select()
-    .from(leadQualificationReviewsTable)
+    .from(leadQualificationReviews)
     .where(and(eq("userId", userId), eq("reviewId", reviewId)))
     .limit(1)) as unknown[];
   return (row as LeadQualificationReviewRow | undefined) ?? null;
@@ -276,7 +279,7 @@ export async function getReviewByQualification(
 ): Promise<LeadQualificationReviewRow | null> {
   const [row] = (await executor
     .select()
-    .from(leadQualificationReviewsTable)
+    .from(leadQualificationReviews)
     .where(and(eq("userId", userId), eq("qualificationId", qualificationId)))
     .limit(1)) as unknown[];
   return (row as LeadQualificationReviewRow | undefined) ?? null;
@@ -288,7 +291,7 @@ export async function insertReview(
   executor: QualificationStoreExecutor
 ): Promise<QualificationWriteResult> {
   try {
-    await executor.insert(leadQualificationReviewsTable).values({ ...row });
+    await executor.insert(leadQualificationReviews).values({ ...row });
   } catch (err) {
     if (!isDuplicateKeyError(err)) throw err;
     const existing = await findReviewRow(Number(row.userId), row.reviewId, executor);
@@ -335,7 +338,7 @@ export async function listReviews(
   if (filters.status !== undefined) conditions.push(eq("status", filters.status));
   const rows = await executor
     .select()
-    .from(leadQualificationReviewsTable)
+    .from(leadQualificationReviews)
     .where(and(...conditions))
     .orderBy(asc("createdAt"), asc("reviewId"))
     .all();
@@ -362,7 +365,7 @@ export async function updateReviewResolution(
   executor: QualificationStoreExecutor
 ): Promise<LeadQualificationReviewRow> {
   const result = await executor
-    .update(leadQualificationReviewsTable)
+    .update(leadQualificationReviews)
     .set({
       status: patch.status,
       resolvedBy: patch.resolvedBy,
