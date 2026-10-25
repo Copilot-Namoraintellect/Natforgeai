@@ -2301,3 +2301,65 @@ export const opportunityHandoffs = mysqlTable(
 
 export type OpportunityHandoffRow = typeof opportunityHandoffs.$inferSelect;
 export type InsertOpportunityHandoffRow = typeof opportunityHandoffs.$inferInsert;
+
+// ─── R6-B: Lead Scoring ───
+// Immutable, append-only authoritative lead score records (one lead + one
+// evidence snapshot + one scoring version → one score identity). History is
+// the ordered row set per lead; there is no update or delete path. References
+// are opaque (no social text, no actor PII). Provisional migration
+// 0034_lead_scoring_foundation (artefacts only — not executed; R6-X owns
+// canonical sequencing). Distinct from the legacy `lead_scores` table (R4
+// audience-intelligence pipeline) — never shared.
+
+export const leadScoreSnapshots = mysqlTable(
+  "lead_score_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    // "lsc1:" + 64-hex deterministic score identity (server-minted only).
+    leadScoreId: varchar("leadScoreId", { length: 69 }).notNull(),
+    // "lss1:" + 64-hex deterministic evidence snapshot identity.
+    evidenceSnapshotId: varchar("evidenceSnapshotId", { length: 69 }).notNull(),
+    scoreContractVersion: varchar("scoreContractVersion", { length: 64 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    leadId: bigint("leadId", { mode: "number", unsigned: true }).notNull(),
+    // R6-A seam version binding (lead-identity-seam/v1 until R6-A publishes).
+    leadIdentityVersion: varchar("leadIdentityVersion", { length: 96 }).notNull(),
+    scoringVersion: varchar("scoringVersion", { length: 64 }).notNull(),
+    featureVersion: varchar("featureVersion", { length: 64 }).notNull(),
+    // sha256 over the canonical evidence manifest (tamper-evident).
+    evidenceSnapshotHash: varchar("evidenceSnapshotHash", { length: 64 }).notNull(),
+    // Bounded manifest: references + closed labels only, sorted deterministically.
+    evidenceManifest: json("evidenceManifest").notNull(),
+    overallScore: int("overallScore").notNull(),
+    scoreBand: mysqlEnum("scoreBand", ["VERY_LOW", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"]).notNull(),
+    scoreConfidence: mysqlEnum("scoreConfidence", ["LOW", "MEDIUM", "HIGH", "UNKNOWN"]).notNull(),
+    fitScore: int("fitScore").notNull(),
+    intentScore: int("intentScore").notNull(),
+    engagementScore: int("engagementScore").notNull(),
+    recencyScore: int("recencyScore").notNull(),
+    opportunityScore: int("opportunityScore").notNull(),
+    // Exact server-owned weights applied (inspectability; clients never supply).
+    componentWeights: json("componentWeights").notNull(),
+    // Bounded closed-vocabulary reason codes (≤ 8).
+    reasonCodes: json("reasonCodes").notNull(),
+    computedAt: timestamp("computedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    // Exact-once convergence anchor: one score per (lead, evidence snapshot,
+    // scoring version). Duplicate/concurrent scoring replays the existing row.
+    convergenceUnique: uniqueIndex("lss_convergence_uidx").on(
+      table.userId,
+      table.leadId,
+      table.evidenceSnapshotHash,
+      table.scoringVersion
+    ),
+    leadScoreIdUnique: uniqueIndex("lss_score_id_uidx").on(table.leadScoreId),
+    snapshotIdIdx: index("lss_snapshot_id_idx").on(table.evidenceSnapshotId),
+    userLeadIdx: index("lss_user_lead_idx").on(table.userId, table.leadId),
+  })
+);
+
+export type LeadScoreSnapshotRow = typeof leadScoreSnapshots.$inferSelect;
+export type InsertLeadScoreSnapshotRow = typeof leadScoreSnapshots.$inferInsert;
