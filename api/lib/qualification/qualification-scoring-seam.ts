@@ -5,8 +5,11 @@
 // version allow-lists (scoring / feature / score-contract / identity),
 // bounded integers, closed vocabularies, component-weight coherence, the
 // bridge-written scoreContentHash tamper guard, and the deterministic
-// C-derived scoreContentHash recomputation (contract §1, §14.4). Score is
-// evidence, never qualification: no decision/authority field crosses here.
+// C-derived scoreContentHash recomputation (contract §1, §14.4). R6-B's legacy
+// numeric leads.id is accepted for the score's leadId anchor and normalized to
+// its deterministic string form (binding is tenant + business scope, never
+// leadId/version equality). Score is evidence, never qualification: no
+// decision/authority field crosses here.
 
 import {
   deriveScoreContentHash,
@@ -126,6 +129,21 @@ function requireNullableIsoUtc(value: unknown, field: string): string | null {
   return requireIsoUtc(value, field);
 }
 
+/**
+ * R6-B keys its score surface on the LEGACY numeric leads.id and the bridge
+ * carries that column verbatim; canonical R6-A ids cross as `lid1:` strings.
+ * C binds score↔identity by tenant + business scope, never by leadId
+ * equality, so either anchor shape is accepted and normalized to the
+ * deterministic string form bound into the score content hash.
+ */
+function requireLeadId(value: unknown, field: string): string {
+  if (typeof value === "string" && LEAD_ID_PATTERN.test(value)) return value;
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return String(value);
+  fail(
+    `${field} must be a canonical lead id (${LEAD_ID_PATTERN}) or a positive legacy numeric leads.id, got ${JSON.stringify(value)}`
+  );
+}
+
 function requireClosedString(
   value: unknown,
   allowed: ReadonlySet<string>,
@@ -225,7 +243,7 @@ export function validateScorePayload(input: unknown): NormalizedScoreEvidence {
   requireExactKeySet(input, SCORE_PAYLOAD_REQUIRED_KEYS, [SCORE_CONTENT_HASH_KEY]);
 
   const leadScoreId = requirePattern(input.leadScoreId, LEAD_SCORE_ID_PATTERN, "leadScoreId");
-  const leadId = requirePattern(input.leadId, LEAD_ID_PATTERN, "leadId");
+  const leadId = requireLeadId(input.leadId, "leadId");
   requirePattern(input.evidenceSnapshotId, EVIDENCE_SNAPSHOT_ID_PATTERN, "evidenceSnapshotId");
   const evidenceSnapshotHash = requirePattern(input.evidenceSnapshotHash, HEX_64, "evidenceSnapshotHash");
 

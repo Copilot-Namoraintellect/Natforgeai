@@ -83,7 +83,8 @@ export interface ValidatedProvenanceItem {
   readonly kind: string;
   readonly handoffId: string | null;
   readonly opportunityId: string | null;
-  readonly evidenceType: string;
+  /** Nullable upstream column (opportunity-handoff provenance carries none). */
+  readonly evidenceType: string | null;
   readonly occurredAt: string;
 }
 
@@ -159,6 +160,11 @@ function requireBoundedString(value: unknown, field: string, maxLength: number):
   return value;
 }
 
+function requireNullableBoundedString(value: unknown, field: string, maxLength: number): string | null {
+  if (value === null) return null;
+  return requireBoundedString(value, field, maxLength);
+}
+
 function requireIsoUtc(value: unknown, field: string): string {
   if (typeof value !== "string" || !isIsoUtc(value) || Number.isNaN(Date.parse(value))) {
     fail(`${field} must be a strict ISO-8601 UTC timestamp, got ${JSON.stringify(value)}`);
@@ -189,7 +195,7 @@ function validateProvenance(value: unknown): readonly ValidatedProvenanceItem[] 
           OPPORTUNITY_ID_PATTERN,
           "provenance.opportunityId"
         ),
-        evidenceType: requireBoundedString(
+        evidenceType: requireNullableBoundedString(
           raw.evidenceType,
           "provenance.evidenceType",
           MAX_EVIDENCE_TYPE_LENGTH
