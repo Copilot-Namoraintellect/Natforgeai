@@ -67,6 +67,10 @@ export const AUDIT_EVENT_TYPES = [
   "opportunity_suppressed",
   "opportunity_state_changed",
   "opportunity_handed_off",
+  // R6-B: one immutable lead score record was durably created. Carries opaque
+  // identity references + bounded score labels only; idempotent replays do not
+  // re-emit. A score is evidence, never a qualification decision.
+  "lead_score_recorded",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
