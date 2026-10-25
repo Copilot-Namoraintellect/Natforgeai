@@ -2301,3 +2301,147 @@ export const opportunityHandoffs = mysqlTable(
 
 export type OpportunityHandoffRow = typeof opportunityHandoffs.$inferSelect;
 export type InsertOpportunityHandoffRow = typeof opportunityHandoffs.$inferInsert;
+
+// ─── R6-A Lead Identities (canonical lead identity authority) ───
+// Deterministic tenant-anchored identity derived ONLY from R5 opportunity
+// handoff envelopes + verified hashed linking keys. Hash-only identity:
+// no raw email/phone/handles/text/tokens anywhere. Unique (userId,
+// identityKey) + (userId, leadId) → DB-authoritative convergence; linking-key
+// uniques make verified key ownership single-writer. R6-A never creates
+// leads/lead_activities/lead_scores rows and never touches R5 tables.
+export const IDENTITY_TYPE_VALUES = [
+  "provider_actor",
+  "email_hash",
+  "phone_hash",
+  "authenticated_customer_reference",
+  "crm_external_reference",
+  "anonymous_thread",
+  "unknown",
+] as const;
+
+export const IDENTITY_STATUS_VALUES = [
+  "active",
+  "anonymous",
+  "partially_identified",
+  "resolved",
+  "conflicting",
+  "suppressed",
+  "merged",
+  "archived",
+] as const;
+
+export const IDENTITY_CONFIDENCE_VALUES = ["unknown", "low", "medium", "high"] as const;
+
+export const leadIdentities = mysqlTable(
+  "lead_identities",
+  {
+    id: serial("id").primaryKey(),
+    leadId: varchar("leadId", { length: 69 }).notNull(),
+    identityKey: varchar("identityKey", { length: 64 }).notNull(),
+    contractVersion: varchar("contractVersion", { length: 40 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    primaryIdentityType: mysqlEnum("primaryIdentityType", IDENTITY_TYPE_VALUES).notNull(),
+    identityStatus: mysqlEnum("identityStatus", IDENTITY_STATUS_VALUES).notNull(),
+    identityConfidence: mysqlEnum("identityConfidence", IDENTITY_CONFIDENCE_VALUES).notNull(),
+    externalActorReferenceHash: varchar("externalActorReferenceHash", { length: 64 }),
+    provider: mysqlEnum("provider", ["meta", "linkedin", "twitter", "tiktok"]),
+    emailIdentityHash: varchar("emailIdentityHash", { length: 64 }),
+    phoneIdentityHash: varchar("phoneIdentityHash", { length: 64 }),
+    customerReferenceHash: varchar("customerReferenceHash", { length: 64 }),
+    sourceOpportunityId: varchar("sourceOpportunityId", { length: 69 }).notNull(),
+    sourceHandoffId: varchar("sourceHandoffId", { length: 69 }).notNull(),
+    canonicalLeadId: varchar("canonicalLeadId", { length: 69 }),
+    firstObservedAt: varchar("firstObservedAt", { length: 32 }).notNull(),
+    lastObservedAt: varchar("lastObservedAt", { length: 32 }).notNull(),
+    provenanceCount: int("provenanceCount").notNull().default(1),
+    identityEvidenceCount: int("identityEvidenceCount").notNull().default(0),
+    version: int("version").notNull().default(1),
+    statusChangedAt: timestamp("statusChangedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    userIdentityUnique: uniqueIndex("li_user_identity_uidx").on(table.userId, table.identityKey),
+    userLeadUnique: uniqueIndex("li_user_lead_uidx").on(table.userId, table.leadId),
+    userEmailUnique: uniqueIndex("li_user_email_uidx").on(table.userId, table.emailIdentityHash),
+    userPhoneUnique: uniqueIndex("li_user_phone_uidx").on(table.userId, table.phoneIdentityHash),
+    userCustomerRefUnique: uniqueIndex("li_user_custref_uidx").on(table.userId, table.customerReferenceHash),
+    userStatusIdx: index("li_user_status_idx").on(table.userId, table.identityStatus),
+  })
+);
+
+export type LeadIdentityRow = typeof leadIdentities.$inferSelect;
+export type InsertLeadIdentityRow = typeof leadIdentities.$inferInsert;
+
+// ─── R6-A Lead Identity Provenance (immutable, append-only evidence lineage) ───
+// kind = opportunity_handoff: unique (userId, handoffId) is the exact-once
+// R5 handoff consumption anchor. kind = identity_evidence: verified hashed
+// linking keys. kind = merge / conflict: immutable authority records.
+// evidenceHash is a deterministic content hash of the entry.
+export const LEAD_PROVENANCE_KIND_VALUES = [
+  "opportunity_handoff",
+  "identity_evidence",
+  "merge",
+  "conflict",
+] as const;
+
+export const leadIdentityProvenance = mysqlTable(
+  "lead_identity_provenance",
+  {
+    id: serial("id").primaryKey(),
+    leadRowId: bigint("leadRowId", { mode: "number", unsigned: true }).notNull(),
+    leadId: varchar("leadId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    kind: mysqlEnum("kind", LEAD_PROVENANCE_KIND_VALUES).notNull(),
+    handoffId: varchar("handoffId", { length: 69 }),
+    opportunityId: varchar("opportunityId", { length: 69 }),
+    provider: mysqlEnum("provider", ["meta", "linkedin", "twitter", "tiktok"]),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    publicationId: varchar("publicationId", { length: 128 }),
+    evidenceType: varchar("evidenceType", { length: 40 }),
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    envelopeHash: varchar("envelopeHash", { length: 64 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    userHandoffUnique: uniqueIndex("lip_user_handoff_uidx").on(table.userId, table.handoffId),
+    userKindHashUnique: uniqueIndex("lip_user_kind_hash_uidx").on(table.userId, table.kind, table.evidenceHash),
+    leadRowIdx: index("lip_lead_row_idx").on(table.leadRowId),
+  })
+);
+
+export type LeadIdentityProvenanceRow = typeof leadIdentityProvenance.$inferSelect;
+export type InsertLeadIdentityProvenanceRow = typeof leadIdentityProvenance.$inferInsert;
+
+// ─── R6-A Lead Identity Merges (immutable deterministic merge authority) ───
+// Merge happens ONLY via authoritative linking evidence (§8 of the lead
+// identity contract). No generic merge-anything endpoint exists.
+export const leadIdentityMerges = mysqlTable(
+  "lead_identity_merges",
+  {
+    id: serial("id").primaryKey(),
+    mergeId: varchar("mergeId", { length: 69 }).notNull(),
+    mergeHash: varchar("mergeHash", { length: 64 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    canonicalLeadId: varchar("canonicalLeadId", { length: 69 }).notNull(),
+    absorbedLeadId: varchar("absorbedLeadId", { length: 69 }).notNull(),
+    linkingEvidenceType: mysqlEnum("linkingEvidenceType", [
+      "email_hash",
+      "phone_hash",
+      "authenticated_customer_reference",
+      "crm_external_reference",
+    ]).notNull(),
+    linkingEvidenceHash: varchar("linkingEvidenceHash", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    userMergeUnique: uniqueIndex("lim_user_merge_uidx").on(table.userId, table.mergeId),
+    userPairUnique: uniqueIndex("lim_user_pair_uidx").on(table.userId, table.canonicalLeadId, table.absorbedLeadId),
+    userHashUnique: uniqueIndex("lim_user_hash_uidx").on(table.userId, table.mergeHash),
+  })
+);
+
+export type LeadIdentityMergeRow = typeof leadIdentityMerges.$inferSelect;
+export type InsertLeadIdentityMergeRow = typeof leadIdentityMerges.$inferInsert;
