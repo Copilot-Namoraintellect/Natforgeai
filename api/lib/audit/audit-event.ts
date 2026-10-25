@@ -67,6 +67,10 @@ export const AUDIT_EVENT_TYPES = [
   "opportunity_suppressed",
   "opportunity_state_changed",
   "opportunity_handed_off",
+  // R6-E: a durable conversion/outcome record was accepted (or an idempotent
+  // replay converged to it). Metadata carries ids/classes/hashes only — never
+  // raw social content or PII.
+  "conversion_recorded",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
