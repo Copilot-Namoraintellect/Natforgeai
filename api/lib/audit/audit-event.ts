@@ -67,6 +67,11 @@ export const AUDIT_EVENT_TYPES = [
   "opportunity_suppressed",
   "opportunity_state_changed",
   "opportunity_handed_off",
+  // R6-C: lead qualification durable effects. Exactly one evaluated event per
+  // inserted decision and one resolved event per review resolution;
+  // convergence/replay paths emit zero events. References + bounded labels only.
+  "lead_qualification_evaluated",
+  "lead_qualification_review_resolved",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

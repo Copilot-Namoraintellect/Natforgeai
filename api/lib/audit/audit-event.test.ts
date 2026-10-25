@@ -57,8 +57,6 @@ describe("audit-event taxonomy", () => {
       "interpretation_recorded",
       // R5-E: governed marketing-action policy decisions.
       "policy_decision",
-      // R5-E: governed marketing-action policy decisions.
-      "policy_decision",
       // R5-C: engagement terminal states + immutable receipts.
       "engagement_execution",
       "engagement_receipt",
@@ -67,6 +65,9 @@ describe("audit-event taxonomy", () => {
       "opportunity_suppressed",
       "opportunity_state_changed",
       "opportunity_handed_off",
+      // R6-C: lead qualification durable effects.
+      "lead_qualification_evaluated",
+      "lead_qualification_review_resolved",
     ]);
   });
 

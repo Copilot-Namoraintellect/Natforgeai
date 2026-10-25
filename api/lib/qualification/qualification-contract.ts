@@ -388,6 +388,8 @@ export interface NormalizedIdentityEvidence {
   readonly identityConfidence: string;
   readonly lastObservedAt: string;
   readonly identityReference: string;
+  /** Canonical target when identityStatus === "merged"; null otherwise. */
+  readonly canonicalLeadId: string | null;
 }
 
 export interface NormalizedScoreEvidence {
@@ -405,6 +407,12 @@ export interface NormalizedScoreEvidence {
   readonly reasonCodes: readonly string[];
   readonly latestObservedAt: string | null;
   readonly computedAt: string;
+  // Cross-binding fields exposed for the service-layer tenant/ownership and
+  // score↔identity consistency assertions (slice 2).
+  readonly leadId: string;
+  readonly businessId: number | null;
+  readonly userId: number;
+  readonly leadIdentityVersion: string;
 }
 
 export interface NormalizedPrivacyState {
@@ -441,6 +449,12 @@ export const QUALIFICATION_ERROR_CODE_VALUES = [
   "INVALID_REASON_CODE",
   "INVALID_CONFIDENCE",
   "INVALID_SCORE",
+  // Slice-2 seam codes (additive): untrusted upstream payloads re-validated at
+  // the C boundary fail closed with these codes.
+  "INVALID_IDENTITY_PROJECTION",
+  "INVALID_SCORE_PAYLOAD",
+  "IDENTITY_MERGE_CHAIN_BROKEN",
+  "PRIVACY_STATE_INVALID",
 ] as const;
 export type QualificationErrorCode = (typeof QUALIFICATION_ERROR_CODE_VALUES)[number];
 

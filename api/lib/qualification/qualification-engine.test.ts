@@ -33,6 +33,7 @@ function identity(overrides: Partial<NormalizedIdentityEvidence> = {}): Normaliz
     identityConfidence: "high",
     lastObservedAt: new Date(NOW.getTime() - HOUR_MS).toISOString(),
     identityReference: "cd".repeat(32),
+    canonicalLeadId: null,
     ...overrides,
   };
 }
@@ -53,6 +54,10 @@ function score(overrides: Partial<NormalizedScoreEvidence> = {}): NormalizedScor
     reasonCodes: [],
     latestObservedAt: new Date(NOW.getTime() - HOUR_MS).toISOString(),
     computedAt: NOW.toISOString(),
+    leadId: LEAD_ID,
+    businessId: 3,
+    userId: 7,
+    leadIdentityVersion: "lead-identity/v1",
     ...overrides,
   };
 }
