@@ -607,6 +607,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `listening` | `api/lib/social-listening/listening-router.ts` | WBS-R5-A social listening: tenant-scoped listening status (`getOverview`), canonical signal read view (`listSignals`), operator overview (`adminGetOverview`) |
 | `policy` | `api/policy-router.ts` | WBS-R5-E governed policy layer: marketing-action evaluation, versioned business policies, durable auditable decisions (`evaluateActionRequest`, `getDecision`, `explainDecision`, `listDecisions`, `getPolicy`, `adoptDefaultPolicy`, `setPolicy`, `adminListDecisions`) |
 | `opportunity` | `api/opportunity-router.ts` | R5-D opportunity detection: rule-first, evidence-backed pre-lead candidate evaluation from R5-B interpretations; aggregation, confidence, lifecycle, expiry, exactly-once R6 handoff (`evaluate`, `attachEngagementEvidence`, `list`, `get`, `suppress`, `unsuppress`, `escalate`, `sweepExpiry` admin, `handoffToR6`, `listHandoffs`). Never creates leads/CRM rows. Contract: `docs/contracts/opportunity-candidate-contract.md` |
+| `leadGovernance` | `api/lead-governance-router.ts` | R6-F lead governance/operations (WBS-R6 Stream F): admin-scoped read-only lead-operations projection reads (`getLeadOperations`, `listLeadOperationalStates`, `getLeadGovernanceSummary`), governed privacy transitions (`setPrivacyState`) and narrow governed recovery (`retryOperation`, retention sweep only). No force-merge/score/qualify/convert paths. Contract: `docs/contracts/lead-governance-operations-contract.md` |
 
 ### Context
 
