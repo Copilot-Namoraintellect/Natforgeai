@@ -67,6 +67,16 @@ export const AUDIT_EVENT_TYPES = [
   "opportunity_suppressed",
   "opportunity_state_changed",
   "opportunity_handed_off",
+  // R6-A: lead identity durable effects (identity authority only — never
+  // scores, qualification, outreach, or conversion). One canonical event per
+  // durable effect; ids/closed labels/hashes in metadata only, never PII.
+  "lead_identity_created",
+  "lead_identity_observed",
+  "lead_identity_evidence_attached",
+  "lead_identity_merged",
+  "lead_identity_conflict",
+  "lead_identity_suppressed",
+  "lead_identity_archived",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
