@@ -2301,3 +2301,108 @@ export const opportunityHandoffs = mysqlTable(
 
 export type OpportunityHandoffRow = typeof opportunityHandoffs.$inferSelect;
 export type InsertOpportunityHandoffRow = typeof opportunityHandoffs.$inferInsert;
+
+// ─── R6-E Conversion Events ───
+// Durable conversion/outcome records: evidence of a business outcome (purchase,
+// subscription, refund...) bound to a tenant + business with provenance lineage
+// (opportunity / engagement / signal / campaign / publication references only —
+// never causation claims). Identity is deterministic and server-derived:
+// conversionKey = sha256(canonicalJson({tenantUserId, sourceSystem,
+// externalConversionId})) so cross-tenant collision/correlation is impossible
+// and provider retries converge on one durable row. Initial outcomeStatus is
+// derived server-side from the source trust registry; clients can never supply
+// trust class, outcome status, identity or evidence hash. Reversal rows
+// (refund/cancellation/reversal) carry reversesConversionId and mint one
+// deterministic lifecycle event on the target. Monetary value is integer minor
+// units (signed for reversals); evidenceHash proves byte-stability.
+export const conversionEvents = mysqlTable(
+  "conversion_events",
+  {
+    id: serial("id").primaryKey(),
+    // "cnv1:" + 64-hex identity; server-minted only.
+    conversionId: varchar("conversionId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    leadId: bigint("leadId", { mode: "number", unsigned: true }),
+    leadIdentityVersion: varchar("leadIdentityVersion", { length: 64 }),
+    externalConversionId: varchar("externalConversionId", { length: 191 }).notNull(),
+    sourceSystem: varchar("sourceSystem", { length: 32 }).notNull(),
+    // Server-derived from the source-system trust registry (never client-supplied).
+    sourceTrustClass: varchar("sourceTrustClass", { length: 24 }).notNull(),
+    conversionType: varchar("conversionType", { length: 32 }).notNull(),
+    // Provider event time and server acceptance time, ISO 8601 verbatim.
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    observedAt: varchar("observedAt", { length: 32 }).notNull(),
+    // Integer minor units; SIGNED so reversal rows may carry negative amounts.
+    amount: bigint("amount", { mode: "number" }),
+    currency: varchar("currency", { length: 3 }),
+    outcomeStatus: varchar("outcomeStatus", { length: 16 }).notNull(),
+    // Set only on reversal rows (refund/cancellation/reversal); references the
+    // conversion row that this row reverses. Never a reversal-of-a-reversal.
+    reversesConversionId: varchar("reversesConversionId", { length: 69 }),
+    sourceOpportunityId: varchar("sourceOpportunityId", { length: 69 }),
+    sourceEngagementReceiptId: varchar("sourceEngagementReceiptId", { length: 64 }),
+    sourceSignalId: varchar("sourceSignalId", { length: 64 }),
+    sourceCampaignId: bigint("sourceCampaignId", { mode: "number", unsigned: true }),
+    sourcePublicationId: bigint("sourcePublicationId", { mode: "number", unsigned: true }),
+    evidenceReference: varchar("evidenceReference", { length: 255 }),
+    // sha256 over the canonical immutable core; drift fails closed.
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    // Optimistic CAS guard for guarded outcome-status transitions.
+    version: int("version").notNull().default(1),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    conversionIdUnique: uniqueIndex("ce_conversion_id_uidx").on(table.conversionId),
+    // Exact-once natural identity: one logical provider conversion per tenant +
+    // source system, enforced at the database level (retries converge).
+    naturalKeyUnique: uniqueIndex("ce_natural_key_uidx").on(
+      table.userId,
+      table.sourceSystem,
+      table.externalConversionId
+    ),
+    userBusinessIdx: index("ce_user_business_idx").on(table.userId, table.businessId),
+    userLeadIdx: index("ce_user_lead_idx").on(table.userId, table.leadId),
+    userOccurredIdx: index("ce_user_occurred_idx").on(table.userId, table.occurredAt),
+    userReversesIdx: index("ce_user_reverses_idx").on(table.userId, table.reversesConversionId),
+  })
+);
+
+export type ConversionEventRow = typeof conversionEvents.$inferSelect;
+export type InsertConversionEventRow = typeof conversionEvents.$inferInsert;
+
+// ─── R6-E Conversion Lifecycle Events (immutable, append-only) ───
+// One deterministic row per outcome lifecycle fact on a conversion
+// (confirmation/reversal/refund/cancellation/dispute/correction). Identity is
+// server-derived: lifecycleEventId = "clf1:" + sha256(canonicalJson(...)); the
+// (conversionId, externalLifecycleId) pair is the provider-retry convergence
+// anchor (NULL external ids are distinct per house convention). Rows are
+// immutable — there is no update path.
+export const conversionLifecycleEvents = mysqlTable(
+  "conversion_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // "clf1:" + 64-hex identity; server-minted only.
+    lifecycleEventId: varchar("lifecycleEventId", { length: 70 }).notNull(),
+    conversionId: varchar("conversionId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 16 }).notNull(),
+    // Target outcome status for this lifecycle fact.
+    outcomeStatus: varchar("outcomeStatus", { length: 16 }).notNull(),
+    amount: bigint("amount", { mode: "number" }),
+    currency: varchar("currency", { length: 3 }),
+    externalLifecycleId: varchar("externalLifecycleId", { length: 191 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventIdUnique: uniqueIndex("cle_event_id_uidx").on(table.lifecycleEventId),
+    // Provider-retry convergence anchor; NULLs distinct in MySQL.
+    externalUnique: uniqueIndex("cle_external_uidx").on(table.conversionId, table.externalLifecycleId),
+    userConversionIdx: index("cle_user_conversion_idx").on(table.userId, table.conversionId),
+  })
+);
+
+export type ConversionLifecycleEventRow = typeof conversionLifecycleEvents.$inferSelect;
+export type InsertConversionLifecycleEventRow = typeof conversionLifecycleEvents.$inferInsert;
