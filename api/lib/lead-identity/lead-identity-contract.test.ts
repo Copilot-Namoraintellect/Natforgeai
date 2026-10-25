@@ -16,6 +16,7 @@ import {
   LeadIdentityTamperError,
 } from "./lead-identity-contract";
 import { HANDOFF_ID_PREFIX } from "../opportunity/opportunity-identity";
+import type { OpportunityHandoffEnvelope } from "../opportunity/opportunity-contract";
 
 const EVIDENCE = [
   { interpretationId: "int-1", signalId: "sig-1", signalVersion: 1, occurredAt: "2026-10-20T10:00:00.000Z" },
@@ -55,12 +56,12 @@ function envelopeContent(overrides: Record<string, unknown> = {}) {
   };
 }
 
-export function buildValidEnvelope(overrides: Record<string, unknown> = {}) {
+export function buildValidEnvelope(overrides: Record<string, unknown> = {}): OpportunityHandoffEnvelope {
   const content = envelopeContent(overrides);
   const { handoffId: _omit, ...rest } = content;
   void _omit;
   const handoffId = `${HANDOFF_ID_PREFIX}${sha256Hex(canonicalJson(rest))}`;
-  return { ...rest, handoffId };
+  return { ...rest, handoffId } as OpportunityHandoffEnvelope;
 }
 
 describe("validateHandoffEnvelope", () => {

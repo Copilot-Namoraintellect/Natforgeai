@@ -577,8 +577,8 @@ describe("A9 cases 6–10 — isolation, cross-provider rules, merge, conflict",
     expect(fake.tables.lead_identities).toHaveLength(2);
     expect(fake.tables.lead_identity_merges).toHaveLength(0);
     // Actor keys differ because provider|platform is bound inside the hash.
-    const a = fake.tables.lead_identities.find((r) => r.leadId === o1.leadId);
-    const b = fake.tables.lead_identities.find((r) => r.leadId === o2.leadId);
+    const a = fake.tables.lead_identities.find((r) => r.leadId === o1.leadId)!;
+    const b = fake.tables.lead_identities.find((r) => r.leadId === o2.leadId)!;
     expect(a.externalActorReferenceHash).not.toBe(b.externalActorReferenceHash);
   });
 

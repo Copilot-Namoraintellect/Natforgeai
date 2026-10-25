@@ -145,7 +145,7 @@ describe("classifyIdentityResolution", () => {
 
   it("CONFLICT when the key owner is in a different business scope", () => {
     const decision = classifyIdentityResolution(
-      { actorKey: "actor-y", provider: "linkedin", emailHash: "h".repeat(64) },
+      { actorKey: "actor-y", provider: "linkedin", emailHash: "h".repeat(64), crossChannel: false },
       candidate,
       { ...candidate, leadId: "lid1:z", businessScope: 2, keyType: "email_hash" }
     );
@@ -155,7 +155,7 @@ describe("classifyIdentityResolution", () => {
 
   it("CONFLICT when the key owner is terminal", () => {
     const decision = classifyIdentityResolution(
-      { actorKey: "actor-y", provider: "linkedin", emailHash: "h".repeat(64) },
+      { actorKey: "actor-y", provider: "linkedin", emailHash: "h".repeat(64), crossChannel: false },
       candidate,
       { ...candidate, leadId: "lid1:z", identityStatus: "suppressed", keyType: "email_hash" }
     );
@@ -173,7 +173,7 @@ describe("classifyIdentityResolution", () => {
 
   it("same-identity key binding is MATCH without merge", () => {
     const decision = classifyIdentityResolution(
-      { actorKey: "actor-x", provider: "meta", emailHash: "h".repeat(64) },
+      { actorKey: "actor-x", provider: "meta", emailHash: "h".repeat(64), crossChannel: false },
       candidate,
       { ...candidate, keyType: "email_hash" }
     );
