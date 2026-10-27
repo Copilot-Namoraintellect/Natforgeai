@@ -81,6 +81,12 @@ describe("audit-event taxonomy", () => {
       // R6-C: lead qualification durable effects.
       "lead_qualification_evaluated",
       "lead_qualification_review_resolved",
+      // R6-D: governed nurture decisions, handoff lifecycle, dispatch
+      // attempts, and exact-once nurture touches (ids/labels only).
+      "lead_nurture_decision",
+      "sales_handoff_state_changed",
+      "sales_handoff_dispatch",
+      "lead_nurture_touch",
     ]);
   });
 

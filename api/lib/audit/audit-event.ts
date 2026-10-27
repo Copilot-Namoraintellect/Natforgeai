@@ -90,6 +90,18 @@ export const AUDIT_EVENT_TYPES = [
   // convergence/replay paths emit zero events. References + bounded labels only.
   "lead_qualification_evaluated",
   "lead_qualification_review_resolved",
+  // R6-D: a governed nurture/handoff decision was durably recorded. Identity
+  // references + decision + closed reason codes in metadata only — no PII,
+  // no message text, no model reasoning.
+  "lead_nurture_decision",
+  // R6-D: a sales-handoff lifecycle transition (PREPARED…CANCELLED). One
+  // event per real transition; convergence paths write zero events.
+  "sales_handoff_state_changed",
+  // R6-D: one handoff dispatch attempt (receipt-backed). Bounded outcome
+  // labels only; the fake transport labels itself in the acknowledgement.
+  "sales_handoff_dispatch",
+  // R6-D: one governed nurture touch (exact-once, cadence-bounded).
+  "lead_nurture_touch",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

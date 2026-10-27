@@ -33,6 +33,7 @@ import { leadIdentityRouter } from "./lead-identity-router";
 import { scoringRouter } from "./scoring-router";
 import { conversionRouter } from "./conversion-router";
 import { qualificationRouter } from "./qualification-router";
+import { nurtureRouter } from "./nurture-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -91,6 +92,7 @@ export const appRouter = createRouter({
   scoring: scoringRouter,
   conversion: conversionRouter,
   qualification: qualificationRouter,
+  nurture: nurtureRouter,
 });
 
 export type AppRouter = typeof appRouter;

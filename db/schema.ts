@@ -735,6 +735,9 @@ export const approvalRequests = mysqlTable("approval_requests", {
     // WBS-R5-E: governed marketing-action approvals/escalations bound to an
     // exact policy decision + policy version + context fingerprint.
     "marketing_action",
+    // WBS-R6-D: governed sales-handoff approvals bound to the exact handoff
+    // identity + qualification fingerprint + policy version + content snapshot.
+    "sales_handoff",
   ]).notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   description: text("description"),
@@ -2302,6 +2305,7 @@ export const opportunityHandoffs = mysqlTable(
 export type OpportunityHandoffRow = typeof opportunityHandoffs.$inferSelect;
 export type InsertOpportunityHandoffRow = typeof opportunityHandoffs.$inferInsert;
 
+
 // ─── R6-A Lead Identities (canonical lead identity authority) ───
 // Deterministic tenant-anchored identity derived ONLY from R5 opportunity
 // handoff envelopes + verified hashed linking keys. Hash-only identity:
@@ -2374,57 +2378,6 @@ export const leadIdentities = mysqlTable(
 export type LeadIdentityRow = typeof leadIdentities.$inferSelect;
 export type InsertLeadIdentityRow = typeof leadIdentities.$inferInsert;
 
-// ─── R6-F Lead Privacy Governance (operational privacy state per lead) ───
-// F-owned durable home for lead suppression / restriction / retention state.
-// One current state per lead (leadId unique). Governance-mutated only through
-// the admin operator surface; every transition is CAS-guarded, provenance-
-// stamped and audit-ledgered. Migration artefact 0034 (created, NOT executed)
-// — runtime code also bridges this table behind a guarded information-schema
-// check so pre-migration environments degrade to "unavailable" instead of
-// erroring. No PII columns: references and closed-vocabulary labels only.
-export const leadPrivacyStates = mysqlTable(
-  "lead_privacy_states",
-  {
-    id: serial("id").primaryKey(),
-    leadId: bigint("leadId", { mode: "number", unsigned: true }).notNull(),
-    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-    businessId: bigint("businessId", { mode: "number", unsigned: true }),
-    privacyState: mysqlEnum("privacyState", [
-      "ACTIVE",
-      "SUPPRESSED",
-      "RESTRICTED",
-      "RETENTION_PENDING",
-      "RETENTION_EXPIRED",
-      "ARCHIVED",
-    ])
-      .default("ACTIVE")
-      .notNull(),
-    previousState: mysqlEnum("previousState", [
-      "ACTIVE",
-      "SUPPRESSED",
-      "RESTRICTED",
-      "RETENTION_PENDING",
-      "RETENTION_EXPIRED",
-      "ARCHIVED",
-    ]),
-    reason: varchar("reason", { length: 500 }),
-    retentionDeadlineAt: timestamp("retentionDeadlineAt"),
-    source: varchar("source", { length: 32 }).default("operator").notNull(),
-    actorUserId: bigint("actorUserId", { mode: "number", unsigned: true }),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
-  },
-  (table) => ({
-    leadUnique: uniqueIndex("lps_lead_uidx").on(table.leadId),
-    userIdx: index("lps_user_idx").on(table.userId),
-    businessIdx: index("lps_business_idx").on(table.businessId),
-    stateIdx: index("lps_state_idx").on(table.privacyState),
-  })
-);
-
-export type LeadPrivacyStateRow = typeof leadPrivacyStates.$inferSelect;
-export type InsertLeadPrivacyStateRow = typeof leadPrivacyStates.$inferInsert;
-
 // ─── R6-A Lead Identity Provenance (immutable, append-only evidence lineage) ───
 // kind = opportunity_handoff: unique (userId, handoffId) is the exact-once
 // R5 handoff consumption anchor. kind = identity_evidence: verified hashed
@@ -2496,6 +2449,57 @@ export const leadIdentityMerges = mysqlTable(
 
 export type LeadIdentityMergeRow = typeof leadIdentityMerges.$inferSelect;
 export type InsertLeadIdentityMergeRow = typeof leadIdentityMerges.$inferInsert;
+
+// ─── R6-F Lead Privacy Governance (operational privacy state per lead) ───
+// F-owned durable home for lead suppression / restriction / retention state.
+// One current state per lead (leadId unique). Governance-mutated only through
+// the admin operator surface; every transition is CAS-guarded, provenance-
+// stamped and audit-ledgered. Migration artefact 0034 (created, NOT executed)
+// — runtime code also bridges this table behind a guarded information-schema
+// check so pre-migration environments degrade to "unavailable" instead of
+// erroring. No PII columns: references and closed-vocabulary labels only.
+export const leadPrivacyStates = mysqlTable(
+  "lead_privacy_states",
+  {
+    id: serial("id").primaryKey(),
+    leadId: bigint("leadId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    privacyState: mysqlEnum("privacyState", [
+      "ACTIVE",
+      "SUPPRESSED",
+      "RESTRICTED",
+      "RETENTION_PENDING",
+      "RETENTION_EXPIRED",
+      "ARCHIVED",
+    ])
+      .default("ACTIVE")
+      .notNull(),
+    previousState: mysqlEnum("previousState", [
+      "ACTIVE",
+      "SUPPRESSED",
+      "RESTRICTED",
+      "RETENTION_PENDING",
+      "RETENTION_EXPIRED",
+      "ARCHIVED",
+    ]),
+    reason: varchar("reason", { length: 500 }),
+    retentionDeadlineAt: timestamp("retentionDeadlineAt"),
+    source: varchar("source", { length: 32 }).default("operator").notNull(),
+    actorUserId: bigint("actorUserId", { mode: "number", unsigned: true }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    leadUnique: uniqueIndex("lps_lead_uidx").on(table.leadId),
+    userIdx: index("lps_user_idx").on(table.userId),
+    businessIdx: index("lps_business_idx").on(table.businessId),
+    stateIdx: index("lps_state_idx").on(table.privacyState),
+  })
+);
+
+export type LeadPrivacyStateRow = typeof leadPrivacyStates.$inferSelect;
+export type InsertLeadPrivacyStateRow = typeof leadPrivacyStates.$inferInsert;
 
 // ─── R6-B: Lead Scoring ───
 // Immutable, append-only authoritative lead score records (one lead + one
@@ -2753,3 +2757,173 @@ export const leadQualificationReviews = mysqlTable(
 
 export type LeadQualificationReviewsRow = typeof leadQualificationReviews.$inferSelect;
 export type InsertLeadQualificationReviewsRow = typeof leadQualificationReviews.$inferInsert;
+
+// ─── R6-D Nurture / Sales Handoff — governed decision authority ───
+// Provisional migration 0034_nurture_sales_handoff_autonomy (artefact only,
+// NOT executed; R6-X owns canonical sequencing). Immutable after acceptance:
+// corrections are new decisions. No PII, no message text — ids/hashes/closed
+// labels/timestamps only. See docs/contracts/lead-nurture-sales-handoff-contract.md.
+export const nurtureHandoffDecisions = mysqlTable(
+  "nurture_handoff_decisions",
+  {
+    id: serial("id").primaryKey(),
+    // "nd1:" + 64-hex deterministic decision identity; server-minted only.
+    nurtureDecisionId: varchar("nurtureDecisionId", { length: 69 }).notNull(),
+    // 64-hex world-state hash (tenant-anchored; contract §1).
+    decisionKey: varchar("decisionKey", { length: 64 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    // R6-A canonical identity reference ("lid1:…").
+    leadId: varchar("leadId", { length: 69 }).notNull(),
+    // R6-C qualification reference ("lqu1:…") + exact consumed projection binding.
+    qualificationId: varchar("qualificationId", { length: 69 }).notNull(),
+    qualificationFingerprint: varchar("qualificationFingerprint", { length: 64 }).notNull(),
+    qualificationPolicyVersion: varchar("qualificationPolicyVersion", { length: 96 }).notNull(),
+    // F privacy state at decision time (re-read at execution; contract §4).
+    privacyState: mysqlEnum("privacyState", [
+      "ACTIVE",
+      "SUPPRESSED",
+      "RESTRICTED",
+      "RETENTION_PENDING",
+      "RETENTION_EXPIRED",
+      "ARCHIVED",
+    ]).notNull(),
+    privacyStateUpdatedAt: varchar("privacyStateUpdatedAt", { length: 32 }),
+    policyVersion: varchar("policyVersion", { length: 112 }).notNull(),
+    decision: mysqlEnum("decision", [
+      "NURTURE",
+      "SALES_HANDOFF",
+      "WAIT",
+      "REVIEW_REQUIRED",
+      "BLOCKED",
+      "NO_ACTION",
+    ]).notNull(),
+    // Closed vocabulary (NURTURE_REASON_CODES), ≤ 8 per record.
+    reasonCodes: json("reasonCodes").notNull(),
+    channel: mysqlEnum("channel", ["email", "whatsapp", "sms", "crm"]),
+    provider: varchar("provider", { length: 32 }),
+    approvalRequired: boolean("approvalRequired").notNull(),
+    approvalRequestId: bigint("approvalRequestId", { mode: "number", unsigned: true }),
+    // Populated when the decision is bound to a handoff identity.
+    handoffId: varchar("handoffId", { length: 69 }),
+    conversionStopped: boolean("conversionStopped").notNull(),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    decisionIdUnique: uniqueIndex("nhd_decision_id_uidx").on(table.nurtureDecisionId),
+    userDecisionKeyUnique: uniqueIndex("nhd_user_decision_key_uidx").on(table.userId, table.decisionKey),
+    userLeadIdx: index("nhd_user_lead_idx").on(table.userId, table.leadId),
+    userQualificationIdx: index("nhd_user_qualification_idx").on(table.userId, table.qualificationId),
+  })
+);
+
+export type NurtureHandoffDecisionRow = typeof nurtureHandoffDecisions.$inferSelect;
+export type InsertNurtureHandoffDecisionRow = typeof nurtureHandoffDecisions.$inferInsert;
+
+// ─── R6-D Sales Handoffs — exact-once handoff identity + lifecycle ───
+export const salesHandoffs = mysqlTable(
+  "sales_handoffs",
+  {
+    id: serial("id").primaryKey(),
+    // "sh1:" + 64-hex exact-once handoff identity (contract §8).
+    handoffId: varchar("handoffId", { length: 69 }).notNull(),
+    handoffKey: varchar("handoffKey", { length: 64 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    leadId: varchar("leadId", { length: 69 }).notNull(),
+    qualificationId: varchar("qualificationId", { length: 69 }).notNull(),
+    nurtureDecisionId: varchar("nurtureDecisionId", { length: 69 }).notNull(),
+    qualificationFingerprint: varchar("qualificationFingerprint", { length: 64 }).notNull(),
+    handoffPolicyVersion: varchar("handoffPolicyVersion", { length: 112 }).notNull(),
+    // Draft-content snapshot hash (approval binding; never raw text).
+    contentSnapshotHash: varchar("contentSnapshotHash", { length: 64 }).notNull(),
+    handoffStatus: mysqlEnum("handoffStatus", [
+      "PREPARED",
+      "APPROVAL_REQUIRED",
+      "APPROVED",
+      "DISPATCH_PENDING",
+      "DISPATCHED",
+      "ACKNOWLEDGED",
+      "FAILED",
+      "BLOCKED",
+      "CANCELLED",
+    ])
+      .default("PREPARED")
+      .notNull(),
+    approvalRequestId: bigint("approvalRequestId", { mode: "number", unsigned: true }),
+    // Bounded reason code on failure/blocking — never raw payloads.
+    lastError: varchar("lastError", { length: 64 }),
+    // Optimistic CAS guard for lifecycle transitions.
+    version: int("version").notNull(),
+    preparedAt: varchar("preparedAt", { length: 32 }).notNull(),
+    dispatchedAt: varchar("dispatchedAt", { length: 32 }),
+    acknowledgedAt: varchar("acknowledgedAt", { length: 32 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    handoffIdUnique: uniqueIndex("sh_handoff_id_uidx").on(table.handoffId),
+    userHandoffKeyUnique: uniqueIndex("sh_user_handoff_key_uidx").on(table.userId, table.handoffKey),
+    userLeadIdx: index("sh_user_lead_idx").on(table.userId, table.leadId),
+    userStatusIdx: index("sh_user_status_idx").on(table.userId, table.handoffStatus),
+  })
+);
+
+export type SalesHandoffRow = typeof salesHandoffs.$inferSelect;
+export type InsertSalesHandoffRow = typeof salesHandoffs.$inferInsert;
+
+// ─── R6-D Handoff Dispatch Receipts — append-only execution evidence ───
+export const handoffDispatchReceipts = mysqlTable(
+  "handoff_dispatch_receipts",
+  {
+    id: serial("id").primaryKey(),
+    // "hd1:" + 64-hex transport idempotency identity (contract §11).
+    executionIdentity: varchar("executionIdentity", { length: 69 }).notNull(),
+    handoffId: varchar("handoffId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    attemptSeq: int("attemptSeq").notNull(),
+    outcome: mysqlEnum("outcome", ["ACCEPTED", "REJECTED", "FAILURE"]).notNull(),
+    // Bounded acknowledgement label; fake transports label themselves.
+    providerAck: varchar("providerAck", { length: 255 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    executionIdentityUnique: uniqueIndex("hdr_execution_identity_uidx").on(table.executionIdentity),
+    userHandoffIdx: index("hdr_user_handoff_idx").on(table.userId, table.handoffId),
+  })
+);
+
+export type HandoffDispatchReceiptRow = typeof handoffDispatchReceipts.$inferSelect;
+export type InsertHandoffDispatchReceiptRow = typeof handoffDispatchReceipts.$inferInsert;
+
+// ─── R6-D Nurture Touch Records — append-only, exact-once touches ───
+export const nurtureTouchRecords = mysqlTable(
+  "nurture_touch_records",
+  {
+    id: serial("id").primaryKey(),
+    // "nt1:" + 64-hex exact-once touch identity (contract §7).
+    touchIdentity: varchar("touchIdentity", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    leadId: varchar("leadId", { length: 69 }).notNull(),
+    nurtureDecisionId: varchar("nurtureDecisionId", { length: 69 }).notNull(),
+    channel: mysqlEnum("channel", ["email", "whatsapp", "sms", "crm"]).notNull(),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    // Deterministic sequence number derived from durable rows only.
+    touchSeq: int("touchSeq").notNull(),
+    outcome: mysqlEnum("outcome", ["ACCEPTED", "REJECTED", "FAILURE"]).notNull(),
+    providerAck: varchar("providerAck", { length: 255 }),
+    touchedAt: varchar("touchedAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    userTouchIdentityUnique: uniqueIndex("ntr_user_touch_identity_uidx").on(table.userId, table.touchIdentity),
+    userLeadChannelIdx: index("ntr_user_lead_channel_idx").on(table.userId, table.leadId, table.channel),
+  })
+);
+
+export type NurtureTouchRecordRow = typeof nurtureTouchRecords.$inferSelect;
+export type InsertNurtureTouchRecordRow = typeof nurtureTouchRecords.$inferInsert;
