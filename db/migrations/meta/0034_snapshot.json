@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "d8956915-deff-4bb7-a9f4-a72872c37917",
+  "id": "6cdb2ffa-89b1-4716-9618-1a6a3dcb1cf4",
   "prevId": "0d14cb9f-a05c-41ca-b64a-c0353c5f5879",
   "tables": {
     "agent_runs": {
@@ -338,7 +338,7 @@
         },
         "approvalType": {
           "name": "approvalType",
-          "type": "enum('campaign_launch','budget_increase','sensitive_reply','high_value_proposal','ad_spend','shutdown','brand_risk','strategy_review','marketing_action')",
+          "type": "enum('campaign_launch','budget_increase','sensitive_reply','high_value_proposal','ad_spend','shutdown','brand_risk','strategy_review','marketing_action','sales_handoff')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -2221,6 +2221,375 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "conversion_events": {
+      "name": "conversion_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "conversionId": {
+          "name": "conversionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "leadId": {
+          "name": "leadId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leadIdentityVersion": {
+          "name": "leadIdentityVersion",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "externalConversionId": {
+          "name": "externalConversionId",
+          "type": "varchar(191)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceSystem": {
+          "name": "sourceSystem",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceTrustClass": {
+          "name": "sourceTrustClass",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "conversionType": {
+          "name": "conversionType",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "occurredAt": {
+          "name": "occurredAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "observedAt": {
+          "name": "observedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "amount": {
+          "name": "amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "varchar(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "outcomeStatus": {
+          "name": "outcomeStatus",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reversesConversionId": {
+          "name": "reversesConversionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sourceOpportunityId": {
+          "name": "sourceOpportunityId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sourceEngagementReceiptId": {
+          "name": "sourceEngagementReceiptId",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sourceSignalId": {
+          "name": "sourceSignalId",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sourceCampaignId": {
+          "name": "sourceCampaignId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sourcePublicationId": {
+          "name": "sourcePublicationId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "evidenceReference": {
+          "name": "evidenceReference",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "evidenceHash": {
+          "name": "evidenceHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "ce_conversion_id_uidx": {
+          "name": "ce_conversion_id_uidx",
+          "columns": [
+            "conversionId"
+          ],
+          "isUnique": true
+        },
+        "ce_natural_key_uidx": {
+          "name": "ce_natural_key_uidx",
+          "columns": [
+            "userId",
+            "sourceSystem",
+            "externalConversionId"
+          ],
+          "isUnique": true
+        },
+        "ce_user_business_idx": {
+          "name": "ce_user_business_idx",
+          "columns": [
+            "userId",
+            "businessId"
+          ],
+          "isUnique": false
+        },
+        "ce_user_lead_idx": {
+          "name": "ce_user_lead_idx",
+          "columns": [
+            "userId",
+            "leadId"
+          ],
+          "isUnique": false
+        },
+        "ce_user_occurred_idx": {
+          "name": "ce_user_occurred_idx",
+          "columns": [
+            "userId",
+            "occurredAt"
+          ],
+          "isUnique": false
+        },
+        "ce_user_reverses_idx": {
+          "name": "ce_user_reverses_idx",
+          "columns": [
+            "userId",
+            "reversesConversionId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "conversion_events_id": {
+          "name": "conversion_events_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "conversion_lifecycle_events": {
+      "name": "conversion_lifecycle_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "lifecycleEventId": {
+          "name": "lifecycleEventId",
+          "type": "varchar(70)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "conversionId": {
+          "name": "conversionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "lifecycleType": {
+          "name": "lifecycleType",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeStatus": {
+          "name": "outcomeStatus",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "amount": {
+          "name": "amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "varchar(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "externalLifecycleId": {
+          "name": "externalLifecycleId",
+          "type": "varchar(191)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "occurredAt": {
+          "name": "occurredAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reasonCode": {
+          "name": "reasonCode",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "cle_event_id_uidx": {
+          "name": "cle_event_id_uidx",
+          "columns": [
+            "lifecycleEventId"
+          ],
+          "isUnique": true
+        },
+        "cle_external_uidx": {
+          "name": "cle_external_uidx",
+          "columns": [
+            "conversionId",
+            "externalLifecycleId"
+          ],
+          "isUnique": true
+        },
+        "cle_user_conversion_idx": {
+          "name": "cle_user_conversion_idx",
+          "columns": [
+            "userId",
+            "conversionId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "conversion_lifecycle_events_id": {
+          "name": "conversion_lifecycle_events_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
     "creative_generation_claims": {
       "name": "creative_generation_claims",
       "columns": {
@@ -3739,6 +4108,103 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "handoff_dispatch_receipts": {
+      "name": "handoff_dispatch_receipts",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "executionIdentity": {
+          "name": "executionIdentity",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "handoffId": {
+          "name": "handoffId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "attemptSeq": {
+          "name": "attemptSeq",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "enum('ACCEPTED','REJECTED','FAILURE')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "providerAck": {
+          "name": "providerAck",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "occurredAt": {
+          "name": "occurredAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "hdr_execution_identity_uidx": {
+          "name": "hdr_execution_identity_uidx",
+          "columns": [
+            "executionIdentity"
+          ],
+          "isUnique": true
+        },
+        "hdr_user_handoff_idx": {
+          "name": "hdr_user_handoff_idx",
+          "columns": [
+            "userId",
+            "handoffId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "handoff_dispatch_receipts_id": {
+          "name": "handoff_dispatch_receipts_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
     "image_render_claims": {
       "name": "image_render_claims",
       "columns": {
@@ -4513,6 +4979,721 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "lead_privacy_states": {
+      "name": "lead_privacy_states",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "leadId": {
+          "name": "leadId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "privacyState": {
+          "name": "privacyState",
+          "type": "enum('ACTIVE','SUPPRESSED','RESTRICTED','RETENTION_PENDING','RETENTION_EXPIRED','ARCHIVED')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'ACTIVE'"
+        },
+        "previousState": {
+          "name": "previousState",
+          "type": "enum('ACTIVE','SUPPRESSED','RESTRICTED','RETENTION_PENDING','RETENTION_EXPIRED','ARCHIVED')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "retentionDeadlineAt": {
+          "name": "retentionDeadlineAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'operator'"
+        },
+        "actorUserId": {
+          "name": "actorUserId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "lps_lead_uidx": {
+          "name": "lps_lead_uidx",
+          "columns": [
+            "leadId"
+          ],
+          "isUnique": true
+        },
+        "lps_user_idx": {
+          "name": "lps_user_idx",
+          "columns": [
+            "userId"
+          ],
+          "isUnique": false
+        },
+        "lps_business_idx": {
+          "name": "lps_business_idx",
+          "columns": [
+            "businessId"
+          ],
+          "isUnique": false
+        },
+        "lps_state_idx": {
+          "name": "lps_state_idx",
+          "columns": [
+            "privacyState"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "lead_privacy_states_id": {
+          "name": "lead_privacy_states_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "lead_qualification_reviews": {
+      "name": "lead_qualification_reviews",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "reviewId": {
+          "name": "reviewId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leadId": {
+          "name": "leadId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "qualificationId": {
+          "name": "qualificationId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decisionBindingHash": {
+          "name": "decisionBindingHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "enum('pending','progress_authorized','progression_rejected')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "triggerReasonCodes": {
+          "name": "triggerReasonCodes",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "resolvedBy": {
+          "name": "resolvedBy",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "resolvedAt": {
+          "name": "resolvedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "resolutionReason": {
+          "name": "resolutionReason",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "pendingChallengeToken": {
+          "name": "pendingChallengeToken",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "challengeExpiresAt": {
+          "name": "challengeExpiresAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "lqr_review_uidx": {
+          "name": "lqr_review_uidx",
+          "columns": [
+            "userId",
+            "reviewId"
+          ],
+          "isUnique": true
+        },
+        "lqr_qualification_uidx": {
+          "name": "lqr_qualification_uidx",
+          "columns": [
+            "userId",
+            "qualificationId"
+          ],
+          "isUnique": true
+        },
+        "lqr_user_lead_idx": {
+          "name": "lqr_user_lead_idx",
+          "columns": [
+            "userId",
+            "leadId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "lead_qualification_reviews_id": {
+          "name": "lead_qualification_reviews_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "lead_qualifications": {
+      "name": "lead_qualifications",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "qualificationId": {
+          "name": "qualificationId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "contractVersion": {
+          "name": "contractVersion",
+          "type": "varchar(40)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "engineVersion": {
+          "name": "engineVersion",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leadId": {
+          "name": "leadId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "leadIdentityVersion": {
+          "name": "leadIdentityVersion",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "identityReference": {
+          "name": "identityReference",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "leadScoreId": {
+          "name": "leadScoreId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scoringVersion": {
+          "name": "scoringVersion",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scoreContentHash": {
+          "name": "scoreContentHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "qualificationPolicyVersion": {
+          "name": "qualificationPolicyVersion",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceSnapshotHash": {
+          "name": "evidenceSnapshotHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceSnapshot": {
+          "name": "evidenceSnapshot",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decision": {
+          "name": "decision",
+          "type": "enum('QUALIFIED','NOT_QUALIFIED','REVIEW_REQUIRED','INSUFFICIENT_EVIDENCE','BLOCKED')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reasonCodes": {
+          "name": "reasonCodes",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "confidenceScore": {
+          "name": "confidenceScore",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reviewRequired": {
+          "name": "reviewRequired",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evaluatedAt": {
+          "name": "evaluatedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "validUntil": {
+          "name": "validUntil",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "lqd_convergence_uidx": {
+          "name": "lqd_convergence_uidx",
+          "columns": [
+            "userId",
+            "qualificationId"
+          ],
+          "isUnique": true
+        },
+        "lqd_user_lead_idx": {
+          "name": "lqd_user_lead_idx",
+          "columns": [
+            "userId",
+            "leadId"
+          ],
+          "isUnique": false
+        },
+        "lqd_user_business_idx": {
+          "name": "lqd_user_business_idx",
+          "columns": [
+            "userId",
+            "businessId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "lead_qualifications_id": {
+          "name": "lead_qualifications_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "lead_score_snapshots": {
+      "name": "lead_score_snapshots",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "leadScoreId": {
+          "name": "leadScoreId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceSnapshotId": {
+          "name": "evidenceSnapshotId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scoreContractVersion": {
+          "name": "scoreContractVersion",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leadId": {
+          "name": "leadId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "leadIdentityVersion": {
+          "name": "leadIdentityVersion",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scoringVersion": {
+          "name": "scoringVersion",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "featureVersion": {
+          "name": "featureVersion",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceSnapshotHash": {
+          "name": "evidenceSnapshotHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceManifest": {
+          "name": "evidenceManifest",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "overallScore": {
+          "name": "overallScore",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scoreBand": {
+          "name": "scoreBand",
+          "type": "enum('VERY_LOW','LOW','MEDIUM','HIGH','VERY_HIGH')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scoreConfidence": {
+          "name": "scoreConfidence",
+          "type": "enum('LOW','MEDIUM','HIGH','UNKNOWN')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fitScore": {
+          "name": "fitScore",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "intentScore": {
+          "name": "intentScore",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "engagementScore": {
+          "name": "engagementScore",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "recencyScore": {
+          "name": "recencyScore",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "opportunityScore": {
+          "name": "opportunityScore",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "componentWeights": {
+          "name": "componentWeights",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reasonCodes": {
+          "name": "reasonCodes",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "computedAt": {
+          "name": "computedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "lss_convergence_uidx": {
+          "name": "lss_convergence_uidx",
+          "columns": [
+            "userId",
+            "leadId",
+            "evidenceSnapshotHash",
+            "scoringVersion"
+          ],
+          "isUnique": true
+        },
+        "lss_score_id_uidx": {
+          "name": "lss_score_id_uidx",
+          "columns": [
+            "leadScoreId"
+          ],
+          "isUnique": true
+        },
+        "lss_snapshot_id_idx": {
+          "name": "lss_snapshot_id_idx",
+          "columns": [
+            "evidenceSnapshotId"
+          ],
+          "isUnique": false
+        },
+        "lss_user_lead_idx": {
+          "name": "lss_user_lead_idx",
+          "columns": [
+            "userId",
+            "leadId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "lead_score_snapshots_id": {
+          "name": "lead_score_snapshots_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
     "lead_scores": {
       "name": "lead_scores",
       "columns": {
@@ -5017,6 +6198,344 @@
       "compositePrimaryKeys": {
         "learning_records_id": {
           "name": "learning_records_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "nurture_handoff_decisions": {
+      "name": "nurture_handoff_decisions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "nurtureDecisionId": {
+          "name": "nurtureDecisionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decisionKey": {
+          "name": "decisionKey",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leadId": {
+          "name": "leadId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "qualificationId": {
+          "name": "qualificationId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "qualificationFingerprint": {
+          "name": "qualificationFingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "qualificationPolicyVersion": {
+          "name": "qualificationPolicyVersion",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "privacyState": {
+          "name": "privacyState",
+          "type": "enum('ACTIVE','SUPPRESSED','RESTRICTED','RETENTION_PENDING','RETENTION_EXPIRED','ARCHIVED')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "privacyStateUpdatedAt": {
+          "name": "privacyStateUpdatedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "policyVersion": {
+          "name": "policyVersion",
+          "type": "varchar(112)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decision": {
+          "name": "decision",
+          "type": "enum('NURTURE','SALES_HANDOFF','WAIT','REVIEW_REQUIRED','BLOCKED','NO_ACTION')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reasonCodes": {
+          "name": "reasonCodes",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "channel": {
+          "name": "channel",
+          "type": "enum('email','whatsapp','sms','crm')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "approvalRequired": {
+          "name": "approvalRequired",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approvalRequestId": {
+          "name": "approvalRequestId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "handoffId": {
+          "name": "handoffId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "conversionStopped": {
+          "name": "conversionStopped",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "occurredAt": {
+          "name": "occurredAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "validUntil": {
+          "name": "validUntil",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "nhd_decision_id_uidx": {
+          "name": "nhd_decision_id_uidx",
+          "columns": [
+            "nurtureDecisionId"
+          ],
+          "isUnique": true
+        },
+        "nhd_user_decision_key_uidx": {
+          "name": "nhd_user_decision_key_uidx",
+          "columns": [
+            "userId",
+            "decisionKey"
+          ],
+          "isUnique": true
+        },
+        "nhd_user_lead_idx": {
+          "name": "nhd_user_lead_idx",
+          "columns": [
+            "userId",
+            "leadId"
+          ],
+          "isUnique": false
+        },
+        "nhd_user_qualification_idx": {
+          "name": "nhd_user_qualification_idx",
+          "columns": [
+            "userId",
+            "qualificationId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "nurture_handoff_decisions_id": {
+          "name": "nurture_handoff_decisions_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "nurture_touch_records": {
+      "name": "nurture_touch_records",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "touchIdentity": {
+          "name": "touchIdentity",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leadId": {
+          "name": "leadId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "nurtureDecisionId": {
+          "name": "nurtureDecisionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "channel": {
+          "name": "channel",
+          "type": "enum('email','whatsapp','sms','crm')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "touchSeq": {
+          "name": "touchSeq",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "enum('ACCEPTED','REJECTED','FAILURE')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "providerAck": {
+          "name": "providerAck",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "touchedAt": {
+          "name": "touchedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "ntr_user_touch_identity_uidx": {
+          "name": "ntr_user_touch_identity_uidx",
+          "columns": [
+            "userId",
+            "touchIdentity"
+          ],
+          "isUnique": true
+        },
+        "ntr_user_lead_channel_idx": {
+          "name": "ntr_user_lead_channel_idx",
+          "columns": [
+            "userId",
+            "leadId",
+            "channel"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "nurture_touch_records_id": {
+          "name": "nurture_touch_records_id",
           "columns": [
             "id"
           ]
@@ -6873,6 +8392,198 @@
       "compositePrimaryKeys": {
         "queue_terminal_failures_id": {
           "name": "queue_terminal_failures_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "sales_handoffs": {
+      "name": "sales_handoffs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "handoffId": {
+          "name": "handoffId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "handoffKey": {
+          "name": "handoffKey",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leadId": {
+          "name": "leadId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "qualificationId": {
+          "name": "qualificationId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "nurtureDecisionId": {
+          "name": "nurtureDecisionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "qualificationFingerprint": {
+          "name": "qualificationFingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "handoffPolicyVersion": {
+          "name": "handoffPolicyVersion",
+          "type": "varchar(112)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "contentSnapshotHash": {
+          "name": "contentSnapshotHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "handoffStatus": {
+          "name": "handoffStatus",
+          "type": "enum('PREPARED','APPROVAL_REQUIRED','APPROVED','DISPATCH_PENDING','DISPATCHED','ACKNOWLEDGED','FAILED','BLOCKED','CANCELLED')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'PREPARED'"
+        },
+        "approvalRequestId": {
+          "name": "approvalRequestId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "lastError": {
+          "name": "lastError",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "preparedAt": {
+          "name": "preparedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "dispatchedAt": {
+          "name": "dispatchedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "acknowledgedAt": {
+          "name": "acknowledgedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "sh_handoff_id_uidx": {
+          "name": "sh_handoff_id_uidx",
+          "columns": [
+            "handoffId"
+          ],
+          "isUnique": true
+        },
+        "sh_user_handoff_key_uidx": {
+          "name": "sh_user_handoff_key_uidx",
+          "columns": [
+            "userId",
+            "handoffKey"
+          ],
+          "isUnique": true
+        },
+        "sh_user_lead_idx": {
+          "name": "sh_user_lead_idx",
+          "columns": [
+            "userId",
+            "leadId"
+          ],
+          "isUnique": false
+        },
+        "sh_user_status_idx": {
+          "name": "sh_user_status_idx",
+          "columns": [
+            "userId",
+            "handoffStatus"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "sales_handoffs_id": {
+          "name": "sales_handoffs_id",
           "columns": [
             "id"
           ]
