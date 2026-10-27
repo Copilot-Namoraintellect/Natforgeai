@@ -166,39 +166,66 @@ function compareOp(opText: string, rowValue: unknown, param: unknown): boolean {
   }
 }
 
-/** Evaluate one drizzle where-fragment against a row. */
+/** Evaluate one drizzle where-fragment against a row (state-machine walker:
+ *  tracks the last column ref, comparison operator, and value; nested sql
+ *  fragments recurse; inArray arrives as a raw Array chunk of Params). */
 export function harnessEvalCond(cond: unknown, row: FakeRow): boolean {
   const chunks: unknown[] = (cond as { queryChunks?: unknown[] })?.queryChunks ?? [];
-  if (!Array.isArray(chunks) || chunks.length === 0) return true;
-  for (let i = 0; i < chunks.length; i += 1) {
-    const chunk = chunks[i] as Record<string, unknown> | undefined;
-    if (!chunk || typeof chunk !== "object") continue;
-    if (Array.isArray(chunk.queryChunks)) {
-      if (!harnessEvalCond(chunk, row)) return false;
+  let ok = true;
+  let col: string | null = null;
+  let op: string = "=";
+  for (const chunk of chunks) {
+    if (chunk === null || chunk === undefined) continue;
+    if (Array.isArray((chunk as { queryChunks?: unknown[] }).queryChunks)) {
+      if (!harnessEvalCond(chunk, row)) ok = false;
       continue;
     }
-    if (typeof chunk.name === "string" && chunk.table) {
-      const col = chunk.name;
-      const opText = fragText(chunks[i + 1]);
-      if (/\bin\s*\(/i.test(opText)) {
-        const raw = chunks[i + 2];
-        const arr = Array.isArray(raw) ? raw : (chunkParamValue(raw) as unknown[]);
-        const values = Array.isArray(arr) ? arr.map((v) => chunkParamValue(v)) : [];
-        if (!values.some((v) => v === row[col])) return false;
-        i += 2;
+    if (typeof chunk === "object") {
+      if (typeof (chunk as { name?: unknown }).name === "string" && (chunk as { table?: unknown }).table) {
+        col = (chunk as { name: string }).name;
         continue;
       }
-      if (/is\s+null/i.test(opText)) {
-        if (row[col] !== null && row[col] !== undefined) return false;
-        i += 1;
+      if (chunk instanceof StringChunk) {
+        const text = chunk.value.join("");
+        if (/is\s+null/i.test(text)) {
+          if (row[col ?? ""] != null) ok = false;
+          col = null;
+          op = "=";
+        } else {
+          op = text.includes(">=")
+            ? ">="
+            : text.includes("<=")
+              ? "<="
+              : text.includes("!=") || text.includes("<>")
+                ? "!="
+                : text.includes(">")
+                  ? ">"
+                  : text.includes("<")
+                    ? "<"
+                    : "=";
+        }
         continue;
       }
-      const param = chunkParamValue(chunks[i + 2]);
-      if (!compareOp(opText, row[col], param)) return false;
-      i += 2;
+      if (chunk instanceof Param) {
+        if (!compareOp(op, row[col ?? ""], chunk.value)) ok = false;
+        col = null;
+        op = "=";
+        continue;
+      }
+      if (Array.isArray(chunk)) {
+        const values = chunk.map((v) => (v instanceof Param ? v.value : v));
+        if (!values.includes(row[col ?? ""])) ok = false;
+        col = null;
+        op = "=";
+        continue;
+      }
+      continue;
     }
+    if (!compareOp(op, row[col ?? ""], chunk)) ok = false;
+    col = null;
+    op = "=";
   }
-  return true;
+  return ok;
 }
 
 function duplicateKeyError(): Error & { code: string } {
@@ -247,7 +274,10 @@ function parseOrderTerms(args: unknown[]): { col: string; dir: "asc" | "desc" }[
 }
 
 export function createHarnessDb(seed: FakeTables = {}): Harness {
-  const tables: FakeTables = { ...DEFAULT_TABLES };
+  const tables: FakeTables = {};
+  for (const name of Object.keys(DEFAULT_TABLES)) {
+    tables[name] = [...(DEFAULT_TABLES[name] ?? [])];
+  }
   for (const name of Object.keys(seed)) {
     tables[name] = [...(seed[name] ?? [])];
   }
@@ -335,7 +365,16 @@ export function createHarnessDb(seed: FakeTables = {}): Harness {
         where: (cond: unknown) => {
           const name = tableName(table);
           const matched = (tables[name] ?? []).filter((r) => harnessEvalCond(cond, r));
-          for (const r of matched) Object.assign(r, patch);
+          for (const r of matched) {
+            for (const [key, value] of Object.entries(patch)) {
+              if (value !== null && typeof value === "object" && Array.isArray((value as { queryChunks?: unknown[] }).queryChunks)) {
+                // sql`col + 1` style fragment (CAS version bumps): increment.
+                r[key] = Number(r[key] ?? 0) + 1;
+              } else {
+                r[key] = value;
+              }
+            }
+          }
           return Promise.resolve({ affectedRows: matched.length });
         },
       }),
