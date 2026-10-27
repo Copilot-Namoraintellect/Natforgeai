@@ -816,3 +816,38 @@ only** — no scoring (R6-B), qualification (R6-C), nurture (R6-D), conversion
 - Contracts: `docs/contracts/lead-identity-contract.md` (canonical),
   `docs/contracts/lead-identity-to-scoring-qualification-contract.md`
   (downstream handoff). Acceptance: `api/lib/lead-identity/r6-a-acceptance.test.ts`.
+
+---
+
+## 20. Lead Autonomy Integration (WBS-R6-X)
+
+The integrated Lead Autonomy system (streams R6-A/B/C/D/E/F merged on
+`integration/r6-lead-autonomy`; verdict `LEAD_AUTONOMY_V1_READY`). Connected
+lifecycle: R5 opportunity handoff → canonical `lid1` identity → evidence
+scoring → governed qualification (independent OTP human review) → privacy
+check → bounded nurture / governed sales handoff → exact-once conversion →
+conversion stop → operations projection.
+
+- **Canonical migration:** one `0034_r6_lead_autonomy_foundation` (13 R6
+  tables + D's accepted `approval_requests` enum extension). Journal/snapshot
+  chain verified; NOT executed (`docs/recovery/r6-migration-convergence.md`).
+- **Cross-stream binding:** the lid1 ↔ numeric `leads.id` mapping is
+  score-mediated, validated at R6-C/R6-D; C's bridge reads canonical
+  `@db/schema` tables (no mirrors); D's production ports
+  (`api/lib/nurture/nurture-ports.ts`) wire C's projection service, A/F/E
+  reads and the approval ledger behind D's frozen validators. D binds C's
+  exact engine-version constant (closed allow-list).
+- **Review authority:** real OTP primitive (bcrypt-hashed, single-use,
+  mailbox-only code); tenant JWT alone cannot resolve; D `sales_handoff`
+  approvals are a distinct, correctly-scoped authority.
+- **Provider truth:** WhatsApp/SMS/CRM UNSUPPORTED; Email
+  REQUIRES_CONFIGURATION; only the fake/test-only transport dispatches
+  (tests only).
+- **Harness:** `api/r6-x-harness.test.ts` (30 connected scenarios + X4
+  identity matrix), `api/r6-x-review-acceptance.test.ts` (X5),
+  `api/r6-x-security-acceptance.test.ts` (X8). Acceptance:
+  `docs/recovery/r6-lead-autonomy-v1-acceptance-report.md`. R7 handoff:
+  `docs/contracts/lead-autonomy-to-business-optimisation-contract.md`.
+- **Deferred:** real-MySQL concurrency execution is promoted to R10 /
+  pre-production acceptance (schema anchors structurally verified;
+  deterministic concurrency green).
