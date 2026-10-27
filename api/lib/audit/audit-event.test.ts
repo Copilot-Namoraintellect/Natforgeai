@@ -76,6 +76,8 @@ describe("audit-event taxonomy", () => {
       "lead_identity_archived",
       // R6-B: immutable lead score records (evidence, not qualification).
       "lead_score_recorded",
+      // R6-E: durable conversion/outcome record accepted (ids/classes only).
+      "conversion_recorded",
     ]);
   });
 

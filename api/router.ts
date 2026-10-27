@@ -30,6 +30,7 @@ import { engagementRouter } from "./engagement-router";
 import { opportunityRouter } from "./opportunity-router";
 import { leadIdentityRouter } from "./lead-identity-router";
 import { scoringRouter } from "./scoring-router";
+import { conversionRouter } from "./conversion-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -85,6 +86,7 @@ export const appRouter = createRouter({
   opportunity: opportunityRouter,
   leadIdentity: leadIdentityRouter,
   scoring: scoringRouter,
+  conversion: conversionRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -81,6 +81,10 @@ export const AUDIT_EVENT_TYPES = [
   // identity references + bounded score labels only; idempotent replays do not
   // re-emit. A score is evidence, never a qualification decision.
   "lead_score_recorded",
+  // R6-E: a durable conversion/outcome record was accepted (or an idempotent
+  // replay converged to it). Metadata carries ids/classes/hashes only — never
+  // raw social content or PII.
+  "conversion_recorded",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
