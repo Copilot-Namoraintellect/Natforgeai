@@ -3,7 +3,11 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 
 const schemaPath = resolve(__dirname, "../schema.ts");
-const migrationPath = resolve(__dirname, "../migrations/0034_lead_qualification_autonomy.sql");
+// R6-X canonical convergence (docs/recovery/r6-migration-convergence.md): the
+// six stream-local provisional 0034 artefacts were merged into the single
+// canonical 0034_r6_lead_autonomy_foundation; C's accepted anchors are verified
+// against that canonical migration.
+const migrationPath = resolve(__dirname, "../migrations/0034_r6_lead_autonomy_foundation.sql");
 
 // Blocker-4 (real-MySQL concurrency) structural evidence: the deterministic
 // in-memory executors mirror these durable anchors. The exact-once
@@ -50,7 +54,7 @@ describe("lead qualification schema — exact-once anchors", () => {
   });
 });
 
-describe("lead qualification schema — provisional migration parity", () => {
+describe("lead qualification schema — canonical migration parity", () => {
   it("0034 carries the same anchors and challenge binding columns", () => {
     const migration = readFileSync(migrationPath, "utf8");
     expect(migration).toMatch(/CONSTRAINT `lqd_convergence_uidx` UNIQUE\(`userId`,`qualificationId`\)/);
