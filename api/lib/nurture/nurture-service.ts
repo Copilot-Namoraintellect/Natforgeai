@@ -398,7 +398,7 @@ async function insertApprovalRequest(
 ): Promise<number> {
   const db = deps.executor ?? getDb();
   try {
-    const result = await db.insert(approvalRequests).values({
+    const rawResult = await db.insert(approvalRequests).values({
       userId: command.userId,
       campaignId: command.campaignId,
       approvalType: command.approvalType,
@@ -410,8 +410,13 @@ async function insertApprovalRequest(
       idempotencyKey: command.idempotencyKey,
       context: command.context,
     });
-    const insertId = (result as unknown as { insertId?: number | bigint }).insertId;
-    if (insertId === undefined) {
+    // drizzle mysql resolves [ResultSetHeader, FieldPacket[]]; test fakes may
+    // resolve the header object directly. Accept both — never invent an id.
+    const header = Array.isArray(rawResult)
+      ? (rawResult[0] as { insertId?: number | bigint })
+      : (rawResult as { insertId?: number | bigint });
+    const insertId = header?.insertId;
+    if (insertId === undefined || insertId === null) {
       failNurture("NURTURE_UPSTREAM_UNAVAILABLE", "Approval insert returned no id; failing closed.");
     }
     return Number(insertId);

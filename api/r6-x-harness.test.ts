@@ -114,7 +114,7 @@ function makeInterpretation(overrides: Partial<CanonicalInterpretationInput> = {
 
 interface World {
   harness: Harness;
-  db: Harness["db"];
+  db: any;
   tables: Harness["tables"];
 }
 
@@ -242,8 +242,8 @@ class FakeChallengeGateway implements ReviewChallengeGateway {
 function nurtureDeps(world: World, transport?: ReturnType<typeof createFakeNurtureTransport>, now: Date = T0): NurtureServiceDeps {
   const wired = transport ? Object.assign(transport, { providerId: "fake_test" as const }) : undefined;
   return {
-    ports: createNurtureProductionPorts(world.db),
-    executor: world.db,
+    ports: createNurtureProductionPorts(world.db as never),
+    executor: world.db as never,
     transport: wired,
     now: () => new Date(now.getTime()),
   };
@@ -604,7 +604,7 @@ describe("R6-X connected lead autonomy harness", () => {
     );
     // Closed-vocabulary evidence only; decisions derive from evidence+rules.
     expect(["QUALIFIED", "REVIEW_REQUIRED", "NOT_QUALIFIED", "INSUFFICIENT_EVIDENCE", "BLOCKED"]).toContain(result.qualification.decision);
-    expect(result.qualification.reasonCodes.every((c) => /^[A-Z_]+$/.test(c))).toBe(true);
+    expect((result.qualification.reasonCodes as string[]).every((c: string) => /^[A-Z_]+$/.test(c))).toBe(true);
   });
 
   it("scenario 17 — nurture cadence bound rejects immediate repeat touch", async () => {
@@ -1020,7 +1020,7 @@ describe("R6-X X4 — lid1 ↔ numeric identity mapping (score-mediated chain)",
     expect(absorbedRow).toBeTruthy();
     // Enriching the absorbed lid1 follows the chain to canonical (allowed);
     // an ARCHIVED (terminal) identity must refuse enrichment outright.
-    const archived = await archiveLeadIdentity({ userId: USER_ID, leadId: (absorbedRow as FakeRow).canonicalLeadId as string, reason: "record_retention", now: T0, executor: world.db });
+    const archived = await archiveLeadIdentity({ userId: USER_ID, leadId: (absorbedRow as FakeRow).canonicalLeadId as string, reason: "operator_request", now: T0, executor: world.db });
     expect(archived.identityStatus).toBe("archived");
     await expect(
       submitIdentityEvidence({ userId: USER_ID, leadId: archived.leadId, evidenceType: "phone", value: "+15550001", now: T0, executor: world.db })

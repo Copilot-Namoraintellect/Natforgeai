@@ -357,7 +357,8 @@ export function createHarnessDb(seed: FakeTables = {}): Harness {
           nextIds[name] = Math.max(nextIds[name] ?? 1, Number(row.id) + 1);
         }
         tables[name].push(row);
-        return Promise.resolve({ insertId: row.id, affectedRows: 1 });
+        // Mirror real drizzle mysql: [ResultSetHeader, FieldPacket[]].
+        return Promise.resolve([{ insertId: row.id, affectedRows: 1 }, []]);
       },
     }),
     update: (table: unknown) => ({
