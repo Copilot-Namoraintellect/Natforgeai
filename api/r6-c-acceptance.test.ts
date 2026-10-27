@@ -31,7 +31,8 @@
 //  20  security invariants › prompt-injected evidence cannot force a decision
 //  21  security invariants › upstream "qualified" field rejected at the seams
 //  22  security invariants › router strict-object: no client-supplied authority
-//  23  governance/review › input authority rejected; human/session separation blocker recorded
+//  23  governance/review › input authority rejected; review requires independent human proof
+//  23d security invariants › BLOCKER CLOSED — session-only self-approval impossible
 //  24  governance/review › superseded review approval rejected
 //  25  governance/review › stale review approval → REVIEW_STALE_BINDING
 //  26  handoff projection › suppressed/BLOCKED never progresses
@@ -42,8 +43,10 @@
 //  H  connected harness › R5 ids → R6-A → R6-B → snapshot → engine → store → D
 //
 // Review authorization never replaces a deterministic QUALIFIED decision.
-// Runtime human/agent credential separation is a separate acceptance blocker;
-// a tenant session alone does not prove a human initiated review resolution.
+// Blocker 1 (independent human review) is CLOSED: resolution requires a
+// single-use, review-bound out-of-band challenge (email OTP) that a verified
+// tenant session alone can never present — runtime agents operate under the
+// tenant's own JWT and cannot observe the emailed code.
 //
 // Two library defects were surfaced by this suite during C9 and are FIXED in
 // the seams (both blocked the specified R6-A/R6-B fixture shapes that the
@@ -57,6 +60,7 @@
 //       into the score content hash.
 
 import { describe, expect, it, vi } from "vitest";
+import { Param, StringChunk } from "drizzle-orm";
 import { auditEvents } from "@db/schema";
 import {
   deriveDecisionBindingHash,
@@ -90,10 +94,14 @@ import {
   getQualificationHistory,
   listQualificationReviews,
   ProviderLeadNotFound,
+  ProviderPrivacyScopeMismatch,
   ProviderScoreNotFound,
+  requestReviewResolution,
   resolveQualificationReview,
   type QualificationAuthorityProvider,
+  type QualificationPrivacyScope,
 } from "./lib/qualification/qualification-service";
+import type { ReviewChallengeGateway } from "./lib/qualification/qualification-review-authority";
 import * as qualificationStore from "./lib/qualification/qualification-store";
 import {
   insertReview,
@@ -103,7 +111,7 @@ import {
 } from "./lib/qualification/qualification-store";
 import { qualificationRouter } from "./qualification-router";
 import { createQualificationBridgeProvider, ProviderAuthorityUnavailable } from "./lib/qualification/qualification-bridge";
-import { buildCtx, createFakeDb } from "./r5-test-support";
+import { buildCtx, createFakeDb, tableName } from "./r5-test-support";
 import { getDb } from "./queries/connection";
 
 vi.mock("./queries/connection", () => ({
@@ -115,6 +123,21 @@ vi.mock("./lib/qualification/qualification-bridge", async (importOriginal) => {
   return {
     ...actual,
     createQualificationBridgeProvider: vi.fn(),
+  };
+});
+
+// The out-of-band channel: the email mock IS the reviewer's mailbox. Codes
+// issued by the real OTP gateway through the router are captured here; the
+// API never returns them (scenario 23d).
+const capturedCodes: string[] = [];
+vi.mock("./lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lib/email")>();
+  return {
+    ...actual,
+    sendTwoFactorCodeEmail: vi.fn(async (input: { to: string; code: string }) => {
+      capturedCodes.push(input.code);
+      return { messageId: "test", accepted: [input.to] } as never;
+    }),
   };
 });
 
@@ -242,10 +265,20 @@ function makeScore(overrides: Record<string, unknown> = {}): Record<string, unkn
 
 // ─── Fake authority provider (tenant-anchored like the production bridge) ───
 
+/**
+ * The numeric legacy CRM key carried by the default fixture score
+ * (makeScore leadId: 123456). R6-F privacy rows key on it — never on the
+ * lid1 identity id, which has no row in the numeric-keyed table.
+ */
+const SCORE_LEAD_KEY = "123456";
+
 class FakeProvider implements QualificationAuthorityProvider {
   readonly identities = new Map<string, { ownerUserId: number; payload: unknown }>();
   readonly scores = new Map<string, unknown>();
+  /** Keyed by the numeric score lead id; values are R6-F evidence rows. */
   readonly privacy = new Map<string, unknown>();
+  /** Toggles the guarded table-unavailable degradation (scenario 26b). */
+  privacyUnavailable = false;
 
   constructor(readonly tenantUserId: number = USER_ID) {}
 
@@ -266,8 +299,32 @@ class FakeProvider implements QualificationAuthorityProvider {
     return this.scores.get(leadScoreId);
   }
 
-  async getPrivacyState(leadId: string): Promise<unknown> {
-    return this.privacy.has(leadId) ? this.privacy.get(leadId) : null;
+  async getPrivacyState(scope: QualificationPrivacyScope): Promise<unknown> {
+    if (this.privacyUnavailable) {
+      throw new ProviderAuthorityUnavailable(["lead_privacy_states"]);
+    }
+    // Mirrors the production bridge: only a numeric score-authoritative key
+    // can reach the privacy table; anything else fails closed rather than
+    // guessing suppression is absent.
+    if (!/^[1-9]\d*$/.test(scope.scoreLeadId)) {
+      throw new ProviderAuthorityUnavailable(["lead_privacy_states"]);
+    }
+    if (!this.privacy.has(scope.scoreLeadId)) return null;
+    const row = this.privacy.get(scope.scoreLeadId);
+    if (row && typeof row === "object" && !Array.isArray(row)) {
+      const { businessId, ...evidence } = row as Record<string, unknown>;
+      // The bridge checks business scope against the row, then hands the
+      // seam a governed evidence shape only (businessId is not a gate field).
+      if (
+        typeof businessId === "number" &&
+        scope.businessId !== null &&
+        businessId !== scope.businessId
+      ) {
+        throw new ProviderPrivacyScopeMismatch(scope.scoreLeadId);
+      }
+      return evidence;
+    }
+    return row;
   }
 }
 
@@ -281,10 +338,62 @@ function makeProvider(
   return provider;
 }
 
-const deps = (provider: QualificationAuthorityProvider, now: Date = NOW) => ({
+const deps = (
+  provider: QualificationAuthorityProvider,
+  now: Date = NOW,
+  challengeGateway?: ReviewChallengeGateway
+) => ({
   provider,
+  challengeGateway,
   now: () => new Date(now.getTime()),
 });
+
+// ─── Independent human-review authority (blocker 1, contract §10) ───
+
+/**
+ * Scripted out-of-band challenge channel: codes exist only inside the fake's
+ * issued store — exactly where the real code lives inside the reviewer's
+ * mailbox. A bare tenant session never sees them.
+ */
+class FakeChallengeGateway implements ReviewChallengeGateway {
+  readonly issued = new Map<string, { code: string; userId: number; consumed: boolean }>();
+  /** Codes a compromised agent might guess/brute-force always differ. */
+  constructor(readonly fixedCode = "415926") {}
+
+  async createAndSend(input: { userId: number; reviewId: string; req: Request }) {
+    const challengeToken = `tok-${this.issued.size}-${input.reviewId.slice(0, 12)}`;
+    this.issued.set(challengeToken, { code: this.fixedCode, userId: input.userId, consumed: false });
+    return {
+      challengeToken,
+      expiresAt: new Date(NOW.getTime() + 10 * 60 * 1000).toISOString(),
+    };
+  }
+
+  async verify(input: { challengeToken: string; code: string }) {
+    const rec = this.issued.get(input.challengeToken);
+    if (!rec || rec.consumed || input.code !== rec.code) {
+      throw new Error("Invalid or expired verification code");
+    }
+    rec.consumed = true;
+    return { userId: rec.userId, consumedAt: NOW_ISO };
+  }
+}
+
+/** Issues the review-bound challenge through the governed request path. */
+async function authorizeReview(
+  provider: FakeProvider,
+  executor: QualificationStoreExecutor,
+  reviewId: string,
+  now: Date = NOW
+) {
+  const gateway = new FakeChallengeGateway();
+  const bound = await requestReviewResolution(
+    { userId: USER_ID, reviewId, req: new Request("http://localhost/api/trpc") },
+    deps(provider, now, gateway),
+    executor
+  );
+  return { gateway, challengeToken: bound.pendingChallengeToken as string, code: gateway.fixedCode };
+}
 
 const evaluateInput = (overrides: Record<string, unknown> = {}) => ({
   userId: USER_ID,
@@ -558,6 +667,140 @@ function makeFakeDb() {
   };
 }
 
+// ─── OTP-aware db adapter for router-level review authorization (23d) ───
+//
+// The real OTP gateway drives the shared two_factor_challenges/users tables
+// with eq/gt/isNull predicates over real Date values; the generic R5-F fake
+// only models primitive equality, so the OTP tables get a purpose-built
+// in-memory adapter here while every other table delegates to the R5-F fake.
+
+/** Evaluates the OTP where-shapes: and(eq(f, v)*, gt(f, date)?, isNull(f)?). */
+function matchOtpCond(row: Record<string, unknown>, cond: unknown): boolean {
+  const eqs: Array<{ field: string; value: unknown }> = [];
+  const gts: Array<{ field: string; value: unknown }> = [];
+  const nulls = new Set<string>();
+  let col: string | null = null;
+  let op: "eq" | "gt" = "eq";
+  const walk = (node: unknown): void => {
+    for (const chunk of (node as { queryChunks?: unknown[] })?.queryChunks ?? []) {
+      if (
+        chunk &&
+        typeof chunk === "object" &&
+        Array.isArray((chunk as { queryChunks?: unknown[] }).queryChunks)
+      ) {
+        walk(chunk);
+        continue;
+      }
+      if (
+        chunk &&
+        typeof chunk === "object" &&
+        typeof (chunk as { name?: unknown }).name === "string" &&
+        (chunk as { table?: unknown }).table
+      ) {
+        col = (chunk as { name: string }).name;
+        continue;
+      }
+      if (chunk instanceof StringChunk) {
+        const text = chunk.value.join("");
+        if (/is\s+null/i.test(text)) {
+          if (col) nulls.add(col);
+          col = null;
+        } else if (/>/.test(text)) {
+          op = "gt";
+        }
+        continue;
+      }
+      if (chunk instanceof Param) {
+        if (!col) continue;
+        if (op === "gt") gts.push({ field: col, value: chunk.value });
+        else eqs.push({ field: col, value: chunk.value });
+        col = null;
+        op = "eq";
+        continue;
+      }
+      if ((typeof chunk === "number" || typeof chunk === "string") && col) {
+        eqs.push({ field: col, value: chunk });
+        col = null;
+        continue;
+      }
+    }
+  };
+  walk(cond);
+  const num = (v: unknown): number => (v instanceof Date ? v.getTime() : Number(v));
+  return (
+    eqs.every((e) => row[e.field] === e.value) &&
+    gts.every((g) => num(row[g.field]) > num(g.value)) &&
+    [...nulls].every((f) => row[f] === null || row[f] === undefined)
+  );
+}
+
+/** Wraps the R5-F fake with working two_factor_challenges/users tables. */
+function withOtpTables(
+  db: ReturnType<typeof createFakeDb>["db"],
+  userId: number,
+  email: string
+) {
+  const challenges: Array<Record<string, unknown>> = [];
+  const users: Array<Record<string, unknown>> = [{ id: userId, email }];
+  let nextId = 1;
+  const otpSelectTarget = (rows: Array<Record<string, unknown>>) => {
+    let current = rows;
+    const query = {
+      where: (cond: unknown) => {
+        current = current.filter((row) => matchOtpCond(row, cond));
+        return query;
+      },
+      limit: (n: number) => Promise.resolve(current.slice(0, n).map((row) => ({ ...row }))),
+    };
+    return query;
+  };
+  return {
+    ...db,
+    select: (fields?: unknown) => ({
+      from: (table: unknown) => {
+        const name = tableName(table);
+        if (name === "two_factor_challenges") return otpSelectTarget(challenges) as never;
+        if (name === "users") return otpSelectTarget(users) as never;
+        return db.select(fields).from(table);
+      },
+    }),
+    update: (table: unknown) => ({
+      set: (patch: Record<string, unknown>) => ({
+        where: async (cond: unknown) => {
+          if (tableName(table) === "two_factor_challenges") {
+            let affected = 0;
+            for (const row of challenges) {
+              if (matchOtpCond(row, cond)) {
+                Object.assign(row, patch);
+                affected += 1;
+              }
+            }
+            return { affectedRows: affected };
+          }
+          return db.update(table).set(patch).where(cond);
+        },
+      }),
+    }),
+    insert: (table: unknown) => ({
+      values: async (row: Record<string, unknown>) => {
+        if (tableName(table) === "two_factor_challenges") {
+          challenges.push({
+            attempts: 0,
+            maxAttempts: 5,
+            consumedAt: null,
+            ipAddress: null,
+            userAgent: null,
+            ...row,
+            id: nextId,
+          });
+          return [{ insertId: nextId++, affectedRows: 1 }];
+        }
+        return db.insert(table).values(row);
+      },
+    }),
+  };
+}
+
 // ─── C9 acceptance — decisions ───
 
 describe("C9 acceptance — decisions", () => {
@@ -662,7 +905,7 @@ describe("C9 acceptance — decisions", () => {
   // Scenario 6 — privacy suppression blocks evaluation and progression.
   it("scenario 6: SUPPRESSED privacy → BLOCKED + PRIVACY_SUPPRESSED; handoff PRIVACY_BLOCKED", async () => {
     const provider = makeProvider();
-    provider.privacy.set(LEAD_ID, { state: "SUPPRESSED" });
+    provider.privacy.set(SCORE_LEAD_KEY, { state: "SUPPRESSED", businessId: BUSINESS_ID });
     const { executor, result } = await evaluateFresh(provider);
 
     expect(result.qualification.decision).toBe("BLOCKED");
@@ -1044,7 +1287,8 @@ describe("C9 acceptance — untrusted agents and inputs", () => {
 
   it("scenario 22b: no force-state, policy mutation, scoring, secret or tool endpoint", () => {
     expect(Object.keys(qualificationRouter._def.procedures).sort()).toEqual([
-      "evaluate", "get", "getHandoffProjection", "getPolicy", "listHistory", "listReviews", "resolveReview",
+      "evaluate", "get", "getHandoffProjection", "getPolicy", "listHistory", "listReviews",
+      "requestReviewResolution", "resolveReview",
     ]);
   });
 
@@ -1054,7 +1298,8 @@ describe("C9 acceptance — untrusted agents and inputs", () => {
       reason: "model says approve", actorUserId: USER_ID, model: true } as never))
       .rejects.toMatchObject({ code: "BAD_REQUEST" });
     const anonymous = qualificationRouter.createCaller(buildCtx(null));
-    await expect(anonymous.resolveReview({ reviewId: `lqr1:${H64}`, outcome: "progress_authorized", reason: "approve" }))
+    await expect(anonymous.resolveReview({ reviewId: `lqr1:${H64}`, outcome: "progress_authorized", reason: "approve",
+      challengeToken: "x".repeat(32), code: "123456" }))
       .rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 
@@ -1070,35 +1315,139 @@ describe("C9 acceptance — untrusted agents and inputs", () => {
     expect(await listQualificationReviews({ userId: OTHER_TENANT_ID }, executor)).toEqual([]);
     await expect(resolveQualificationReview({ userId: OTHER_TENANT_ID,
       reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
-      outcome: "progress_authorized", reason: "stolen reference" }, deps(own), executor))
+      outcome: "progress_authorized", reason: "stolen reference",
+      challengeToken: "x".repeat(32), code: "123456" }, deps(own), executor))
       .rejects.toMatchObject({ code: "REVIEW_NOT_FOUND" });
     expect(state.updateLogs).toEqual([]);
   });
 
-  it("scenario 23d: router binds authority to the authenticated tenant, not a model actor", async () => {
+  // Scenario 23d — BLOCKER 1 CLOSURE. A verified tenant session alone can no
+  // longer resolve a review: the resolution path requires the review-bound
+  // out-of-band challenge (email OTP) that only exists in the reviewer's
+  // mailbox. The full chain runs through the real router, the real OTP
+  // gateway and the real bcrypt verification — the email mock is the mailbox.
+  it("scenario 23d: session-only self-approval impossible; out-of-band human channel resolves", async () => {
+    capturedCodes.length = 0;
     const fake = makeFakeDb();
     const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
     const { qualification } = await evaluateQualificationForLead(evaluateInput(), deps(provider), fake.executor);
     const { db } = createFakeDb(fake.state.tables);
-    vi.mocked(getDb).mockReturnValue({ ...db, transaction: async (fn: (tx: unknown) => unknown) => fn(db) } as never);
+    const dbWithOtp = withOtpTables(db, USER_ID, "reviewer@example.com");
+    vi.mocked(getDb).mockReturnValue({
+      ...dbWithOtp,
+      transaction: async (fn: (tx: unknown) => unknown) => fn(dbWithOtp),
+    } as never);
     vi.mocked(createQualificationBridgeProvider).mockReturnValue(provider);
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     try {
       const caller = qualificationRouter.createCaller(buildCtx({ id: USER_ID, role: "user" }));
       const review = fake.state.tables.lead_qualification_reviews[0];
-      // Demonstrates the remaining blocker: a verified user session alone
-      // permits resolution and supplies no independently verified human proof.
-      const resolved = await caller.resolveReview({ reviewId: review.reviewId as string,
-        outcome: "progress_authorized", reason: "tenant session has no human/agent distinction" });
+
+      // (1) The former attack: a verified tenant session (exactly what a
+      // compromised agent holds) tries to rubber-stamp its own review. It
+      // fails closed — FORBIDDEN, zero writes, review still pending.
+      await expect(
+        caller.resolveReview({ reviewId: review.reviewId as string, outcome: "progress_authorized",
+          reason: "agent holding the tenant session", challengeToken: "a".repeat(64), code: "123456" })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(fake.state.tables.audit_events).toHaveLength(1); // evaluation only
+      expect(review.status).toBe("pending");
+
+      // (2) The governed path: the human requests a challenge; the code is
+      // delivered only to the mailbox (captured by the email mock here);
+      // the API returns the binding token, never the code.
+      const request = caller.requestReviewResolution({ reviewId: review.reviewId as string });
+      await vi.runAllTimersAsync();
+      const bound = await request;
+      expect(bound.version).toBe(2);
+      expect(bound.pendingChallengeToken).toMatch(/^[a-f0-9]{64}$/);
+      expect(capturedCodes).toHaveLength(1);
+      expect(JSON.stringify(bound)).not.toContain(capturedCodes[0]);
+      // Snapshot the binding now: through the router the returned row is the
+      // live stored row, cleared again by the resolution in step (4).
+      const challengeToken = bound.pendingChallengeToken as string;
+      const emailedCode = capturedCodes[0];
+
+      // (3) Guessing the 6-digit code without mailbox access fails closed.
+      await expect(
+        caller.resolveReview({ reviewId: review.reviewId as string, outcome: "progress_authorized",
+          reason: "guessed code", challengeToken, code: "000000" })
+      ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+      expect(fake.state.tables.audit_events).toHaveLength(1);
+      expect(review.status).toBe("pending");
+
+      // (4) The human presents the emailed code: resolution succeeds and the
+      // projection still refuses progression (review authorization never
+      // replaces a deterministic QUALIFIED decision).
+      const resolve = caller.resolveReview({ reviewId: review.reviewId as string,
+        outcome: "progress_authorized", reason: "human reviewed evidence out of band",
+        challengeToken, code: emailedCode });
+      await vi.runAllTimersAsync();
+      const resolved = await resolve;
       expect(resolved.resolvedBy).toBe(USER_ID);
       expect(resolved.status).toBe("progress_authorized");
+      expect(resolved.pendingChallengeToken).toBeNull();
       expect((await caller.getHandoffProjection({ qualificationId: qualification.qualificationId })).mayProgress).toBe(false);
+
+      // (5) The single-use challenge cannot approve anything twice.
+      await expect(
+        caller.resolveReview({ reviewId: review.reviewId as string, outcome: "progression_rejected",
+          reason: "replay", challengeToken, code: emailedCode })
+      ).rejects.toMatchObject({ code: "CONFLICT" });
     } finally {
       vi.useRealTimers();
       vi.mocked(getDb).mockReset();
       vi.mocked(createQualificationBridgeProvider).mockReset();
     }
+  });
+
+  // Scenario 23e — adversarial: a challenge issued for review A cannot be
+  // replayed against review B, and a fabricated (never-issued) token cannot
+  // resolve anything. A compromised agent scripting the tenant session gets
+  // no path to self-approval.
+  it("scenario 23e: cross-review challenge replay and fabricated tokens fail closed", async () => {
+    const fake = makeFakeDb();
+    const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    await evaluateQualificationForLead(evaluateInput(), deps(provider), fake.executor);
+    // A second, distinct REVIEW_REQUIRED decision on another lead.
+    const providerB = new FakeProvider();
+    providerB.setIdentity(OTHER_LEAD_ID, makeIdentity({ leadId: OTHER_LEAD_ID }));
+    providerB.scores.set(SCORE_ID, makeScore({ leadId: 654321, reasonCodes: ["CONTRADICTING_EVIDENCE"] }));
+    await evaluateQualificationForLead(
+      { userId: USER_ID, leadId: OTHER_LEAD_ID, leadScoreId: SCORE_ID },
+      deps(providerB),
+      fake.executor
+    );
+    const [reviewA, reviewB] = fake.state.tables.lead_qualification_reviews;
+    expect(reviewA.reviewId).not.toBe(reviewB.reviewId);
+
+    // Fabricated token: never issued, plausible shape.
+    await expect(
+      resolveQualificationReview({ userId: USER_ID, reviewId: reviewA.reviewId as string,
+        outcome: "progress_authorized", reason: "fabricated token", challengeToken: "f".repeat(64),
+        code: "123456" }, deps(provider), fake.executor)
+    ).rejects.toMatchObject({ code: "REVIEW_AUTHORIZATION_BINDING_MISMATCH" });
+
+    // Real challenge bound to A, presented for B (B's own score/provider
+    // satisfies the preconditions — the binding check is what must stop it).
+    const { gateway, challengeToken, code } = await authorizeReview(provider, fake.executor, reviewA.reviewId as string);
+    await expect(
+      resolveQualificationReview({ userId: USER_ID, reviewId: reviewB.reviewId as string,
+        outcome: "progress_authorized", reason: "cross-review replay", challengeToken, code },
+        deps(providerB, NOW, gateway), fake.executor)
+    ).rejects.toMatchObject({ code: "REVIEW_AUTHORIZATION_BINDING_MISMATCH" });
+
+    // And review B still cannot be resolved even with A's consumed code.
+    await expect(
+      resolveQualificationReview({ userId: USER_ID, reviewId: reviewB.reviewId as string,
+        outcome: "progress_authorized", reason: "consumed replay", challengeToken, code },
+        deps(providerB, NOW, gateway), fake.executor)
+    ).rejects.toMatchObject({ code: "REVIEW_AUTHORIZATION_BINDING_MISMATCH" });
+    expect(fake.state.tables.audit_events).toHaveLength(2); // two evaluations only
+    // The only durable write is the challenge binding on review A; both
+    // cross-review replays and the fabricated token died before any write.
+    expect(fake.state.updateLogs).toEqual(["lead_qualification_reviews"]);
   });
 });
 
@@ -1115,7 +1464,8 @@ describe("C9 acceptance — downstream projection and side effects", () => {
       .rejects.toMatchObject({ code: "QUALIFICATION_AUTHORITY_UNAVAILABLE" });
     await expect(resolveQualificationReview({ userId: USER_ID,
       reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
-      outcome: "progress_authorized", reason: "missing privacy" }, deps(provider), executor))
+      outcome: "progress_authorized", reason: "missing privacy",
+      challengeToken: "x".repeat(32), code: "123456" }, deps(provider), executor))
       .rejects.toMatchObject({ code: "QUALIFICATION_AUTHORITY_UNAVAILABLE" });
     expect(state.insertLogs).toEqual(before);
     expect(state.updateLogs).toEqual([]);
@@ -1125,13 +1475,98 @@ describe("C9 acceptance — downstream projection and side effects", () => {
     "scenario 26: current privacy %s blocks previously QUALIFIED decisions", async (state) => {
       const provider = makeProvider();
       const { executor, result } = await evaluateFresh(provider);
-      provider.privacy.set(LEAD_ID, { state });
+      provider.privacy.set(SCORE_LEAD_KEY, { state, businessId: BUSINESS_ID });
       const projection = await getHandoffProjectionForUser({ userId: USER_ID,
         qualificationId: result.qualification.qualificationId }, deps(provider), executor);
       expect(projection.mayProgress).toBe(false);
       expect(projection.progressBlockedReason).toBe("PRIVACY_BLOCKED");
     }
   );
+
+  it("scenario 31: a privacy record for a different lead never binds to this qualification", async () => {
+    const provider = makeProvider();
+    // Suppression recorded against ANOTHER numeric lead id.
+    provider.privacy.set("999999", { state: "SUPPRESSED", businessId: BUSINESS_ID });
+    const { executor, result } = await evaluateFresh(provider);
+    expect(result.qualification.decision).toBe("QUALIFIED");
+    // Only the score-authoritative key governs this lead.
+    provider.privacy.set(SCORE_LEAD_KEY, { state: "SUPPRESSED", businessId: BUSINESS_ID });
+    const blocked = await getHandoffProjectionForUser({ userId: USER_ID,
+      qualificationId: result.qualification.qualificationId }, deps(provider), executor);
+    expect(blocked.mayProgress).toBe(false);
+    expect(blocked.progressBlockedReason).toBe("PRIVACY_BLOCKED");
+  });
+
+  it("scenario 32: stale privacy state (RETENTION_PENDING past deadline) blocks at read time", async () => {
+    const provider = makeProvider();
+    const { executor, result } = await evaluateFresh(provider);
+    const deadline = new Date(NOW.getTime() - HOUR_MS).toISOString();
+    provider.privacy.set(SCORE_LEAD_KEY, {
+      state: "RETENTION_PENDING", businessId: BUSINESS_ID, retentionDeadlineAt: deadline,
+    });
+    const projection = await getHandoffProjectionForUser({ userId: USER_ID,
+      qualificationId: result.qualification.qualificationId }, deps(provider), executor);
+    expect(projection.mayProgress).toBe(false);
+    expect(projection.progressBlockedReason).toBe("PRIVACY_BLOCKED");
+    expect(projection.privacy).toEqual({ state: "RETENTION_EXPIRED", actionable: false });
+    // A fresh RETENTION_PENDING (future deadline) remains actionable.
+    provider.privacy.set(SCORE_LEAD_KEY, {
+      state: "RETENTION_PENDING", businessId: BUSINESS_ID,
+      retentionDeadlineAt: new Date(NOW.getTime() + 24 * HOUR_MS).toISOString(),
+    });
+    const pending = await getHandoffProjectionForUser({ userId: USER_ID,
+      qualificationId: result.qualification.qualificationId }, deps(provider), executor);
+    expect(pending.mayProgress).toBe(true);
+  });
+
+  it("scenario 33: an unestablished privacy chain (score carries no numeric key) fails closed", async () => {
+    // The score's leadId is a lid1 identity id: no authoritative numeric key
+    // into the numeric-keyed R6-F table exists, so privacy cannot be
+    // established and evaluation fails closed (never degrades to ACTIVE).
+    const provider = makeProvider({}, { leadId: LEAD_ID });
+    await expect(
+      evaluateQualificationForLead(evaluateInput(), deps(provider), makeFakeDb().executor)
+    ).rejects.toMatchObject({ code: "QUALIFICATION_AUTHORITY_UNAVAILABLE" });
+  });
+
+  it("scenario 34: a cross-business privacy record fails closed as OWNERSHIP_MISMATCH", async () => {
+    const provider = makeProvider();
+    provider.privacy.set(SCORE_LEAD_KEY, { state: "ACTIVE", businessId: 99 });
+    await expect(
+      evaluateQualificationForLead(evaluateInput(), deps(provider), makeFakeDb().executor)
+    ).rejects.toMatchObject({ name: "QualificationOwnershipError", code: "OWNERSHIP_MISMATCH" });
+  });
+
+  it("scenario 35: challenge requests fail closed for stale or resolved reviews", async () => {
+    const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    const { executor, state } = await evaluateFresh(provider);
+    const reviewId = state.tables.lead_qualification_reviews[0].reviewId as string;
+    const gateway = new FakeChallengeGateway();
+    const gatewayDeps = deps(provider, NOW, gateway);
+    const req = new Request("http://localhost/api/trpc");
+
+    // Supersede the decision: the review can no longer be authorized.
+    registerQualificationPolicy(POLICY_V2);
+    await evaluateQualificationForLead(
+      evaluateInput({ policyVersion: POLICY_V2.policyVersion }), deps(provider), executor);
+    await expect(
+      requestReviewResolution({ userId: USER_ID, reviewId, req }, gatewayDeps, executor)
+    ).rejects.toMatchObject({ code: "REVIEW_STALE_BINDING" });
+
+    // And a resolved review cannot be re-authorized.
+    const fresh = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    const freshDb = makeFakeDb();
+    await evaluateQualificationForLead(evaluateInput(), deps(fresh), freshDb.executor);
+    const freshReviewId = freshDb.state.tables.lead_qualification_reviews[0].reviewId as string;
+    const { gateway: g2, challengeToken, code } = await authorizeReview(fresh, freshDb.executor, freshReviewId);
+    await resolveQualificationReview({ userId: USER_ID, reviewId: freshReviewId,
+      outcome: "progression_rejected", reason: "reviewed", challengeToken, code },
+      deps(fresh, NOW, g2), freshDb.executor);
+    await expect(
+      requestReviewResolution({ userId: USER_ID, reviewId: freshReviewId, req },
+        deps(fresh, NOW, g2), freshDb.executor)
+    ).rejects.toMatchObject({ code: "REVIEW_ALREADY_RESOLVED" });
+  });
 
   it("scenario 27: NOT_QUALIFIED cannot progress", async () => {
     const provider = makeProvider({}, { reasonCodes: ["UNRESOLVED_COMPLAINT_SIGNAL"] });
@@ -1147,9 +1582,11 @@ describe("C9 acceptance — downstream projection and side effects", () => {
     const { executor, result, state } = await evaluateFresh(provider);
     const input = { userId: USER_ID, qualificationId: result.qualification.qualificationId };
     expect((await getHandoffProjectionForUser(input, deps(provider), executor)).mayProgress).toBe(false);
+    const reviewId = state.tables.lead_qualification_reviews[0].reviewId as string;
+    const { gateway, challengeToken, code } = await authorizeReview(provider, executor, reviewId);
     await resolveQualificationReview({ userId: USER_ID,
-      reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
-      outcome: "progress_authorized", reason: "reviewed evidence" }, deps(provider), executor);
+      reviewId, outcome: "progress_authorized", reason: "reviewed evidence",
+      challengeToken, code }, deps(provider, NOW, gateway), executor);
     const projection = await getHandoffProjectionForUser(input, deps(provider), executor);
     expect(projection.mayProgress).toBe(false);
     expect(projection.progressBlockedReason).toBe("REVIEW_REQUIRED_PENDING");
@@ -1175,13 +1612,16 @@ describe("C9 acceptance — downstream projection and side effects", () => {
     const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
     const { executor, state, result } = await evaluateFresh(provider);
     await evaluateQualificationForLead(evaluateInput(), deps(provider), executor);
+    const reviewId = state.tables.lead_qualification_reviews[0].reviewId as string;
+    const { gateway, challengeToken, code } = await authorizeReview(provider, executor, reviewId);
     await resolveQualificationReview({ userId: USER_ID,
-      reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
-      outcome: "progress_authorized", reason: "verified" }, deps(provider), executor);
+      reviewId, outcome: "progress_authorized", reason: "verified",
+      challengeToken, code }, deps(provider, NOW, gateway), executor);
     await getHandoffProjectionForUser({ userId: USER_ID,
       qualificationId: result.qualification.qualificationId }, deps(provider), executor);
     expect([...new Set(state.insertLogs)].sort()).toEqual(["audit_events", "lead_qualification_reviews", "lead_qualifications"]);
-    expect(state.updateLogs).toEqual(["lead_qualification_reviews"]);
+    // One update binds the human-review challenge, one records the resolution.
+    expect(state.updateLogs).toEqual(["lead_qualification_reviews", "lead_qualification_reviews"]);
     for (const table of FORBIDDEN_WRITE_TABLES) expect(state.tables[table]).toEqual([]);
     expect(state.tables.audit_events).toHaveLength(2);
   });
@@ -1191,7 +1631,8 @@ describe("C9 acceptance — downstream projection and side effects", () => {
     const { executor, state } = await evaluateFresh(provider);
     await expect(resolveQualificationReview({ userId: USER_ID,
       reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
-      outcome: "progress_authorized", reason: "expired" },
+      outcome: "progress_authorized", reason: "expired",
+      challengeToken: "x".repeat(32), code: "123456" },
       deps(provider, new Date(NOW.getTime() + DEFAULT_QUALIFICATION_POLICY.validityMs + 1)), executor))
       .rejects.toMatchObject({ code: "REVIEW_STALE_BINDING" });
     expect(state.updateLogs).toEqual([]);
@@ -1201,10 +1642,11 @@ describe("C9 acceptance — downstream projection and side effects", () => {
   it("scenario 25c: suppressed review approval rejected without writes", async () => {
     const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
     const { executor, state } = await evaluateFresh(provider);
-    provider.privacy.set(LEAD_ID, { state: "SUPPRESSED" });
+    provider.privacy.set(SCORE_LEAD_KEY, { state: "SUPPRESSED", businessId: BUSINESS_ID });
     await expect(resolveQualificationReview({ userId: USER_ID,
       reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
-      outcome: "progress_authorized", reason: "ignore suppression" }, deps(provider), executor))
+      outcome: "progress_authorized", reason: "ignore suppression",
+      challengeToken: "x".repeat(32), code: "123456" }, deps(provider), executor))
       .rejects.toMatchObject({ code: "REVIEW_STALE_BINDING" });
     expect(state.updateLogs).toEqual([]);
   });
@@ -1250,7 +1692,8 @@ describe("C9 acceptance — governance/review", () => {
     const { provider, executor, state, result, review } = await reviewedDecision();
     await expect(
       resolveQualificationReview(
-        { userId: USER_ID, reviewId: "lqr1:" + "ff".repeat(32), outcome: "progress_authorized", reason: "x" },
+        { userId: USER_ID, reviewId: "lqr1:" + "ff".repeat(32), outcome: "progress_authorized",
+          reason: "x", challengeToken: "x".repeat(32), code: "123456" },
         deps(provider),
         executor
       )
@@ -1278,11 +1721,14 @@ describe("C9 acceptance — governance/review", () => {
       reviewedAt: null,
     });
 
-    // (c) Resolution records the authenticated tenant user. This alone cannot
-    // distinguish a human from an agent using that user's verified session.
+    // (c) Resolution requires independent human proof: the review-bound
+    // out-of-band challenge. Only then does the authenticated tenant user
+    // become the server-derived resolvedBy.
+    const reviewId = review.reviewId as string;
+    const { gateway, challengeToken, code } = await authorizeReview(provider, executor, reviewId);
     const resolved = await resolveQualificationReview(
-      { userId: USER_ID, reviewId: review.reviewId as string, outcome: "progress_authorized", reason: "verified by ops" },
-      deps(provider),
+      { userId: USER_ID, reviewId, outcome: "progress_authorized", reason: "verified by ops", challengeToken, code },
+      deps(provider, NOW, gateway),
       executor
     );
     expect(resolved.status).toBe("progress_authorized");
@@ -1336,8 +1782,11 @@ describe("C9 acceptance — governance/review", () => {
     );
     expect(() => assertReviewDecisionBinding(review, storedV1)).not.toThrow();
 
+    // The old review is stale against the superseded decision — rejected
+    // before any challenge could be verified.
     await expect(resolveQualificationReview(
-      { userId: USER_ID, reviewId: review.reviewId, outcome: "progress_authorized", reason: "ops verified the v1 evidence" },
+      { userId: USER_ID, reviewId: review.reviewId, outcome: "progress_authorized", reason: "ops verified the v1 evidence",
+        challengeToken: "x".repeat(32), code: "123456" },
       deps(provider),
       executor
     )).rejects.toMatchObject({ code: "REVIEW_STALE_BINDING" });
@@ -1362,7 +1811,8 @@ describe("C9 acceptance — governance/review", () => {
 
     await expect(
       resolveQualificationReview(
-        { userId: USER_ID, reviewId: review.reviewId as string, outcome: "progress_authorized", reason: "too late" },
+        { userId: USER_ID, reviewId: review.reviewId as string, outcome: "progress_authorized", reason: "too late",
+          challengeToken: "x".repeat(32), code: "123456" },
         deps(provider),
         executor
       )

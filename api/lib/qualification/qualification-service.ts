@@ -40,6 +40,7 @@ import {
   insertReview,
   listQualificationHistory,
   listReviews,
+  updateReviewChallengeRequest,
   updateReviewResolution,
   type LeadQualificationRow,
   type LeadQualificationReviewRow,
@@ -50,6 +51,7 @@ import {
   assertReviewResolvable,
   buildReviewForDecision,
 } from "./qualification-review";
+import type { ReviewChallengeGateway } from "./qualification-review-authority";
 import {
   buildHandoffProjection,
   type QualificationHandoffProjection,
@@ -69,7 +71,26 @@ import { persistAuditEvent, type AuditDbExecutor } from "../audit/audit-store";
 export interface QualificationAuthorityProvider {
   getIdentityProjection(leadId: string): Promise<unknown>;
   getScorePayload(leadScoreId: string): Promise<unknown>;
-  getPrivacyState(leadId: string): Promise<unknown>;
+  /**
+   * Authoritative R6-F privacy read. The lookup is keyed by the legacy
+   * numeric leads.id carried verbatim by the re-validated R6-B score row
+   * (blocker-2 chain binding) — never by a caller-supplied id and never by
+   * the lid1 identity id, which has no row in the numeric-keyed R6-F table.
+   */
+  getPrivacyState(scope: QualificationPrivacyScope): Promise<unknown>;
+}
+
+/**
+ * The established ownership chain for a privacy read: the score row has
+ * already been re-validated and bound to the identity at exact tenant +
+ * business scope; the numeric lead key it carries is the only authoritative
+ * key into lead_privacy_states available under the frozen A/B/F contracts.
+ */
+export interface QualificationPrivacyScope {
+  /** Legacy numeric leads.id from the validated score row (string form). */
+  readonly scoreLeadId: string;
+  /** Exact business scope asserted across identity + score. */
+  readonly businessId: number | null;
 }
 
 export class ProviderLeadNotFound extends Error {
@@ -88,8 +109,28 @@ export class ProviderScoreNotFound extends Error {
   }
 }
 
+/**
+ * A privacy row exists for the score-authoritative numeric lead but its
+ * business scope disagrees with the established identity+score chain —
+ * the record belongs to a different business context and must not govern
+ * this qualification. Fails closed as OWNERSHIP_MISMATCH.
+ */
+export class ProviderPrivacyScopeMismatch extends Error {
+  readonly kind = "privacy_scope_mismatch" as const;
+  constructor(leadId: string) {
+    super(`privacy record for lead ${leadId} is outside the established business scope`);
+    this.name = "ProviderPrivacyScopeMismatch";
+  }
+}
+
 export interface QualificationAuthorityDeps {
   readonly provider: QualificationAuthorityProvider;
+  /**
+   * Independent human-review authority (§10): the out-of-band challenge
+   * gateway. Required for review resolution paths; deterministic evaluation
+   * never consults it (no human in the autonomous path).
+   */
+  readonly challengeGateway?: ReviewChallengeGateway;
   /** Injected clock for determinism; defaults to wall time. */
   readonly now?: () => Date;
 }
@@ -134,15 +175,61 @@ async function fetchIdentity(
   return validateIdentityProjection(raw);
 }
 
-async function fetchPrivacy(deps: QualificationAuthorityDeps, leadId: string) {
+async function fetchPrivacy(
+  deps: QualificationAuthorityDeps,
+  scope: QualificationPrivacyScope,
+  now: Date
+) {
   try {
-    return resolvePrivacyGate(await deps.provider.getPrivacyState(leadId));
+    return resolvePrivacyGate(await deps.provider.getPrivacyState(scope), now);
   } catch (err) {
     if (err instanceof ProviderAuthorityUnavailable) {
       throw new QualificationError("QUALIFICATION_AUTHORITY_UNAVAILABLE", err.message);
     }
+    if (err instanceof ProviderPrivacyScopeMismatch) {
+      throw new QualificationOwnershipError("OWNERSHIP_MISMATCH", err.message);
+    }
     throw err;
   }
+}
+
+/**
+ * Re-fetches the decision's score through the seam for a privacy re-check
+ * (handoff projection / review resolution). The score row is the authority
+ * for the numeric privacy key; its recomputed content binding must match
+ * the stored decision, else the durable state drifted (tamper) and the
+ * privacy read must not proceed.
+ */
+async function fetchScorePrivacyScope(
+  deps: QualificationAuthorityDeps,
+  userId: number,
+  q: LeadQualificationRow
+): Promise<QualificationPrivacyScope> {
+  let rawScore: unknown;
+  try {
+    rawScore = await deps.provider.getScorePayload(q.leadScoreId);
+  } catch (err) {
+    if (err instanceof ProviderScoreNotFound) {
+      throw new QualificationInputError("SCORE_NOT_FOUND", `score ${q.leadScoreId} not found`);
+    }
+    if (err instanceof ProviderAuthorityUnavailable) {
+      throw new QualificationError(
+        "QUALIFICATION_AUTHORITY_UNAVAILABLE",
+        `qualification authority unavailable: ${err.message}`
+      );
+    }
+    throw err;
+  }
+  const score = validateScorePayload(rawScore);
+  if (score.userId !== userId || score.scoreContentHash !== q.scoreContentHash) {
+    // Cross-tenant scores and drifted score content are indistinguishable
+    // from absent/tampered ones — the privacy chain cannot be established.
+    throw new QualificationTamperError(
+      "SCORE_TAMPERED",
+      `score ${q.leadScoreId} no longer matches the stored decision binding; refusing privacy re-check.`
+    );
+  }
+  return { scoreLeadId: score.leadId, businessId: score.businessId };
 }
 
 /**
@@ -263,8 +350,18 @@ export async function evaluateQualificationForLead(
     );
   }
 
-  // (7) Privacy gate — governed state only; an absent row degrades to ACTIVE.
-  const privacy = await fetchPrivacy(deps, identity.leadId);
+  // (7) Privacy gate — established through the authoritative chain
+  //     identity (lid1, exact tenant/business scope) ←validated score→
+  //     numeric leads.id → R6-F state. Never keyed by the lid1 id (the F
+  //     table is numeric-keyed) and never inferred from a bare numeric id —
+  //     the numeric key arrives only inside the re-validated score binding.
+  //     An absent privacy row for the authoritative lead degrades to ACTIVE
+  //     (R6-F §5); an unavailable table or unestablished chain fails closed.
+  const privacy = await fetchPrivacy(
+    deps,
+    { scoreLeadId: score.leadId, businessId: businessScopes[0] ?? null },
+    now
+  );
 
   // (8)+(9) Deterministic snapshot + rule-first decision. No model in the path.
   const { snapshot, snapshotHash, entries } = buildEvidenceSnapshot({
@@ -442,25 +539,143 @@ export async function getHandoffProjectionForUser(
   const q = await getQualification(input.userId, input.qualificationId, executor);
   const latest = await getLatestQualification(input.userId, q.leadId, executor);
   const review = await getReviewByQualification(input.userId, q.qualificationId, executor);
-  const privacy = await fetchPrivacy(deps, q.leadId);
+  const now = resolveNow(deps);
+  // Privacy is re-established through the authoritative chain at read time
+  // (never from cached decision state): the score row is re-validated, its
+  // content binding must match the stored decision, and the F state is read
+  // for that score-authoritative numeric lead in the exact business scope.
+  const privacyScope = await fetchScorePrivacyScope(deps, input.userId, q);
+  const privacy = await fetchPrivacy(deps, privacyScope, now);
   return buildHandoffProjection(
     q,
     review,
     privacy,
     latest?.qualificationId === input.qualificationId,
-    resolveNow(deps)
+    now
   );
 }
 
-// ─── Governed review resolution (contract §10) ───
+// ─── Governed review resolution (contract §10, independent human authority) ───
 
 export interface ResolveQualificationReviewInput {
   readonly userId: number;
   readonly reviewId: string;
   readonly outcome: string;
   readonly reason: string;
+  /** Out-of-band challenge issued for exactly this review (request step). */
+  readonly challengeToken: string;
+  /** 6-digit code delivered to the reviewer's mailbox only. */
+  readonly code: string;
 }
 
+export interface RequestReviewResolutionInput {
+  readonly userId: number;
+  readonly reviewId: string;
+  readonly req: Request;
+}
+
+/**
+ * Preconditions shared by requesting an authorization and resolving a
+ * review: the review is pending, its bound decision still exists and
+ * matches, the decision is still the lead's current, unexpired decision,
+ * and privacy currently permits resolution. Anything drifted fails closed
+ * before any challenge is issued or consumed.
+ */
+async function assertReviewResolutionPreconditions(
+  review: LeadQualificationReviewRow,
+  deps: QualificationAuthorityDeps,
+  executor: QualificationStoreExecutor
+): Promise<{ q: LeadQualificationRow; now: Date }> {
+  // The bound qualification must still exist for this tenant.
+  let q: LeadQualificationRow;
+  try {
+    q = await getQualification(review.userId, review.qualificationId, executor);
+  } catch (err) {
+    if (err instanceof QualificationInputError && err.code === "QUALIFICATION_NOT_FOUND") {
+      throw new QualificationStateConflictError(
+        "REVIEW_STALE_BINDING",
+        `bound qualification ${review.qualificationId} no longer exists; review is stale`
+      );
+    }
+    throw err;
+  }
+  assertReviewDecisionBinding(review, q);
+
+  const now = resolveNow(deps);
+  const latest = await getLatestQualification(review.userId, q.leadId, executor);
+  if (latest?.qualificationId !== q.qualificationId || now.getTime() > Date.parse(q.validUntil)) {
+    throw new QualificationStateConflictError(
+      "REVIEW_STALE_BINDING",
+      "review references a superseded or expired qualification"
+    );
+  }
+  const privacyScope = await fetchScorePrivacyScope(deps, review.userId, q);
+  const privacy = await fetchPrivacy(deps, privacyScope, now);
+  if (!privacy.actionable) {
+    throw new QualificationStateConflictError("REVIEW_STALE_BINDING", "privacy blocks review resolution");
+  }
+  return { q, now };
+}
+
+function requireChallengeGateway(deps: QualificationAuthorityDeps): ReviewChallengeGateway {
+  if (!deps.challengeGateway) {
+    // Server wiring defect — fail closed rather than resolving without
+    // independent human proof.
+    throw new QualificationError(
+      "REVIEW_AUTHORIZATION_REQUIRED",
+      "review challenge gateway is not configured; refusing review action"
+    );
+  }
+  return deps.challengeGateway;
+}
+
+/**
+ * Issues the independent human-review challenge for a pending review. The
+ * review must currently be resolvable (same preconditions as resolution) so
+ * a code is never issued for a dead review; the returned challengeToken is
+ * bound to this exact review and presented with the emailed code at
+ * resolveReview. The code itself travels only to the reviewer's mailbox —
+ * it is never returned by any API.
+ */
+export async function requestReviewResolution(
+  input: RequestReviewResolutionInput,
+  deps: QualificationAuthorityDeps,
+  executor: QualificationStoreExecutor
+): Promise<LeadQualificationReviewRow> {
+  const review = await getReview(input.userId, input.reviewId, executor);
+  assertReviewResolvable(review);
+  await assertReviewResolutionPreconditions(review, deps, executor);
+  const gateway = requireChallengeGateway(deps);
+  const challenge = await gateway.createAndSend({
+    userId: input.userId,
+    reviewId: input.reviewId,
+    req: input.req,
+  });
+  const now = resolveNow(deps);
+  return updateReviewChallengeRequest(
+    input.userId,
+    input.reviewId,
+    review.version,
+    {
+      challengeToken: challenge.challengeToken,
+      expiresAt: challenge.expiresAt,
+      requestedAt: now.toISOString(),
+    },
+    executor
+  );
+}
+
+/**
+ * Governed review resolution with independent human authentication. A bare
+ * verified tenant session can never resolve a review: the resolver must
+ * present the review-bound challenge token plus the 6-digit code that was
+ * emailed out of band. The gateway verifies and durably consumes the
+ * challenge (single use, expiry, attempt limits); the service then asserts
+ * the challenge was issued to this exact user for this exact review before
+ * the optimistic-CAS resolution commits. Failure modes are fail-closed:
+ * absent gateway, wrong/foreign review binding, or a challenge the caller
+ * cannot complete.
+ */
 export async function resolveQualificationReview(
   input: ResolveQualificationReviewInput,
   deps: QualificationAuthorityDeps,
@@ -478,37 +693,49 @@ export async function resolveQualificationReview(
       "resolution reason must be a non-empty string of at most 500 chars"
     );
   }
+  if (
+    typeof input.challengeToken !== "string" ||
+    input.challengeToken.length === 0 ||
+    typeof input.code !== "string" ||
+    input.code.length === 0
+  ) {
+    throw new QualificationValidationError(
+      "REVIEW_AUTHORIZATION_REQUIRED",
+      "review resolution requires an out-of-band human-review challenge; none supplied"
+    );
+  }
 
   const review = await getReview(input.userId, input.reviewId, executor);
   assertReviewResolvable(review);
 
-  // The bound qualification must still exist for this tenant.
-  let q: LeadQualificationRow;
-  try {
-    q = await getQualification(input.userId, review.qualificationId, executor);
-  } catch (err) {
-    if (err instanceof QualificationInputError && err.code === "QUALIFICATION_NOT_FOUND") {
-      throw new QualificationStateConflictError(
-        "REVIEW_STALE_BINDING",
-        `bound qualification ${review.qualificationId} no longer exists; review is stale`
-      );
-    }
-    throw err;
-  }
-  assertReviewDecisionBinding(review, q);
+  // Full stale-state checks before any challenge is consumed: superseded,
+  // expired, drifted or privacy-blocked reviews reject without burning the
+  // reviewer's code.
+  const { q, now } = await assertReviewResolutionPreconditions(review, deps, executor);
 
-  const now = resolveNow(deps);
-  const latest = await getLatestQualification(input.userId, q.leadId, executor);
-  if (latest?.qualificationId !== q.qualificationId || now.getTime() > Date.parse(q.validUntil)) {
-    throw new QualificationStateConflictError(
-      "REVIEW_STALE_BINDING",
-      "review references a superseded or expired qualification"
+  // The presented challenge must be the one bound to this review. This is a
+  // non-destructive check; the durable single-use consumption happens in
+  // the gateway next.
+  if (review.pendingChallengeToken !== input.challengeToken) {
+    throw new QualificationOwnershipError(
+      "REVIEW_AUTHORIZATION_BINDING_MISMATCH",
+      "challenge is not bound to this review (or no authorization was requested); refusing resolution"
     );
   }
-  const privacy = await fetchPrivacy(deps, q.leadId);
-  if (!privacy.actionable) {
-    throw new QualificationStateConflictError("REVIEW_STALE_BINDING", "privacy blocks review resolution");
+  const gateway = requireChallengeGateway(deps);
+  const verified = await gateway.verify({
+    challengeToken: input.challengeToken,
+    code: input.code,
+  });
+  // The human who completed the out-of-band challenge must be the session's
+  // own tenant user — never a different principal, never client-asserted.
+  if (verified.userId !== input.userId) {
+    throw new QualificationOwnershipError(
+      "REVIEW_AUTHORIZATION_BINDING_MISMATCH",
+      "challenge was issued to a different actor; refusing cross-actor review resolution"
+    );
   }
+
   const resolvedAt = now.toISOString();
   const updated = await updateReviewResolution(
     input.userId,
@@ -540,6 +767,12 @@ export async function resolveQualificationReview(
       qualificationPolicyVersion: q.qualificationPolicyVersion,
       engineVersion: q.engineVersion,
       resolvedBy: input.userId,
+      // Independent human-review proof, no secrets: the out-of-band
+      // challenge was verified and durably consumed by the gateway. Key is
+      // sanitizer-safe (the audit ledger strips metadata keys containing
+      // "authorization"/"token").
+      humanReviewProof: "out_of_band_email_challenge",
+      reviewAuthorizedAt: verified.consumedAt,
     },
   });
   await persistAuditEvent(event, asAuditExecutor(executor));

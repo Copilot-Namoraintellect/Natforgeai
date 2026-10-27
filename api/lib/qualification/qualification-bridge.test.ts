@@ -8,6 +8,7 @@ import {
 } from "./qualification-bridge";
 import {
   ProviderLeadNotFound,
+  ProviderPrivacyScopeMismatch,
   ProviderScoreNotFound,
 } from "./qualification-service";
 import {
@@ -274,7 +275,7 @@ describe("createQualificationBridgeProvider — availability guard", () => {
       },
     };
     const provider = createQualificationBridgeProvider(counting as never, 7);
-    await provider.getPrivacyState("123456");
+    await provider.getPrivacyState({ scoreLeadId: "123456", businessId: null });
     await provider.getScorePayload(SCORE_ID);
     expect(executeCalls).toBe(1);
   });
@@ -284,12 +285,16 @@ describe("createQualificationBridgeProvider — availability guard", () => {
       makeFakeDb({}, ALL_TABLES.filter((t) => t !== "lead_privacy_states")) as never,
       7
     );
-    await expect(provider.getPrivacyState(LEAD_ID)).rejects.toBeInstanceOf(ProviderAuthorityUnavailable);
+    await expect(
+      provider.getPrivacyState({ scoreLeadId: "123456", businessId: null })
+    ).rejects.toBeInstanceOf(ProviderAuthorityUnavailable);
   });
 
   it("fails closed rather than querying a numeric privacy id with an unmapped lid1 identity", async () => {
     const provider = createQualificationBridgeProvider(makeFakeDb({}, ALL_TABLES) as never, 7);
-    await expect(provider.getPrivacyState(LEAD_ID)).rejects.toBeInstanceOf(ProviderAuthorityUnavailable);
+    await expect(
+      provider.getPrivacyState({ scoreLeadId: LEAD_ID, businessId: 3 })
+    ).rejects.toBeInstanceOf(ProviderAuthorityUnavailable);
   });
 });
 
@@ -389,7 +394,36 @@ describe("createQualificationBridgeProvider — score payload", () => {
       ],
     };
     const provider = createQualificationBridgeProvider(makeFakeDb(seed, ALL_TABLES) as never, 7);
-    expect(await provider.getPrivacyState("123456")).toEqual({ state: "SUPPRESSED" });
+    expect(await provider.getPrivacyState({ scoreLeadId: "123456", businessId: 3 })).toEqual({
+      state: "SUPPRESSED",
+      retentionDeadlineAt: null,
+      updatedAt: "2026-06-25T10:00:00.000Z",
+    });
+  });
+
+  it("throws ProviderPrivacyScopeMismatch when the privacy row belongs to a different business scope", async () => {
+    const seed: Record<string, Row[]> = {
+      lead_privacy_states: [
+        {
+          id: 1,
+          leadId: 123456,
+          userId: 7,
+          businessId: 99,
+          privacyState: "SUPPRESSED",
+          previousState: "ACTIVE",
+          reason: "opt-out",
+          retentionDeadlineAt: null,
+          source: "operator",
+          actorUserId: 7,
+          createdAt: new Date("2026-06-25T10:00:00.000Z"),
+          updatedAt: new Date("2026-06-25T10:00:00.000Z"),
+        },
+      ],
+    };
+    const provider = createQualificationBridgeProvider(makeFakeDb(seed, ALL_TABLES) as never, 7);
+    await expect(
+      provider.getPrivacyState({ scoreLeadId: "123456", businessId: 3 })
+    ).rejects.toBeInstanceOf(ProviderPrivacyScopeMismatch);
   });
 });
 
@@ -449,6 +483,8 @@ describe("bindQualificationStoreExecutor", () => {
         resolvedBy: null,
         resolvedAt: null,
         resolutionReason: null,
+        pendingChallengeToken: null,
+        challengeExpiresAt: null,
         version: 1,
         createdAt: NOW,
         updatedAt: NOW,

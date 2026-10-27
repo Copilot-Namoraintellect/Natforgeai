@@ -446,6 +446,10 @@ export const QUALIFICATION_ERROR_CODE_VALUES = [
   "REVIEW_ALREADY_RESOLVED",
   "REVIEW_STALE_BINDING",
   "REVIEW_BINDING_INVALID",
+  // Independent human-review authority (§10): resolution without a valid,
+  // single-use, review-bound out-of-band challenge fails closed.
+  "REVIEW_AUTHORIZATION_REQUIRED",
+  "REVIEW_AUTHORIZATION_BINDING_MISMATCH",
   "INVALID_DECISION",
   "INVALID_REASON_CODE",
   "INVALID_CONFIDENCE",
@@ -541,8 +545,21 @@ export const ResolveQualificationReviewInputSchema = z.strictObject({
   reviewId: z.string().regex(REVIEW_ID_PATTERN),
   outcome: z.enum(REVIEW_OUTCOME_VALUES),
   reason: z.string().min(1).max(500),
+  /**
+   * Independent human-review proof (§10): the challenge token issued by
+   * requestReviewResolution for exactly this review, plus the 6-digit code
+   * delivered out of band. A bare tenant session can never supply these —
+   * the code only exists in the reviewer's mailbox.
+   */
+  challengeToken: z.string().min(32).max(255),
+  code: z.string().regex(/^\d{6}$/),
 });
 export type ResolveQualificationReviewInput = z.infer<typeof ResolveQualificationReviewInputSchema>;
+
+export const RequestReviewResolutionInputSchema = z.strictObject({
+  reviewId: z.string().regex(REVIEW_ID_PATTERN),
+});
+export type RequestReviewResolutionInput = z.infer<typeof RequestReviewResolutionInputSchema>;
 
 export const GetQualificationHandoffInputSchema = z.strictObject({
   qualificationId: z.string().regex(QUALIFICATION_ID_PATTERN),

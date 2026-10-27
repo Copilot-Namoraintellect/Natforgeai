@@ -102,13 +102,19 @@ export function leadPrivacyGateFor(state: string): NormalizedPrivacyState {
 /**
  * Resolves the untrusted privacy payload to a governed gate outcome.
  *
- * - null/undefined (row absent) ⇒ ACTIVE/actionable — the honest degrade.
+ * - null/undefined (row absent) ⇒ ACTIVE/actionable — the honest degrade,
+ *   only legitimate once the bridge has established the authoritative
+ *   identity→score→numeric-key chain for this lead.
  * - A present-but-unknown state string ⇒ PRIVACY_STATE_INVALID (fail closed).
  * - An absent state is honored as ACTIVE only when the bridge explicitly
  *   reports the privacy row unavailable (available === false); otherwise the
  *   payload is structurally meaningless and fails closed.
+ * - RETENTION_PENDING whose retentionDeadlineAt has passed (clock supplied)
+ *   resolves to the RETENTION_EXPIRED gate: the lead must not silently
+ *   remain actionable past its deadline even before F's sweep transitions
+ *   the durable row (R6-F §5/§7).
  */
-export function resolvePrivacyGate(input: unknown): NormalizedPrivacyState {
+export function resolvePrivacyGate(input: unknown, now?: Date): NormalizedPrivacyState {
   if (input === null || input === undefined) {
     return Object.freeze({ state: "ACTIVE", actionable: true, blockedReason: null });
   }
@@ -121,7 +127,7 @@ export function resolvePrivacyGate(input: unknown): NormalizedPrivacyState {
     fail(`available must be a boolean when present, got ${String(input.available)}`);
   }
   // Bounded re-validation of the remaining governed fields.
-  requireNullableTimestamp(input.retentionDeadlineAt, "retentionDeadlineAt");
+  const retentionDeadlineAt = requireNullableTimestamp(input.retentionDeadlineAt, "retentionDeadlineAt");
   if (input.previousState !== undefined && input.previousState !== null) {
     if (typeof input.previousState !== "string" || !LEAD_PRIVACY_STATE_SET.has(input.previousState)) {
       fail(`previousState must be a known privacy state or null, got ${JSON.stringify(input.previousState)}`);
@@ -140,6 +146,14 @@ export function resolvePrivacyGate(input: unknown): NormalizedPrivacyState {
   }
   if (typeof state !== "string" || !LEAD_PRIVACY_STATE_SET.has(state)) {
     fail(`state must be one of ${LEAD_PRIVACY_STATE_VALUES.join(", ")}, got ${JSON.stringify(state)}`);
+  }
+  if (
+    state === "RETENTION_PENDING" &&
+    retentionDeadlineAt !== null &&
+    now !== undefined &&
+    now.getTime() > Date.parse(retentionDeadlineAt)
+  ) {
+    return Object.freeze({ state: "RETENTION_EXPIRED", actionable: false, blockedReason: "RETENTION_EXPIRED" });
   }
   return leadPrivacyGateFor(state);
 }
@@ -160,14 +174,28 @@ export interface LeadPrivacyEvidenceRow {
 
 /**
  * Pure adapter from a lead_privacy_states-shaped row to the gate input
- * ({state: privacyState}). null (row absent) ⇒ null — the caller then
- * resolves the null gate, which degrades to ACTIVE. State validity itself is
- * enforced by resolvePrivacyGate, never here.
+ * ({state, retentionDeadlineAt, updatedAt}). null (row absent) ⇒ null —
+ * the caller then resolves the null gate, which degrades to ACTIVE once the
+ * authoritative chain is established. State validity itself is enforced by
+ * resolvePrivacyGate, never here.
  */
-export function leadPrivacyEvidenceFromRow(row: unknown): { state: unknown } | null {
+export function leadPrivacyEvidenceFromRow(row: unknown): Record<string, unknown> | null {
   if (row === null || row === undefined) return null;
   if (!isPlainObject(row)) {
     fail("privacy evidence row must be a plain object or null");
   }
-  return { state: row.privacyState };
+  const evidence: Record<string, unknown> = { state: row.privacyState };
+  if (row.retentionDeadlineAt !== undefined) {
+    evidence.retentionDeadlineAt = toIsoOrNull(row.retentionDeadlineAt);
+  }
+  if (row.updatedAt !== undefined) {
+    evidence.updatedAt = toIsoOrNull(row.updatedAt);
+  }
+  return evidence;
+}
+
+function toIsoOrNull(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
 }

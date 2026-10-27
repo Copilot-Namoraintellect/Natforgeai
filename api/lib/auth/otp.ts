@@ -7,7 +7,16 @@ import { users, twoFactorChallenges, type User } from "@db/schema";
 import { sendTwoFactorCodeEmail } from "../email";
 import { logInfo, logError } from "../logger";
 
-export type ChallengePurpose = "email_verification" | "login_2fa";
+export type ChallengePurpose = "email_verification" | "login_2fa" | "review_authorization";
+
+/**
+ * Human-presence purposes (step-up / out-of-band authorization). Challenges
+ * created for these purposes attest an interactive human action; callers
+ * must never mint such challenges from model/agent output alone.
+ */
+export const HUMAN_PRESENCE_PURPOSES: ReadonlySet<ChallengePurpose> = new Set([
+  "review_authorization",
+]);
 
 const CHALLENGE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -71,7 +80,7 @@ export async function createAndSendChallenge(
     purpose: ChallengePurpose;
     ctx: { req: Request };
   }
-): Promise<{ challengeToken: string; info: SentMessageInfo }> {
+): Promise<{ challengeToken: string; info: SentMessageInfo; expiresAt: Date }> {
   const otpCode = generateVerificationCode();
   const otpHash = await hashVerificationCode(otpCode);
   const challengeToken = randomBytes(32).toString("hex");
@@ -121,7 +130,7 @@ export async function createAndSendChallenge(
     response: typeof info.response === "string" ? info.response : undefined,
   });
 
-  return { challengeToken, info };
+  return { challengeToken, info, expiresAt };
 }
 
 export async function verifyChallenge(

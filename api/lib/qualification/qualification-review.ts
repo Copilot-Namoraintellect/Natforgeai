@@ -70,6 +70,8 @@ export function buildReviewForDecision(q: LeadQualificationRow): LeadQualificati
     resolvedBy: null,
     resolvedAt: null,
     resolutionReason: null,
+    pendingChallengeToken: null,
+    challengeExpiresAt: null,
     version: 1,
     createdAt: q.evaluatedAt,
     updatedAt: q.evaluatedAt,

@@ -11,10 +11,15 @@ import {
   getQualificationHistory,
   listQualificationReviews,
   ProviderLeadNotFound,
+  ProviderPrivacyScopeMismatch,
   ProviderScoreNotFound,
+  requestReviewResolution,
   resolveQualificationReview,
   type QualificationAuthorityProvider,
+  type QualificationPrivacyScope,
 } from "./qualification-service";
+import { ProviderAuthorityUnavailable } from "./qualification-bridge";
+import type { ReviewChallengeGateway } from "./qualification-review-authority";
 import {
   type QualificationStoreExecutor,
   type StoreOrderTerm,
@@ -68,7 +73,7 @@ function identityProjection(overrides: Record<string, unknown> = {}): Record<str
   };
 }
 
-function baseScore(leadId = LEAD_ID): Record<string, unknown> {
+function baseScore(leadId: string | number = 123456): Record<string, unknown> {
   return {
     leadScoreId: SCORE_ID,
     leadId,
@@ -106,7 +111,7 @@ function withContentHash(payload: Record<string, unknown>): Record<string, unkno
       featureVersion: payload.featureVersion as string,
       scoreContractVersion: payload.scoreContractVersion as string,
       leadIdentityVersion: payload.leadIdentityVersion as string,
-      leadId: payload.leadId as string,
+      leadId: String(payload.leadId),
       businessId: payload.businessId as number | null,
       overallScore: payload.overallScore as number,
       scoreBand: payload.scoreBand as string,
@@ -137,6 +142,7 @@ class FakeProvider implements QualificationAuthorityProvider {
   readonly identities = new Map<string, unknown>();
   readonly scores = new Map<string, unknown>();
   readonly privacy = new Map<string, unknown>();
+  privacyUnavailable = false;
 
   async getIdentityProjection(leadId: string): Promise<unknown> {
     if (!this.identities.has(leadId)) throw new ProviderLeadNotFound(leadId);
@@ -148,8 +154,20 @@ class FakeProvider implements QualificationAuthorityProvider {
     return this.scores.get(leadScoreId);
   }
 
-  async getPrivacyState(leadId: string): Promise<unknown> {
-    return this.privacy.has(leadId) ? this.privacy.get(leadId) : null;
+  async getPrivacyState(scope: QualificationPrivacyScope): Promise<unknown> {
+    if (this.privacyUnavailable) throw new ProviderAuthorityUnavailable(["lead_privacy_states"]);
+    if (!/^[1-9]\d*$/.test(scope.scoreLeadId)) {
+      throw new ProviderAuthorityUnavailable(["lead_privacy_states"]);
+    }
+    if (!this.privacy.has(scope.scoreLeadId)) return null;
+    const row = this.privacy.get(scope.scoreLeadId);
+    if (row && typeof row === "object" && !Array.isArray(row)) {
+      const businessId = (row as { businessId?: unknown }).businessId;
+      if (typeof businessId === "number" && scope.businessId !== null && businessId !== scope.businessId) {
+        throw new ProviderPrivacyScopeMismatch(scope.scoreLeadId);
+      }
+    }
+    return row;
   }
 }
 
@@ -160,7 +178,44 @@ function makeProvider(identityOverrides: Record<string, unknown> = {}, scoreOver
   return provider;
 }
 
-const deps = (provider: QualificationAuthorityProvider) => ({ provider, now: () => new Date(NOW) });
+const deps = (provider: QualificationAuthorityProvider, challengeGateway?: ReviewChallengeGateway) => ({
+  provider,
+  ...(challengeGateway ? { challengeGateway } : {}),
+  now: () => new Date(NOW),
+});
+
+class FakeChallengeGateway implements ReviewChallengeGateway {
+  readonly issued = new Map<string, { code: string; userId: number; consumed: boolean }>();
+  constructor(private readonly fixedCode = "123456") {}
+
+  async createAndSend(input: { userId: number; reviewId: string; req: Request }) {
+    const challengeToken = `tok-${this.issued.size}-${input.reviewId.slice(0, 12)}`;
+    this.issued.set(challengeToken, { code: this.fixedCode, userId: input.userId, consumed: false });
+    return { challengeToken, expiresAt: new Date(Date.parse(NOW_ISO) + 10 * 60 * 1000).toISOString() };
+  }
+
+  async verify(input: { challengeToken: string; code: string }) {
+    const rec = this.issued.get(input.challengeToken);
+    if (!rec || rec.consumed || input.code !== rec.code) throw new Error("Invalid or expired verification code");
+    rec.consumed = true;
+    return { userId: rec.userId, consumedAt: NOW_ISO };
+  }
+}
+
+/** Authorizes a pending review, returning the review row with its bound challenge token. */
+async function authorizeReview(
+  provider: QualificationAuthorityProvider,
+  executor: ReturnType<typeof makeFakeDb>["executor"],
+  reviewId: string,
+  gateway = new FakeChallengeGateway()
+) {
+  const bound = await requestReviewResolution(
+    { userId: USER_ID, reviewId, req: {} as Request },
+    deps(provider, gateway),
+    executor
+  );
+  return { gateway, challengeToken: bound.pendingChallengeToken as string };
+}
 
 // ─── Fake executor (R6-C tables + audit_events ledger) ───
 
@@ -620,7 +675,7 @@ describe("evaluateQualificationForLead — merged identity chains", () => {
     const provider = new FakeProvider();
     provider.identities.set(LEAD_ID, identityProjection({ identityStatus: "merged", canonicalLeadId: OTHER_LEAD_ID }));
     provider.identities.set(OTHER_LEAD_ID, identityProjection({ leadId: OTHER_LEAD_ID }));
-    provider.scores.set(SCORE_ID, scorePayload({ leadId: OTHER_LEAD_ID }));
+    provider.scores.set(SCORE_ID, scorePayload({ leadId: 654321 }));
 
     const { executor, state } = makeFakeDb();
     const result = await evaluateQualificationForLead(evaluateInput(), deps(provider), executor);
@@ -727,9 +782,17 @@ describe("getHandoffProjectionForUser", () => {
     expect(pending.review?.status).toBe("pending");
 
     const [review] = await listQualificationReviews({ userId: USER_ID, leadId: LEAD_ID }, executor);
+    const { gateway, challengeToken } = await authorizeReview(provider, executor, review.reviewId);
     await resolveQualificationReview(
-      { userId: USER_ID, reviewId: review.reviewId, outcome: "progress_authorized", reason: "verified by ops" },
-      deps(provider),
+      {
+        userId: USER_ID,
+        reviewId: review.reviewId,
+        outcome: "progress_authorized",
+        reason: "verified by ops",
+        challengeToken,
+        code: "123456",
+      },
+      deps(provider, gateway),
       executor
     );
 
@@ -747,15 +810,20 @@ describe("getHandoffProjectionForUser", () => {
     });
     const provider = makeProvider();
     const { executor } = makeFakeDb();
-    const v1 = await evaluateQualificationForLead(evaluateInput(), deps(provider), executor);
+    // Re-evaluation must land later than v1, else the latest-decision tiebreak
+    // (evaluatedAt desc, qualificationId desc) decides which row is current.
+    let nowMs = NOW.getTime();
+    const clockedDeps = { provider, now: () => new Date(nowMs) };
+    const v1 = await evaluateQualificationForLead(evaluateInput(), clockedDeps, executor);
+    nowMs += HOUR_MS;
     await evaluateQualificationForLead(
       evaluateInput({ policyVersion: "lead-qualification-policy/v3" }),
-      deps(provider),
+      clockedDeps,
       executor
     );
     const projection = await getHandoffProjectionForUser(
       { userId: USER_ID, qualificationId: v1.qualification.qualificationId },
-      deps(provider),
+      clockedDeps,
       executor
     );
     expect(projection.mayProgress).toBe(false);
@@ -764,7 +832,7 @@ describe("getHandoffProjectionForUser", () => {
 
   it("blocks progression for a suppressed lead with PRIVACY_BLOCKED", async () => {
     const provider = makeProvider();
-    provider.privacy.set(LEAD_ID, { state: "SUPPRESSED" });
+    provider.privacy.set("123456", { state: "SUPPRESSED" });
     const { executor } = makeFakeDb();
     const result = await evaluateQualificationForLead(evaluateInput(), deps(provider), executor);
     expect(result.qualification.decision).toBe("BLOCKED");
@@ -804,16 +872,28 @@ describe("resolveQualificationReview", () => {
 
   it("resolves a pending review once and emits exactly one audit event", async () => {
     const { provider, executor, state, review } = await evaluatedReview();
+    const { gateway, challengeToken } = await authorizeReview(provider, executor, review.reviewId);
+    expect(gateway.issued.has(challengeToken)).toBe(true);
+
     const updated = await resolveQualificationReview(
-      { userId: USER_ID, reviewId: review.reviewId, outcome: "progress_authorized", reason: "verified by ops" },
-      deps(provider),
+      {
+        userId: USER_ID,
+        reviewId: review.reviewId,
+        outcome: "progress_authorized",
+        reason: "verified by ops",
+        challengeToken,
+        code: "123456",
+      },
+      deps(provider, gateway),
       executor
     );
     expect(updated.status).toBe("progress_authorized");
-    expect(updated.version).toBe(2);
+    expect(updated.version).toBe(3); // authorize bumped 1→2, resolution 2→3
     expect(updated.resolvedBy).toBe(USER_ID);
     expect(updated.resolvedAt).toBe(NOW_ISO);
     expect(updated.resolutionReason).toBe("verified by ops");
+    expect(updated.pendingChallengeToken).toBeNull();
+    expect(updated.challengeExpiresAt).toBeNull();
 
     expect(state.insertedAudit).toHaveLength(2);
     const event = state.insertedAudit[1];
@@ -826,20 +906,45 @@ describe("resolveQualificationReview", () => {
       outcome: "progress_authorized",
       decision: "REVIEW_REQUIRED",
       resolvedBy: USER_ID,
+      reviewAuthorizedAt: NOW_ISO,
     });
+    // The service writes humanReviewProof: "out_of_band_email_challenge" under
+    // a sanitizer-safe key (the shared audit sanitizer strips any metadata key
+    // matching /authorization|token/ before persistence); no challenge secret
+    // reaches the ledger.
+    expect(event.metadata).toMatchObject({
+      humanReviewProof: "out_of_band_email_challenge",
+    });
+    expect(event.metadata).not.toHaveProperty("challengeToken");
+    expect(event.metadata).not.toHaveProperty("code");
   });
 
   it("a second resolution fails closed with REVIEW_ALREADY_RESOLVED", async () => {
     const { provider, executor, state, review } = await evaluatedReview();
+    const { gateway, challengeToken } = await authorizeReview(provider, executor, review.reviewId);
     await resolveQualificationReview(
-      { userId: USER_ID, reviewId: review.reviewId, outcome: "progress_authorized", reason: "first" },
-      deps(provider),
+      {
+        userId: USER_ID,
+        reviewId: review.reviewId,
+        outcome: "progress_authorized",
+        reason: "first",
+        challengeToken,
+        code: "123456",
+      },
+      deps(provider, gateway),
       executor
     );
     await expect(
       resolveQualificationReview(
-        { userId: USER_ID, reviewId: review.reviewId, outcome: "progression_rejected", reason: "second" },
-        deps(provider),
+        {
+          userId: USER_ID,
+          reviewId: review.reviewId,
+          outcome: "progression_rejected",
+          reason: "second",
+          challengeToken,
+          code: "123456",
+        },
+        deps(provider, gateway),
         executor
       )
     ).rejects.toMatchObject({
@@ -851,11 +956,19 @@ describe("resolveQualificationReview", () => {
 
   it("fails closed when the bound qualification drifted after review creation", async () => {
     const { provider, executor, state, review } = await evaluatedReview();
+    const { gateway, challengeToken } = await authorizeReview(provider, executor, review.reviewId);
     state.qualifications[0].decision = "QUALIFIED"; // tamper with the durable decision
     await expect(
       resolveQualificationReview(
-        { userId: USER_ID, reviewId: review.reviewId, outcome: "progress_authorized", reason: "too late" },
-        deps(provider),
+        {
+          userId: USER_ID,
+          reviewId: review.reviewId,
+          outcome: "progress_authorized",
+          reason: "too late",
+          challengeToken,
+          code: "123456",
+        },
+        deps(provider, gateway),
         executor
       )
     ).rejects.toMatchObject({
@@ -869,14 +982,28 @@ describe("resolveQualificationReview", () => {
     const { provider, executor, review } = await evaluatedReview();
     await expect(
       resolveQualificationReview(
-        { userId: USER_ID, reviewId: review.reviewId, outcome: "force_qualified", reason: "x" },
+        {
+          userId: USER_ID,
+          reviewId: review.reviewId,
+          outcome: "force_qualified",
+          reason: "x",
+          challengeToken: "x".repeat(32),
+          code: "123456",
+        },
         deps(provider),
         executor
       )
     ).rejects.toMatchObject({ name: "QualificationValidationError", code: "INVALID_DECISION" });
     await expect(
       resolveQualificationReview(
-        { userId: USER_ID, reviewId: review.reviewId, outcome: "progress_authorized", reason: "" },
+        {
+          userId: USER_ID,
+          reviewId: review.reviewId,
+          outcome: "progress_authorized",
+          reason: "",
+          challengeToken: "x".repeat(32),
+          code: "123456",
+        },
         deps(provider),
         executor
       )
@@ -887,11 +1014,130 @@ describe("resolveQualificationReview", () => {
     const { provider, executor, review } = await evaluatedReview();
     await expect(
       resolveQualificationReview(
-        { userId: 99, reviewId: review.reviewId, outcome: "progress_authorized", reason: "x" },
+        {
+          userId: 99,
+          reviewId: review.reviewId,
+          outcome: "progress_authorized",
+          reason: "x",
+          challengeToken: "x".repeat(32),
+          code: "123456",
+        },
         deps(provider),
         executor
       )
     ).rejects.toMatchObject({ name: "QualificationInputError", code: "REVIEW_NOT_FOUND" });
+  });
+
+  it("rejects resolution when no authorization was ever requested", async () => {
+    const { provider, executor, state, review } = await evaluatedReview();
+    await expect(
+      resolveQualificationReview(
+        {
+          userId: USER_ID,
+          reviewId: review.reviewId,
+          outcome: "progress_authorized",
+          reason: "no challenge requested",
+          challengeToken: "x".repeat(32),
+          code: "123456",
+        },
+        deps(provider, new FakeChallengeGateway()),
+        executor
+      )
+    ).rejects.toMatchObject({
+      name: "QualificationOwnershipError",
+      code: "REVIEW_AUTHORIZATION_BINDING_MISMATCH",
+    });
+    expect(state.insertedAudit).toHaveLength(1); // no audit for the unauthorized attempt
+  });
+
+  it("rejects a challenge token that was never issued for this review", async () => {
+    const { provider, executor, state, review } = await evaluatedReview();
+    const { gateway, challengeToken } = await authorizeReview(provider, executor, review.reviewId);
+    await expect(
+      resolveQualificationReview(
+        {
+          userId: USER_ID,
+          reviewId: review.reviewId,
+          outcome: "progress_authorized",
+          reason: "foreign token",
+          challengeToken: "z".repeat(32),
+          code: "123456",
+        },
+        deps(provider, gateway),
+        executor
+      )
+    ).rejects.toMatchObject({
+      name: "QualificationOwnershipError",
+      code: "REVIEW_AUTHORIZATION_BINDING_MISMATCH",
+    });
+    // The review is untouched: still pending with its original challenge binding, no audit.
+    const [stored] = await listQualificationReviews({ userId: USER_ID, leadId: LEAD_ID }, executor);
+    expect(stored.status).toBe("pending");
+    expect(stored.pendingChallengeToken).toBe(challengeToken);
+    expect(state.insertedAudit).toHaveLength(1);
+  });
+
+  it("rejects a valid bound challenge with a wrong code and leaves the review pending", async () => {
+    const { provider, executor, state, review } = await evaluatedReview();
+    const { gateway, challengeToken } = await authorizeReview(provider, executor, review.reviewId);
+    await expect(
+      resolveQualificationReview(
+        {
+          userId: USER_ID,
+          reviewId: review.reviewId,
+          outcome: "progress_authorized",
+          reason: "wrong code",
+          challengeToken,
+          code: "000000",
+        },
+        deps(provider, gateway),
+        executor
+      )
+    ).rejects.toThrow("Invalid or expired verification code");
+    const [stored] = await listQualificationReviews({ userId: USER_ID, leadId: LEAD_ID }, executor);
+    expect(stored.status).toBe("pending");
+    expect(stored.pendingChallengeToken).toBe(challengeToken);
+    expect(state.insertedAudit).toHaveLength(1);
+  });
+
+  it("a challenge bound to review A cannot resolve review B", async () => {
+    const provider = new FakeProvider();
+    provider.identities.set(LEAD_ID, identityProjection());
+    provider.identities.set(OTHER_LEAD_ID, identityProjection({ leadId: OTHER_LEAD_ID }));
+    provider.scores.set(SCORE_ID, scorePayload({ reasonCodes: ["CONTRADICTING_EVIDENCE"] }));
+    provider.scores.set(
+      OTHER_SCORE_ID,
+      scorePayload({ leadScoreId: OTHER_SCORE_ID, leadId: 654321, reasonCodes: ["CONTRADICTING_EVIDENCE"] })
+    );
+    const { executor, state } = makeFakeDb();
+    await evaluateQualificationForLead(evaluateInput(), deps(provider), executor);
+    await evaluateQualificationForLead(
+      evaluateInput({ leadId: OTHER_LEAD_ID, leadScoreId: OTHER_SCORE_ID }),
+      deps(provider),
+      executor
+    );
+    const [reviewA] = await listQualificationReviews({ userId: USER_ID, leadId: LEAD_ID }, executor);
+    const [reviewB] = await listQualificationReviews({ userId: USER_ID, leadId: OTHER_LEAD_ID }, executor);
+
+    const { gateway, challengeToken } = await authorizeReview(provider, executor, reviewA.reviewId);
+    await expect(
+      resolveQualificationReview(
+        {
+          userId: USER_ID,
+          reviewId: reviewB.reviewId,
+          outcome: "progress_authorized",
+          reason: "cross-review attempt",
+          challengeToken,
+          code: "123456",
+        },
+        deps(provider, gateway),
+        executor
+      )
+    ).rejects.toMatchObject({
+      name: "QualificationOwnershipError",
+      code: "REVIEW_AUTHORIZATION_BINDING_MISMATCH",
+    });
+    expect(state.insertedAudit).toHaveLength(2); // one per evaluation; the failed resolve emits none
   });
 });
 

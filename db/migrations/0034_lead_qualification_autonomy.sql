@@ -11,6 +11,8 @@ CREATE TABLE `lead_qualification_reviews` (
 	`resolvedBy` bigint unsigned,
 	`resolvedAt` varchar(32),
 	`resolutionReason` varchar(500),
+	`pendingChallengeToken` varchar(255),
+	`challengeExpiresAt` varchar(32),
 	`version` int NOT NULL DEFAULT 1,
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	`updatedAt` timestamp NOT NULL DEFAULT (now()),

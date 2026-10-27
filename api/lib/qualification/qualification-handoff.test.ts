@@ -66,6 +66,8 @@ function reviewRow(overrides: Partial<LeadQualificationReviewRow> = {}): LeadQua
     resolvedBy: null,
     resolvedAt: null,
     resolutionReason: null,
+    pendingChallengeToken: null,
+    challengeExpiresAt: null,
     version: 1,
     createdAt: NOW.toISOString(),
     updatedAt: NOW.toISOString(),

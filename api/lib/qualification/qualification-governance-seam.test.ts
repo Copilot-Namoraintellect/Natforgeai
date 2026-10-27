@@ -140,6 +140,35 @@ describe("resolvePrivacyGate", () => {
     });
     expect(gate).toEqual({ state: "SUPPRESSED", actionable: false, blockedReason: "PRIVACY_SUPPRESSED" });
   });
+
+  it("resolves RETENTION_PENDING with a past retentionDeadlineAt to the RETENTION_EXPIRED gate", () => {
+    const gate = resolvePrivacyGate(
+      { state: "RETENTION_PENDING", retentionDeadlineAt: "2026-06-01T00:00:00Z" },
+      new Date("2026-06-15T00:00:00Z")
+    );
+    expect(gate).toEqual({ state: "RETENTION_EXPIRED", actionable: false, blockedReason: "RETENTION_EXPIRED" });
+  });
+
+  it("keeps RETENTION_PENDING actionable when the retentionDeadlineAt is still in the future", () => {
+    const gate = resolvePrivacyGate(
+      { state: "RETENTION_PENDING", retentionDeadlineAt: "2027-01-01T00:00:00Z" },
+      new Date("2026-06-15T00:00:00Z")
+    );
+    expect(gate).toEqual({ state: "RETENTION_PENDING", actionable: true, blockedReason: null });
+  });
+
+  it("keeps RETENTION_PENDING actionable when no retentionDeadlineAt is present", () => {
+    const gate = resolvePrivacyGate({ state: "RETENTION_PENDING" }, new Date("2026-06-15T00:00:00Z"));
+    expect(gate).toEqual({ state: "RETENTION_PENDING", actionable: true, blockedReason: null });
+  });
+
+  it("keeps legacy actionable behavior when no clock is supplied, even with a past deadline", () => {
+    const gate = resolvePrivacyGate({
+      state: "RETENTION_PENDING",
+      retentionDeadlineAt: "2026-06-01T00:00:00Z",
+    });
+    expect(gate).toEqual({ state: "RETENTION_PENDING", actionable: true, blockedReason: null });
+  });
 });
 
 describe("leadPrivacyEvidenceFromRow", () => {
@@ -158,7 +187,7 @@ describe("leadPrivacyEvidenceFromRow", () => {
         createdAt: "2026-06-01T00:00:00Z",
         updatedAt: "2026-06-28T00:00:00Z",
       })
-    ).toEqual({ state: "SUPPRESSED" });
+    ).toEqual({ state: "SUPPRESSED", retentionDeadlineAt: null, updatedAt: "2026-06-28T00:00:00Z" });
   });
 
   it("returns null for an absent row", () => {
@@ -193,5 +222,29 @@ describe("leadPrivacyEvidenceFromRow", () => {
     expect(() => leadPrivacyEvidenceFromRow("SUPPRESSED")).toThrowError(
       expect.objectContaining({ code: "PRIVACY_STATE_INVALID" })
     );
+  });
+
+  it("passes retentionDeadlineAt and updatedAt through as ISO strings for Date values", () => {
+    const evidence = leadPrivacyEvidenceFromRow({
+      leadId: "lead-1",
+      userId: 7,
+      businessId: 3,
+      privacyState: "RETENTION_PENDING",
+      previousState: "ACTIVE",
+      reason: null,
+      retentionDeadlineAt: new Date("2026-06-01T00:00:00Z"),
+      source: null,
+      actorUserId: null,
+      createdAt: "2026-06-01T00:00:00Z",
+      updatedAt: new Date("2026-06-28T10:00:00Z"),
+    });
+    expect(evidence).toEqual({
+      state: "RETENTION_PENDING",
+      retentionDeadlineAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-28T10:00:00.000Z",
+    });
+    // Date-derived evidence composes with the clocked gate.
+    const gate = resolvePrivacyGate(evidence, new Date("2026-06-29T00:00:00Z"));
+    expect(gate).toEqual({ state: "RETENTION_EXPIRED", actionable: false, blockedReason: "RETENTION_EXPIRED" });
   });
 });

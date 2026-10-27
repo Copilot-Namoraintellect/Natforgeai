@@ -2372,6 +2372,12 @@ export const leadQualificationReviews = mysqlTable(
     resolvedBy: bigint("resolvedBy", { mode: "number", unsigned: true }),
     resolvedAt: varchar("resolvedAt", { length: 32 }),
     resolutionReason: varchar("resolutionReason", { length: 500 }),
+    // Independent human-review authority (§10 blocker closure): the
+    // outstanding out-of-band challenge bound to this review (issued by
+    // requestReviewResolution, cleared on resolution). Never authoritative
+    // on its own — the OTP challenge row is the durable single-use proof.
+    pendingChallengeToken: varchar("pendingChallengeToken", { length: 255 }),
+    challengeExpiresAt: varchar("challengeExpiresAt", { length: 32 }),
     version: int("version").notNull().default(1),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().notNull(),

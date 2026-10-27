@@ -132,7 +132,29 @@ describe("OTP service", () => {
       });
 
       expect(result.challengeToken).toBeTruthy();
+      expect(result.expiresAt).toBeInstanceOf(Date);
       expect(db.challenges).toHaveLength(1);
+      expect(db.challenges[0].purpose).toBe("email_verification");
+      expect(db.challenges[0].expiresAt).toBeInstanceOf(Date);
+      expect(sendTwoFactorCodeEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it("forwards the review_authorization purpose to the stored challenge", async () => {
+      const { createAndSendChallenge } = await import("./otp");
+      const db = createMockDb();
+
+      const result = await createAndSendChallenge(db as any, {
+        userId: 1,
+        email: "reviewer@example.com",
+        purpose: "review_authorization",
+        ctx: { req: new Request("http://localhost") },
+      });
+
+      expect(result.challengeToken).toBeTruthy();
+      expect(result.expiresAt).toBeInstanceOf(Date);
+      expect(db.challenges).toHaveLength(1);
+      expect(db.challenges[0].purpose).toBe("review_authorization");
+      expect(db.challenges[0].sentToEmail).toBe("reviewer@example.com");
       expect(sendTwoFactorCodeEmail).toHaveBeenCalledTimes(1);
     });
 
@@ -167,6 +189,33 @@ describe("OTP service", () => {
 
       expect(oldChallenge.consumedAt).toBeInstanceOf(Date);
       expect(db.challenges).toHaveLength(2);
+    });
+  });
+
+  describe("challenge purposes", () => {
+    it("includes review_authorization in HUMAN_PRESENCE_PURPOSES", async () => {
+      const { HUMAN_PRESENCE_PURPOSES } = await import("./otp");
+
+      expect(HUMAN_PRESENCE_PURPOSES.has("review_authorization")).toBe(true);
+    });
+
+    it("does not treat login_2fa or email_verification as human-presence purposes", async () => {
+      const { HUMAN_PRESENCE_PURPOSES } = await import("./otp");
+
+      expect(HUMAN_PRESENCE_PURPOSES.has("login_2fa")).toBe(false);
+      expect(HUMAN_PRESENCE_PURPOSES.has("email_verification")).toBe(false);
+    });
+
+    it("getChallengePurpose returns email_verification for unverified users", async () => {
+      const { getChallengePurpose } = await import("./otp");
+
+      expect(getChallengePurpose({ emailVerifiedAt: null })).toBe("email_verification");
+    });
+
+    it("getChallengePurpose returns login_2fa for verified users (unchanged by review_authorization)", async () => {
+      const { getChallengePurpose } = await import("./otp");
+
+      expect(getChallengePurpose({ emailVerifiedAt: new Date() })).toBe("login_2fa");
     });
   });
 

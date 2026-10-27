@@ -13,6 +13,7 @@ import {
   insertReview,
   listQualificationHistory,
   listReviews,
+  updateReviewChallengeRequest,
   updateReviewResolution,
   type LeadQualificationReviewRow,
   type LeadQualificationRow,
@@ -203,6 +204,8 @@ function reviewRow(overrides: Partial<LeadQualificationReviewRow> = {}): LeadQua
     resolvedBy: null,
     resolvedAt: null,
     resolutionReason: null,
+    pendingChallengeToken: null,
+    challengeExpiresAt: null,
     version: 1,
     createdAt: NOW,
     updatedAt: NOW,
@@ -403,6 +406,101 @@ describe("qualification store — reviews", () => {
     expect(stored.status).toBe("progress_authorized");
     expect(stored.resolutionReason).toBe("verified by ops");
     expect(state.updateCalls).toBe(2);
+  });
+
+  it("binds an out-of-band challenge to a pending review via optimistic CAS", async () => {
+    const { executor, state } = makeFakeDb();
+    const row = reviewRow();
+    await insertReview(row, executor);
+
+    const updated = await updateReviewChallengeRequest(
+      7,
+      row.reviewId,
+      1,
+      {
+        challengeToken: "tok-abc",
+        expiresAt: "2026-06-28T12:10:00.000Z",
+        requestedAt: "2026-06-28T12:00:30.000Z",
+      },
+      executor
+    );
+    expect(updated.pendingChallengeToken).toBe("tok-abc");
+    expect(updated.challengeExpiresAt).toBe("2026-06-28T12:10:00.000Z");
+    expect(updated.version).toBe(2);
+    expect(updated.updatedAt).toBe("2026-06-28T12:00:30.000Z");
+
+    const stored = await getReview(7, row.reviewId, executor);
+    expect(stored.pendingChallengeToken).toBe("tok-abc");
+    expect(stored.challengeExpiresAt).toBe("2026-06-28T12:10:00.000Z");
+    expect(state.updateCalls).toBe(1);
+  });
+
+  it("rejects a stale challenge binding with a stale expectedVersion", async () => {
+    const { executor } = makeFakeDb();
+    const row = reviewRow();
+    await insertReview(row, executor);
+
+    await expect(
+      updateReviewChallengeRequest(
+        7,
+        row.reviewId,
+        2,
+        {
+          challengeToken: "tok-abc",
+          expiresAt: "2026-06-28T12:10:00.000Z",
+          requestedAt: "2026-06-28T12:00:30.000Z",
+        },
+        executor
+      )
+    ).rejects.toMatchObject({
+      name: "QualificationStateConflictError",
+      code: "REVIEW_ALREADY_RESOLVED",
+    });
+    // The stored row is untouched by the failed CAS.
+    const stored = await getReview(7, row.reviewId, executor);
+    expect(stored.pendingChallengeToken).toBeNull();
+    expect(stored.challengeExpiresAt).toBeNull();
+    expect(stored.version).toBe(1);
+  });
+
+  it("clears the outstanding challenge fields when a review is resolved", async () => {
+    const { executor } = makeFakeDb();
+    const row = reviewRow();
+    await insertReview(row, executor);
+    const bound = await updateReviewChallengeRequest(
+      7,
+      row.reviewId,
+      1,
+      {
+        challengeToken: "tok-abc",
+        expiresAt: "2026-06-28T12:10:00.000Z",
+        requestedAt: "2026-06-28T12:00:30.000Z",
+      },
+      executor
+    );
+    expect(bound.pendingChallengeToken).toBe("tok-abc");
+    expect(bound.version).toBe(2);
+
+    const resolved = await updateReviewResolution(
+      7,
+      row.reviewId,
+      2,
+      {
+        status: "progress_authorized",
+        resolvedBy: 7,
+        resolvedAt: "2026-06-28T12:05:00.000Z",
+        resolutionReason: "verified by ops",
+      },
+      executor
+    );
+    expect(resolved.status).toBe("progress_authorized");
+    expect(resolved.pendingChallengeToken).toBeNull();
+    expect(resolved.challengeExpiresAt).toBeNull();
+    expect(resolved.version).toBe(3);
+
+    const stored = await getReview(7, row.reviewId, executor);
+    expect(stored.pendingChallengeToken).toBeNull();
+    expect(stored.challengeExpiresAt).toBeNull();
   });
 
   it("fails closed when the review row does not exist", async () => {

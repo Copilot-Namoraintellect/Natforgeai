@@ -9,10 +9,15 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { getDb } from "./queries/connection";
 import { qualificationRouter } from "./qualification-router";
-import { createQualificationBridgeProvider } from "./lib/qualification/qualification-bridge";
+import {
+  createQualificationBridgeProvider,
+  ProviderAuthorityUnavailable,
+} from "./lib/qualification/qualification-bridge";
 import {
   ProviderLeadNotFound,
+  ProviderPrivacyScopeMismatch,
   ProviderScoreNotFound,
+  type QualificationPrivacyScope,
 } from "./lib/qualification/qualification-service";
 import { deriveScoreContentHash } from "./lib/qualification/qualification-contract";
 import { QUALIFICATION_HANDOFF_PROJECTION_KEYS } from "./lib/qualification/qualification-handoff";
@@ -30,6 +35,22 @@ vi.mock("./lib/qualification/qualification-bridge", async (importOriginal) => {
   };
 });
 
+// The real OTP gateway mails the 6-digit review-authorization code through
+// sendTwoFactorCodeEmail; capture the issued codes so tests can present the
+// exact out-of-band code a human reviewer would read from their inbox.
+const capturedCodes: string[] = [];
+
+vi.mock("./lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lib/email")>();
+  return {
+    ...actual,
+    sendTwoFactorCodeEmail: vi.fn(async (input: { to: string; code: string }) => {
+      capturedCodes.push(input.code);
+      return { messageId: "test", accepted: [input.to] } as never;
+    }),
+  };
+});
+
 const H64 = "ab".repeat(32);
 const G64 = "cd".repeat(32);
 const LEAD_ID = `lid1:${H64}`;
@@ -39,6 +60,10 @@ const OPP_ID = `opp1:${"ef".repeat(32)}`;
 const HANDOFF_ID = `oph1:${"12".repeat(32)}`;
 const USER_ID = 7;
 const BUSINESS_ID = 3;
+// The score's leadId is the LEGACY NUMERIC leads.id — the R6-F privacy key.
+// It is independent of the lid1 identity id: C binds score↔identity by
+// tenant + business scope, never by leadId/version equality.
+const SCORE_LEAD_ID = 123456;
 // The router path has no injected clock (wall time by design), so the fake
 // timers pin the evaluation instant — this also keeps replay derivations
 // byte-identical across the two evaluate calls.
@@ -55,11 +80,14 @@ type Row = Record<string, unknown>;
 function makeFakeProvider() {
   const identities = new Map<string, unknown>();
   const scores = new Map<string, unknown>();
+  // Privacy rows are keyed by the NUMERIC score lead id (string form), never
+  // by the lid1 identity id — the F table is keyed on legacy leads.id.
   const privacy = new Map<string, unknown>();
   return {
     identities,
     scores,
     privacy,
+    privacyUnavailable: false,
     async getIdentityProjection(leadId: string): Promise<unknown> {
       if (!identities.has(leadId)) throw new ProviderLeadNotFound(leadId);
       return identities.get(leadId);
@@ -68,8 +96,26 @@ function makeFakeProvider() {
       if (!scores.has(leadScoreId)) throw new ProviderScoreNotFound(leadScoreId);
       return scores.get(leadScoreId);
     },
-    async getPrivacyState(leadId: string): Promise<unknown> {
-      return privacy.has(leadId) ? privacy.get(leadId) : null;
+    async getPrivacyState(scope: QualificationPrivacyScope): Promise<unknown> {
+      if (this.privacyUnavailable) {
+        throw new ProviderAuthorityUnavailable(["lead_privacy_states"]);
+      }
+      if (!/^[1-9]\d*$/.test(scope.scoreLeadId)) {
+        throw new ProviderAuthorityUnavailable(["lead_privacy_states"]);
+      }
+      if (!privacy.has(scope.scoreLeadId)) return null;
+      const row = privacy.get(scope.scoreLeadId);
+      if (row && typeof row === "object" && !Array.isArray(row)) {
+        const businessId = (row as { businessId?: unknown }).businessId;
+        if (
+          typeof businessId === "number" &&
+          scope.businessId !== null &&
+          businessId !== scope.businessId
+        ) {
+          throw new ProviderPrivacyScopeMismatch(scope.scoreLeadId);
+        }
+      }
+      return row;
     },
   };
 }
@@ -107,7 +153,7 @@ function identityProjection(overrides: Row = {}): Row {
 function scorePayload(overrides: Row = {}): Row {
   const base: Row = {
     leadScoreId: SCORE_ID,
-    leadId: LEAD_ID,
+    leadId: SCORE_LEAD_ID,
     leadIdentityVersion: "lead-identity/v1",
     scoringVersion: "lead-scoring-engine/v1",
     featureVersion: "lead-scoring-features/v1",
@@ -139,7 +185,7 @@ function scorePayload(overrides: Row = {}): Row {
       featureVersion: merged.featureVersion as string,
       scoreContractVersion: merged.scoreContractVersion as string,
       leadIdentityVersion: merged.leadIdentityVersion as string,
-      leadId: merged.leadId as string,
+      leadId: String(merged.leadId as string | number),
       businessId: merged.businessId as number | null,
       overallScore: merged.overallScore as number,
       scoreBand: merged.scoreBand as string,
@@ -227,6 +273,10 @@ function makeFakeDb() {
     lead_qualifications: [],
     lead_qualification_reviews: [],
     audit_events: [],
+    // The real OtpReviewChallengeGateway reads the reviewer email from users
+    // and persists the out-of-band OTP challenge in two_factor_challenges.
+    users: [{ id: USER_ID, email: "reviewer@example.com" }],
+    two_factor_challenges: [],
   };
   const duplicateKeyError = () =>
     Object.assign(new Error("Duplicate entry"), { code: "ER_DUP_ENTRY", errno: 1062 });
@@ -280,7 +330,13 @@ function makeFakeDb() {
             throw duplicateKeyError();
           }
         }
-        rows.push({ ...row });
+        rows.push(
+          name === "two_factor_challenges"
+            ? // The real table defaults the attempt-limit columns; the fake
+              // applies the same defaults at insert.
+              { attempts: 0, maxAttempts: 5, ...row }
+            : { ...row }
+        );
         return [{ affectedRows: 1 }];
       },
     }),
@@ -323,6 +379,7 @@ const evaluateInput = { leadId: LEAD_ID, leadScoreId: SCORE_ID };
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
+  capturedCodes.length = 0;
   fakeDb = makeFakeDb();
   provider = makeFakeProvider();
   vi.mocked(getDb).mockReturnValue(fakeDb as never);
@@ -338,6 +395,9 @@ describe("qualificationRouter — auth boundary", () => {
     const caller = callerFor(null);
     await expect(caller.evaluate(evaluateInput)).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await expect(caller.getPolicy()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(
+      caller.requestReviewResolution({ reviewId: `lqr1:${H64}` })
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 });
 
@@ -462,13 +522,34 @@ describe("qualificationRouter — handoff projection", () => {
     const review = reviews[0];
     expect(review.qualificationId).toBe(qualification.qualificationId);
 
-    const resolved = await caller.resolveReview({
+    // The out-of-band challenge is issued by the REAL OTP gateway over the
+    // fake db. bcryptjs schedules its hash/compare work via setImmediate,
+    // which the pinned fake timers swallow — drain them while the request is
+    // in flight (the whole hash completes synchronously because the pinned
+    // clock never trips bcrypt's 100ms yield check).
+    const requestPromise = caller.requestReviewResolution({ reviewId: review.reviewId });
+    await vi.runAllTimersAsync();
+    const requested = await requestPromise;
+    expect(requested.version).toBe(2);
+    expect(requested.pendingChallengeToken).toEqual(expect.any(String));
+    expect(capturedCodes).toHaveLength(1);
+    expect(fakeDb.seed.audit_events.map((row) => row.eventType)).toEqual([
+      "lead_qualification_evaluated",
+    ]);
+
+    const resolvePromise = caller.resolveReview({
       reviewId: review.reviewId,
       outcome: "progress_authorized",
       reason: "verified by ops",
+      challengeToken: requested.pendingChallengeToken as string,
+      code: capturedCodes[0],
     });
+    await vi.runAllTimersAsync();
+    const resolved = await resolvePromise;
     expect(resolved.status).toBe("progress_authorized");
-    expect(resolved.version).toBe(2);
+    expect(resolved.version).toBe(3);
+    expect(resolved.pendingChallengeToken).toBeNull();
+    expect(resolved.challengeExpiresAt).toBeNull();
 
     // The audit ledger carries exactly the evaluation + the resolution.
     expect(fakeDb.seed.audit_events.map((row) => row.eventType)).toEqual([
@@ -486,13 +567,47 @@ describe("qualificationRouter — handoff projection", () => {
       outcome: "progress_authorized",
     });
 
-    // A second resolution conflicts; the durable review is untouched.
+    // A second resolution conflicts; the durable review is untouched. The
+    // challenge fields remain syntactically required even though the review
+    // is no longer pending.
     await expect(
       caller.resolveReview({
         reviewId: review.reviewId,
         outcome: "progression_rejected",
         reason: "too late",
+        challengeToken: requested.pendingChallengeToken as string,
+        code: capturedCodes[0],
       })
     ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("resolveReview without a prior requestReviewResolution rejects FORBIDDEN", async () => {
+    seedProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    const caller = callerFor({ id: USER_ID, role: "user" });
+    await caller.evaluate(evaluateInput);
+
+    const reviews = await caller.listReviews({ leadId: LEAD_ID, status: "pending" });
+    expect(reviews).toHaveLength(1);
+
+    // A bare verified session can never resolve: no challenge was requested
+    // for this review, so the presented token cannot be the bound one — the
+    // failure happens before any challenge is consumed.
+    await expect(
+      caller.resolveReview({
+        reviewId: reviews[0].reviewId,
+        outcome: "progress_authorized",
+        reason: "verified by ops",
+        challengeToken: "x".repeat(32),
+        code: "123456",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    // No resolution audit event and the review stays pending and unbound.
+    expect(fakeDb.seed.audit_events.map((row) => row.eventType)).toEqual([
+      "lead_qualification_evaluated",
+    ]);
+    const stillPending = await caller.listReviews({ leadId: LEAD_ID, status: "pending" });
+    expect(stillPending).toHaveLength(1);
+    expect(stillPending[0].pendingChallengeToken).toBeNull();
   });
 });

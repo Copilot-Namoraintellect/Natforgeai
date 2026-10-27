@@ -76,6 +76,8 @@ describe("buildReviewForDecision", () => {
       resolvedBy: null,
       resolvedAt: null,
       resolutionReason: null,
+      pendingChallengeToken: null,
+      challengeExpiresAt: null,
       version: 1,
       createdAt: NOW,
       updatedAt: NOW,

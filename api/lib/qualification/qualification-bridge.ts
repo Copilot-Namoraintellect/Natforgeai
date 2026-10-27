@@ -37,8 +37,10 @@ import {
 import { getDb } from "../../queries/connection";
 import {
   ProviderLeadNotFound,
+  ProviderPrivacyScopeMismatch,
   ProviderScoreNotFound,
   type QualificationAuthorityProvider,
+  type QualificationPrivacyScope,
 } from "./qualification-service";
 import { leadPrivacyEvidenceFromRow } from "./qualification-governance-seam";
 import type {
@@ -378,15 +380,24 @@ class QualificationBridgeProvider implements QualificationAuthorityProvider {
     return toScorePayload(row);
   }
 
-  async getPrivacyState(leadId: string): Promise<unknown> {
+  async getPrivacyState(scope: QualificationPrivacyScope): Promise<unknown> {
     const available = await this.availableTables();
     if (!available.has("lead_privacy_states")) {
       throw new ProviderAuthorityUnavailable(["lead_privacy_states"]);
     }
-    // R6-X must supply an authoritative lid1 -> legacy numeric id mapping.
-    // A TypeScript cast cannot establish that binding; never treat a failed
-    // lookup in the wrong id space as proof that suppression is absent.
-    if (!/^[1-9]\d*$/.test(leadId) || !Number.isSafeInteger(Number(leadId))) {
+    // Authoritative chain binding (blocker 2): the numeric key into the
+    // numeric-keyed R6-F table arrives only inside the re-validated R6-B
+    // score binding (scoreLeadId), within the exact tenant + business scope
+    // already established against the R6-A identity. The lid1 identity id
+    // has no row in this table and a bare client numeric id is never
+    // trusted — an unestablished binding fails closed instead of guessing.
+    const numericLeadKey =
+      typeof scope.scoreLeadId === "string" &&
+      /^[1-9]\d*$/.test(scope.scoreLeadId) &&
+      Number.isSafeInteger(Number(scope.scoreLeadId))
+        ? Number(scope.scoreLeadId)
+        : null;
+    if (numericLeadKey === null) {
       throw new ProviderAuthorityUnavailable(["lead_privacy_states"]);
     }
     const [row] = (await this.db
@@ -395,12 +406,22 @@ class QualificationBridgeProvider implements QualificationAuthorityProvider {
       .where(
         and(
           drizzleEq(leadPrivacyStatesMirror.userId, this.userId),
-          // Only an already-resolved legacy numeric key can reach this query.
-          drizzleEq(leadPrivacyStatesMirror.leadId, Number(leadId))
+          // Only a score-validated legacy numeric key can reach this query.
+          drizzleEq(leadPrivacyStatesMirror.leadId, numericLeadKey)
         )
       )
       .orderBy(desc(leadPrivacyStatesMirror.createdAt))
       .limit(1)) as Array<LeadPrivacyStatesMirrorRow | undefined>;
+    if (
+      row &&
+      row.businessId !== null &&
+      scope.businessId !== null &&
+      row.businessId !== scope.businessId
+    ) {
+      // A privacy record for a different business context must not govern
+      // this qualification chain.
+      throw new ProviderPrivacyScopeMismatch(String(numericLeadKey));
+    }
     return leadPrivacyEvidenceFromRow(row ?? null);
   }
 }

@@ -18,11 +18,16 @@ import {
   createQualificationBridgeProvider,
 } from "./lib/qualification/qualification-bridge";
 import {
+  OtpReviewChallengeGateway,
+  type ReviewChallengeGateway,
+} from "./lib/qualification/qualification-review-authority";
+import {
   evaluateQualificationForLead,
   getHandoffProjectionForUser,
   getQualificationForUser,
   getQualificationHistory,
   listQualificationReviews,
+  requestReviewResolution,
   resolveQualificationReview,
 } from "./lib/qualification/qualification-service";
 import {
@@ -32,6 +37,7 @@ import {
   ListQualificationHistoryInputSchema,
   ListQualificationReviewsInputSchema,
   QualificationError,
+  RequestReviewResolutionInputSchema,
   ResolveQualificationReviewInputSchema,
   type QualificationErrorCode,
 } from "./lib/qualification/qualification-contract";
@@ -47,7 +53,10 @@ const NOT_FOUND_CODES: ReadonlySet<QualificationErrorCode> = new Set([
   "REVIEW_NOT_FOUND",
 ]);
 
-const FORBIDDEN_CODES: ReadonlySet<QualificationErrorCode> = new Set(["OWNERSHIP_MISMATCH"]);
+const FORBIDDEN_CODES: ReadonlySet<QualificationErrorCode> = new Set([
+  "OWNERSHIP_MISMATCH",
+  "REVIEW_AUTHORIZATION_BINDING_MISMATCH",
+]);
 
 const CONFLICT_CODES: ReadonlySet<QualificationErrorCode> = new Set([
   "REVIEW_STALE_BINDING",
@@ -136,20 +145,49 @@ export const qualificationRouter = createRouter({
   }),
 
   /**
-   * Governed review resolution (contract §10). Exactly one resolution per
-   * review, tx-atomic with its audit event; the immutable decision is never
-   * mutated.
+   * Issues the independent human-review challenge for a pending review
+   * (contract §10). The 6-digit code is emailed out of band; the returned
+   * challengeToken is bound to this review and must be presented with the
+   * code at resolveReview. A verified session alone can request (the request
+   * only delivers a code) but can never resolve.
+   */
+  requestReviewResolution: authedQuery
+    .input(RequestReviewResolutionInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const provider = createQualificationBridgeProvider(db, ctx.user.id);
+      const challengeGateway: ReviewChallengeGateway = new OtpReviewChallengeGateway(db);
+      try {
+        return await db.transaction(async (tx) =>
+          requestReviewResolution(
+            { userId: ctx.user.id, reviewId: input.reviewId, req: ctx.req },
+            { provider, challengeGateway },
+            bindQualificationStoreExecutor(tx)
+          )
+        );
+      } catch (err) {
+        throw toTrpcError(err);
+      }
+    }),
+
+  /**
+   * Governed review resolution (contract §10) with independent human
+   * authentication. Exactly one resolution per review, tx-atomic with its
+   * audit event; the immutable decision is never mutated. A bare verified
+   * session cannot resolve: the review-bound out-of-band challenge must be
+   * presented and is durably consumed by the OTP gateway.
    */
   resolveReview: authedQuery
     .input(ResolveQualificationReviewInputSchema)
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const provider = createQualificationBridgeProvider(db, ctx.user.id);
+      const challengeGateway: ReviewChallengeGateway = new OtpReviewChallengeGateway(db);
       try {
         return await db.transaction(async (tx) =>
           resolveQualificationReview(
             { userId: ctx.user.id, ...input },
-            { provider },
+            { provider, challengeGateway },
             bindQualificationStoreExecutor(tx)
           )
         );

@@ -363,8 +363,14 @@ describe("qualification contract — router input schemas", () => {
     expect(() => ListQualificationReviewsInputSchema.parse({ status: "pending", extra: 1 })).toThrow();
   });
 
-  it("ResolveQualificationReviewInputSchema validates outcome and reason", () => {
-    const valid = { reviewId: REVIEW_ID, outcome: "progress_authorized", reason: "human override" };
+  it("ResolveQualificationReviewInputSchema validates outcome, reason and the human-review challenge", () => {
+    const valid = {
+      reviewId: REVIEW_ID,
+      outcome: "progress_authorized",
+      reason: "human override",
+      challengeToken: "ab".repeat(32),
+      code: "123456",
+    };
     expect(ResolveQualificationReviewInputSchema.parse(valid).outcome).toBe("progress_authorized");
     expect(() =>
       ResolveQualificationReviewInputSchema.parse({ ...valid, outcome: "approved" })
@@ -373,6 +379,19 @@ describe("qualification contract — router input schemas", () => {
     expect(() => ResolveQualificationReviewInputSchema.parse({ ...valid, reason: "x".repeat(501) })).toThrow();
     expect(() => ResolveQualificationReviewInputSchema.parse({ ...valid, reviewId: "lqr1:zzz" })).toThrow();
     expect(() => ResolveQualificationReviewInputSchema.parse({ ...valid, actor: "admin" })).toThrow();
+    // Independent human proof is mandatory: a bare session payload fails schema.
+    expect(() =>
+      ResolveQualificationReviewInputSchema.parse({ reviewId: REVIEW_ID, outcome: "progress_authorized", reason: "x" })
+    ).toThrow();
+    expect(() =>
+      ResolveQualificationReviewInputSchema.parse({ ...valid, challengeToken: "short" })
+    ).toThrow();
+    expect(() =>
+      ResolveQualificationReviewInputSchema.parse({ ...valid, code: "12345" })
+    ).toThrow();
+    expect(() =>
+      ResolveQualificationReviewInputSchema.parse({ ...valid, human: true })
+    ).toThrow();
   });
 
   it("GetQualificationHandoffInputSchema validates qualification ids strictly", () => {

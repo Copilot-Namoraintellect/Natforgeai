@@ -141,6 +141,14 @@ export interface LeadQualificationReviewRow {
   readonly resolvedBy: number | null;
   readonly resolvedAt: string | null;
   readonly resolutionReason: string | null;
+  /**
+   * Outstanding independent human-review challenge (§10): the single-use
+   * out-of-band challenge token bound to this review, set by
+   * requestReviewResolution and cleared on resolution. Null while none is
+   * in flight; never a substitute for the durable OTP consumption check.
+   */
+  readonly pendingChallengeToken: string | null;
+  readonly challengeExpiresAt: string | null;
   readonly version: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -355,7 +363,9 @@ export interface ReviewResolutionPatch {
 /**
  * Optimistic-CAS resolution. The version predicate makes exactly one
  * resolution possible; any raced or repeated call affects zero rows and
- * fails closed — a review is resolved at most once.
+ * fails closed — a review is resolved at most once. The outstanding
+ * human-review challenge (if any) is cleared with the resolution: the
+ * single-use OTP challenge is already consumed durably by the gateway.
  */
 export async function updateReviewResolution(
   userId: number,
@@ -371,6 +381,8 @@ export async function updateReviewResolution(
       resolvedBy: patch.resolvedBy,
       resolvedAt: patch.resolvedAt,
       resolutionReason: patch.resolutionReason,
+      pendingChallengeToken: null,
+      challengeExpiresAt: null,
       version: expectedVersion + 1,
       updatedAt: patch.resolvedAt,
     })
@@ -388,6 +400,47 @@ export async function updateReviewResolution(
     throw new QualificationStateConflictError(
       "REVIEW_ALREADY_RESOLVED",
       `review ${reviewId} disappeared during resolution; refusing ambiguous outcome.`
+    );
+  }
+  return updated;
+}
+
+/**
+ * Binds a freshly issued out-of-band challenge to a pending review
+ * (optimistic CAS). A raced request or a concurrent resolution affects zero
+ * rows and fails closed; the newest issued challenge wins because the OTP
+ * primitive has already invalidated the user's previous unconsumed
+ * review-authorization codes.
+ */
+export async function updateReviewChallengeRequest(
+  userId: number,
+  reviewId: string,
+  expectedVersion: number,
+  challenge: { readonly challengeToken: string; readonly expiresAt: string; readonly requestedAt: string },
+  executor: QualificationStoreExecutor
+): Promise<LeadQualificationReviewRow> {
+  const result = await executor
+    .update(leadQualificationReviews)
+    .set({
+      pendingChallengeToken: challenge.challengeToken,
+      challengeExpiresAt: challenge.expiresAt,
+      version: expectedVersion + 1,
+      updatedAt: challenge.requestedAt,
+    })
+    .where(
+      and(eq("userId", userId), eq("reviewId", reviewId), eq("version", expectedVersion))
+    );
+  if (affectedRowsOf(result) === 0) {
+    throw new QualificationStateConflictError(
+      "REVIEW_ALREADY_RESOLVED",
+      `review ${reviewId} is not at version ${expectedVersion}; already resolved or stale. Challenge binding rejected.`
+    );
+  }
+  const updated = await findReviewRow(userId, reviewId, executor);
+  if (!updated) {
+    throw new QualificationStateConflictError(
+      "REVIEW_ALREADY_RESOLVED",
+      `review ${reviewId} disappeared during challenge binding; refusing ambiguous outcome.`
     );
   }
   return updated;
