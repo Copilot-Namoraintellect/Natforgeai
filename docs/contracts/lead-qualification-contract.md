@@ -12,7 +12,9 @@
 > R6-F governance (`c4932c6`) via `docs/contracts/lead-governance-operations-contract.md`
 > **Audience:** R6-D (nurture/sales handoff), R6-F (governance projection),
 > R6-X integration
-> **Status:** authoritative as of the R6-C acceptance harness
+> **Status:** authoritative as of the R6-C acceptance harness; §10 human-review
+> authentication and the §14.10 privacy chain hardened 2026-10-27 (blocker
+> closures — see docs/recovery/r6-c-lead-qualification-acceptance-report.md)
 
 This contract defines the single canonical lead-qualification model. R6-C
 owns **qualification only**: evidence assembly, qualification rules (policy),
@@ -198,16 +200,32 @@ mechanism: a durable `lead_qualification_reviews` record bound to the exact
 decision via `decisionBindingHash = sha256(canonicalJson({qualificationId,
 decision, reasonCodes, identityReference, scoreContentHash,
 evidenceSnapshotHash, qualificationPolicyVersion, engineVersion}))`.
-Resolution (`progress_authorized | progression_rejected`) requires: the
-review exists and is `pending`; the actor is the owning tenant user or an
-admin (server-derived actor only); the bound qualification is still the
-lead's current decision (stale binding ⇒ rejected, `REVIEW_STALE_BINDING`);
-audit is tx-atomic with the CAS update. There is **no generic approve-lead
-endpoint**; review never mutates the immutable decision or grants downstream
-progression. Expired decisions and non-actionable privacy also reject resolution.
-The current verified-session authentication does not distinguish humans from
-agents holding that session; independent human approval remains a readiness
-blocker, not a security guarantee supplied by actor attribution.
+Resolution (`progress_authorized | progression_rejected`) requires:
+
+1. **Independent human-review authentication.** The resolution must present
+   the review-bound out-of-band challenge issued by
+   `requestReviewResolution` — a single-use, expiring (10-minute), attempt-
+   limited email OTP under the governed `review_authorization` challenge
+   purpose — consisting of the challenge token stored on the review row plus
+   the 6-digit code delivered only to the reviewer's mailbox. The server
+   derives the reviewer identity from the consumed challenge (it must be the
+   session's own tenant user); no client-supplied reviewer id, human flag,
+   model output or session presence alone is accepted. A verified tenant
+   session by itself can never resolve: runtime agents operate under the
+   tenant's own JWT and cannot observe the emailed code. Resolution fails
+   closed when the gateway is unconfigured, the token is not bound to this
+   exact review, the challenge is invalid/expired/consumed, or the challenge
+   belongs to a different actor.
+2. The review exists and is `pending`; the actor is the owning tenant user
+   or an admin (server-derived actor only); the bound qualification is still
+   the lead's current decision (stale binding ⇒ rejected,
+   `REVIEW_STALE_BINDING`); audit is tx-atomic with the CAS update.
+   `requestReviewResolution` runs the same preconditions before a code is
+   ever issued, so dead reviews can neither be authorized nor resolved.
+   There is **no generic approve-lead endpoint**; review never mutates the
+   immutable decision or grants downstream progression. Expired decisions
+   and non-actionable privacy also reject resolution and reject
+   authorization requests.
 
 ## 11. Exact-once / replay / immutability
 
@@ -253,9 +271,9 @@ automatically.
 2. Cross-business scope assertion mismatch ⇒ `OWNERSHIP_MISMATCH`.
 3. No client-supplied evaluation authority: no decision, reason codes,
    confidence, policy content or actor is accepted. `resolveReview` accepts a
-   bounded resolution request, not an evaluation outcome. Independent human
-   authorization for that request remains the blocker documented in §10.
-   `z.strictObject` at the router; unknown fields rejected.
+   bounded resolution request plus the review-bound human-review challenge,
+   not an evaluation outcome. `z.strictObject` at the router; unknown fields
+   rejected.
 4. Upstream untrusted-data discipline: A/B/F payloads re-validated at the C
    seam (strict shape, closed vocabularies, version allow-list, hash
    recompute, freshness). Internal source ≠ trusted source.
@@ -273,7 +291,13 @@ automatically.
    No billing or outreach/CRM/conversion side effects. Host/runtime privilege
    isolation is not established by these API tests.
 10. Privacy: suppression/restriction/expired retention ⇒ `BLOCKED` /
-    not actionable; suppressed leads cannot progress.
+    not actionable; suppressed leads cannot progress. The R6-F state is read
+    only through the authoritative chain — canonical R6-A identity (exact
+    tenant/business ownership) ← validated R6-B score → score-authoritative
+    legacy numeric `leads.id` → `lead_privacy_states` — never from a bare
+    numeric id, client payload, model output or cached state; when the chain
+    cannot be established (no numeric score key, unavailable table,
+    cross-business privacy row) evaluation fails closed.
 11. Fail closed on: missing/unknown policy version, unknown identity/score
     versions, tampered hashes, stale inputs, unavailable authority bridge,
     replay conflicts.

@@ -700,11 +700,23 @@ evaluation, and governance does not block progression.
   versions, tampered hashes, stale inputs, unavailable authority bridge
   (`QUALIFICATION_AUTHORITY_UNAVAILABLE`), replay conflicts, and privacy
   suppression/retention (`BLOCKED`).
+- Manual review requires **independent human authentication**: resolution
+  needs a single-use, review-bound out-of-band challenge (email OTP,
+  purpose `review_authorization`) — a verified tenant session alone can
+  never resolve (runtime agents hold the tenant JWT; the code exists only
+  in the reviewer's mailbox). Gateway: `qualification-review-authority.ts`
+  over the governed OTP primitive; schema: `pendingChallengeToken` /
+  `challengeExpiresAt` on `lead_qualification_reviews`.
+- Privacy is read only through the authoritative chain: R6-A identity
+  (exact tenant/business scope) → validated R6-B score → score-authoritative
+  numeric `leads.id` → R6-F `lead_privacy_states`. No numeric-id inference,
+  no cached state; unestablished chains fail closed.
 - Router: `qualification` (`api/qualification-router.ts`) — authed-only
-  (`evaluate`, `get`, `listHistory`, `listReviews`, `resolveReview`,
-  `getHandoffProjection`, `getPolicy`). Clients reference ids only;
-  `z.strictObject` rejects every client-supplied authority field (decision,
-  reason codes, confidence, review outcome, policy content, identity).
+  (`evaluate`, `get`, `listHistory`, `listReviews`, `requestReviewResolution`,
+  `resolveReview`, `getHandoffProjection`, `getPolicy`). Clients reference
+  ids only; `z.strictObject` rejects every client-supplied authority field
+  (decision, reason codes, confidence, review outcome, policy content,
+  identity, challenge proof).
 - Handoff contract: `docs/contracts/lead-qualification-contract.md` and
   `docs/contracts/lead-qualification-to-nurture-handoff-contract.md`. R6-D
   consumes the exact `getHandoffProjection` key set; the `mayProgress`
