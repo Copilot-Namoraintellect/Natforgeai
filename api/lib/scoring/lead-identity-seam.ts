@@ -1,26 +1,28 @@
-// ─── R6-B Lead Scoring — lead identity seam (R6-A pending) ───
+// ─── R6-B Lead Scoring — lead identity seam (R6-X CONVERGED) ───
 //
-// R6-A (Lead Identity) runs in parallel; its contract
-// (docs/contracts/lead-identity-to-scoring-qualification-contract.md) is not
-// yet available — the R6-A branch sits at the integration base. ALL lead
-// identity assumptions for scoring are isolated in this module so the stream
-// converges cleanly: when R6-A publishes identity authority, only this file
-// (and its fixtures) change.
+// R6-X convergence note (was: "R6-A pending — interim authority"). The frozen
+// R6 streams bind identity through the SCORE RECORD, not through a code-level
+// join: B scores the legacy numeric `leads` row (schema-frozen
+// `lead_score_snapshots.leadId` is bigint) and mints a deterministic
+// `identityVersion` over the lead's immutable coordinates. R6-C co-validates
+// that score against the canonical R6-A `lid1` identity projection during
+// qualification (binding = tenant + business scope + content hashes, never
+// leadId equality), and R6-D re-establishes the same chain at execution time.
+// That score-mediated binding is the ONE authoritative lid1 ↔ numeric
+// `leads.id` mapping (X4); no fuzzy or client-controlled mapping exists here.
 //
-// Interim authority (strictly server-side):
+// This module therefore keeps two strictly server-side duties:
 // - lead existence + tenant ownership are re-verified from the durable `leads`
 //   row on every scoring call; forged / cross-tenant leadId fails closed;
 // - `identityVersion` is derived deterministically from durable lead
 //   coordinates — any reassignment (business/campaign) mints a new identity
-//   version, hence new score versions;
-// - the interim evidence scope binds a lead to R5 opportunity candidates via
-//   tenant + business + campaign attribution, restricted to evidence-bearing
-//   statuses (active + handed_off_to_r6; suppressed/expired/escalated excluded
-//   as non-evidence). Replaced by authoritative R6-A lead→handoff linkage on
-//   convergence.
+//   version, hence new score versions (allowed by R6-C's version allow-list).
+// The evidence scope binds a lead to R5 opportunity candidates via tenant +
+// business + campaign attribution, restricted to evidence-bearing statuses.
 //
 // Scoring NEVER writes the leads table, never merges leads, never derives
-// cross-tenant identity.
+// cross-tenant identity, and never consults R6-A authority directly — the
+// canonical identity gate lives at R6-C/R6-D where the lid1 is authoritative.
 
 import { and, eq } from "drizzle-orm";
 import { leads, opportunityCandidates, type Lead } from "@db/schema";

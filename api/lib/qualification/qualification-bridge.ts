@@ -4,12 +4,11 @@
 // and adapts a Drizzle client/transaction to the qualification store's
 // structural executor seam.
 //
-// FROZEN-CONTRACT MIRRORS: the R6-A lead_identities / lead_identity_provenance
-// (ded8f2876e7c), R6-B lead_score_snapshots (259dc88) and R6-F
-// lead_privacy_states (c4932c6) tables are NOT in this branch's schema.ts, so
-// the column-set mirrors below were extracted verbatim from the frozen
-// upstream commits. They are frozen-contract mirrors, replaced by canonical
-// @db/schema imports at R6-X convergence — never edit them locally.
+// R6-X CONVERGED: the upstream tables are the canonical @db/schema exports
+// (R6-A lead_identities / lead_identity_provenance, R6-B lead_score_snapshots,
+// R6-F lead_privacy_states). The pre-convergence frozen-contract mirrors were
+// verified column-identical to the canonical schema and replaced by these
+// imports — upstream authority lives in one schema only.
 //
 // Guarded degradation: table availability is probed once per provider
 // instance through information_schema and memoized. A read against an absent
@@ -23,17 +22,15 @@
 
 import { and, eq as drizzleEq, sql, type SQL } from "drizzle-orm";
 import {
-  bigint,
-  index,
-  int,
-  json,
-  mysqlEnum,
-  mysqlTable,
-  serial,
-  timestamp,
-  uniqueIndex,
-  varchar,
-} from "drizzle-orm/mysql-core";
+  leadIdentities,
+  leadIdentityProvenance,
+  leadPrivacyStates,
+  leadScoreSnapshots,
+  type LeadIdentityRow,
+  type LeadIdentityProvenanceRow,
+  type LeadPrivacyStateRow,
+  type LeadScoreSnapshotRow,
+} from "@db/schema";
 import { getDb } from "../../queries/connection";
 import {
   ProviderLeadNotFound,
@@ -51,193 +48,6 @@ import type {
   StoreOrderTerm,
   StorePredicate,
 } from "./qualification-store";
-
-// ─── Frozen-contract mirror tables (upstream column sets, verbatim) ───
-// Replaced by canonical @db/schema imports at R6-X convergence.
-
-const IDENTITY_TYPE_VALUES = [
-  "provider_actor",
-  "email_hash",
-  "phone_hash",
-  "authenticated_customer_reference",
-  "crm_external_reference",
-  "anonymous_thread",
-  "unknown",
-] as const;
-
-const IDENTITY_STATUS_VALUES = [
-  "active",
-  "anonymous",
-  "partially_identified",
-  "resolved",
-  "conflicting",
-  "suppressed",
-  "merged",
-  "archived",
-] as const;
-
-const IDENTITY_CONFIDENCE_VALUES = ["unknown", "low", "medium", "high"] as const;
-
-const leadIdentitiesMirror = mysqlTable(
-  "lead_identities",
-  {
-    id: serial("id").primaryKey(),
-    leadId: varchar("leadId", { length: 69 }).notNull(),
-    identityKey: varchar("identityKey", { length: 64 }).notNull(),
-    contractVersion: varchar("contractVersion", { length: 40 }).notNull(),
-    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-    businessId: bigint("businessId", { mode: "number", unsigned: true }),
-    primaryIdentityType: mysqlEnum("primaryIdentityType", IDENTITY_TYPE_VALUES).notNull(),
-    identityStatus: mysqlEnum("identityStatus", IDENTITY_STATUS_VALUES).notNull(),
-    identityConfidence: mysqlEnum("identityConfidence", IDENTITY_CONFIDENCE_VALUES).notNull(),
-    externalActorReferenceHash: varchar("externalActorReferenceHash", { length: 64 }),
-    provider: mysqlEnum("provider", ["meta", "linkedin", "twitter", "tiktok"]),
-    emailIdentityHash: varchar("emailIdentityHash", { length: 64 }),
-    phoneIdentityHash: varchar("phoneIdentityHash", { length: 64 }),
-    customerReferenceHash: varchar("customerReferenceHash", { length: 64 }),
-    sourceOpportunityId: varchar("sourceOpportunityId", { length: 69 }).notNull(),
-    sourceHandoffId: varchar("sourceHandoffId", { length: 69 }).notNull(),
-    canonicalLeadId: varchar("canonicalLeadId", { length: 69 }),
-    firstObservedAt: varchar("firstObservedAt", { length: 32 }).notNull(),
-    lastObservedAt: varchar("lastObservedAt", { length: 32 }).notNull(),
-    provenanceCount: int("provenanceCount").notNull().default(1),
-    identityEvidenceCount: int("identityEvidenceCount").notNull().default(0),
-    version: int("version").notNull().default(1),
-    statusChangedAt: timestamp("statusChangedAt").defaultNow().notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
-  },
-  (table) => ({
-    userIdentityUnique: uniqueIndex("li_user_identity_uidx").on(table.userId, table.identityKey),
-    userLeadUnique: uniqueIndex("li_user_lead_uidx").on(table.userId, table.leadId),
-    userEmailUnique: uniqueIndex("li_user_email_uidx").on(table.userId, table.emailIdentityHash),
-    userPhoneUnique: uniqueIndex("li_user_phone_uidx").on(table.userId, table.phoneIdentityHash),
-    userCustomerRefUnique: uniqueIndex("li_user_custref_uidx").on(table.userId, table.customerReferenceHash),
-    userStatusIdx: index("li_user_status_idx").on(table.userId, table.identityStatus),
-  })
-);
-
-type LeadIdentitiesMirrorRow = typeof leadIdentitiesMirror.$inferSelect;
-
-const LEAD_PROVENANCE_KIND_VALUES = [
-  "opportunity_handoff",
-  "identity_evidence",
-  "merge",
-  "conflict",
-] as const;
-
-const leadIdentityProvenanceMirror = mysqlTable(
-  "lead_identity_provenance",
-  {
-    id: serial("id").primaryKey(),
-    leadRowId: bigint("leadRowId", { mode: "number", unsigned: true }).notNull(),
-    leadId: varchar("leadId", { length: 69 }).notNull(),
-    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-    kind: mysqlEnum("kind", LEAD_PROVENANCE_KIND_VALUES).notNull(),
-    handoffId: varchar("handoffId", { length: 69 }),
-    opportunityId: varchar("opportunityId", { length: 69 }),
-    provider: mysqlEnum("provider", ["meta", "linkedin", "twitter", "tiktok"]),
-    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
-    publicationId: varchar("publicationId", { length: 128 }),
-    evidenceType: varchar("evidenceType", { length: 40 }),
-    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
-    envelopeHash: varchar("envelopeHash", { length: 64 }),
-    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-  },
-  (table) => ({
-    userHandoffUnique: uniqueIndex("lip_user_handoff_uidx").on(table.userId, table.handoffId),
-    userKindHashUnique: uniqueIndex("lip_user_kind_hash_uidx").on(table.userId, table.kind, table.evidenceHash),
-    leadRowIdx: index("lip_lead_row_idx").on(table.leadRowId),
-  })
-);
-
-type LeadIdentityProvenanceMirrorRow = typeof leadIdentityProvenanceMirror.$inferSelect;
-
-const leadScoreSnapshotsMirror = mysqlTable(
-  "lead_score_snapshots",
-  {
-    id: serial("id").primaryKey(),
-    leadScoreId: varchar("leadScoreId", { length: 69 }).notNull(),
-    evidenceSnapshotId: varchar("evidenceSnapshotId", { length: 69 }).notNull(),
-    scoreContractVersion: varchar("scoreContractVersion", { length: 64 }).notNull(),
-    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-    businessId: bigint("businessId", { mode: "number", unsigned: true }),
-    leadId: bigint("leadId", { mode: "number", unsigned: true }).notNull(),
-    leadIdentityVersion: varchar("leadIdentityVersion", { length: 96 }).notNull(),
-    scoringVersion: varchar("scoringVersion", { length: 64 }).notNull(),
-    featureVersion: varchar("featureVersion", { length: 64 }).notNull(),
-    evidenceSnapshotHash: varchar("evidenceSnapshotHash", { length: 64 }).notNull(),
-    evidenceManifest: json("evidenceManifest").notNull(),
-    overallScore: int("overallScore").notNull(),
-    scoreBand: mysqlEnum("scoreBand", ["VERY_LOW", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"]).notNull(),
-    scoreConfidence: mysqlEnum("scoreConfidence", ["LOW", "MEDIUM", "HIGH", "UNKNOWN"]).notNull(),
-    fitScore: int("fitScore").notNull(),
-    intentScore: int("intentScore").notNull(),
-    engagementScore: int("engagementScore").notNull(),
-    recencyScore: int("recencyScore").notNull(),
-    opportunityScore: int("opportunityScore").notNull(),
-    componentWeights: json("componentWeights").notNull(),
-    reasonCodes: json("reasonCodes").notNull(),
-    computedAt: timestamp("computedAt").defaultNow().notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-  },
-  (table) => ({
-    convergenceUnique: uniqueIndex("lss_convergence_uidx").on(
-      table.userId,
-      table.leadId,
-      table.evidenceSnapshotHash,
-      table.scoringVersion
-    ),
-    leadScoreIdUnique: uniqueIndex("lss_score_id_uidx").on(table.leadScoreId),
-    snapshotIdIdx: index("lss_snapshot_id_idx").on(table.evidenceSnapshotId),
-    userLeadIdx: index("lss_user_lead_idx").on(table.userId, table.leadId),
-  })
-);
-
-type LeadScoreSnapshotsMirrorRow = typeof leadScoreSnapshotsMirror.$inferSelect;
-
-const leadPrivacyStatesMirror = mysqlTable(
-  "lead_privacy_states",
-  {
-    id: serial("id").primaryKey(),
-    leadId: bigint("leadId", { mode: "number", unsigned: true }).notNull(),
-    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
-    businessId: bigint("businessId", { mode: "number", unsigned: true }),
-    privacyState: mysqlEnum("privacyState", [
-      "ACTIVE",
-      "SUPPRESSED",
-      "RESTRICTED",
-      "RETENTION_PENDING",
-      "RETENTION_EXPIRED",
-      "ARCHIVED",
-    ])
-      .default("ACTIVE")
-      .notNull(),
-    previousState: mysqlEnum("previousState", [
-      "ACTIVE",
-      "SUPPRESSED",
-      "RESTRICTED",
-      "RETENTION_PENDING",
-      "RETENTION_EXPIRED",
-      "ARCHIVED",
-    ]),
-    reason: varchar("reason", { length: 500 }),
-    retentionDeadlineAt: timestamp("retentionDeadlineAt"),
-    source: varchar("source", { length: 32 }).default("operator").notNull(),
-    actorUserId: bigint("actorUserId", { mode: "number", unsigned: true }),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
-  },
-  (table) => ({
-    leadUnique: uniqueIndex("lps_lead_uidx").on(table.leadId),
-    userIdx: index("lps_user_idx").on(table.userId),
-    businessIdx: index("lps_business_idx").on(table.businessId),
-    stateIdx: index("lps_state_idx").on(table.privacyState),
-  })
-);
-
-type LeadPrivacyStatesMirrorRow = typeof leadPrivacyStatesMirror.$inferSelect;
 
 // ─── Provider ───
 
@@ -316,27 +126,27 @@ class QualificationBridgeProvider implements QualificationAuthorityProvider {
     await this.requireTables("lead_identities", "lead_identity_provenance");
     const [row] = (await this.db
       .select()
-      .from(leadIdentitiesMirror)
+      .from(leadIdentities)
       .where(
         and(
-          drizzleEq(leadIdentitiesMirror.userId, this.userId),
-          drizzleEq(leadIdentitiesMirror.leadId, leadId)
+          drizzleEq(leadIdentities.userId, this.userId),
+          drizzleEq(leadIdentities.leadId, leadId)
         )
       )
-      .limit(1)) as Array<LeadIdentitiesMirrorRow | undefined>;
+      .limit(1)) as Array<LeadIdentityRow | undefined>;
     if (!row) {
       throw new ProviderLeadNotFound(leadId);
     }
     const provenanceRows = (await this.db
       .select()
-      .from(leadIdentityProvenanceMirror)
+      .from(leadIdentityProvenance)
       .where(
         and(
-          drizzleEq(leadIdentityProvenanceMirror.userId, this.userId),
-          drizzleEq(leadIdentityProvenanceMirror.leadId, leadId)
+          drizzleEq(leadIdentityProvenance.userId, this.userId),
+          drizzleEq(leadIdentityProvenance.leadId, leadId)
         )
       )
-      .orderBy(asc(leadIdentityProvenanceMirror.createdAt))) as LeadIdentityProvenanceMirrorRow[];
+      .orderBy(asc(leadIdentityProvenance.createdAt))) as LeadIdentityProvenanceRow[];
     // The exact 14-key R6-A projection the identity seam re-validates.
     return {
       leadId: row.leadId,
@@ -366,14 +176,14 @@ class QualificationBridgeProvider implements QualificationAuthorityProvider {
     await this.requireTables("lead_score_snapshots");
     const [row] = (await this.db
       .select()
-      .from(leadScoreSnapshotsMirror)
+      .from(leadScoreSnapshots)
       .where(
         and(
-          drizzleEq(leadScoreSnapshotsMirror.userId, this.userId),
-          drizzleEq(leadScoreSnapshotsMirror.leadScoreId, leadScoreId)
+          drizzleEq(leadScoreSnapshots.userId, this.userId),
+          drizzleEq(leadScoreSnapshots.leadScoreId, leadScoreId)
         )
       )
-      .limit(1)) as Array<LeadScoreSnapshotsMirrorRow | undefined>;
+      .limit(1)) as Array<LeadScoreSnapshotRow | undefined>;
     if (!row) {
       throw new ProviderScoreNotFound(leadScoreId);
     }
@@ -402,16 +212,16 @@ class QualificationBridgeProvider implements QualificationAuthorityProvider {
     }
     const [row] = (await this.db
       .select()
-      .from(leadPrivacyStatesMirror)
+      .from(leadPrivacyStates)
       .where(
         and(
-          drizzleEq(leadPrivacyStatesMirror.userId, this.userId),
+          drizzleEq(leadPrivacyStates.userId, this.userId),
           // Only a score-validated legacy numeric key can reach this query.
-          drizzleEq(leadPrivacyStatesMirror.leadId, numericLeadKey)
+          drizzleEq(leadPrivacyStates.leadId, numericLeadKey)
         )
       )
-      .orderBy(desc(leadPrivacyStatesMirror.createdAt))
-      .limit(1)) as Array<LeadPrivacyStatesMirrorRow | undefined>;
+      .orderBy(desc(leadPrivacyStates.createdAt))
+      .limit(1)) as Array<LeadPrivacyStateRow | undefined>;
     if (
       row &&
       row.businessId !== null &&
@@ -441,7 +251,7 @@ function toIso(value: Date | string | null | undefined): string | null {
  * manifest occurredAt (B contract §12); `duplicateClassification` is not a B
  * column — a read of a committed row is not a replay.
  */
-function toScorePayload(row: LeadScoreSnapshotsMirrorRow): Record<string, unknown> {
+function toScorePayload(row: LeadScoreSnapshotRow): Record<string, unknown> {
   const manifest: unknown[] = Array.isArray(row.evidenceManifest) ? row.evidenceManifest : [];
   let latestObservedAt: string | null = null;
   for (const entry of manifest) {

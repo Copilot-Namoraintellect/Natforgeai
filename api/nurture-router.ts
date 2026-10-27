@@ -18,8 +18,8 @@ import {
   reconcileHandoff,
   getLeadNurtureHandoffView,
   type NurtureServiceDeps,
-  type NurtureUpstreamPorts,
 } from "./lib/nurture/nurture-service";
+import { createNurtureProductionPorts } from "./lib/nurture/nurture-ports";
 import { buildDefaultNurturePolicyConfig, buildNurtureHandoffPolicy } from "./lib/nurture/nurture-policy";
 import { getDecisionById, getHandoffById, nurtureTablesAvailable } from "./lib/nurture/nurture-store";
 function toTrpcError(err: unknown): TRPCError {
@@ -53,42 +53,20 @@ function toTrpcError(err: unknown): TRPCError {
   });
 }
 
-// ─── Upstream port wiring (guarded bridges; fail closed when absent) ───
+// ─── Upstream port wiring (R6-X convergence) ───
 //
-// Production wiring is an R6-X activation slot: the R6-C projection surface,
-// R6-A identity projection, R6-F privacy store and R6-E conversion store are
-// consumed through their frozen contracts once those streams land. Until
-// then every port fails closed with an honest unavailable answer — D never
-// guesses authority.
-
-const unavailablePorts: NurtureUpstreamPorts = {
-  async getQualificationProjection() {
-    throw new NurtureError(
-      "QUALIFICATION_NOT_FOUND",
-      "QUALIFICATION_NOT_FOUND: qualification authority bridge is not wired in this environment (R6-X activation slot)."
-    );
-  },
-  async getLeadIdentity() {
-    throw new NurtureError(
-      "OWNERSHIP_MISMATCH",
-      "OWNERSHIP_MISMATCH: identity authority bridge is not wired in this environment (R6-X activation slot)."
-    );
-  },
-  async getPrivacyEvidence() {
-    // Fail closed: privacy truth is never guessed.
-    return { available: false, state: "ACTIVE", explicit: false, retentionDeadlineAt: null, previousState: null, source: null, actorUserId: null, updatedAt: null };
-  },
-  async listConversionsForLead() {
-    return [];
-  },
-  async getApprovalRequest() {
-    return null;
-  },
-};
+// Production ports read the governed R6 infrastructure through its frozen
+// contracts (R6-C projection built by C's own service; R6-A identity rows as
+// stored; R6-F privacy store; R6-E conversion rows; R5 approval ledger) and
+// D's frozen validators re-validate every payload. Availability is probed at
+// runtime per call: absent upstream tables fail closed, never guess. No
+// transport is wired on this router: dispatch fails closed until a truthful
+// transport is configured (contract §10; WhatsApp/SMS/CRM unsupported, email
+// REQUIRES_CONFIGURATION).
 
 function buildDeps(): NurtureServiceDeps {
   return {
-    ports: unavailablePorts,
+    ports: createNurtureProductionPorts(),
     // No transport wired: dispatch fails closed (contract §10).
   };
 }
@@ -128,7 +106,7 @@ export const nurtureRouter = createRouter({
       contractVersion: "lead-nurture-sales-handoff/v1",
       tablesAvailable,
       defaultPolicyVersion: buildNurtureHandoffPolicy(buildDefaultNurturePolicyConfig()).policyVersion,
-      portsWired: false,
+      portsWired: true,
       transportConfigured: false,
     };
   }),
