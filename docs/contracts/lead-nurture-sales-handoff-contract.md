@@ -44,7 +44,7 @@ derived without wall-clock or randomness:
 decisionKey  = sha256(canonicalJson({ v: 1, userId, businessId, leadId,
               qualificationId, qualificationFingerprint, privacyState,
               privacyStateUpdatedAt, conversionStopped, handoffExists,
-              policyVersion, channel }))
+              policyVersion, channel, cadenceBlocked }))
 nurtureDecisionId = "nd1:" + decisionKey
 
 handoffKey   = sha256(canonicalJson({ v: 1, userId, businessId, leadId,
@@ -225,7 +225,8 @@ REQUIRES_CONFIGURATION · REQUIRES_APPROVAL · BLOCKED`.
 - `UNSUPPORTED` or `BLOCKED` at execution ⇒ fail closed
   (`CAPABILITY_UNSUPPORTED`); the durable row reflects the honest state.
 - The only `SUPPORTED` execution path shipped by R6-D is the
-  **fake/test-only** in-memory transport (`api/lib/nurture/nurture-fake-transport.ts`),
+  **fake/test-only** in-memory transport (`createFakeNurtureTransport`,
+  `api/lib/nurture/nurture-transport.ts`),
   explicitly named, documented, and used solely by tests. It performs no
   network I/O and contacts no real lead.
 - `REQUIRES_APPROVAL` capability composes with §9: execution only after the
