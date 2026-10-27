@@ -78,6 +78,9 @@ describe("audit-event taxonomy", () => {
       "lead_score_recorded",
       // R6-E: durable conversion/outcome record accepted (ids/classes only).
       "conversion_recorded",
+      // R6-C: lead qualification durable effects.
+      "lead_qualification_evaluated",
+      "lead_qualification_review_resolved",
     ]);
   });
 

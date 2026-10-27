@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-06-28 (added §17 Marketing Action Policy, WBS-R5-E; §18 Lead Identity, WBS-R6-A)
+> **Last updated:** 2026-10-30 (R6-X integration: §18 Lead Identity WBS-R6-A; §19 Lead Qualification WBS-R6-C)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -23,6 +23,8 @@
 14. [Freemium Limits](#14-freemium-limits)
 15. [Database Schema Overview](#15-database-schema-overview)
 16. [API Architecture](#16-api-architecture)
+17. [Marketing Action Policy (WBS-R5-E)](#17-marketing-action-policy-wbs-r5-e)
+18. [Lead Qualification (WBS-R6-C)](#18-lead-qualification-wbs-r6-c)
 
 ---
 
@@ -609,6 +611,8 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `opportunity` | `api/opportunity-router.ts` | R5-D opportunity detection: rule-first, evidence-backed pre-lead candidate evaluation from R5-B interpretations; aggregation, confidence, lifecycle, expiry, exactly-once R6 handoff (`evaluate`, `attachEngagementEvidence`, `list`, `get`, `suppress`, `unsuppress`, `escalate`, `sweepExpiry` admin, `handoffToR6`, `listHandoffs`). Never creates leads/CRM rows. Contract: `docs/contracts/opportunity-candidate-contract.md` |
 | `leadIdentity` | `api/lead-identity-router.ts` | R6-A lead identity authority: deterministic, tenant-bound lead identities from R5 handoff envelopes; exact-once consumption (`consumeOpportunityHandoff` — server loads the durable envelope by `opportunityId` reference only), governed hashed enrichment (`submitIdentityEvidence` with deterministic merge/conflict), suppression/archival, downstream-safe projections (`get`, `list`). No scoring/qualification/contact/conversion. Contracts: `docs/contracts/lead-identity-contract.md`, `docs/contracts/lead-identity-to-scoring-qualification-contract.md` |
 | `scoring` | `api/scoring-router.ts` | R6-B lead scoring: deterministic, evidence-bound lead scores from R5 opportunity evidence + lead identity seam (`scoreLead`, `get`, `listHistory`). Immutable versioned records, honest confidence, bounded reason codes, exact-once. Score is evidence, never qualification. Contracts: `docs/contracts/lead-scoring-contract.md`, `docs/contracts/lead-scoring-to-qualification-contract.md` |
+| `conversion` | `api/conversion-router.ts` | R6-E conversion tracking: durable conversion/outcome records bound to tenant+business with provenance lineage (references only, never causation), deterministic server-minted conversion identity, exact-once natural key, reversal lifecycle events. Contracts: `docs/contracts/conversion-event-contract.md`, `docs/contracts/conversion-to-attribution-contract.md` |
+| `qualification` | `api/qualification-router.ts` | R6-C governed lead qualification: deterministic evidence-based decisions (QUALIFIED/NOT_QUALIFIED/REVIEW_REQUIRED/INSUFFICIENT_EVIDENCE/BLOCKED), exact-once immutable persistence, governed manual review, safe D handoff projection (`evaluate`, `get`, `listHistory`, `listReviews`, `resolveReview`, `getHandoffProjection`, `getPolicy`). Never performs outreach/CRM/conversion. Contracts: `docs/contracts/lead-qualification-contract.md`, `docs/contracts/lead-qualification-to-nurture-handoff-contract.md` |
 
 ### Context
 
@@ -655,6 +659,81 @@ server-side policy decision explicitly authorizes it.
   `docs/recovery/r5-e-unexecuted-migrations.md`).
 
 ---
+
+## 18. Lead Qualification (WBS-R6-C)
+
+The governed qualification layer that decides whether a lead may progress to
+downstream nurture/sales handoff. Owns qualification only — not identity
+resolution (R6-A), scoring (R6-B), outreach/nurture execution (R6-D), CRM
+lifecycle (`api/lead-router.ts`), conversion (R6-E), or privacy governance
+(R6-F).
+
+**Required principle:** *score is evidence, not qualification.* No
+qualification may be inferred from score alone, and no autonomous
+qualification occurs unless identity is valid and current, score evidence is
+valid and current where required, required business-fit evidence exists,
+qualification rules authorize the outcome, privacy/suppression allows
+evaluation, and governance does not block progression.
+
+- Core modules: `api/lib/qualification/` (`qualification-contract`,
+  `qualification-policy`, `qualification-engine`, `qualification-evidence`,
+  `qualification-identity-seam`, `qualification-scoring-seam`,
+  `qualification-governance-seam`, `qualification-review`,
+  `qualification-handoff`, `qualification-store`, `qualification-service`,
+  `qualification-bridge`).
+- Decisions (closed): `QUALIFIED`, `NOT_QUALIFIED`, `REVIEW_REQUIRED`,
+  `INSUFFICIENT_EVIDENCE`, `BLOCKED`. Reason codes closed (20, ≤ 8 per
+  record). There are no sales states — pipeline lifecycle remains with CRM
+  and R6-D.
+- Deterministic, rule-first: no model in the decision path; every decision is
+  reproducible from governed evidence + rules, immutable, and audited —
+  exactly one `lead_qualification_evaluated` event per inserted decision and
+  one `lead_qualification_review_resolved` per governed review resolution;
+  convergence paths emit zero events.
+- Exact-once: unique `(userId, qualificationId)` convergence anchor;
+  retries/concurrency converge by re-read (`idempotent_replay`); rows are
+  insert-only — corrections are new decisions. One governed review per
+  REVIEW_REQUIRED decision, bound to the exact decision via
+  `decisionBindingHash`, optimistic-CAS resolved at most once; replay drift
+  fails closed (`QUALIFICATION_REPLAY_CONFLICT`).
+- Cross-binding discipline: R6-B's score surface keys on the legacy numeric
+  `leads.id` with `lead-identity-seam/v1:<hash>`; C binds score↔identity by
+  tenant + business scope, never by leadId/version equality.
+- Fail closed on: missing/unknown policy version, unknown identity/score
+  versions, tampered hashes, stale inputs, unavailable authority bridge
+  (`QUALIFICATION_AUTHORITY_UNAVAILABLE`), replay conflicts, and privacy
+  suppression/retention (`BLOCKED`).
+- Manual review requires **independent human authentication**: resolution
+  needs a single-use, review-bound out-of-band challenge (email OTP,
+  purpose `review_authorization`) — a verified tenant session alone can
+  never resolve (runtime agents hold the tenant JWT; the code exists only
+  in the reviewer's mailbox). Gateway: `qualification-review-authority.ts`
+  over the governed OTP primitive; schema: `pendingChallengeToken` /
+  `challengeExpiresAt` on `lead_qualification_reviews`.
+- Privacy is read only through the authoritative chain: R6-A identity
+  (exact tenant/business scope) → validated R6-B score → score-authoritative
+  numeric `leads.id` → R6-F `lead_privacy_states`. No numeric-id inference,
+  no cached state; unestablished chains fail closed.
+- Router: `qualification` (`api/qualification-router.ts`) — authed-only
+  (`evaluate`, `get`, `listHistory`, `listReviews`, `requestReviewResolution`,
+  `resolveReview`, `getHandoffProjection`, `getPolicy`). Clients reference
+  ids only; `z.strictObject` rejects every client-supplied authority field
+  (decision, reason codes, confidence, review outcome, policy content,
+  identity, challenge proof).
+- Handoff contract: `docs/contracts/lead-qualification-contract.md` and
+  `docs/contracts/lead-qualification-to-nurture-handoff-contract.md`. R6-D
+  consumes the exact `getHandoffProjection` key set; the `mayProgress`
+  derivation is R6-C authority, never recomputed downstream.
+- Non-billable: deterministic rules only — no billing, no outreach, no CRM
+  mutation, no conversion side effects.
+- Schema: `lead_qualifications` + `lead_qualification_reviews` (provisional
+  migration `0034_lead_qualification_autonomy` — artefacts only, NOT
+  executed; see `docs/recovery/r6-c-unexecuted-migrations.md`; R6-X owns
+  canonical sequencing). The bridge (`qualification-bridge.ts`) mirrors the
+  frozen upstream R6-A/B/F column sets (`lead_identities`,
+  `lead_identity_provenance`, `lead_score_snapshots`, `lead_privacy_states`)
+  behind guarded information-schema checks, replaced by canonical
+  `@db/schema` imports at R6-X convergence.
 
 ## Useful Commands
 
