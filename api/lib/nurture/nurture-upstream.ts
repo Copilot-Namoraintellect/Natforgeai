@@ -10,12 +10,24 @@
 
 import { z } from "zod";
 import { failNurture } from "./nurture-contract";
+import { QUALIFICATION_ENGINE_VERSION } from "../qualification/qualification-contract";
 
 // ─── R6-C qualification handoff projection (frozen C §15 key set) ───
+
+// R6-X convergence: the C handoff projection carries C's published engine
+// version (lead-qualification-engine/v1, see qualification-contract.ts); D's
+// original prefix-only check never accepted it. The supported set below is
+// the exact closed allow-list of C-published versions — no prefix looseness,
+// so "lead-qualification/v1-rogue" keeps failing closed.
 
 /** C contract version this D build was frozen against. */
 export const SUPPORTED_QUALIFICATION_CONTRACT_PREFIX = "lead-qualification/v1" as const;
 export const SUPPORTED_IDENTITY_CONTRACT_VERSION = "lead-identity/v1" as const;
+
+const SUPPORTED_QUALIFICATION_ENGINE_VERSIONS: readonly string[] = Object.freeze([
+  SUPPORTED_QUALIFICATION_CONTRACT_PREFIX,
+  QUALIFICATION_ENGINE_VERSION,
+] as const);
 
 const QUALIFICATION_DECISIONS = [
   "QUALIFIED",
@@ -82,7 +94,7 @@ export const QualificationHandoffProjectionSchema = z.strictObject({
 export type QualificationHandoffProjection = z.infer<typeof QualificationHandoffProjectionSchema>;
 
 export function isQualificationContractVersionSupported(engineVersion: string): boolean {
-  return engineVersion.startsWith(SUPPORTED_QUALIFICATION_CONTRACT_PREFIX);
+  return (SUPPORTED_QUALIFICATION_ENGINE_VERSIONS as readonly string[]).includes(engineVersion);
 }
 
 /**
