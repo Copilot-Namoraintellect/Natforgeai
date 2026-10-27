@@ -37,6 +37,18 @@ import {
   validateMarketingActionApprovalAuthorizable,
 } from "./lib/policy/marketing-action-approval";
 import { policyDecisionRowToDecision } from "./lib/policy/policy-decision-store";
+// WBS-R6-D: sales-handoff approvals bind one exact handoff identity +
+// qualification fingerprint + policy version + content snapshot (contract §9).
+import {
+  SALES_HANDOFF_APPROVAL_TYPE,
+  readSalesHandoffApprovalBinding,
+  validateHandoffApprovalAuthorizable,
+} from "./lib/nurture/nurture-approval";
+import { getHandoffById, transitionHandoffStatus } from "./lib/nurture/nurture-store";
+import {
+  buildDefaultNurturePolicyConfig,
+  buildNurtureHandoffPolicy,
+} from "./lib/nurture/nurture-policy";
 
 type ApprovalDb = ReturnType<typeof getDb>;
 
@@ -610,6 +622,49 @@ async function validateMarketingActionApprovalForDecision(
   }
 }
 
+/**
+ * WBS-R6-D: authorising a `sales_handoff` approval requires the bound handoff
+ * to still exist with the same policy version and content snapshot; the
+ * binding must not have expired. Runs inside the decision transaction.
+ * Rejection is always permitted — a human may reject anything pending.
+ */
+async function validateSalesHandoffApprovalForDecision(
+  request: { id: number; status: string; userId: number; context: unknown },
+  executor: ApprovalDbExecutor,
+  now: Date
+): Promise<void> {
+  const binding = readSalesHandoffApprovalBinding(request.context);
+  if (binding === null) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "APPROVAL_BINDING_MISMATCH: this approval carries no sales-handoff binding.",
+    });
+  }
+  const handoff = await getHandoffById(request.userId, binding.handoffId, executor);
+  const currentPolicyVersion = buildNurtureHandoffPolicy(buildDefaultNurturePolicyConfig()).policyVersion;
+
+  try {
+    validateHandoffApprovalAuthorizable({
+      approval: { id: request.id, status: request.status as "pending", context: request.context },
+      handoff:
+        handoff === null
+          ? null
+          : {
+              handoffId: handoff.handoffId,
+              handoffPolicyVersion: handoff.handoffPolicyVersion,
+              contentSnapshotHash: handoff.contentSnapshotHash,
+            },
+      currentPolicyVersion,
+      now: now.toISOString(),
+    });
+  } catch (err) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: (err as Error).message,
+    });
+  }
+}
+
 type ApprovalDecisionKind = "approve" | "reject" | "edit";
 
 interface ApprovalDecisionResult {
@@ -741,6 +796,28 @@ async function executeApprovalDecision(
       }
     }
 
+    // WBS-R6-D: a sales_handoff approval binds one exact handoff identity +
+    // qualification fingerprint + policy version + content snapshot.
+    // Authorising is fail-closed on stale policy, changed snapshot, missing
+    // handoff or expired binding; edited approvals are never valid. Rejection
+    // is always permitted. Approval transitions the bound handoff to APPROVED
+    // inside the same transaction — the service never self-approves.
+    if (request.approvalType === SALES_HANDOFF_APPROVAL_TYPE) {
+      if (kind === "edit") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Sales handoff approvals cannot be edited; approve or reject the exact bound handoff.",
+        });
+      }
+      if (kind !== "reject") {
+        await validateSalesHandoffApprovalForDecision(
+          { id: request.id, status: request.status, userId: request.userId, context: request.context },
+          tx,
+          new Date()
+        );
+      }
+    }
+
     // ONE decision timestamp, shared by the approval row and the audit event.
     const decidedAt = new Date();
 
@@ -852,6 +929,28 @@ async function executeApprovalDecision(
         decidedByUserId: ctx.user.id,
         executor: tx,
       });
+    }
+
+    // WBS-R6-D: approving a sales_handoff approval authorizes exactly the
+    // bound handoff identity — CAS transition to APPROVED in the same
+    // transaction. A handoff that drifted to a non-claimable state fails
+    // closed rather than authorizing a stale effect.
+    if (kind === "approve" && request.approvalType === SALES_HANDOFF_APPROVAL_TYPE) {
+      const binding = readSalesHandoffApprovalBinding(request.context);
+      if (binding !== null) {
+        const moved = await transitionHandoffStatus(
+          request.userId,
+          binding.handoffId,
+          { fromStatuses: ["APPROVAL_REQUIRED"], toStatus: "APPROVED" },
+          tx
+        );
+        if (!moved.transitioned && moved.row.handoffStatus !== "APPROVED") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `HANDOFF_STATE_CONFLICT: bound handoff is ${moved.row.handoffStatus}; approval cannot authorize it.`,
+          });
+        }
+      }
     }
 
     return {

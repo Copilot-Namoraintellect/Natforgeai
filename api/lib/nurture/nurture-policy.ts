@@ -69,7 +69,7 @@ export interface NurtureHandoffPolicy {
  * is visibly a different version (STALE_POLICY_VERSION gates enforcement).
  */
 export function derivePolicyVersion(
-  config: NurtureHandoffPolicyConfig,
+  _config: NurtureHandoffPolicyConfig,
   configHash: string
 ): string {
   const defaultHash = hashNurturePolicyConfig(buildDefaultNurturePolicyConfig());

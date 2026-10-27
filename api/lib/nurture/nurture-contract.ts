@@ -159,8 +159,17 @@ export const DispatchHandoffInputSchema = z.strictObject({
   handoffId: z.string().min(1).max(96),
 });
 
+export const NurtureDraftInputSchema = z.strictObject({
+  channel: z.enum(NURTURE_CHANNELS),
+  subject: z.string().max(200).optional(),
+  body: z.string().min(1).max(4000),
+  cta: z.string().max(200).optional(),
+});
+
 export const DispatchNurtureTouchInputSchema = z.strictObject({
   nurtureDecisionId: z.string().min(1).max(96),
+  /** Model-drafted content — validated by the D4 boundary before any send. */
+  draft: NurtureDraftInputSchema,
 });
 
 // ─── Error taxonomy ───
