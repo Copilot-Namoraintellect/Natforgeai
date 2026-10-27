@@ -74,6 +74,8 @@ describe("audit-event taxonomy", () => {
       "lead_identity_conflict",
       "lead_identity_suppressed",
       "lead_identity_archived",
+      // R6-B: immutable lead score records (evidence, not qualification).
+      "lead_score_recorded",
     ]);
   });
 

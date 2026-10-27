@@ -29,6 +29,7 @@ import { policyRouter } from "./policy-router";
 import { engagementRouter } from "./engagement-router";
 import { opportunityRouter } from "./opportunity-router";
 import { leadIdentityRouter } from "./lead-identity-router";
+import { scoringRouter } from "./scoring-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -83,6 +84,7 @@ export const appRouter = createRouter({
   engagement: engagementRouter,
   opportunity: opportunityRouter,
   leadIdentity: leadIdentityRouter,
+  scoring: scoringRouter,
 });
 
 export type AppRouter = typeof appRouter;
