@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-06-28 (added §17 Marketing Action Policy, WBS-R5-E)
+> **Last updated:** 2026-06-28 (added §17 Marketing Action Policy, WBS-R5-E; §18 Lead Identity, WBS-R6-A)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -607,6 +607,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `listening` | `api/lib/social-listening/listening-router.ts` | WBS-R5-A social listening: tenant-scoped listening status (`getOverview`), canonical signal read view (`listSignals`), operator overview (`adminGetOverview`) |
 | `policy` | `api/policy-router.ts` | WBS-R5-E governed policy layer: marketing-action evaluation, versioned business policies, durable auditable decisions (`evaluateActionRequest`, `getDecision`, `explainDecision`, `listDecisions`, `getPolicy`, `adoptDefaultPolicy`, `setPolicy`, `adminListDecisions`) |
 | `opportunity` | `api/opportunity-router.ts` | R5-D opportunity detection: rule-first, evidence-backed pre-lead candidate evaluation from R5-B interpretations; aggregation, confidence, lifecycle, expiry, exactly-once R6 handoff (`evaluate`, `attachEngagementEvidence`, `list`, `get`, `suppress`, `unsuppress`, `escalate`, `sweepExpiry` admin, `handoffToR6`, `listHandoffs`). Never creates leads/CRM rows. Contract: `docs/contracts/opportunity-candidate-contract.md` |
+| `leadIdentity` | `api/lead-identity-router.ts` | R6-A lead identity authority: deterministic, tenant-bound lead identities from R5 handoff envelopes; exact-once consumption (`consumeOpportunityHandoff` — server loads the durable envelope by `opportunityId` reference only), governed hashed enrichment (`submitIdentityEvidence` with deterministic merge/conflict), suppression/archival, downstream-safe projections (`get`, `list`). No scoring/qualification/contact/conversion. Contracts: `docs/contracts/lead-identity-contract.md`, `docs/contracts/lead-identity-to-scoring-qualification-contract.md` |
 
 ### Context
 
@@ -699,3 +700,36 @@ npm run reset:superadmin     # Reset superadmin password
 | `LINKEDIN_REDIRECT_URI` | LinkedIn OAuth callback URI (default `https://natforgeai.com/api/oauth/linkedin/callback`) |
 | `ENABLE_PREMIUM_VIDEO` | Enable premium video generation features (`false` by default) |
 | `ENABLE_BASIC_DRAFT_VIDEO` | Enable basic draft video generation features (`false` by default) |
+
+---
+
+## 18. Lead Identity (WBS-R6-A)
+
+The authoritative lead-identity layer: converts R5 opportunity handoff
+envelopes into durable, tenant-safe lead identities. Owns **lead identity
+only** — no scoring (R6-B), qualification (R6-C), nurture (R6-D), conversion
+(R6-E), or governance override (R6-F).
+
+- Core modules: `api/lib/lead-identity/` (`lead-identity-contract`,
+  `lead-identity-keys`, `lead-identity-derivation`, `lead-identity-store`,
+  `lead-identity-service`); router `api/lead-identity-router.ts` (`leadIdentity`).
+- Identity: deterministic, server-minted `leadId = "lid1:" + sha256(coordinates)`
+  over `{ userId, businessId, actorKey | threadKey }`; the R5 `actorKey` hash
+  is stored verbatim — **raw actor references / raw PII never persist**.
+- Exact-once R5 handoff consumption via unique `(userId, handoffId)`
+  provenance; replay returns the existing identity; concurrent intake
+  converges; tampered/stale/forged/cross-tenant handoffs fail closed.
+- Controlled enrichment only through `submitIdentityEvidence`
+  (email/phone/customer references are normalized + hashed server-side).
+  Deterministic merge requires an authoritative linking key shared within one
+  tenant + business scope; conflicts become `conflicting` (sticky, R6-F
+  resolves) — never a silent merge. No merge-anything endpoint exists.
+- Identity status is identity-lifecycle only (`active`, `anonymous`,
+  `partially_identified`, `resolved`, `conflicting`, `suppressed`, `merged`,
+  `archived`) — no sales/qualified/converted states.
+- Schema: `lead_identities`, `lead_identity_provenance`, `lead_identity_merges`
+  (provisional migration `0034_lead_identity_foundation`, artefact only — see
+  `docs/recovery/r6-a-unexecuted-migrations.md`).
+- Contracts: `docs/contracts/lead-identity-contract.md` (canonical),
+  `docs/contracts/lead-identity-to-scoring-qualification-contract.md`
+  (downstream handoff). Acceptance: `api/lib/lead-identity/r6-a-acceptance.test.ts`.
