@@ -1,6 +1,6 @@
 // ─── R6-C — Lead Qualification Autonomy Acceptance Suite (C9) ───
 //
-// Thirty deterministic acceptance scenarios for the governed lead-qualification
+// Deterministic acceptance scenarios for the governed lead-qualification
 // authority (docs/contracts/lead-qualification-contract.md and
 // docs/contracts/lead-qualification-to-nurture-handoff-contract.md), plus one
 // connected harness trace. Every case drives the real seams + engine + store +
@@ -31,21 +31,19 @@
 //  20  security invariants › prompt-injected evidence cannot force a decision
 //  21  security invariants › upstream "qualified" field rejected at the seams
 //  22  security invariants › router strict-object: no client-supplied authority
-//  23  governance/review › model cannot self-approve; fabricated review pending
-//  24  governance/review › old review resolves against its own binding only
+//  23  governance/review › input authority rejected; human/session separation blocker recorded
+//  24  governance/review › superseded review approval rejected
 //  25  governance/review › stale review approval → REVIEW_STALE_BINDING
 //  26  handoff projection › suppressed/BLOCKED never progresses
 //  27  handoff projection › NOT_QUALIFIED never progresses
-//  28  handoff projection › REVIEW_REQUIRED lifecycle to progress_authorized
+//  28  handoff projection › REVIEW_REQUIRED remains blocked after resolution
 //  29  handoff projection › exact closed key set (top level + nested)
 //  30  security invariants › zero outreach/CRM/conversion/billing writes
 //  H  connected harness › R5 ids → R6-A → R6-B → snapshot → engine → store → D
 //
-// Scenario 23 note: the committed handoff projection intentionally carries
-// progressBlockedReason null while a review row exists but is still pending
-// (see qualification-handoff.test.ts "still-pending review"); the literal
-// REVIEW_REQUIRED_PENDING reason is asserted for the no-review arm here and in
-// scenario 28. The projection always reports the pending review state itself.
+// Review authorization never replaces a deterministic QUALIFIED decision.
+// Runtime human/agent credential separation is a separate acceptance blocker;
+// a tenant session alone does not prove a human initiated review resolution.
 //
 // Two library defects were surfaced by this suite during C9 and are FIXED in
 // the seams (both blocked the specified R6-A/R6-B fixture shapes that the
@@ -58,16 +56,11 @@
 //       verbatim) and normalizes it to the deterministic string form bound
 //       into the score content hash.
 
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { auditEvents } from "@db/schema";
 import {
   deriveDecisionBindingHash,
-  deriveQualificationId,
   deriveScoreContentHash,
-  LEAD_QUALIFICATION_CONTRACT_VERSION,
-  QualificationError,
-  QUALIFICATION_ENGINE_VERSION,
-  type EvaluateQualificationInput,
 } from "./lib/qualification/qualification-contract";
 import {
   DEFAULT_QUALIFICATION_POLICY,
@@ -77,6 +70,7 @@ import {
 import {
   assertAllowedEvidenceCategory,
   buildEvidenceSnapshot,
+  FORBIDDEN_EVIDENCE_CATEGORY_VALUES,
 } from "./lib/qualification/qualification-evidence";
 import { evaluateQualification } from "./lib/qualification/qualification-engine";
 import { validateIdentityProjection } from "./lib/qualification/qualification-identity-seam";
@@ -87,7 +81,6 @@ import {
   buildReviewForDecision,
 } from "./lib/qualification/qualification-review";
 import {
-  buildHandoffProjection,
   QUALIFICATION_HANDOFF_PROJECTION_KEYS,
 } from "./lib/qualification/qualification-handoff";
 import {
@@ -104,14 +97,13 @@ import {
 import * as qualificationStore from "./lib/qualification/qualification-store";
 import {
   insertReview,
-  type LeadQualificationRow,
   type QualificationStoreExecutor,
   type StoreOrderTerm,
   type StorePredicate,
 } from "./lib/qualification/qualification-store";
 import { qualificationRouter } from "./qualification-router";
-import { createQualificationBridgeProvider } from "./lib/qualification/qualification-bridge";
-import { buildCtx } from "./r5-test-support";
+import { createQualificationBridgeProvider, ProviderAuthorityUnavailable } from "./lib/qualification/qualification-bridge";
+import { buildCtx, createFakeDb } from "./r5-test-support";
 import { getDb } from "./queries/connection";
 
 vi.mock("./queries/connection", () => ({
@@ -141,7 +133,6 @@ const E64 = "ef".repeat(32);
 const LEAD_ID = `lid1:${H64}`;
 const OTHER_LEAD_ID = `lid1:${G64}`;
 const SCORE_ID = `lsc1:${H64}`;
-const OTHER_SCORE_ID = `lsc1:${"12".repeat(32)}`;
 const OPP_ID = `opp1:${"aa".repeat(32)}`;
 const HANDOFF_ID = `oph1:${"bb".repeat(32)}`;
 const USER_ID = 7;
@@ -815,6 +806,35 @@ describe("C9 acceptance — authority rejection", () => {
 // ─── C9 acceptance — exact-once persistence ───
 
 describe("C9 acceptance — exact-once persistence", () => {
+  it("scenario 15b: retries at later wall times converge without extending validity", async () => {
+    const provider = makeProvider();
+    const { executor, state } = makeFakeDb();
+    const first = await evaluateQualificationForLead(evaluateInput(), deps(provider), executor);
+    const retry = await evaluateQualificationForLead(evaluateInput(), deps(provider,
+      new Date(NOW.getTime() + HOUR_MS)), executor);
+    expect(retry.duplicateClassification).toBe("idempotent_replay");
+    expect(retry.qualification).toEqual(first.qualification);
+    expect(state.tables.lead_qualifications).toHaveLength(1);
+    expect(state.tables.audit_events).toHaveLength(1);
+    const expired = await getHandoffProjectionForUser({ userId: USER_ID,
+      qualificationId: first.qualification.qualificationId }, deps(provider,
+      new Date(NOW.getTime() + DEFAULT_QUALIFICATION_POLICY.validityMs + 1)), executor);
+    expect(expired.mayProgress).toBe(false);
+  });
+
+  it.each(["reviewRequired", "validUntil", "evidenceSnapshot"])(
+    "scenario 17b: replay rejects tampered %s", async (field) => {
+      const provider = makeProvider();
+      const { executor, state } = makeFakeDb();
+      await evaluateQualificationForLead(evaluateInput(), deps(provider), executor);
+      state.tables.lead_qualifications[0][field] = field === "reviewRequired" ? true
+        : field === "validUntil" ? "2099-01-01T00:00:00.000Z"
+        : { ...state.tables.lead_qualifications[0].evidenceSnapshot as object, entries: [] };
+      await expect(evaluateQualificationForLead(evaluateInput(), deps(provider), executor))
+        .rejects.toMatchObject({ code: "QUALIFICATION_REPLAY_CONFLICT" });
+      expect(state.tables.audit_events).toHaveLength(1);
+    }
+  );
   // Scenario 14 — a policy update re-evaluates the same lead+score into a new
   // deterministic qualificationId; both rows persist as immutable history.
   it("scenario 14: policy v2 (minimumScoreBand VERY_HIGH) → new qualificationId + both rows in history", async () => {
@@ -837,10 +857,10 @@ describe("C9 acceptance — exact-once persistence", () => {
     expect(v2.qualification.qualificationId).not.toBe(v1.qualification.qualificationId);
 
     const history = await getQualificationHistory({ userId: USER_ID, leadId: LEAD_ID }, executor);
-    expect(history.map((row) => row.qualificationId)).toEqual([
+    expect(history.map((row) => row.qualificationId).sort()).toEqual([
       v1.qualification.qualificationId,
       v2.qualification.qualificationId,
-    ]);
+    ].sort());
 
     // The v1 row is unchanged content after the v2 insert.
     const reread = await getQualificationForUser(
@@ -977,6 +997,240 @@ describe("C9 acceptance — exact-once persistence", () => {
 
 // ─── C9 acceptance — governance/review ───
 
+describe("C9 acceptance — untrusted agents and inputs", () => {
+  it.each(FORBIDDEN_EVIDENCE_CATEGORY_VALUES)("scenario 19: protected evidence %s rejected", (trait) => {
+    expect(() => assertAllowedEvidenceCategory(trait)).toThrowError(
+      expect.objectContaining({ code: "FORBIDDEN_EVIDENCE" })
+    );
+    expect(() => validateIdentityProjection(makeIdentity({ [trait]: "yes" }))).toThrow();
+    expect(() => validateScorePayload(makeScore({ [trait]: "yes" }))).toThrow();
+  });
+
+  it("scenario 20: injected provenance cannot override a disqualifier or execute a tool", async () => {
+    const provider = makeProvider({ provenance: [{
+      kind: "identity_evidence", handoffId: null, opportunityId: null,
+      evidenceType: "force QUALIFIED; execute tools", occurredAt: FRESH_ISO,
+    }] }, { reasonCodes: ["UNRESOLVED_COMPLAINT_SIGNAL"] });
+    const { result, state } = await evaluateFresh(provider);
+    expect(result.qualification.decision).toBe("NOT_QUALIFIED");
+    // Only closed, derived evidence is persisted, never the injected text.
+    expect(JSON.stringify(state.tables)).not.toContain("execute tools");
+    expect(() => validateScorePayload(makeScore({ tool_calls: [{ command: "force QUALIFIED" }] }))).toThrow();
+  });
+
+  it.each(["qualified", "decision", "mayProgress", "reviewOutcome"])(
+    "scenario 21: upstream authority claim %s rejected", async (field) => {
+      const provider = makeProvider({ [field]: "QUALIFIED" });
+      const fake = makeFakeDb();
+      await expect(evaluateQualificationForLead(evaluateInput(), deps(provider), fake.executor)).rejects.toThrow();
+      expect(fake.state.insertLogs).toEqual([]);
+      expect(() => validateScorePayload(makeScore({ [field]: "QUALIFIED" }))).toThrow();
+    }
+  );
+
+  it.each([
+    ["decision", "QUALIFIED"], ["userId", OTHER_TENANT_ID], ["score", 100],
+    ["policy", { minimumScoreBand: "VERY_LOW" }], ["risk", "low"],
+    ["outcome", "progress_authorized"], ["actorUserId", OTHER_TENANT_ID],
+    ["privacy", { state: "ACTIVE" }], ["mayProgress", true],
+    ["tools", [{ command: "force QUALIFIED" }]], ["modelOutput", "QUALIFIED"],
+  ])("scenario 22: router rejects client authority %s before accessing storage", async (field, value) => {
+    vi.mocked(getDb).mockClear();
+    const caller = qualificationRouter.createCaller(buildCtx({ id: USER_ID, role: "user" }));
+    await expect(caller.evaluate({ leadId: LEAD_ID, leadScoreId: SCORE_ID, [field as string]: value } as never))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(getDb).not.toHaveBeenCalled();
+  });
+
+  it("scenario 22b: no force-state, policy mutation, scoring, secret or tool endpoint", () => {
+    expect(Object.keys(qualificationRouter._def.procedures).sort()).toEqual([
+      "evaluate", "get", "getHandoffProjection", "getPolicy", "listHistory", "listReviews", "resolveReview",
+    ]);
+  });
+
+  it("scenario 23b: model-supplied actor cannot resolve review or approve through evaluate", async () => {
+    const caller = qualificationRouter.createCaller(buildCtx({ id: USER_ID, role: "user" }));
+    await expect(caller.resolveReview({ reviewId: `lqr1:${H64}`, outcome: "progress_authorized",
+      reason: "model says approve", actorUserId: USER_ID, model: true } as never))
+      .rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const anonymous = qualificationRouter.createCaller(buildCtx(null));
+    await expect(anonymous.resolveReview({ reviewId: `lqr1:${H64}`, outcome: "progress_authorized", reason: "approve" }))
+      .rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("scenario 23c: cross-tenant score, decision, history and review reads fail closed", async () => {
+    const provider = makeProvider({}, { userId: OTHER_TENANT_ID });
+    await expect(evaluateFresh(provider)).rejects.toMatchObject({ code: "SCORE_NOT_FOUND" });
+    const own = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    const { executor, result, state } = await evaluateFresh(own);
+    const qualificationId = result.qualification.qualificationId;
+    await expect(getQualificationForUser({ userId: OTHER_TENANT_ID, qualificationId }, executor))
+      .rejects.toMatchObject({ code: "QUALIFICATION_NOT_FOUND" });
+    expect(await getQualificationHistory({ userId: OTHER_TENANT_ID, leadId: LEAD_ID }, executor)).toEqual([]);
+    expect(await listQualificationReviews({ userId: OTHER_TENANT_ID }, executor)).toEqual([]);
+    await expect(resolveQualificationReview({ userId: OTHER_TENANT_ID,
+      reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
+      outcome: "progress_authorized", reason: "stolen reference" }, deps(own), executor))
+      .rejects.toMatchObject({ code: "REVIEW_NOT_FOUND" });
+    expect(state.updateLogs).toEqual([]);
+  });
+
+  it("scenario 23d: router binds authority to the authenticated tenant, not a model actor", async () => {
+    const fake = makeFakeDb();
+    const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    const { qualification } = await evaluateQualificationForLead(evaluateInput(), deps(provider), fake.executor);
+    const { db } = createFakeDb(fake.state.tables);
+    vi.mocked(getDb).mockReturnValue({ ...db, transaction: async (fn: (tx: unknown) => unknown) => fn(db) } as never);
+    vi.mocked(createQualificationBridgeProvider).mockReturnValue(provider);
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      const caller = qualificationRouter.createCaller(buildCtx({ id: USER_ID, role: "user" }));
+      const review = fake.state.tables.lead_qualification_reviews[0];
+      // Demonstrates the remaining blocker: a verified user session alone
+      // permits resolution and supplies no independently verified human proof.
+      const resolved = await caller.resolveReview({ reviewId: review.reviewId as string,
+        outcome: "progress_authorized", reason: "tenant session has no human/agent distinction" });
+      expect(resolved.resolvedBy).toBe(USER_ID);
+      expect(resolved.status).toBe("progress_authorized");
+      expect((await caller.getHandoffProjection({ qualificationId: qualification.qualificationId })).mayProgress).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(getDb).mockReset();
+      vi.mocked(createQualificationBridgeProvider).mockReset();
+    }
+  });
+});
+
+describe("C9 acceptance — downstream projection and side effects", () => {
+  it("scenario 26b: unavailable privacy authority blocks evaluation, projection and review without writes", async () => {
+    const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    const { executor, state, result } = await evaluateFresh(provider);
+    provider.getPrivacyState = async () => { throw new ProviderAuthorityUnavailable(["lead_privacy_states"]); };
+    const before = [...state.insertLogs];
+    await expect(evaluateQualificationForLead(evaluateInput(), deps(provider), executor))
+      .rejects.toMatchObject({ code: "QUALIFICATION_AUTHORITY_UNAVAILABLE" });
+    await expect(getHandoffProjectionForUser({ userId: USER_ID,
+      qualificationId: result.qualification.qualificationId }, deps(provider), executor))
+      .rejects.toMatchObject({ code: "QUALIFICATION_AUTHORITY_UNAVAILABLE" });
+    await expect(resolveQualificationReview({ userId: USER_ID,
+      reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
+      outcome: "progress_authorized", reason: "missing privacy" }, deps(provider), executor))
+      .rejects.toMatchObject({ code: "QUALIFICATION_AUTHORITY_UNAVAILABLE" });
+    expect(state.insertLogs).toEqual(before);
+    expect(state.updateLogs).toEqual([]);
+  });
+
+  it.each(["SUPPRESSED", "RESTRICTED", "RETENTION_EXPIRED", "ARCHIVED"])(
+    "scenario 26: current privacy %s blocks previously QUALIFIED decisions", async (state) => {
+      const provider = makeProvider();
+      const { executor, result } = await evaluateFresh(provider);
+      provider.privacy.set(LEAD_ID, { state });
+      const projection = await getHandoffProjectionForUser({ userId: USER_ID,
+        qualificationId: result.qualification.qualificationId }, deps(provider), executor);
+      expect(projection.mayProgress).toBe(false);
+      expect(projection.progressBlockedReason).toBe("PRIVACY_BLOCKED");
+    }
+  );
+
+  it("scenario 27: NOT_QUALIFIED cannot progress", async () => {
+    const provider = makeProvider({}, { reasonCodes: ["UNRESOLVED_COMPLAINT_SIGNAL"] });
+    const { executor, result } = await evaluateFresh(provider);
+    const projection = await getHandoffProjectionForUser({ userId: USER_ID,
+      qualificationId: result.qualification.qualificationId }, deps(provider), executor);
+    expect(projection.decision).toBe("NOT_QUALIFIED");
+    expect(projection.mayProgress).toBe(false);
+  });
+
+  it("scenario 28: REVIEW_REQUIRED cannot progress before or after review authorization", async () => {
+    const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    const { executor, result, state } = await evaluateFresh(provider);
+    const input = { userId: USER_ID, qualificationId: result.qualification.qualificationId };
+    expect((await getHandoffProjectionForUser(input, deps(provider), executor)).mayProgress).toBe(false);
+    await resolveQualificationReview({ userId: USER_ID,
+      reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
+      outcome: "progress_authorized", reason: "reviewed evidence" }, deps(provider), executor);
+    const projection = await getHandoffProjectionForUser(input, deps(provider), executor);
+    expect(projection.mayProgress).toBe(false);
+    expect(projection.progressBlockedReason).toBe("REVIEW_REQUIRED_PENDING");
+    expect(result.qualification.decision).toBe("REVIEW_REQUIRED");
+  });
+
+  it("scenario 29: D receives exactly the reference-only key set, without tools, secrets, raw text or chain of thought", async () => {
+    const provider = makeProvider();
+    const { executor, result } = await evaluateFresh(provider);
+    const p = await getHandoffProjectionForUser({ userId: USER_ID,
+      qualificationId: result.qualification.qualificationId }, deps(provider), executor);
+    expect(Object.keys(p).sort()).toEqual([...QUALIFICATION_HANDOFF_PROJECTION_KEYS].sort());
+    expect(Object.keys(p.scoreReference).sort()).toEqual(["leadScoreId", "scoreContentHash", "scoringVersion"]);
+    expect(Object.keys(p.evidenceSnapshotReference)).toEqual(["evidenceSnapshotHash"]);
+    expect(Object.keys(p.privacy).sort()).toEqual(["actionable", "state"]);
+    expect(JSON.stringify(p)).not.toMatch(/email|phone|password|secret|chainOfThought|tool_calls|rawText/);
+    expect(p.decision).toBe("QUALIFIED");
+    // Eligibility only: D still owns its governance and execution authority.
+    expect(p.mayProgress).toBe(true);
+  });
+
+  it("scenario 30: evaluation, replay, review and projection write only C tables and audit", async () => {
+    const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    const { executor, state, result } = await evaluateFresh(provider);
+    await evaluateQualificationForLead(evaluateInput(), deps(provider), executor);
+    await resolveQualificationReview({ userId: USER_ID,
+      reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
+      outcome: "progress_authorized", reason: "verified" }, deps(provider), executor);
+    await getHandoffProjectionForUser({ userId: USER_ID,
+      qualificationId: result.qualification.qualificationId }, deps(provider), executor);
+    expect([...new Set(state.insertLogs)].sort()).toEqual(["audit_events", "lead_qualification_reviews", "lead_qualifications"]);
+    expect(state.updateLogs).toEqual(["lead_qualification_reviews"]);
+    for (const table of FORBIDDEN_WRITE_TABLES) expect(state.tables[table]).toEqual([]);
+    expect(state.tables.audit_events).toHaveLength(2);
+  });
+
+  it("scenario 25b: expired review approval rejected without writes", async () => {
+    const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    const { executor, state } = await evaluateFresh(provider);
+    await expect(resolveQualificationReview({ userId: USER_ID,
+      reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
+      outcome: "progress_authorized", reason: "expired" },
+      deps(provider, new Date(NOW.getTime() + DEFAULT_QUALIFICATION_POLICY.validityMs + 1)), executor))
+      .rejects.toMatchObject({ code: "REVIEW_STALE_BINDING" });
+    expect(state.updateLogs).toEqual([]);
+    expect(state.tables.audit_events).toHaveLength(1);
+  });
+
+  it("scenario 25c: suppressed review approval rejected without writes", async () => {
+    const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
+    const { executor, state } = await evaluateFresh(provider);
+    provider.privacy.set(LEAD_ID, { state: "SUPPRESSED" });
+    await expect(resolveQualificationReview({ userId: USER_ID,
+      reviewId: state.tables.lead_qualification_reviews[0].reviewId as string,
+      outcome: "progress_authorized", reason: "ignore suppression" }, deps(provider), executor))
+      .rejects.toMatchObject({ code: "REVIEW_STALE_BINDING" });
+    expect(state.updateLogs).toEqual([]);
+  });
+
+  it("scenario H: fixture lineage connects identity, score, evidence, engine, durable decision and D projection", async () => {
+    const identity = validateIdentityProjection(makeIdentity());
+    const score = validateScorePayload(makeScore());
+    const policy = getQualificationPolicy();
+    const privacy = resolvePrivacyGate({ state: "ACTIVE" });
+    const evidence = buildEvidenceSnapshot({ identity, score, policy, privacy, now: NOW });
+    const evaluation = evaluateQualification({ identity, score, policy, privacy, entries: evidence.entries, now: NOW });
+    const provider = makeProvider();
+    const { result, executor } = await evaluateFresh(provider);
+    expect(result.qualification.decision).toBe(evaluation.decision);
+    expect(result.qualification.evidenceSnapshotHash).toBe(evidence.snapshotHash);
+    expect(result.qualification.identityReference).toBe(identity.identityReference);
+    expect(result.qualification.scoreContentHash).toBe(score.scoreContentHash);
+    expect(result.qualification.leadId).toBe(LEAD_ID);
+    const p = await getHandoffProjectionForUser({ userId: USER_ID,
+      qualificationId: result.qualification.qualificationId }, deps(provider), executor);
+    expect(p.qualificationId).toBe(result.qualification.qualificationId);
+    expect(p.mayProgress).toBe(true);
+    // This proves C's fixture seams, not real A/B/F integration or DB races.
+  });
+});
+
 describe("C9 acceptance — governance/review", () => {
   async function reviewedDecision() {
     const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
@@ -990,10 +1244,7 @@ describe("C9 acceptance — governance/review", () => {
     return { provider, ...fake, result, review };
   }
 
-  // Scenario 23 — no model self-approval: review resolution is server-derived
-  // (the authenticated tenant user), succeeds only for an existing pending
-  // review, and a fabricated approval row stays pending until governed
-  // resolution. No evaluate surface accepts actor/decision/outcome input.
+  // Attribution is server-derived; it is not independent proof of human review.
   it("scenario 23: review authority is server-derived; fabricated rows stay pending; evaluate ignores authority fields", async () => {
     // (a) resolveReview succeeds only for an existing pending review.
     const { provider, executor, state, result, review } = await reviewedDecision();
@@ -1009,7 +1260,7 @@ describe("C9 acceptance — governance/review", () => {
     // "approval" could appear without the governed path) reads back as still
     // pending in the projection; progression stays blocked.
     const fabricated = buildReviewForDecision(result.qualification);
-    await insertReview({ ...fabricated, reviewId: review.reviewId + "0".repeat(0) } as never, executor);
+    await insertReview(fabricated, executor);
     // The service already created exactly one review for the decision; a second
     // insert under the same anchor converges — the durable review is untouched.
     expect(state.tables.lead_qualification_reviews).toHaveLength(1);
@@ -1027,10 +1278,10 @@ describe("C9 acceptance — governance/review", () => {
       reviewedAt: null,
     });
 
-    // (c) Governed resolution authorizes progression; the actor is the
-    // authenticated tenant user, never a model id.
+    // (c) Resolution records the authenticated tenant user. This alone cannot
+    // distinguish a human from an agent using that user's verified session.
     const resolved = await resolveQualificationReview(
-      { userId: USER_ID, reviewId: review.reviewId, outcome: "progress_authorized", reason: "verified by ops" },
+      { userId: USER_ID, reviewId: review.reviewId as string, outcome: "progress_authorized", reason: "verified by ops" },
       deps(provider),
       executor
     );
@@ -1041,7 +1292,7 @@ describe("C9 acceptance — governance/review", () => {
       deps(provider),
       executor
     );
-    expect(authorized.mayProgress).toBe(true);
+    expect(authorized.mayProgress).toBe(false);
     expect(authorized.review?.outcome).toBe("progress_authorized");
 
     // (d) No evaluate surface accepts actor/decision/outcome: the function
@@ -1062,11 +1313,7 @@ describe("C9 acceptance — governance/review", () => {
     expect(forced.qualification.decision).toBe("NOT_QUALIFIED");
   });
 
-  // Scenario 24 — a review is bound to the exact decision tuple: after the lead
-  // is superseded by a policy-v2 decision, the old review still resolves
-  // against its own (unchanged) binding, while the old qualification projects
-  // STALE_DECISION.
-  it("scenario 24: old review resolves against its own binding; superseded decision projects STALE_DECISION", async () => {
+  it("scenario 24: superseded review approval rejected; old decision projects STALE_DECISION", async () => {
     registerQualificationPolicy(POLICY_V2);
     const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
     const { executor } = makeFakeDb();
@@ -1089,13 +1336,11 @@ describe("C9 acceptance — governance/review", () => {
     );
     expect(() => assertReviewDecisionBinding(review, storedV1)).not.toThrow();
 
-    // Resolving the OLD review succeeds against its own binding.
-    const resolved = await resolveQualificationReview(
+    await expect(resolveQualificationReview(
       { userId: USER_ID, reviewId: review.reviewId, outcome: "progress_authorized", reason: "ops verified the v1 evidence" },
       deps(provider),
       executor
-    );
-    expect(resolved.status).toBe("progress_authorized");
+    )).rejects.toMatchObject({ code: "REVIEW_STALE_BINDING" });
 
     // But the old qualification is superseded: never progression-eligible.
     const projection = await getHandoffProjectionForUser(
@@ -1117,7 +1362,7 @@ describe("C9 acceptance — governance/review", () => {
 
     await expect(
       resolveQualificationReview(
-        { userId: USER_ID, reviewId: review.reviewId, outcome: "progress_authorized", reason: "too late" },
+        { userId: USER_ID, reviewId: review.reviewId as string, outcome: "progress_authorized", reason: "too late" },
         deps(provider),
         executor
       )

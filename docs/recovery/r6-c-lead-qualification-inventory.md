@@ -106,9 +106,10 @@ endpoint).
   actionable; `SUPPRESSED`/`RESTRICTED` ⇒ not actionable
   (`PRIVACY_SUPPRESSED`); `RETENTION_EXPIRED`/`ARCHIVED` ⇒ not actionable
   (`RETENTION_EXPIRED`).
-- Guarded information-schema bridge: privacy table absent ⇒ degrade
-  honestly (default `ACTIVE` on reads; C mirrors the bridge pattern for its
-  own authority tables).
+- C9 safety override: the bridge rejects absent privacy schema and unresolved
+  `lid1:` to numeric privacy-id mappings. Missing authority is not evidence
+  of ACTIVE status. A missing row is meaningful only after an authoritative
+  numeric binding is available; R6-X owns that integration.
 - F blocker taxonomy reserves `QUALIFICATION_REQUIRES_REVIEW` /
   `QUALIFICATION_BLOCKED` (GOVERNANCE_APPROVAL recovery class,
   `systemRetryAllowed: false`), keyed on future `qualificationStatus`
@@ -162,7 +163,7 @@ reasonCodes, scoreReference {leadScoreId, scoringVersion, scoreContentHash},
 evidenceSnapshotReference {evidenceSnapshotHash}, qualificationPolicyVersion,
 engineVersion, evaluatedAt, validUntil, review state, privacy state,
 mayProgress + blocked reason`. No PII, no raw evidence, no model output.
-Only `QUALIFIED` (or `REVIEW_REQUIRED` after governed review authorization)
+Only a current, fresh, privacy-actionable `QUALIFIED` decision
 may progress; D must not rewrite qualification authority. See
 `docs/contracts/lead-qualification-to-nurture-handoff-contract.md`.
 

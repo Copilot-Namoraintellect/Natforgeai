@@ -715,7 +715,7 @@ describe("getHandoffProjectionForUser", () => {
     expect(projection.privacy).toEqual({ state: "ACTIVE", actionable: true });
   });
 
-  it("blocks progression for REVIEW_REQUIRED until governed review authorizes it", async () => {
+  it("blocks progression for REVIEW_REQUIRED even after review authorization", async () => {
     const provider = makeProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
     const { executor } = makeFakeDb();
     const result = await evaluateQualificationForLead(evaluateInput(), deps(provider), executor);
@@ -723,9 +723,7 @@ describe("getHandoffProjectionForUser", () => {
 
     const pending = await getHandoffProjectionForUser({ userId: USER_ID, qualificationId }, deps(provider), executor);
     expect(pending.mayProgress).toBe(false);
-    // The review exists but is still pending — progression is blocked without
-    // a terminal blocked-reason class until review completes.
-    expect(pending.progressBlockedReason).toBeNull();
+    expect(pending.progressBlockedReason).toBe("REVIEW_REQUIRED_PENDING");
     expect(pending.review?.status).toBe("pending");
 
     const [review] = await listQualificationReviews({ userId: USER_ID, leadId: LEAD_ID }, executor);
@@ -736,7 +734,7 @@ describe("getHandoffProjectionForUser", () => {
     );
 
     const authorized = await getHandoffProjectionForUser({ userId: USER_ID, qualificationId }, deps(provider), executor);
-    expect(authorized.mayProgress).toBe(true);
+    expect(authorized.mayProgress).toBe(false);
     expect(authorized.review?.outcome).toBe("progress_authorized");
     expect(authorized.review?.reviewedAt).toBe(NOW_ISO);
   });

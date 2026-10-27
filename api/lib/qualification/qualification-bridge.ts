@@ -14,8 +14,8 @@
 // Guarded degradation: table availability is probed once per provider
 // instance through information_schema and memoized. A read against an absent
 // upstream schema fails closed with ProviderAuthorityUnavailable (mapped by
-// the service to QUALIFICATION_AUTHORITY_UNAVAILABLE), except the privacy
-// read, which degrades to null (ACTIVE per R6-F semantics).
+// the service to QUALIFICATION_AUTHORITY_UNAVAILABLE). Privacy also fails
+// closed when its schema or authoritative identity mapping is unavailable.
 //
 // The provider is tenant-anchored: every query predicates eq(userId) with the
 // authenticated tenant supplied at construction — upstream rows are untrusted
@@ -381,8 +381,13 @@ class QualificationBridgeProvider implements QualificationAuthorityProvider {
   async getPrivacyState(leadId: string): Promise<unknown> {
     const available = await this.availableTables();
     if (!available.has("lead_privacy_states")) {
-      // Honest degrade: an absent privacy row/table means ACTIVE per R6-F.
-      return null;
+      throw new ProviderAuthorityUnavailable(["lead_privacy_states"]);
+    }
+    // R6-X must supply an authoritative lid1 -> legacy numeric id mapping.
+    // A TypeScript cast cannot establish that binding; never treat a failed
+    // lookup in the wrong id space as proof that suppression is absent.
+    if (!/^[1-9]\d*$/.test(leadId) || !Number.isSafeInteger(Number(leadId))) {
+      throw new ProviderAuthorityUnavailable(["lead_privacy_states"]);
     }
     const [row] = (await this.db
       .select()
@@ -390,9 +395,8 @@ class QualificationBridgeProvider implements QualificationAuthorityProvider {
       .where(
         and(
           drizzleEq(leadPrivacyStatesMirror.userId, this.userId),
-          // F's frozen table keys the LEGACY numeric leads.id; the lid1 ↔
-          // numeric reconciliation is R6-X convergence work.
-          drizzleEq(leadPrivacyStatesMirror.leadId, leadId as unknown as number)
+          // Only an already-resolved legacy numeric key can reach this query.
+          drizzleEq(leadPrivacyStatesMirror.leadId, Number(leadId))
         )
       )
       .orderBy(desc(leadPrivacyStatesMirror.createdAt))

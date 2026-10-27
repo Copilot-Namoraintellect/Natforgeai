@@ -275,7 +275,8 @@ export interface EvidenceSnapshotHashInput {
 export function deriveEvidenceSnapshotHash(input: EvidenceSnapshotHashInput): string {
   return sha256Hex(
     canonicalJson({
-      assembledAt: input.assembledAt,
+      // Assembly wall time is metadata, not evidence identity. Otherwise every
+      // later HTTP retry creates a fresh decision and audit event.
       identity: {
         leadId: input.identity.leadId,
         leadIdentityVersion: input.identity.leadIdentityVersion,

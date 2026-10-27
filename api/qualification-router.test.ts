@@ -446,7 +446,7 @@ describe("qualificationRouter — handoff projection", () => {
     });
   });
 
-  it("review lifecycle end-to-end: REVIEW_REQUIRED blocks until governed resolution authorizes", async () => {
+  it("review lifecycle end-to-end: resolution never overrides REVIEW_REQUIRED", async () => {
     seedProvider({}, { reasonCodes: ["CONTRADICTING_EVIDENCE"] });
     const caller = callerFor({ id: USER_ID, role: "user" });
     const { qualification } = await caller.evaluate(evaluateInput);
@@ -479,7 +479,7 @@ describe("qualificationRouter — handoff projection", () => {
     const authorized = await caller.getHandoffProjection({
       qualificationId: qualification.qualificationId,
     });
-    expect(authorized.mayProgress).toBe(true);
+    expect(authorized.mayProgress).toBe(false);
     expect(authorized.review).toMatchObject({
       reviewId: review.reviewId,
       status: "progress_authorized",

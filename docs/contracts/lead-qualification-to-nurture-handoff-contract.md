@@ -92,9 +92,9 @@ or mutate prior decisions.
 decisions carry a durable review record bound to the exact decision
 (`decisionBindingHash` over decision + reason codes + identity reference +
 score content hash + evidence snapshot hash + policy/engine versions).
-Progression requires `status === "progress_authorized"` (governed human
-resolution, tx-audited); `progression_rejected` permanently blocks that
-decision's progression. R6-D must not implement review, must not auto-resolve
+Review resolution is tx-audited historical evidence, not progression authority.
+Even `progress_authorized` leaves `REVIEW_REQUIRED` blocked: only a new
+deterministic `QUALIFIED` decision may progress. R6-D must not implement review, must not auto-resolve
 it, and must not accept review state from any non-R6-C surface.
 
 ## 12. Privacy / suppression semantics
@@ -144,11 +144,11 @@ read-only downstream. Corrections are new R6-C records only.
 
 `NOT_QUALIFIED`, `BLOCKED`, `INSUFFICIENT_EVIDENCE` never progress
 automatically (`mayProgress: false`, `DECISION_NOT_QUALIFIED`).
-`REVIEW_REQUIRED` does not progress until governed review authorization
-(`REVIEW_REQUIRED_PENDING` / `REVIEW_REJECTED` otherwise). Expired or
+`REVIEW_REQUIRED` never progresses, including after review authorization
+(`REVIEW_REQUIRED_PENDING` / `REVIEW_REJECTED`). Expired or
 superseded decisions (`STALE_DECISION`) and non-actionable privacy
 (`PRIVACY_BLOCKED`) never progress. Only a fresh, current, actionable
-`QUALIFIED` (or `REVIEW_REQUIRED` with `progress_authorized` review)
+`QUALIFIED`
 projects `mayProgress: true` — and progression itself then remains subject
 to R6-D/R5-E/R6-F governance.
 

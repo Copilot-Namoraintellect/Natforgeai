@@ -11,6 +11,7 @@
 
 import {
   canonicalJson,
+  deriveEvidenceSnapshotHash,
   deriveQualificationId,
   LEAD_QUALIFICATION_CONTRACT_VERSION,
   QualificationError,
@@ -133,6 +134,17 @@ async function fetchIdentity(
   return validateIdentityProjection(raw);
 }
 
+async function fetchPrivacy(deps: QualificationAuthorityDeps, leadId: string) {
+  try {
+    return resolvePrivacyGate(await deps.provider.getPrivacyState(leadId));
+  } catch (err) {
+    if (err instanceof ProviderAuthorityUnavailable) {
+      throw new QualificationError("QUALIFICATION_AUTHORITY_UNAVAILABLE", err.message);
+    }
+    throw err;
+  }
+}
+
 /**
  * The qualification executor spans R6-C tables and the audit ledger. The
  * audit seam's Drizzle-typed signature is structurally identical
@@ -252,7 +264,7 @@ export async function evaluateQualificationForLead(
   }
 
   // (7) Privacy gate — governed state only; an absent row degrades to ACTIVE.
-  const privacy = resolvePrivacyGate(await deps.provider.getPrivacyState(identity.leadId));
+  const privacy = await fetchPrivacy(deps, identity.leadId);
 
   // (8)+(9) Deterministic snapshot + rule-first decision. No model in the path.
   const { snapshot, snapshotHash, entries } = buildEvidenceSnapshot({
@@ -340,8 +352,8 @@ export async function evaluateQualificationForLead(
   }
 
   // (12) Replay: re-read the durable row and verify every binding field plus
-  // decision, reason codes, confidence and evaluated time against the
-  // recomputed decision. Drift is tampering (QUALIFICATION_REPLAY_CONFLICT).
+  // decision, reason codes, confidence, snapshot and validity against the
+  // recomputed decision, retaining the original evaluation clock.
   const stored = await getQualification(input.userId, row.qualificationId, executor);
   assertReplayConverges(stored, row);
   return { qualification: stored, duplicateClassification: "idempotent_replay" };
@@ -374,12 +386,22 @@ function replayBindingView(row: LeadQualificationRow): Record<string, unknown> {
     decision: row.decision,
     reasonCodes: jsonColumn(row.reasonCodes),
     confidenceScore: row.confidenceScore,
-    evaluatedAt: row.evaluatedAt,
+    reviewRequired: row.reviewRequired,
   };
 }
 
 function assertReplayConverges(stored: LeadQualificationRow, computed: LeadQualificationRow): void {
-  if (canonicalJson(replayBindingView(stored)) !== canonicalJson(replayBindingView(computed))) {
+  const evaluatedAt = Date.parse(stored.evaluatedAt);
+  const validityMs = Date.parse(computed.validUntil) - Date.parse(computed.evaluatedAt);
+  const snapshot = jsonColumn(stored.evidenceSnapshot);
+  if (
+    canonicalJson(replayBindingView(stored)) !== canonicalJson(replayBindingView(computed)) ||
+    !Number.isFinite(evaluatedAt) ||
+    stored.createdAt !== stored.evaluatedAt ||
+    Date.parse(stored.validUntil) !== evaluatedAt + validityMs ||
+    !snapshot || typeof snapshot !== "object" ||
+    deriveEvidenceSnapshotHash(snapshot as Parameters<typeof deriveEvidenceSnapshotHash>[0]) !== stored.evidenceSnapshotHash
+  ) {
     throw new QualificationTamperError(
       "QUALIFICATION_REPLAY_CONFLICT",
       `stored qualification ${stored.qualificationId} does not match the recomputed decision bindings; refusing to serve divergent durable state.`
@@ -420,7 +442,7 @@ export async function getHandoffProjectionForUser(
   const q = await getQualification(input.userId, input.qualificationId, executor);
   const latest = await getLatestQualification(input.userId, q.leadId, executor);
   const review = await getReviewByQualification(input.userId, q.qualificationId, executor);
-  const privacy = resolvePrivacyGate(await deps.provider.getPrivacyState(q.leadId));
+  const privacy = await fetchPrivacy(deps, q.leadId);
   return buildHandoffProjection(
     q,
     review,
@@ -476,6 +498,17 @@ export async function resolveQualificationReview(
   assertReviewDecisionBinding(review, q);
 
   const now = resolveNow(deps);
+  const latest = await getLatestQualification(input.userId, q.leadId, executor);
+  if (latest?.qualificationId !== q.qualificationId || now.getTime() > Date.parse(q.validUntil)) {
+    throw new QualificationStateConflictError(
+      "REVIEW_STALE_BINDING",
+      "review references a superseded or expired qualification"
+    );
+  }
+  const privacy = await fetchPrivacy(deps, q.leadId);
+  if (!privacy.actionable) {
+    throw new QualificationStateConflictError("REVIEW_STALE_BINDING", "privacy blocks review resolution");
+  }
   const resolvedAt = now.toISOString();
   const updated = await updateReviewResolution(
     input.userId,

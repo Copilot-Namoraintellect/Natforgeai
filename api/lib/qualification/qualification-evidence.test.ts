@@ -106,7 +106,7 @@ describe("qualification evidence — snapshot assembly", () => {
     expect(build({ policy: { ...DEFAULT_QUALIFICATION_POLICY, policyVersion: "lead-qualification-policy/v2" } as QualificationPolicy }).snapshotHash).not.toBe(
       base.snapshotHash
     );
-    expect(build({ now: new Date(NOW.getTime() + HOUR_MS) }).snapshotHash).not.toBe(base.snapshotHash);
+    expect(build({ now: new Date(NOW.getTime() + HOUR_MS) }).snapshotHash).toBe(base.snapshotHash);
   });
 
   it("emits entries in the fixed category order", () => {

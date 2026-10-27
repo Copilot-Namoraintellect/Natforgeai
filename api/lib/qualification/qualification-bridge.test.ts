@@ -274,17 +274,22 @@ describe("createQualificationBridgeProvider — availability guard", () => {
       },
     };
     const provider = createQualificationBridgeProvider(counting as never, 7);
-    await provider.getPrivacyState(LEAD_ID);
+    await provider.getPrivacyState("123456");
     await provider.getScorePayload(SCORE_ID);
     expect(executeCalls).toBe(1);
   });
 
-  it("privacy degrades to null when the privacy table is absent (ACTIVE per F semantics)", async () => {
+  it("privacy authority fails closed when the privacy table is absent", async () => {
     const provider = createQualificationBridgeProvider(
       makeFakeDb({}, ALL_TABLES.filter((t) => t !== "lead_privacy_states")) as never,
       7
     );
-    expect(await provider.getPrivacyState(LEAD_ID)).toBeNull();
+    await expect(provider.getPrivacyState(LEAD_ID)).rejects.toBeInstanceOf(ProviderAuthorityUnavailable);
+  });
+
+  it("fails closed rather than querying a numeric privacy id with an unmapped lid1 identity", async () => {
+    const provider = createQualificationBridgeProvider(makeFakeDb({}, ALL_TABLES) as never, 7);
+    await expect(provider.getPrivacyState(LEAD_ID)).rejects.toBeInstanceOf(ProviderAuthorityUnavailable);
   });
 });
 
@@ -369,7 +374,7 @@ describe("createQualificationBridgeProvider — score payload", () => {
       lead_privacy_states: [
         {
           id: 1,
-          leadId: LEAD_ID,
+          leadId: 123456,
           userId: 7,
           businessId: 3,
           privacyState: "SUPPRESSED",
@@ -384,7 +389,7 @@ describe("createQualificationBridgeProvider — score payload", () => {
       ],
     };
     const provider = createQualificationBridgeProvider(makeFakeDb(seed, ALL_TABLES) as never, 7);
-    expect(await provider.getPrivacyState(LEAD_ID)).toEqual({ state: "SUPPRESSED" });
+    expect(await provider.getPrivacyState("123456")).toEqual({ state: "SUPPRESSED" });
   });
 });
 

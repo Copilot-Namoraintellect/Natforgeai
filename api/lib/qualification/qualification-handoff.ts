@@ -83,9 +83,8 @@ function asReasonCodes(value: unknown): string[] {
  *
  * mayProgress (first match wins): a non-actionable privacy state blocks
  * everything; a superseded or expired decision is stale; QUALIFIED progresses
- * on fresh, actionable evidence alone; REVIEW_REQUIRED progresses only after
- * governed review authorization (progress_authorized); every other decision
- * never progresses automatically.
+ * on fresh, actionable evidence alone. Review resolution is historical evidence,
+ * never a substitute for a new deterministic QUALIFIED decision.
  */
 export function buildHandoffProjection(
   q: LeadQualificationRow,
@@ -104,13 +103,9 @@ export function buildHandoffProjection(
   } else if (q.decision === "QUALIFIED") {
     mayProgress = true;
   } else if (q.decision === "REVIEW_REQUIRED") {
-    if (review === null) {
-      progressBlockedReason = "REVIEW_REQUIRED_PENDING";
-    } else if (review.status === "progress_authorized") {
-      mayProgress = true;
-    } else if (review.status === "progression_rejected") {
-      progressBlockedReason = "REVIEW_REJECTED";
-    }
+    progressBlockedReason = review?.status === "progression_rejected"
+      ? "REVIEW_REJECTED"
+      : "REVIEW_REQUIRED_PENDING";
   } else {
     progressBlockedReason = "DECISION_NOT_QUALIFIED";
   }

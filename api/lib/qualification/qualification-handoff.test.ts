@@ -170,14 +170,14 @@ describe("buildHandoffProjection — mayProgress matrix", () => {
     const q = qualificationRow({ decision: "REVIEW_REQUIRED", reviewRequired: true });
     const projection = project(q, reviewRow());
     expect(projection.mayProgress).toBe(false);
-    expect(projection.progressBlockedReason).toBeNull();
+    expect(projection.progressBlockedReason).toBe("REVIEW_REQUIRED_PENDING");
   });
 
-  it("REVIEW_REQUIRED progresses only after progress_authorized", () => {
+  it("review authorization cannot substitute for a QUALIFIED decision", () => {
     const q = qualificationRow({ decision: "REVIEW_REQUIRED", reviewRequired: true });
     const authorized = project(q, reviewRow({ status: "progress_authorized", resolvedAt: "2026-06-29T12:00:00.000Z" }));
-    expect(authorized.mayProgress).toBe(true);
-    expect(authorized.progressBlockedReason).toBeNull();
+    expect(authorized.mayProgress).toBe(false);
+    expect(authorized.progressBlockedReason).toBe("REVIEW_REQUIRED_PENDING");
   });
 
   it("REVIEW_REQUIRED stays blocked after progression_rejected", () => {

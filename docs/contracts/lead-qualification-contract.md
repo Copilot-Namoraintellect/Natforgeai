@@ -99,7 +99,7 @@ QUALIFIED · NOT_QUALIFIED · REVIEW_REQUIRED · INSUFFICIENT_EVIDENCE · BLOCKE
 |---|---|
 | `QUALIFIED` | Sufficient, current evidence and policy authorization for downstream nurture/sales-handoff eligibility (subject to D/F governance). |
 | `NOT_QUALIFIED` | Evidence is sufficient to decide and fails policy thresholds or hits a disqualifier. Immutable historical fact; re-evaluation requires new evidence/policy. |
-| `REVIEW_REQUIRED` | Evidence ambiguous, conflicting, low-confidence, or policy-mandated review. Progression blocked until governed human review authorizes this exact decision (§10). |
+| `REVIEW_REQUIRED` | Evidence ambiguous, conflicting, low-confidence, or policy-mandated review. Review is recorded against this decision; progression requires a new deterministic `QUALIFIED` decision (§10). |
 | `INSUFFICIENT_EVIDENCE` | Required evidence categories missing/stale; qualification cannot be determined. Never inferred as qualified. |
 | `BLOCKED` | Privacy/suppression, retention, or identity governance blocks evaluation or progression. Fail-closed outcome, not an error. |
 
@@ -203,7 +203,11 @@ review exists and is `pending`; the actor is the owning tenant user or an
 admin (server-derived actor only); the bound qualification is still the
 lead's current decision (stale binding ⇒ rejected, `REVIEW_STALE_BINDING`);
 audit is tx-atomic with the CAS update. There is **no generic approve-lead
-endpoint**; review never mutates the immutable decision.
+endpoint**; review never mutates the immutable decision or grants downstream
+progression. Expired decisions and non-actionable privacy also reject resolution.
+The current verified-session authentication does not distinguish humans from
+agents holding that session; independent human approval remains a readiness
+blocker, not a security guarantee supplied by actor attribution.
 
 ## 11. Exact-once / replay / immutability
 
@@ -211,6 +215,9 @@ endpoint**; review never mutates the immutable decision.
   replay returns the existing decision (`duplicateClassification:
   "idempotent_replay"`). Concurrent duplicates converge by re-read. No
   in-memory dedupe.
+- Snapshot assembly wall time is metadata, excluded from the evidence hash.
+  Delayed retries preserve the first decision's timestamps and validity; they
+  cannot renew eligibility by retrying. Freshness is checked again before replay.
 - Replay verification: stored input bindings (identityReference,
   scoreContentHash, evidenceSnapshotHash, policy/engine versions) are
   re-verified on replay; drift ⇒ fail closed (`QUALIFICATION_REPLAY_CONFLICT`).
@@ -235,7 +242,7 @@ superseded decisions. Nothing is silently mutated.
 One safe projection for R6-D: ids, decision, reason codes, references,
 versions, timestamps, review state, privacy state, derived `mayProgress`.
 `QUALIFIED` (fresh, actionable privacy) may progress automatically;
-`REVIEW_REQUIRED` progresses only after governed review authorization;
+`REVIEW_REQUIRED` never progresses, including after review authorization;
 `NOT_QUALIFIED` / `BLOCKED` / `INSUFFICIENT_EVIDENCE` never progress
 automatically.
 
@@ -244,8 +251,10 @@ automatically.
 1. Tenant isolation: `userId` anchors every record and query; cross-tenant /
    forged leads fail closed (`LEAD_NOT_FOUND`, indistinguishable).
 2. Cross-business scope assertion mismatch ⇒ `OWNERSHIP_MISMATCH`.
-3. No client-supplied authority: no decision, reason codes, confidence,
-   review outcome, policy content, actor, or qualificationId is accepted.
+3. No client-supplied evaluation authority: no decision, reason codes,
+   confidence, policy content or actor is accepted. `resolveReview` accepts a
+   bounded resolution request, not an evaluation outcome. Independent human
+   authorization for that request remains the blocker documented in §10.
    `z.strictObject` at the router; unknown fields rejected.
 4. Upstream untrusted-data discipline: A/B/F payloads re-validated at the C
    seam (strict shape, closed vocabularies, version allow-list, hash
@@ -259,8 +268,10 @@ automatically.
 8. Self-qualification prohibition: no agent/model/upstream field can mark a
    lead qualified; review actors are server-derived; decision outcomes are
    reproducible from evidence + rules alone.
-9. Tool least privilege: no shell/SQL/provider/network execution in the
-   qualification path; no billing; no outreach/CRM/conversion side effects.
+9. Tool least privilege: no caller-controlled shell, SQL, provider or tool
+   execution; only server-owned database reads/writes and audit persistence.
+   No billing or outreach/CRM/conversion side effects. Host/runtime privilege
+   isolation is not established by these API tests.
 10. Privacy: suppression/restriction/expired retention ⇒ `BLOCKED` /
     not actionable; suppressed leads cannot progress.
 11. Fail closed on: missing/unknown policy version, unknown identity/score

@@ -229,7 +229,7 @@ describe("qualification contract — deterministic derivations", () => {
     ).not.toBe(a);
     expect(
       deriveEvidenceSnapshotHash(evidenceSnapshotHashInput({ assembledAt: "2026-06-28T11:00:00Z" }))
-    ).not.toBe(a);
+    ).toBe(a);
   });
 
   it("deriveQualificationId is deterministic and sensitive to every binding", () => {
