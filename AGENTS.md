@@ -24,7 +24,8 @@
 15. [Database Schema Overview](#15-database-schema-overview)
 16. [API Architecture](#16-api-architecture)
 17. [Marketing Action Policy (WBS-R5-E)](#17-marketing-action-policy-wbs-r5-e)
-18. [Lead Qualification (WBS-R6-C)](#18-lead-qualification-wbs-r6-c)
+18. [Lead Identity (WBS-R6-A)](#18-lead-identity-wbs-r6-a)
+19. [Lead Qualification (WBS-R6-C)](#19-lead-qualification-wbs-r6-c)
 
 ---
 
@@ -613,6 +614,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `scoring` | `api/scoring-router.ts` | R6-B lead scoring: deterministic, evidence-bound lead scores from R5 opportunity evidence + lead identity seam (`scoreLead`, `get`, `listHistory`). Immutable versioned records, honest confidence, bounded reason codes, exact-once. Score is evidence, never qualification. Contracts: `docs/contracts/lead-scoring-contract.md`, `docs/contracts/lead-scoring-to-qualification-contract.md` |
 | `conversion` | `api/conversion-router.ts` | R6-E conversion tracking: durable conversion/outcome records bound to tenant+business with provenance lineage (references only, never causation), deterministic server-minted conversion identity, exact-once natural key, reversal lifecycle events. Contracts: `docs/contracts/conversion-event-contract.md`, `docs/contracts/conversion-to-attribution-contract.md` |
 | `qualification` | `api/qualification-router.ts` | R6-C governed lead qualification: deterministic evidence-based decisions (QUALIFIED/NOT_QUALIFIED/REVIEW_REQUIRED/INSUFFICIENT_EVIDENCE/BLOCKED), exact-once immutable persistence, governed manual review, safe D handoff projection (`evaluate`, `get`, `listHistory`, `listReviews`, `resolveReview`, `getHandoffProjection`, `getPolicy`). Never performs outreach/CRM/conversion. Contracts: `docs/contracts/lead-qualification-contract.md`, `docs/contracts/lead-qualification-to-nurture-handoff-contract.md` |
+| `leadGovernance` | `api/lead-governance-router.ts` | R6-F lead governance/operations (WBS-R6 Stream F): admin-scoped read-only lead-operations projection reads (`getLeadOperations`, `listLeadOperationalStates`, `getLeadGovernanceSummary`), governed privacy transitions (`setPrivacyState`) and narrow governed recovery (`retryOperation`, retention sweep only). No force-merge/score/qualify/convert paths. Contract: `docs/contracts/lead-governance-operations-contract.md` |
 
 ### Context
 
@@ -660,7 +662,7 @@ server-side policy decision explicitly authorizes it.
 
 ---
 
-## 18. Lead Qualification (WBS-R6-C)
+## 19. Lead Qualification (WBS-R6-C)
 
 The governed qualification layer that decides whether a lead may progress to
 downstream nurture/sales handoff. Owns qualification only — not identity

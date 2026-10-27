@@ -7,6 +7,8 @@ import {
   approvalRequests,
   businesses,
   creditWallets,
+  leadPrivacyStates,
+  leads,
   publishingQueue,
   queueReplayRequests,
   queueTerminalFailures,
@@ -35,6 +37,10 @@ import {
   clampR5BusinessLimit,
   summarizeR5Operations,
 } from "./lib/governance/r5-operations-summary";
+import {
+  clampLeadBusinessLimit,
+  summarizeLeadGovernance,
+} from "./lib/governance/lead-operations-summary";
 
 /**
  * Per-area isolation for the R5 readiness rollup: a failing area read yields
@@ -457,6 +463,109 @@ export const healthRouter = createRouter({
           walletsExhausted: walletRows.ok ? walletsExhausted : 0,
         },
         topBlockedBusinesses: summary.value?.topBlocked ?? [],
+        truncated: summary.value?.truncated ?? false,
+      };
+    }),
+
+  // ─── R6-F4: Lead governance readiness ───
+  // Bounded, secret/PII-free rollup over the R6 lead-operations authorities.
+  // Stream components (identity/scoring/qualification/nurture/handoff/
+  // conversion) report `unavailable` until their streams land at R6-X —
+  // honest, never guessed. The privacy governance component is F-owned and
+  // authoritative. A failing area degrades to an honest
+  // unavailable/zero/attention contribution instead of failing the rollup.
+  getR6LeadGovernanceReadiness: adminQuery
+    .input(
+      z
+        .object({
+          businessLimit: z.number().int().min(1).max(100).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ input }) => {
+      const db = getDb();
+      const now = new Date();
+      const businessLimit = clampLeadBusinessLimit(input?.businessLimit);
+
+      const [leadRows, privacyRows, summary] = await Promise.all([
+        safeR5ReadinessArea("leads", () =>
+          db
+            .select({ id: leads.id, businessId: leads.businessId, status: leads.status })
+            .from(leads)
+        ),
+        safeR5ReadinessArea("lead_privacy", () =>
+          db
+            .select({ privacyState: leadPrivacyStates.privacyState })
+            .from(leadPrivacyStates)
+        ),
+        safeR5ReadinessArea("lead_summary", () =>
+          summarizeLeadGovernance(db, now, businessLimit)
+        ),
+      ]);
+
+      const privacyCounts = { SUPPRESSED: 0, RESTRICTED: 0, RETENTION_PENDING: 0, RETENTION_EXPIRED: 0, ARCHIVED: 0 };
+      for (const row of privacyRows.value ?? []) {
+        if (row.privacyState in privacyCounts) {
+          privacyCounts[row.privacyState as keyof typeof privacyCounts] += 1;
+        }
+      }
+      const overlayed =
+        privacyCounts.SUPPRESSED +
+        privacyCounts.RESTRICTED +
+        privacyCounts.RETENTION_PENDING +
+        privacyCounts.RETENTION_EXPIRED +
+        privacyCounts.ARCHIVED;
+
+      const components: {
+        identity: "ready" | "degraded" | "blocked" | "unsupported" | "unavailable";
+        scoring: "ready" | "degraded" | "blocked" | "unsupported" | "unavailable";
+        qualification: "ready" | "degraded" | "blocked" | "unsupported" | "unavailable";
+        nurture: "ready" | "degraded" | "blocked" | "unsupported" | "unavailable";
+        salesHandoff: "ready" | "degraded" | "blocked" | "unsupported" | "unavailable";
+        conversion: "ready" | "degraded" | "blocked" | "unsupported" | "unavailable";
+        privacyGovernance: "ready" | "attention" | "blocked" | "unavailable";
+      } = {
+        identity: "unavailable",
+        scoring: "unavailable",
+        qualification: "unavailable",
+        nurture: "unavailable",
+        salesHandoff: "unavailable",
+        conversion: "unavailable",
+        privacyGovernance: !privacyRows.ok
+          ? "unavailable"
+          : privacyCounts.RETENTION_EXPIRED > 0
+            ? "blocked"
+            : overlayed > 0
+              ? "attention"
+              : "ready",
+      };
+
+      const topBlockedBusinesses = (summary.value?.businesses ?? [])
+        .filter((b) => b.blockedLeads > 0)
+        .slice(0, 10)
+        .map((b) => ({
+          businessId: b.businessId,
+          leadsTotal: b.leadsTotal,
+          blockedLeads: b.blockedLeads,
+          worstHealth: b.worstHealth,
+        }));
+
+      return {
+        generatedAt: now.toISOString(),
+        components,
+        counters: {
+          leadsTotal: (leadRows.value ?? []).length,
+          leadsWithPrivacyOverlay: privacyRows.ok ? overlayed : 0,
+          privacySuppressed: privacyRows.ok ? privacyCounts.SUPPRESSED : 0,
+          privacyRestricted: privacyRows.ok ? privacyCounts.RESTRICTED : 0,
+          retentionPending: privacyRows.ok ? privacyCounts.RETENTION_PENDING : 0,
+          retentionExpired: privacyRows.ok ? privacyCounts.RETENTION_EXPIRED : 0,
+          archived: privacyRows.ok ? privacyCounts.ARCHIVED : 0,
+          blockedLeads: summary.value?.blockedLeads ?? 0,
+          staleLeads: summary.value?.staleLeads ?? 0,
+          operatorActionRequired: summary.value?.operatorActionRequired ?? 0,
+        },
+        topBlockedBusinesses,
         truncated: summary.value?.truncated ?? false,
       };
     }),

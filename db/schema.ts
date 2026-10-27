@@ -2374,6 +2374,57 @@ export const leadIdentities = mysqlTable(
 export type LeadIdentityRow = typeof leadIdentities.$inferSelect;
 export type InsertLeadIdentityRow = typeof leadIdentities.$inferInsert;
 
+// ─── R6-F Lead Privacy Governance (operational privacy state per lead) ───
+// F-owned durable home for lead suppression / restriction / retention state.
+// One current state per lead (leadId unique). Governance-mutated only through
+// the admin operator surface; every transition is CAS-guarded, provenance-
+// stamped and audit-ledgered. Migration artefact 0034 (created, NOT executed)
+// — runtime code also bridges this table behind a guarded information-schema
+// check so pre-migration environments degrade to "unavailable" instead of
+// erroring. No PII columns: references and closed-vocabulary labels only.
+export const leadPrivacyStates = mysqlTable(
+  "lead_privacy_states",
+  {
+    id: serial("id").primaryKey(),
+    leadId: bigint("leadId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    privacyState: mysqlEnum("privacyState", [
+      "ACTIVE",
+      "SUPPRESSED",
+      "RESTRICTED",
+      "RETENTION_PENDING",
+      "RETENTION_EXPIRED",
+      "ARCHIVED",
+    ])
+      .default("ACTIVE")
+      .notNull(),
+    previousState: mysqlEnum("previousState", [
+      "ACTIVE",
+      "SUPPRESSED",
+      "RESTRICTED",
+      "RETENTION_PENDING",
+      "RETENTION_EXPIRED",
+      "ARCHIVED",
+    ]),
+    reason: varchar("reason", { length: 500 }),
+    retentionDeadlineAt: timestamp("retentionDeadlineAt"),
+    source: varchar("source", { length: 32 }).default("operator").notNull(),
+    actorUserId: bigint("actorUserId", { mode: "number", unsigned: true }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    leadUnique: uniqueIndex("lps_lead_uidx").on(table.leadId),
+    userIdx: index("lps_user_idx").on(table.userId),
+    businessIdx: index("lps_business_idx").on(table.businessId),
+    stateIdx: index("lps_state_idx").on(table.privacyState),
+  })
+);
+
+export type LeadPrivacyStateRow = typeof leadPrivacyStates.$inferSelect;
+export type InsertLeadPrivacyStateRow = typeof leadPrivacyStates.$inferInsert;
+
 // ─── R6-A Lead Identity Provenance (immutable, append-only evidence lineage) ───
 // kind = opportunity_handoff: unique (userId, handoffId) is the exact-once
 // R5 handoff consumption anchor. kind = identity_evidence: verified hashed

@@ -11,7 +11,9 @@
  * - insert().values() with insertId and an ER_DUP_ENTRY simulation on the
  *   queue_replay_requests.replayKey and audit_events.eventFingerprint unique
  *   authorities, plus a throwable toggle for audit_events inserts
- *   (audit-fail-closed tests).
+ *   (audit-fail-closed tests);
+ * - transaction(cb) with snapshot/rollback so mutation+audit atomicity is
+ *   testable (R6-F lead governance).
  *
  * Raw exception/authority modules are never mocked: the real delegated
  * authorities run against this fake. Drizzle chunk shapes verified against
@@ -200,6 +202,11 @@ export function createFakeDb(
             throw duplicateKeyError("Duplicate entry 'replayKey'");
           }
         }
+        if (name === "lead_privacy_states") {
+          if (rows.some((r) => r.leadId === row.leadId)) {
+            throw duplicateKeyError("Duplicate entry 'leadId'");
+          }
+        }
         if (name === "audit_events") {
           if (options.failAuditInsert) throw options.failAuditInsert;
           if (rows.some((r) => r.eventFingerprint === row.eventFingerprint)) {
@@ -212,6 +219,21 @@ export function createFakeDb(
       },
     }),
     execute: vi.fn(),
+    /**
+     * Transaction support for mutation+audit atomicity tests: runs the
+     * callback against the same in-memory db; on failure the seed is restored
+     * from a structured snapshot (real MySQL would roll back the tx).
+     */
+    transaction: async (cb: (tx: unknown) => Promise<unknown>) => {
+      const snapshot = structuredClone(seed);
+      try {
+        return await cb(db);
+      } catch (err) {
+        for (const key of Object.keys(seed)) delete seed[key];
+        Object.assign(seed, snapshot);
+        throw err;
+      }
+    },
   };
   return { db, seed };
 }
