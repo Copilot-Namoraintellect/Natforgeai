@@ -44,7 +44,8 @@ export interface OutcomeOwnershipResult {
 export async function assertOutcomeOwnership(
   db: OutcomeStoreExecutor,
   userId: number,
-  input: OutcomeRecordInput
+  input: OutcomeRecordInput,
+  opts: { tolerateTerminalLineageTarget?: boolean } = {}
 ): Promise<OutcomeOwnershipResult> {
   // ─── Business anchor ───
   const [business] = await db
@@ -119,10 +120,12 @@ export async function assertOutcomeOwnership(
   // a number) ───
   if (
     isFinancialAuthorityTrustClass(conversion.sourceTrustClass as never) &&
-    input.valueType === "MONETARY"
+    input.valueType === "MONETARY" &&
+    conversion.amount !== null &&
+    conversion.amount !== undefined
   ) {
     assertConversionValueConsistency({
-      conversionAmount: conversion.amount === undefined ? null : Number(conversion.amount),
+      conversionAmount: Number(conversion.amount),
       conversionCurrency: conversion.currency ?? null,
       outcomeAmount: input.amountMinor ?? null,
       outcomeCurrency: input.currency ?? null,
@@ -147,7 +150,14 @@ export async function assertOutcomeOwnership(
       );
     }
     const targetStatus = target.outcomeStatus as never;
-    if (targetStatus === "REVERSED" || targetStatus === "CANCELLED" || targetStatus === "SUPERSEDED") {
+    if (
+      !opts.tolerateTerminalLineageTarget &&
+      (targetStatus === "REVERSED" || targetStatus === "CANCELLED" || targetStatus === "SUPERSEDED")
+    ) {
+      // A terminal target rejects NEW lineage. A replay of the outcome that
+      // already applied the effect converges before this check (the service
+      // pre-checks the natural key and passes the tolerate flag); conflicting
+      // replay material still fails closed later on the evidence-hash compare.
       throw new OutcomeInputError(
         "OUTCOME_TRANSITION_INVALID",
         `lineage target outcome ${lineageId} is in terminal status ${targetStatus}.`

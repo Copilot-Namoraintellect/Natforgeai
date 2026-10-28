@@ -246,10 +246,16 @@ const CLIENT_AUTHORITY_FIELDS = [
   "outcomeLifecycleEventId",
 ] as const;
 
-export function assertNoOutcomeClientAuthorityFields(input: Record<string, unknown>): void {
+export function assertNoOutcomeClientAuthorityFields(
+  input: Record<string, unknown>,
+  opts: { allowOutcomeReference?: boolean } = {}
+): void {
   // Fail closed: any attempt to smuggle outcome/verification/identity authority
   // is rejected, never silently ignored — silent ignoring would hide a probe.
+  // `verify` legitimately REFERENCES an outcome by outcomeId (it never mints
+  // one), so the reference key is allowed there and banned on `record`.
   for (const key of CLIENT_AUTHORITY_FIELDS) {
+    if (opts.allowOutcomeReference && key === "outcomeId") continue;
     if (key in input) {
       throw new OutcomeInputError(
         "OUTCOME_CLIENT_AUTHORITY_FIELD_FORBIDDEN",
@@ -364,7 +370,7 @@ export function buildOutcomeVerifyInput(raw: unknown, now: string): OutcomeVerif
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new OutcomeInputError("OUTCOME_INPUT_INVALID", "Outcome verify input must be a structured object.");
   }
-  assertNoOutcomeClientAuthorityFields(raw as Record<string, unknown>);
+  assertNoOutcomeClientAuthorityFields(raw as Record<string, unknown>, { allowOutcomeReference: true });
   let parsed: OutcomeVerifyInput;
   try {
     parsed = outcomeVerifyInputSchema.parse(raw);

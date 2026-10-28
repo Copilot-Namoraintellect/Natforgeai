@@ -12,6 +12,7 @@ import { createAuditEvent } from "../audit/audit-event";
 import { persistAuditEvent } from "../audit/audit-store";
 import {
   OutcomeInputError,
+  OutcomeOwnershipError,
   OutcomeStateConflictError,
   type OutcomeDuplicateClassification,
   type OutcomeLifecycleType,
@@ -42,6 +43,7 @@ import {
   REVERSAL_TARGET_STATUS,
 } from "./outcome-lifecycle";
 import {
+  getOutcomeByNaturalKey,
   getOutcomeByOutcomeId,
   insertBusinessOutcome,
   insertOutcomeLifecycleEvent,
@@ -66,7 +68,8 @@ export interface RecordOutcomeDeps {
   assertOwnership?: (
     db: OutcomeStoreExecutor,
     userId: number,
-    input: OutcomeRecordInput
+    input: OutcomeRecordInput,
+    opts?: { tolerateTerminalLineageTarget?: boolean }
   ) => Promise<OutcomeOwnershipResult>;
 }
 
@@ -187,13 +190,12 @@ async function applyLineageEffects(args: {
     // Full reversal flips the target to its terminal reversal status; a partial
     // reversal leaves the target at its current (VERIFIED/PROVISIONAL/OBSERVED)
     // status with the fact recorded — net-value accounting is downstream's own
-    // derivation.
+    // derivation. A non-monetary reversal (e.g. cancellation of a booking) is
+    // inherently full.
     const targetAmount =
       target.amountMinor === null || target.amountMinor === undefined ? null : Number(target.amountMinor);
     const reversalFull =
-      amountMinor !== null &&
-      targetAmount !== null &&
-      Math.abs(amountMinor) === Math.abs(targetAmount);
+      amountMinor === null || (targetAmount !== null && Math.abs(amountMinor) === Math.abs(targetAmount));
     postFactStatus = reversalFull ? fullStatus : (target.outcomeStatus as OutcomeStatus);
   } else if (isRenewal) {
     lifecycleType = "renewal";
@@ -306,9 +308,21 @@ export async function recordOutcome(
 
   // 3. Ownership re-verification from durable rows (fail closed): business,
   //    canonical conversion, lead binding, stale-evidence check, R6-E amount
-  //    revalidation, lineage target.
+  //    revalidation, lineage target. A natural-key hit marks a replay candidate:
+  //    the lineage target may sit in the terminal status this very outcome
+  //    applied — convergence is decided by the evidence-hash compare at
+  //    insert-first (conflicting material still fails closed).
+  const existingByNaturalKey = await getOutcomeByNaturalKey(
+    userId,
+    parsed.conversionId,
+    parsed.evidenceSource,
+    parsed.evidenceIdentity,
+    db
+  );
   const assertOwnership = deps.assertOwnership ?? assertOutcomeOwnership;
-  const { conversion, target } = await assertOwnership(db, userId, parsed);
+  const { conversion, target } = await assertOwnership(db, userId, parsed, {
+    tolerateTerminalLineageTarget: existingByNaturalKey !== null,
+  });
 
   // 4. Deterministic, rule-first classification (no model authority).
   const outcomeType = classifyOutcomeType(conversion.conversionType, parsed.outcomeTypeProposal);
@@ -475,18 +489,13 @@ export async function verifyOutcome(
   // 4. Load the outcome (tenant-scoped).
   const outcome = await getOutcomeByOutcomeId(userId, parsed.outcomeId, db);
   if (!outcome) {
-    throw new OutcomeInputError("FORBIDDEN", "Outcome not found for the authenticated user.");
+    throw new OutcomeOwnershipError("FORBIDDEN", "Outcome not found for the authenticated user.");
   }
 
-  // 5. Legal transition only (VERIFIED → VERIFIED and terminal states reject).
-  if (outcome.outcomeStatus !== "OBSERVED" && outcome.outcomeStatus !== "PROVISIONAL") {
-    throw new OutcomeStateConflictError(
-      "OUTCOME_TRANSITION_INVALID",
-      `outcome ${parsed.outcomeId} is in status ${outcome.outcomeStatus}; only OBSERVED or PROVISIONAL outcomes may be verified.`
-    );
-  }
-
-  // 6. Deterministic verification fact (replay converges on the same id).
+  // 5. Deterministic verification fact (replay converges on the same id). The
+  //    fact insert decides replay vs new: a replayed verification converges
+  //    even though the outcome already sits at VERIFIED; a NEW verification of
+  //    an outcome that is no longer OBSERVED/PROVISIONAL fails closed.
   const occurredAt = parsed.occurredAt ?? now;
   const amountMinor = outcome.amountMinor === null || outcome.amountMinor === undefined ? null : Number(outcome.amountMinor);
   const currency = outcome.currency ?? null;
@@ -515,6 +524,16 @@ export async function verifyOutcome(
   };
   const fact = await insertOutcomeLifecycleEvent(factRow, db);
 
+  if (outcome.outcomeStatus !== "OBSERVED" && outcome.outcomeStatus !== "PROVISIONAL") {
+    if (fact.duplicateClassification === "idempotent_replay" && outcome.outcomeStatus === "VERIFIED") {
+      return { outcome, duplicateClassification: "idempotent_replay" };
+    }
+    throw new OutcomeStateConflictError(
+      "OUTCOME_TRANSITION_INVALID",
+      `outcome ${parsed.outcomeId} is in status ${outcome.outcomeStatus}; only OBSERVED or PROVISIONAL outcomes may be verified.`
+    );
+  }
+
   if (fact.inserted) {
     await emitOutcomeLifecycleAudit({
       db,
@@ -528,7 +547,7 @@ export async function verifyOutcome(
     });
   }
 
-  // 7. CAS transition to VERIFIED; swallow a race only when already verified.
+  // 6. CAS transition to VERIFIED; swallow a race only when already verified.
   let current = outcome;
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
     if (current.outcomeStatus === "VERIFIED") {

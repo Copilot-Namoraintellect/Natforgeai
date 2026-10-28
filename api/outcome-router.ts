@@ -126,45 +126,61 @@ export const outcomeRouter = createRouter({
 
   /** Tenant-scoped read of one outcome with its lifecycle + downstream projection. */
   get: authedQuery.input(outcomeIdSchema).query(async ({ ctx, input }) => {
-    const row = await getOutcomeByOutcomeId(ctx.user.id, input.outcomeId);
-    if (!row) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Outcome not found." });
+    try {
+      const row = await getOutcomeByOutcomeId(ctx.user.id, input.outcomeId);
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Outcome not found." });
+      }
+      return await projectWithLifecycle(ctx.user.id, row);
+    } catch (err) {
+      toTrpcError(err);
     }
-    return projectWithLifecycle(ctx.user.id, row);
   }),
 
   /** Tenant-scoped list with optional filters; returns rows + projections. */
   list: authedQuery.input(listFiltersSchema).query(async ({ ctx, input }) => {
-    const filters: ListOutcomesFilter = { ...input };
-    const rows = await listOutcomes(ctx.user.id, filters);
-    const projections = [];
-    for (const row of rows) {
-      assertOutcomeEvidenceIntegrity(row);
-      const lifecycle = await listOutcomeLifecycleEvents(ctx.user.id, row.outcomeId);
-      projections.push(buildOutcomeProjection(row, lifecycle));
+    try {
+      const filters: ListOutcomesFilter = { ...input };
+      const rows = await listOutcomes(ctx.user.id, filters);
+      const projections = [];
+      for (const row of rows) {
+        assertOutcomeEvidenceIntegrity(row);
+        const lifecycle = await listOutcomeLifecycleEvents(ctx.user.id, row.outcomeId);
+        projections.push(buildOutcomeProjection(row, lifecycle));
+      }
+      return { outcomes: rows, projections };
+    } catch (err) {
+      toTrpcError(err);
     }
-    return { outcomes: rows, projections };
   }),
 
   /** Downstream (R7-B/R7-C) projections only — read-only, no raw mutation surface. */
   r7Projections: authedQuery.input(listFiltersSchema).query(async ({ ctx, input }) => {
-    const filters: ListOutcomesFilter = { ...input };
-    const rows = await listOutcomes(ctx.user.id, filters);
-    const projections = [];
-    for (const row of rows) {
-      assertOutcomeEvidenceIntegrity(row);
-      const lifecycle = await listOutcomeLifecycleEvents(ctx.user.id, row.outcomeId);
-      projections.push(buildOutcomeProjection(row, lifecycle));
+    try {
+      const filters: ListOutcomesFilter = { ...input };
+      const rows = await listOutcomes(ctx.user.id, filters);
+      const projections = [];
+      for (const row of rows) {
+        assertOutcomeEvidenceIntegrity(row);
+        const lifecycle = await listOutcomeLifecycleEvents(ctx.user.id, row.outcomeId);
+        projections.push(buildOutcomeProjection(row, lifecycle));
+      }
+      return projections;
+    } catch (err) {
+      toTrpcError(err);
     }
-    return projections;
   }),
 
   /** Lifecycle history for one tenant-scoped outcome. */
   listLifecycle: authedQuery.input(outcomeIdSchema).query(async ({ ctx, input }) => {
-    const row = await getOutcomeByOutcomeId(ctx.user.id, input.outcomeId);
-    if (!row) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Outcome not found." });
+    try {
+      const row = await getOutcomeByOutcomeId(ctx.user.id, input.outcomeId);
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Outcome not found." });
+      }
+      return await listOutcomeLifecycleEvents(ctx.user.id, input.outcomeId);
+    } catch (err) {
+      toTrpcError(err);
     }
-    return listOutcomeLifecycleEvents(ctx.user.id, input.outcomeId);
   }),
 });
