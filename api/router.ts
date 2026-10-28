@@ -34,6 +34,7 @@ import { scoringRouter } from "./scoring-router";
 import { conversionRouter } from "./conversion-router";
 import { qualificationRouter } from "./qualification-router";
 import { nurtureRouter } from "./nurture-router";
+import { attributionRouter } from "./attribution-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -93,6 +94,7 @@ export const appRouter = createRouter({
   conversion: conversionRouter,
   qualification: qualificationRouter,
   nurture: nurtureRouter,
+  attribution: attributionRouter,
 });
 
 export type AppRouter = typeof appRouter;
