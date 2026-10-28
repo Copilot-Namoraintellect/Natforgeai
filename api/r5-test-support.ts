@@ -213,6 +213,16 @@ export function createFakeDb(
             throw duplicateKeyError("Duplicate entry 'eventFingerprint'");
           }
         }
+        if (name === "optimisation_governance_decisions") {
+          // R7-F durable convergence anchor: unique (userId, governanceDecisionId).
+          if (
+            rows.some(
+              (r) => r.userId === row.userId && r.governanceDecisionId === row.governanceDecisionId
+            )
+          ) {
+            throw duplicateKeyError("Duplicate entry 'userId-governanceDecisionId'");
+          }
+        }
         const id = rows.reduce((max, r) => Math.max(max, Number(r.id) || 0), 0) + 1;
         rows.push({ ...row, id });
         return [{ insertId: id, affectedRows: 1 }];

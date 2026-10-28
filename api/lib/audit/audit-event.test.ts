@@ -87,6 +87,10 @@ describe("audit-event taxonomy", () => {
       "sales_handoff_state_changed",
       "sales_handoff_dispatch",
       "lead_nurture_touch",
+      // R7-F: optimisation governance durable effects (decisions + narrow
+      // audit-only recovery actions; references + closed labels only).
+      "optimisation_governance_decision",
+      "optimisation_governance_recovery",
     ]);
   });
 
