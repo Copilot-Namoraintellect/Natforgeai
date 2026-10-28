@@ -87,6 +87,10 @@ describe("audit-event taxonomy", () => {
       "sales_handoff_state_changed",
       "sales_handoff_dispatch",
       "lead_nurture_touch",
+      // R7-B: immutable attribution results + supersession facts
+      // (ids/closed labels/classes/hashes only; convergence emits zero).
+      "attribution_calculated",
+      "attribution_superseded",
     ]);
   });
 
