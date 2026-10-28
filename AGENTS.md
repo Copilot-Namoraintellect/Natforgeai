@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-10-30 (R6-X integration: §18 Lead Identity WBS-R6-A; §19 Lead Qualification WBS-R6-C)
+> **Last updated:** 2026-11-05 (R7-F: §21 Optimisation Governance WBS-R7-F)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -26,6 +26,8 @@
 17. [Marketing Action Policy (WBS-R5-E)](#17-marketing-action-policy-wbs-r5-e)
 18. [Lead Identity (WBS-R6-A)](#18-lead-identity-wbs-r6-a)
 19. [Lead Qualification (WBS-R6-C)](#19-lead-qualification-wbs-r6-c)
+20. [Lead Autonomy Integration (WBS-R6-X)](#20-lead-autonomy-integration-wbs-r6-x)
+21. [Optimisation Governance (WBS-R7-F)](#21-optimisation-governance-wbs-r7-f)
 
 ---
 
@@ -616,6 +618,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `qualification` | `api/qualification-router.ts` | R6-C governed lead qualification: deterministic evidence-based decisions (QUALIFIED/NOT_QUALIFIED/REVIEW_REQUIRED/INSUFFICIENT_EVIDENCE/BLOCKED), exact-once immutable persistence, governed manual review, safe D handoff projection (`evaluate`, `get`, `listHistory`, `listReviews`, `resolveReview`, `getHandoffProjection`, `getPolicy`). Never performs outreach/CRM/conversion. Contracts: `docs/contracts/lead-qualification-contract.md`, `docs/contracts/lead-qualification-to-nurture-handoff-contract.md` |
 | `leadGovernance` | `api/lead-governance-router.ts` | R6-F lead governance/operations (WBS-R6 Stream F): admin-scoped read-only lead-operations projection reads (`getLeadOperations`, `listLeadOperationalStates`, `getLeadGovernanceSummary`), governed privacy transitions (`setPrivacyState`) and narrow governed recovery (`retryOperation`, retention sweep only). No force-merge/score/qualify/convert paths. Contract: `docs/contracts/lead-governance-operations-contract.md` |
 | `nurture` | `api/nurture-router.ts` | WBS-R6-D nurture/sales-handoff autonomy: governed nurture/handoff decisions over frozen A/C/E/F contracts; exact-once handoff identity, lifecycle, `sales_handoff` approvals, fake/test-only transport seam, conversion stop conditions, F-consumable operations view (`status`, `evaluate`, `getDecision`, `getHandoff`, `dispatchHandoff`, `reconcileHandoff`, `dispatchNurtureTouch`, `getLeadView`). Contract: `docs/contracts/lead-nurture-sales-handoff-contract.md` |
+| `optimisationGovernance` | `api/optimisation-governance-router.ts` | R7-F optimisation governance authority: deterministic proposal → governance evaluation (`ALLOW`/`REVIEW_REQUIRED`/`BLOCK`) over closed action taxonomy, versioned code-level policy, financial guardrails (no autonomous total-spend increase, locked/reserved funds immutable, provider allow-list), experiment constraints (concurrency/budget/dimensions/protected traits), portfolio concentration/shift/oscillation limits, approval-bound execution gate, read-only operations projection, audit-only narrow recovery (`evaluate`, `get`, `listDecisions`, `getOperationsProjection`, `revalidate`, `recordRecovery`, `getPolicy`). Never executes optimisation, billing, or provider actions. Contract: `docs/contracts/business-optimisation-governance-contract.md` |
 
 ### Context
 
@@ -851,3 +854,52 @@ conversion stop → operations projection.
 - **Deferred:** real-MySQL concurrency execution is promoted to R10 /
   pre-production acceptance (schema anchors structurally verified;
   deterministic concurrency green).
+
+---
+
+## 21. Optimisation Governance (WBS-R7-F)
+
+The governance authority that constrains business optimisation. Future R7
+components (B/C/D/E) will learn, experiment and reallocate marketing
+resources; R7-F decides **whether** an optimisation action may proceed —
+never **which** action is optimal. Governance may authorize or prohibit; it
+must not secretly become the optimisation engine.
+
+- **Owns:** optimisation policy vocabulary (code-level, versioned, immutable —
+  no runtime mutation endpoint); closed action taxonomy (unknown actions
+  BLOCK); financial authority boundaries (no autonomous total-budget increase
+  under the default policy; locked/reserved funds immutable; provider
+  allow-list; stale budget state blocks); approval thresholds; risk ceilings;
+  experiment governance constraints (concurrency, per-experiment budget,
+  prohibited dimensions, duration bounds, protected traits); portfolio
+  concentration/shift/oscillation limits; immutable decision receipts
+  (`ogd1:`); blocker taxonomy; audit-only narrow recovery; read-only
+  operations projection.
+- **Decisions (closed):** `ALLOW`, `REVIEW_REQUIRED`, `BLOCK`. Authority only
+  ever narrows. Reason codes closed (≤8 per record). Risk tiers
+  `low < medium < high < critical`; model/agent output is proposal material
+  only — client-supplied `approved`/`override`/`riskClass`/`decision` fields
+  are rejected at the boundary.
+- **Financial invariant:** an autonomous agent must not increase total
+  authorized business spend merely because its algorithm recommends doing
+  so. Monetary values are integer minor units; the R4 billing authority
+  remains the only settling authority — governance never charges.
+- **Approvals:** reuse the `approval_requests` ledger
+  (`approvalType = "optimisation_action"`, provisional enum extension in
+  unexecuted 0035); the only execution gate is
+  `assertOptimisationActionExecutable`, which downstream streams MUST call
+  (and revalidate) immediately before any material state change.
+- **Core modules:** `api/lib/optimisation-governance/` (`-contract`,
+  `-action-taxonomy`, `-policy`, `-financial-governance`,
+  `-experiment-governance`, `-portfolio-governance`, `-decision-engine`,
+  `-approval`, `-governance-store`, `-governance-service`,
+  `-governance-bridge`, `-blocker-taxonomy`, `-operations-projection`);
+  router `api/optimisation-governance-router.ts`. Contracts:
+  `docs/contracts/business-optimisation-governance-contract.md`; inventory:
+  `docs/recovery/r7-f-optimisation-governance-inventory.md`; migration:
+  provisional `0035_r7_f_optimisation_governance` (NOT executed,
+  `docs/recovery/r7-f-unexecuted-migrations.md`; R7-X owns convergence).
+- **Non-billable, non-executing:** no billing, no payments, no providers, no
+  CRM, no optimisation algorithm. Audit via the canonical `audit_events`
+  ledger (`optimisation_governance_decision`,
+  `optimisation_governance_recovery`).
