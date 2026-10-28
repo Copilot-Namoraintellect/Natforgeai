@@ -168,7 +168,10 @@ async function prepareAttribution(input: {
     throw new AttributionOwnershipError("FORBIDDEN", "Outcome not found for the authenticated tenant.");
   }
 
-  if (ATTRIBUTION_TERMINAL_OUTCOME_STATUS_SET.has(outcome.outcomeStatus)) {
+  // Terminal outcomes never receive a NEW positive evaluation. The
+  // forced-zero-credit supersession path (synchronize on reversal) passes this
+  // gate by design: it mints a zero-credit successor, never positive credit.
+  if (!input.forcedZeroCredit && ATTRIBUTION_TERMINAL_OUTCOME_STATUS_SET.has(outcome.outcomeStatus)) {
     throw new AttributionStateError(
       "ATTRIBUTION_OUTCOME_NOT_ATTRIBUTABLE",
       `Outcome ${outcome.outcomeId} is in terminal state ${outcome.outcomeStatus}; no active positive attribution may be minted.`
@@ -306,13 +309,15 @@ export async function evaluateAttribution(
     zeroCreditReason: null,
   });
 
-  // Supersession link: the currently-active prior result for this outcome +
-  // model + version (if any) is superseded by the new result.
+  // Supersession link: the active chain head for this outcome + model +
+  // version (excluding the row being calculated) is superseded by the new
+  // result. The exclusion keeps replay lineage byte-identical (convergence).
   const target = await findSupersedeTarget(
     userId,
     prepared.row.outcomeId,
     prepared.row.modelType,
     prepared.row.modelVersion,
+    prepared.identity.attributionId,
     db
   );
   const supersedes = target && target.attributionId !== prepared.identity.attributionId
@@ -406,25 +411,8 @@ export async function synchronizeAttribution(
     return evaluateAttribution(executor, deps, ctx, rawInput, now);
   }
 
-  const modelVersion = ATTRIBUTION_MODEL_VERSIONS[parsed.modelType as AttributionModelType];
-  const target = await findSupersedeTarget(userId, outcome.outcomeId, parsed.modelType, modelVersion, db);
-  const alreadyZero = target !== null && Number(target.totalCreditBps) === 0;
-  if (!target || alreadyZero) {
-    // Nothing misleading to retire: nothing active, or already retired.
-    if (!target) {
-      throw new AttributionStateError(
-        "ATTRIBUTION_OUTCOME_NOT_ATTRIBUTABLE",
-        `Outcome ${outcome.outcomeId} is in terminal state ${outcome.outcomeStatus} and has no active attribution.`
-      );
-    }
-    return {
-      result: target,
-      duplicateClassification: "idempotent_replay",
-      projection: buildAttributionLearningProjection(target),
-    };
-  }
-
-  // Mint the zero-credit successor that retires the misleading active credit.
+  // Prepare the zero-credit successor first (no side effects) so its
+  // deterministic identity can drive the supersession-target lookup.
   const prepared = await prepareAttribution({
     db,
     deps,
@@ -434,6 +422,34 @@ export async function synchronizeAttribution(
     forcedZeroCredit: true,
     zeroCreditReason: `outcome_${outcome.outcomeStatus.toLowerCase()}`,
   });
+
+  const modelVersion = ATTRIBUTION_MODEL_VERSIONS[parsed.modelType as AttributionModelType];
+  const target = await findSupersedeTarget(
+    userId,
+    outcome.outcomeId,
+    parsed.modelType,
+    modelVersion,
+    prepared.identity.attributionId,
+    db
+  );
+  if (!target) {
+    // Nothing active to retire.
+    throw new AttributionStateError(
+      "ATTRIBUTION_OUTCOME_NOT_ATTRIBUTABLE",
+      `Outcome ${outcome.outcomeId} is in terminal state ${outcome.outcomeStatus} and has no active attribution.`
+    );
+  }
+  if (target.attributionId === prepared.identity.attributionId || Number(target.totalCreditBps) === 0) {
+    // Already retired (by this exact zero-credit row or an equivalent one):
+    // converge without minting anything new.
+    return {
+      result: target,
+      duplicateClassification: "idempotent_replay",
+      projection: buildAttributionLearningProjection(target),
+    };
+  }
+
+  // Mint the zero-credit successor that retires the misleading active credit.
   const supersedes = target.attributionId;
   const recordHash = deriveRecordHash({ ...prepared.row, supersedesAttributionId: supersedes } as never);
   const finalRow = { ...prepared.row, supersedesAttributionId: supersedes } as InsertAttributionResultRow;

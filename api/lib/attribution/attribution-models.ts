@@ -102,10 +102,11 @@ function timeDecayWeights(
     return Math.floor(ageDays / 7);
   });
   const maxBucket = buckets.reduce((m, b) => Math.max(m, b), 0);
-  const denominator = 2 ** maxBucket; // dyadic — exact in integer arithmetic
+  const numerators = buckets.map((b) => 2 ** (maxBucket - b));
+  const denominator = numerators.reduce((sum, n) => sum + n, 0); // Σ 2^-b = 1 exactly
   return ordered.map((touchpoint, i) => ({
     touchpoint,
-    weightNumerator: 2 ** (maxBucket - buckets[i]),
+    weightNumerator: numerators[i],
     weightDenominator: denominator,
   }));
 }

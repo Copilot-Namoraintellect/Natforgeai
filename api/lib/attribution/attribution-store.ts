@@ -241,13 +241,20 @@ export async function listAttributions(
   return rows;
 }
 
-/** Latest active result per (outcomeId, modelType, modelVersion): newest row
- *  not superseded by any newer row. Used for supersession linking. */
+/**
+ * Deterministic supersession target for one evaluation. The target is the
+ * active chain head (latest non-superseded result) for the outcome + model +
+ * version. When the head IS the row being calculated (exact replay), the
+ * target is what that head superseded — so replaying identical material
+ * always reproduces identical lineage and converges instead of conflicting.
+ * Returns null when there is no prior active result.
+ */
 export async function findSupersedeTarget(
   userId: number,
   outcomeId: string,
   modelType: string,
   modelVersion: string,
+  excludeAttributionId: string,
   executor?: AttributionStoreExecutor
 ): Promise<AttributionResultRow | null> {
   const db = resolveAttributionDb(executor);
@@ -269,8 +276,12 @@ export async function findSupersedeTarget(
   const superseded = new Set(
     rows.map((r) => r.supersedesAttributionId).filter((v): v is string => v !== null)
   );
-  const active = rows.find((r) => !superseded.has(r.attributionId));
-  return active ?? rows[0];
+  const head = rows.find((r) => !superseded.has(r.attributionId)) ?? rows[0];
+  if (head.attributionId === excludeAttributionId) {
+    if (head.supersedesAttributionId === null) return null;
+    return rows.find((r) => r.attributionId === head.supersedesAttributionId) ?? null;
+  }
+  return head;
 }
 
 // ─── Lifecycle events (immutable, append-only) ───
