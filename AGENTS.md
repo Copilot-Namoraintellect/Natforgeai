@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-10-30 (R6-X integration: §18 Lead Identity WBS-R6-A; §19 Lead Qualification WBS-R6-C)
+> **Last updated:** 2026-10-30 (R7-A: §21 Conversion Outcome Intelligence WBS-R7-A)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -26,6 +26,8 @@
 17. [Marketing Action Policy (WBS-R5-E)](#17-marketing-action-policy-wbs-r5-e)
 18. [Lead Identity (WBS-R6-A)](#18-lead-identity-wbs-r6-a)
 19. [Lead Qualification (WBS-R6-C)](#19-lead-qualification-wbs-r6-c)
+20. [Lead Autonomy Integration (WBS-R6-X)](#20-lead-autonomy-integration-wbs-r6-x)
+21. [Conversion Outcome Intelligence (WBS-R7-A)](#21-conversion-outcome-intelligence-wbs-r7-a)
 
 ---
 
@@ -851,3 +853,64 @@ conversion stop → operations projection.
 - **Deferred:** real-MySQL concurrency execution is promoted to R10 /
   pre-production acceptance (schema anchors structurally verified;
   deterministic concurrency green).
+
+---
+
+## 21. Conversion Outcome Intelligence (WBS-R7-A)
+
+The authoritative business-outcome layer: interprets and persists the business
+outcome produced by a governed R6-E conversion — what outcome occurred, what
+value was realised, what evidence supports it, and whether that value is
+final, provisional, reversed, refunded, renewed or otherwise changed. R6-E
+proves a conversion occurred; R7-A answers what it was worth. Branch
+`feature/r7-a-conversion-outcome-intelligence`, base `8030e97a`.
+
+- Core modules: `api/lib/outcome/` (`outcome-contract`, `outcome-evidence`,
+  `outcome-classification`, `outcome-value`, `outcome-identity`,
+  `outcome-lifecycle`, `outcome-store`, `outcome-ownership`,
+  `outcome-service`, `outcome-projection`); router `api/outcome-router.ts`
+  (tRPC `outcome`: `record`, `verify`, `get`, `list`, `r7Projections`,
+  `listLifecycle`).
+- Identity: deterministic `outcomeId = "out1:" + sha256({tenantUserId,
+  businessId, conversionId, evidenceSource, evidenceIdentity})`; exact-once
+  per `(userId, conversionId, evidenceSource, evidenceIdentity)`;
+  `evidenceHash` binds the immutable core (drift fails closed).
+- Closed vocabularies: 12 outcome types (reversal types carry negative
+  amounts + `reversesOutcomeId`; `RENEWAL` may carry `renewsOutcomeId`;
+  supersession via `supersedesOutcomeId`), 6 statuses (`OBSERVED`,
+  `PROVISIONAL`, `VERIFIED`, `REVERSED`, `CANCELLED`, `SUPERSEDED`), 2 value
+  types (`MONETARY` integer minor units + closed 20-code currency /
+  `NON_MONETARY` quantity + closed metric unit — never a fabricated
+  currency), 8 evidence sources → 7 server-derived authority classes
+  (VERIFIED_* lands VERIFIED; `user_attestation` PROVISIONAL; unverified
+  OBSERVED — never client-selectable).
+- Classification is deterministic/rule-first from the canonical conversion
+  type + optional closed proposal (subscription/renewal accept UPGRADE/
+  DOWNGRADE; ambiguous offline outcomes narrow by proposal; `unknown`
+  conversions fail closed). No model is outcome authority; model/client
+  output is untrusted data. R6-E conversion amounts are revalidated before
+  use as business value (equality cross-check; conflicts fail closed).
+- Lifecycle: append-only `business_outcome_lifecycle_events` (`obf1:` facts;
+  verification/reversal/refund/cancellation/renewal/supersession) + CAS
+  `version` transitions. Full reversal flips the target terminal; partial
+  reversal leaves it VERIFIED with the fact recorded; current state is
+  derived, history is never edited.
+- Security: session `userId` anchors everything; business/conversion/lead/
+  lineage ownership re-verified from durable rows every call; client
+  authority smuggling fails closed (`OUTCOME_CLIENT_AUTHORITY_FIELD_FORBIDDEN`);
+  no billing/payment/CRM/lead writes; projections carry verbatim causation +
+  attribution disclaimers (`attributionClaimed: false`).
+- Downstream: frozen 27-key `conversion-outcome/v1` projection for R7-B
+  attribution / R7-C learning — read-only, no causal fields, net-value
+  derivation explicitly downstream-owned. Contracts:
+  `docs/contracts/conversion-outcome-intelligence-contract.md`,
+  `docs/contracts/conversion-outcome-to-attribution-learning-contract.md`.
+- Schema: `business_outcomes` + `business_outcome_lifecycle_events`;
+  provisional migration `0035_r7_a_conversion_outcome_foundation` (artefact
+  only, NOT executed; `docs/recovery/r7-a-unexecuted-migrations.md`; R7-X
+  owns canonical R7 sequencing). Audit: additive `business_outcome_recorded`
+  / `business_outcome_lifecycle` (one per durable effect; convergence emits
+  zero).
+- Acceptance: `api/outcome-acceptance.test.ts` (33 connected adversarial
+  cases over the real R6-E + R7-A routers). Report:
+  `docs/recovery/r7-a-conversion-outcome-acceptance-report.md`.
