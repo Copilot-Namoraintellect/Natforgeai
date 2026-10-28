@@ -26,6 +26,8 @@
 17. [Marketing Action Policy (WBS-R5-E)](#17-marketing-action-policy-wbs-r5-e)
 18. [Lead Identity (WBS-R6-A)](#18-lead-identity-wbs-r6-a)
 19. [Lead Qualification (WBS-R6-C)](#19-lead-qualification-wbs-r6-c)
+20. [Lead Autonomy Integration (WBS-R6-X)](#20-lead-autonomy-integration-wbs-r6-x)
+21. [Attribution Intelligence (WBS-R7-B)](#21-attribution-intelligence-wbs-r7-b)
 
 ---
 
@@ -616,6 +618,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `qualification` | `api/qualification-router.ts` | R6-C governed lead qualification: deterministic evidence-based decisions (QUALIFIED/NOT_QUALIFIED/REVIEW_REQUIRED/INSUFFICIENT_EVIDENCE/BLOCKED), exact-once immutable persistence, governed manual review, safe D handoff projection (`evaluate`, `get`, `listHistory`, `listReviews`, `resolveReview`, `getHandoffProjection`, `getPolicy`). Never performs outreach/CRM/conversion. Contracts: `docs/contracts/lead-qualification-contract.md`, `docs/contracts/lead-qualification-to-nurture-handoff-contract.md` |
 | `leadGovernance` | `api/lead-governance-router.ts` | R6-F lead governance/operations (WBS-R6 Stream F): admin-scoped read-only lead-operations projection reads (`getLeadOperations`, `listLeadOperationalStates`, `getLeadGovernanceSummary`), governed privacy transitions (`setPrivacyState`) and narrow governed recovery (`retryOperation`, retention sweep only). No force-merge/score/qualify/convert paths. Contract: `docs/contracts/lead-governance-operations-contract.md` |
 | `nurture` | `api/nurture-router.ts` | WBS-R6-D nurture/sales-handoff autonomy: governed nurture/handoff decisions over frozen A/C/E/F contracts; exact-once handoff identity, lifecycle, `sales_handoff` approvals, fake/test-only transport seam, conversion stop conditions, F-consumable operations view (`status`, `evaluate`, `getDecision`, `getHandoff`, `dispatchHandoff`, `reconcileHandoff`, `dispatchNurtureTouch`, `getLeadView`). Contract: `docs/contracts/lead-nurture-sales-handoff-contract.md` |
+| `attribution` | `api/attribution-router.ts` | WBS-R7-B attribution intelligence: deterministic attribution over frozen R7-A outcome projections; eligible journey reconstruction (score-mediated lead chain, scope/window/dedup rules), closed model set (`FIRST_TOUCH`, `LAST_TOUCH`, `LINEAR`, `POSITION_BASED`, `TIME_DECAY`) in exact integer basis points, evidence/confidence classification, immutable results + supersession, R7-C learning projection (`evaluate`, `synchronize`, `get`, `list`). Contracts: `docs/contracts/attribution-intelligence-contract.md`, `docs/contracts/attribution-to-business-learning-contract.md` |
 
 ### Context
 
@@ -851,3 +854,64 @@ conversion stop → operations projection.
 - **Deferred:** real-MySQL concurrency execution is promoted to R10 /
   pre-production acceptance (schema anchors structurally verified;
   deterministic concurrency green).
+
+---
+
+## 21. Attribution Intelligence (WBS-R7-B)
+
+The authoritative attribution layer: which prior marketing/customer-journey
+events are legitimately associated with a canonical R7-A business outcome,
+what contribution evidence exists, and how deterministic models allocate
+credit. Owns **attribution evidence and attribution results only** — not
+outcome truth (R7-A), causal proof, experimentation (R7-D), budget
+optimisation (R7-E), or business learning (R7-C).
+
+**Required principle:** *association is not causation.* Attribution
+distinguishes observed association, eligible contribution, allocated credit,
+and causal evidence. Credit is never causal proof; no client or runtime agent
+can mark causation proven, supply weights, or fabricate touchpoints.
+
+- Core modules: `api/lib/attribution/` (`attribution-contract`,
+  `attribution-identity`, `attribution-policy`, `attribution-window`,
+  `attribution-journey`, `attribution-journey-store`, `attribution-models`,
+  `attribution-credit`, `attribution-evidence`, `attribution-outcome-seam`,
+  `attribution-store`, `attribution-service`, `attribution-projection`);
+  router `api/attribution-router.ts` (`attribution`).
+- Outcomes are consumed **only** through the frozen R7-A
+  `conversion-outcome/v1` projection (branch `feature/r7-a-conversion-outcome-intelligence`
+  @ `3e8aea8`, consumed by ref — never merged); the seam validates the exact
+  28-key allowlist + verbatim disclaimers and reads behind a guarded
+  information-schema check.
+- Journey reconstruction is deterministic and lead-safe: tenant-predicated
+  reads, null-or-equal business scope, score-mediated numeric→`lid1` chain
+  (`lead_score_snapshots` → `lead_qualifications`), closed touchpoint types
+  (`CAMPAIGN`, `PUBLICATION`, `ENGAGEMENT`, `OPPORTUNITY`, `NURTURE_TOUCH`,
+  `SALES_HANDOFF`), window/dedup/timestamp exclusion rules with closed reason
+  codes. No fuzzy matching, no cross-lead/cross-business stitching, no
+  inferred events.
+- Closed model set, versioned, deterministic, integer-only:
+  `FIRST_TOUCH`, `LAST_TOUCH`, `LINEAR`, `POSITION_BASED`, `TIME_DECAY`
+  (7-day half-life, day-granular dyadic weights). Total credit is exactly
+  100000 basis points (largest-remainder, deterministic tie-breaks); outcome
+  monetary value is read-only reference.
+- Evidence classes (closed): `DIRECT_LINKAGE`, `STRONG_ASSOCIATION`,
+  `WEAK_ASSOCIATION`, `INSUFFICIENT_EVIDENCE`; confidence
+  `HIGH/MEDIUM/LOW/NONE` is a deterministic mapping from evidence quality —
+  never model opinion, never causal proof.
+- Exact-once: unique `attributionId` +
+  `(userId, outcomeId, modelType, modelVersion, windowStart, windowEnd,
+  journeyHash)`; retries/concurrency converge (`idempotent_replay`);
+  conflicting replay fails closed. Results are immutable; new evidence /
+  model-policy change / outcome reversal mints supersession-linked history
+  (`supersedesAttributionId` + immutable `attribution_lifecycle_events`
+  facts); reversed outcomes retire active credit via a zero-credit successor.
+- Privacy gate: R6-F `SUPPRESSED/RESTRICTED/RETENTION_EXPIRED` hard-stops
+  evaluation. No upstream (R4/R5/R6/R7-A) table is ever written.
+- Schema: `attribution_results`, `attribution_lifecycle_events`
+  (stream-local provisional migration `0035_r7_b_attribution_foundation`,
+  artefact only — NOT executed; R7-X owns canonical sequencing/collision with
+  R7-A's provisional `0035`; see `docs/recovery/r7-b-unexecuted-migrations.md`).
+- Contracts: `docs/contracts/attribution-intelligence-contract.md` (canonical),
+  `docs/contracts/attribution-to-business-learning-contract.md` (R7-C
+  handoff). Acceptance: `api/attribution-acceptance.test.ts` (49 connected
+  cases). Inventory: `docs/recovery/r7-b-attribution-inventory.md`.
