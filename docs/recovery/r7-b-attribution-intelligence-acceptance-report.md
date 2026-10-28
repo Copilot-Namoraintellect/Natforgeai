@@ -10,9 +10,9 @@
 
 ```
 branch=feature/r7-b-attribution-intelligence
-HEAD=<final-commit-after-report>
+HEAD=0d19e52 (report commit; pushed to origin)
 remote=origin (https://github.com/Copilot-Namoraintellect/Natforgeai.git)
-working_tree=clean (only this report + AGENTS.md §21 doc change at report time)
+working_tree=clean
 programme_base=8030e97adc9fe8e6bf1cc3a93a8a66da56025a46 (verified: HEAD == base at start; merge-base == base)
 ```
 
