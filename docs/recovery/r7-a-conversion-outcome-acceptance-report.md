@@ -14,7 +14,8 @@
 
 ```
 branch=feature/r7-a-conversion-outcome-intelligence
-HEAD=<see git log at report time — top commit is the A9 acceptance slice>
+HEAD=top commit of this branch (7521597 at push time — the commit that lands
+     this report; verifiable via git log; a commit cannot embed its own hash)
 remote=origin (https://github.com/Copilot-Namoraintellect/Natforgeai.git)
 working_tree=clean (committed atomically per slice, pushed immediately)
 ```
