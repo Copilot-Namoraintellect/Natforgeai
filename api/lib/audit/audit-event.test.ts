@@ -109,6 +109,11 @@ describe("audit-event taxonomy", () => {
       "experiment_assignment_recorded",
       "experiment_evidence_bound",
       "experiment_result_recorded",
+      // R7-E: budget/portfolio durable effects (snapshots, proposals,
+      // authorised instructions; ids/classes/hashes only).
+      "portfolio_snapshot_created",
+      "optimisation_proposal_created",
+      "optimisation_instruction_authorized",
     ]);
   });
 

@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-05 (R7-X integration: §21 R7-A Conversion Outcome; §22 R7-B Attribution; §23 R7-F Optimisation Governance)
+> **Last updated:** 2026-11-10 (R7-X integration: §21 R7-A Conversion Outcome; §22 R7-B Attribution; §23 R7-F Optimisation Governance; §24 R7-E Budget & Portfolio Optimisation)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -30,6 +30,7 @@
 21. [Conversion Outcome Intelligence (WBS-R7-A)](#21-conversion-outcome-intelligence-wbs-r7-a)
 22. [Attribution Intelligence (WBS-R7-B)](#22-attribution-intelligence-wbs-r7-b)
 23. [Optimisation Governance (WBS-R7-F)](#23-optimisation-governance-wbs-r7-f)
+24. [Budget & Portfolio Optimisation (WBS-R7-E)](#24-budget--portfolio-optimisation-wbs-r7-e)
 
 ---
 
@@ -622,6 +623,10 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `nurture` | `api/nurture-router.ts` | WBS-R6-D nurture/sales-handoff autonomy: governed nurture/handoff decisions over frozen A/C/E/F contracts; exact-once handoff identity, lifecycle, `sales_handoff` approvals, fake/test-only transport seam, conversion stop conditions, F-consumable operations view (`status`, `evaluate`, `getDecision`, `getHandoff`, `dispatchHandoff`, `reconcileHandoff`, `dispatchNurtureTouch`, `getLeadView`). Contract: `docs/contracts/lead-nurture-sales-handoff-contract.md` |
 | `attribution` | `api/attribution-router.ts` | WBS-R7-B attribution intelligence: deterministic attribution over frozen R7-A outcome projections; eligible journey reconstruction (score-mediated lead chain, scope/window/dedup rules), closed model set (`FIRST_TOUCH`, `LAST_TOUCH`, `LINEAR`, `POSITION_BASED`, `TIME_DECAY`) in exact integer basis points, evidence/confidence classification, immutable results + supersession, R7-C learning projection (`evaluate`, `synchronize`, `get`, `list`). Contracts: `docs/contracts/attribution-intelligence-contract.md`, `docs/contracts/attribution-to-business-learning-contract.md` |
 | `optimisationGovernance` | `api/optimisation-governance-router.ts` | R7-F optimisation governance authority: deterministic proposal → governance evaluation (`ALLOW`/`REVIEW_REQUIRED`/`BLOCK`) over closed action taxonomy, versioned code-level policy, financial guardrails (no autonomous total-spend increase, locked/reserved funds immutable, provider allow-list), experiment constraints (concurrency/budget/dimensions/protected traits), portfolio concentration/shift/oscillation limits, approval-bound execution gate, read-only operations projection, audit-only narrow recovery (`evaluate`, `get`, `listDecisions`, `getOperationsProjection`, `revalidate`, `recordRecovery`, `getPolicy`). Never executes optimisation, billing, or provider actions. Contract: `docs/contracts/business-optimisation-governance-contract.md` |
+| `outcome` | `api/outcome-router.ts` | WBS-R7-A conversion outcome intelligence: durable business-outcome truth from governed R6-E conversions — deterministic `out1:` identity, exact-once, closed outcome types/statuses/evidence-authority classes, immutable lifecycle facts, monetary value read-only (`record`, `verify`, `get`, `list`, `r7Projections`, `listLifecycle`). Contracts: `docs/contracts/conversion-outcome-intelligence-contract.md`, `docs/contracts/conversion-outcome-to-attribution-learning-contract.md` |
+| `businessLearning` | `api/business-learning-router.ts` | WBS-R7-C business learning engine: deterministic context-scoped learning derived from R7-A outcomes + R7-B attribution via frozen projections; evidence bundles, contradiction/novelty handling, honest confidence, immutable records + lifecycle (`derive`, `get`, `list`, `listLifecycle`). Contracts: `docs/contracts/business-learning-contract.md`, `docs/contracts/business-learning-to-experiment-optimisation-contract.md` |
+| `experimentation` | `api/experimentation-router.ts` | WBS-R7-D experimentation engine: governed experiment designs over R7-C learning, deterministic assignment, R7-A/R7-B-sourced evidence binding, immutable results scoped to design assumptions (`createDesign`, `getDesign`, `activate`, `assign`, `bindEvidence`, `calculateResult`, `getResult`, lifecycle reads). Contract: `docs/contracts/experimentation-contract.md` |
+| `budgetPortfolio` | `api/budget-portfolio-router.ts` | WBS-R7-E budget & portfolio optimisation: portfolio snapshots, evidence model, bounded reallocation solver under stability constraints, R7-F-governed proposals and read-only authorised instructions; never raises total approved budget, never moves locked/reserved funds, no billing (`snapshotPortfolio`, `generateProposal`, `getInstruction`, `listProposals`, `getStrategyHandoff`). Contract: `docs/contracts/budget-portfolio-optimisation-contract.md` |
 
 ### Context
 
@@ -1031,3 +1036,59 @@ must not secretly become the optimisation engine.
   CRM, no optimisation algorithm. Audit via the canonical `audit_events`
   ledger (`optimisation_governance_decision`,
   `optimisation_governance_recovery`).
+---
+
+## 24. Budget & Portfolio Optimisation (WBS-R7-E)
+
+The governed optimisation layer that converts evidence (R7-A outcomes,
+R7-B attribution, R7-C learning), the current campaign portfolio and the
+approved budget envelope into **bounded, explainable optimisation
+proposals**. Owns optimisation proposal generation and bounded portfolio
+allocation only — governance authorizes (R7-F), R4 settles. **Optimisation
+proposes; governance authorizes.**
+
+- Core modules: `api/lib/budget-portfolio/` (`budget-portfolio-contract`,
+  `portfolio-snapshot`, `evidence-model`, `allocation-solver`,
+  `stability-controls`, `governance-seam`, `budget-portfolio-store`,
+  `budget-portfolio-service`, `budget-portfolio-bridge`); router
+  `api/budget-portfolio-router.ts` (tRPC namespace `budgetPortfolio`).
+- Portfolio snapshot (E2): deterministic `psn1:` identity over server-assembled
+  authoritative state (campaigns × 100 minor units, committed/reserved,
+  locked/disabled keys, supported providers). Client may never supply totals,
+  allocations or funds. Stale snapshots fail closed before material action.
+- Evidence model (E3): deterministic integer weights — VERIFIED > PROVISIONAL
+  outcomes, attribution confidence/evidence class, learning confidence;
+  contradicted learning blocks its subject; stale evidence excluded; single
+  events capped at 40% of total mass. No model assigns financial weight.
+  Provisional-class (MODERATE) evidence shifts ≤ 10% of portfolio per cycle.
+- Bounded solver (E4): integer minor units (BigInt internals), Σ proposed ≤
+  approved total, pure reallocations conserve money exactly (Σ delta = 0,
+  largest-remainder deterministic rounding); concentration ceiling (50%),
+  per-cycle shift cap (20% / $500), minimum-allocation floor, locked /
+  reserved / disabled / unsupported allocations preserved exactly.
+- Stability (E5): cooldown (24h/key), hysteresis band, repeated-reversal hold —
+  noisy signals produce `NO_CHANGE`, never thrash.
+- Governance binding (E6): every material proposal is evaluated through the
+  frozen R7-F seam (`evaluateProposal`), the decision is persisted verbatim
+  and re-validated (shape + evaluation fingerprint + proposal fingerprint)
+  before authorisation; `assertActionExecutable` is the only execution gate.
+  `BLOCK` never executes; `REVIEW_REQUIRED` needs a human approval on the
+  ledger; forged/expired/edited approvals and modified proposals fail closed.
+  On this branch the production port is the fail-closed UNAVAILABLE port —
+  canonical R7-F binds at R7-X (`governance-seam.ts`).
+- Execution boundary (E7): emits read-only authorised optimisation
+  instructions (`ins1:`) only — no billing/payment/provider/campaign/strategy
+  execution anywhere in the stream.
+- Downstream (E8): `budgetPortfolio.getStrategyHandoff` exposes the frozen
+  23-key read-only projection for future R8 planning
+  (`docs/contracts/business-optimisation-to-strategy-contract.md`).
+- Contracts: `docs/contracts/budget-portfolio-optimisation-contract.md`
+  (canonical) + the strategy handoff contract. Inventory:
+  `docs/recovery/r7-e-budget-portfolio-inventory.md`. Acceptance:
+  `docs/recovery/r7-e-budget-portfolio-optimisation-acceptance-report.md`.
+- Schema: `budget_portfolio_snapshots`, `budget_portfolio_proposals`,
+  `budget_portfolio_allocation_instructions` — stream-local provisional
+  migration `0035_r7_e_budget_portfolio_optimisation` (artefact only, **NOT
+  executed**; sibling 0035 collision documented in
+  `docs/recovery/r7-e-unexecuted-migrations.md`; R7-X owns convergence).
+- Money: integer minor units everywhere; no floating-point money.

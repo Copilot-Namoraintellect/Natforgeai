@@ -62,6 +62,11 @@ export const HARNESS_UNIQUE_CONSTRAINTS: Record<string, string[][]> = {
   approval_requests: [["idempotencyKey"]],
   audit_events: [["eventFingerprint"]],
   two_factor_challenges: [["challengeId"]],
+  // R7-E additive: budget/portfolio optimisation anchors (provisional 0035;
+  // see docs/recovery/r7-e-unexecuted-migrations.md).
+  budget_portfolio_snapshots: [["portfolioSnapshotId"], ["userId", "portfolioSnapshotId"]],
+  budget_portfolio_proposals: [["optimisationId"], ["userId", "optimisationId"]],
+  budget_portfolio_allocation_instructions: [["instructionId"], ["userId", "instructionId"]],
 };
 
 const DEFAULT_TABLES: FakeTables = {
@@ -91,6 +96,10 @@ const DEFAULT_TABLES: FakeTables = {
   two_factor_challenges: [],
   social_signals: [],
   social_interpretations: [],
+  // R7-E additive (provisional 0035; artefact only — NOT executed).
+  budget_portfolio_snapshots: [],
+  budget_portfolio_proposals: [],
+  budget_portfolio_allocation_instructions: [],
 };
 
 function tableName(table: unknown): string {

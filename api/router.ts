@@ -39,6 +39,7 @@ import { attributionRouter } from "./attribution-router";
 import { businessLearningRouter } from "./business-learning-router";
 import { optimisationGovernanceRouter } from "./optimisation-governance-router";
 import { experimentationRouter } from "./experimentation-router";
+import { budgetPortfolioRouter } from "./budget-portfolio-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -103,6 +104,7 @@ export const appRouter = createRouter({
   businessLearning: businessLearningRouter,
   optimisationGovernance: optimisationGovernanceRouter,
   experimentation: experimentationRouter,
+  budgetPortfolio: budgetPortfolioRouter,
 });
 
 export type AppRouter = typeof appRouter;

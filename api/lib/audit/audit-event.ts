@@ -142,6 +142,13 @@ export const AUDIT_EVENT_TYPES = [
   "experiment_assignment_recorded",
   "experiment_evidence_bound",
   "experiment_result_recorded",
+  // R7-E: budget/portfolio durable effects (snapshots, proposals, authorised
+  // instructions). One canonical event per durable effect; convergence/replay
+  // paths emit zero. Metadata carries ids/classes/hashes/allocations-counts
+  // only — never free-form model output.
+  "portfolio_snapshot_created",
+  "optimisation_proposal_created",
+  "optimisation_instruction_authorized",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
