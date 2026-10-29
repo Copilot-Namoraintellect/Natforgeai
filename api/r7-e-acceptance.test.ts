@@ -259,8 +259,18 @@ function auditEvents(harness: Harness): FakeRow[] {
   return harness.tables.audit_events ?? [];
 }
 
-function sumDelta(row: { deltaAllocations: { deltaMinor: number }[] }): number {
-  return row.deltaAllocations.reduce((s, d) => s + d.deltaMinor, 0);
+interface DeltaEntry {
+  allocationKey: string;
+  deltaMinor: number;
+}
+
+/** JSON columns travel as unknown across the store seam; test views pin the shape. */
+function deltasOf(row: { deltaAllocations: unknown }): DeltaEntry[] {
+  return row.deltaAllocations as DeltaEntry[];
+}
+
+function sumDelta(row: { deltaAllocations: unknown }): number {
+  return deltasOf(row).reduce((s, d) => s + d.deltaMinor, 0);
 }
 
 describe("R7-E connected acceptance", () => {
@@ -326,7 +336,7 @@ describe("R7-E connected acceptance", () => {
       locked.deps,
       locked.executor
     );
-    const delta2 = view.proposal.deltaAllocations.find((d) => d.allocationKey === "camp:2");
+    const delta2 = deltasOf(view.proposal).find((d) => d.allocationKey === "camp:2");
     expect(delta2 ?? { deltaMinor: 0 }).toMatchObject({ deltaMinor: 0 });
     expect(view.proposal.reasonCodes).toContain("LOCKED_FUNDS_PRESERVED");
   });
@@ -410,7 +420,7 @@ describe("R7-E connected acceptance", () => {
     expect(verified.proposal.confidenceClass).toBe("STRONG");
     expect(provisional.proposal.confidenceClass).toBe("MODERATE");
     const toCamp1 = (row: typeof verified.proposal) =>
-      row.deltaAllocations.find((d) => d.allocationKey === "camp:1")?.deltaMinor ?? 0;
+      deltasOf(row).find((d) => d.allocationKey === "camp:1")?.deltaMinor ?? 0;
     expect(toCamp1(verified.proposal)).toBeGreaterThan(toCamp1(provisional.proposal));
     expect(toCamp1(provisional.proposal)).toBeLessThanOrEqual(Math.floor((80_000 * 1000) / 10_000));
   });
@@ -448,7 +458,7 @@ describe("R7-E connected acceptance", () => {
     const strong = await proposeOptimisation({ userId: USER_ID, businessId: BUSINESS, evidenceRefs: refs }, strongWorld.deps, strongWorld.executor);
     const weak = await proposeOptimisation({ userId: USER_ID, businessId: BUSINESS, evidenceRefs: refs }, weakWorld.deps, weakWorld.executor);
     const toCamp1 = (row: typeof strong.proposal) =>
-      row.deltaAllocations.find((d) => d.allocationKey === "camp:1")?.deltaMinor ?? 0;
+      deltasOf(row).find((d) => d.allocationKey === "camp:1")?.deltaMinor ?? 0;
     expect(toCamp1(strong.proposal)).toBeGreaterThan(toCamp1(weak.proposal));
   });
 
@@ -480,7 +490,7 @@ describe("R7-E connected acceptance", () => {
     );
     expect(view.proposal.reasonCodes).toContain("LEARNING_CONTRADICTED");
     // Contradicted subject cannot receive new allocation.
-    const delta1 = view.proposal.deltaAllocations.find((d) => d.allocationKey === "camp:1");
+    const delta1 = deltasOf(view.proposal).find((d) => d.allocationKey === "camp:1");
     expect(delta1?.deltaMinor ?? 0).toBeLessThanOrEqual(0);
   });
 
@@ -508,7 +518,7 @@ describe("R7-E connected acceptance", () => {
       huge.executor
     );
     const cap = Math.min(50_000, Math.floor((80_000 * 2000) / 10_000));
-    const delta1 = view.proposal.deltaAllocations.find((d) => d.allocationKey === "camp:1")?.deltaMinor ?? 0;
+    const delta1 = deltasOf(view.proposal).find((d) => d.allocationKey === "camp:1")?.deltaMinor ?? 0;
     expect(Math.abs(delta1)).toBeLessThanOrEqual(cap);
   });
 
@@ -562,7 +572,7 @@ describe("R7-E connected acceptance", () => {
       threeCamp.executor
     );
     const cap = Math.min(50_000, Math.floor((100_000 * 2000) / 10_000));
-    for (const d of view.proposal.deltaAllocations) {
+    for (const d of deltasOf(view.proposal)) {
       expect(Math.abs(d.deltaMinor)).toBeLessThanOrEqual(cap);
     }
     expect(view.proposal.reasonCodes).toContain("PER_CYCLE_SHIFT_CAP_APPLIED");
@@ -704,7 +714,7 @@ describe("R7-E connected acceptance", () => {
     const tampered = {
       ...(world.harness.tables.budget_portfolio_proposals[0] as FakeRow),
       proposedAllocations: [{ allocationKey: "camp:1", campaignId: 1, provider: null, amountMinor: 1_000_000 }],
-    };
+    } as any;
     tampered.proposalContentHash = deriveProposalContentHash({
       optimisationId: first.proposal.optimisationId,
       currentAllocations: tampered.currentAllocations as never,
@@ -787,7 +797,7 @@ describe("R7-E connected acceptance", () => {
       reversalWorld.executor
     );
     expect(initial.proposal.status).toBe("REVIEW_REQUIRED");
-    const delta1Initial = initial.proposal.deltaAllocations.find((d) => d.allocationKey === "camp:1")?.deltaMinor ?? 0;
+    const delta1Initial = deltasOf(initial.proposal).find((d) => d.allocationKey === "camp:1")?.deltaMinor ?? 0;
     expect(delta1Initial).toBeGreaterThan(0);
     reversalWorld.governance.mintApproval(initial.proposal.governanceDecisionId!, "approved");
     const authorised = await getAuthorisedInstruction({ userId: USER_ID, optimisationId: initial.proposal.optimisationId }, reversalWorld.deps, reversalWorld.executor);
@@ -1158,7 +1168,7 @@ describe("R7-E connected acceptance", () => {
       lockedWorld.deps,
       lockedWorld.executor
     );
-    const delta1 = lockedView.proposal.deltaAllocations.find((d) => d.allocationKey === "camp:1");
+    const delta1 = deltasOf(lockedView.proposal).find((d) => d.allocationKey === "camp:1");
     expect(delta1 ?? { deltaMinor: 0 }).toMatchObject({ deltaMinor: 0 });
     expect(lockedView.proposal.reasonCodes).toContain("LOCKED_FUNDS_PRESERVED");
     // 4. Human rejection permanently blocks the proposal identity.

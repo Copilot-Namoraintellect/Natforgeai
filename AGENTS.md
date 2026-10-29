@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-10-30 (R6-X integration: §18 Lead Identity WBS-R6-A; §19 Lead Qualification WBS-R6-C)
+> **Last updated:** 2026-11-10 (R7-E: §21 Budget & Portfolio Optimisation WBS-R7-E)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -26,6 +26,7 @@
 17. [Marketing Action Policy (WBS-R5-E)](#17-marketing-action-policy-wbs-r5-e)
 18. [Lead Identity (WBS-R6-A)](#18-lead-identity-wbs-r6-a)
 19. [Lead Qualification (WBS-R6-C)](#19-lead-qualification-wbs-r6-c)
+21. [Budget & Portfolio Optimisation (WBS-R7-E)](#21-budget--portfolio-optimisation-wbs-r7-e)
 
 ---
 
@@ -851,3 +852,60 @@ conversion stop → operations projection.
 - **Deferred:** real-MySQL concurrency execution is promoted to R10 /
   pre-production acceptance (schema anchors structurally verified;
   deterministic concurrency green).
+
+---
+
+## 21. Budget & Portfolio Optimisation (WBS-R7-E)
+
+The governed optimisation layer that converts evidence (R7-A outcomes,
+R7-B attribution, R7-C learning), the current campaign portfolio and the
+approved budget envelope into **bounded, explainable optimisation
+proposals**. Owns optimisation proposal generation and bounded portfolio
+allocation only — governance authorizes (R7-F), R4 settles. **Optimisation
+proposes; governance authorizes.**
+
+- Core modules: `api/lib/budget-portfolio/` (`budget-portfolio-contract`,
+  `portfolio-snapshot`, `evidence-model`, `allocation-solver`,
+  `stability-controls`, `governance-seam`, `budget-portfolio-store`,
+  `budget-portfolio-service`, `budget-portfolio-bridge`); router
+  `api/budget-portfolio-router.ts` (tRPC namespace `budgetPortfolio`).
+- Portfolio snapshot (E2): deterministic `psn1:` identity over server-assembled
+  authoritative state (campaigns × 100 minor units, committed/reserved,
+  locked/disabled keys, supported providers). Client may never supply totals,
+  allocations or funds. Stale snapshots fail closed before material action.
+- Evidence model (E3): deterministic integer weights — VERIFIED > PROVISIONAL
+  outcomes, attribution confidence/evidence class, learning confidence;
+  contradicted learning blocks its subject; stale evidence excluded; single
+  events capped at 40% of total mass. No model assigns financial weight.
+  Provisional-class (MODERATE) evidence shifts ≤ 10% of portfolio per cycle.
+- Bounded solver (E4): integer minor units (BigInt internals), Σ proposed ≤
+  approved total, pure reallocations conserve money exactly (Σ delta = 0,
+  largest-remainder deterministic rounding); concentration ceiling (50%),
+  per-cycle shift cap (20% / $500), minimum-allocation floor, locked /
+  reserved / disabled / unsupported allocations preserved exactly.
+- Stability (E5): cooldown (24h/key), hysteresis band, repeated-reversal hold —
+  noisy signals produce `NO_CHANGE`, never thrash.
+- Governance binding (E6): every material proposal is evaluated through the
+  frozen R7-F seam (`evaluateProposal`), the decision is persisted verbatim
+  and re-validated (shape + evaluation fingerprint + proposal fingerprint)
+  before authorisation; `assertActionExecutable` is the only execution gate.
+  `BLOCK` never executes; `REVIEW_REQUIRED` needs a human approval on the
+  ledger; forged/expired/edited approvals and modified proposals fail closed.
+  On this branch the production port is the fail-closed UNAVAILABLE port —
+  canonical R7-F binds at R7-X (`governance-seam.ts`).
+- Execution boundary (E7): emits read-only authorised optimisation
+  instructions (`ins1:`) only — no billing/payment/provider/campaign/strategy
+  execution anywhere in the stream.
+- Downstream (E8): `budgetPortfolio.getStrategyHandoff` exposes the frozen
+  23-key read-only projection for future R8 planning
+  (`docs/contracts/business-optimisation-to-strategy-contract.md`).
+- Contracts: `docs/contracts/budget-portfolio-optimisation-contract.md`
+  (canonical) + the strategy handoff contract. Inventory:
+  `docs/recovery/r7-e-budget-portfolio-inventory.md`. Acceptance:
+  `docs/recovery/r7-e-budget-portfolio-optimisation-acceptance-report.md`.
+- Schema: `budget_portfolio_snapshots`, `budget_portfolio_proposals`,
+  `budget_portfolio_allocation_instructions` — stream-local provisional
+  migration `0035_r7_e_budget_portfolio_optimisation` (artefact only, **NOT
+  executed**; sibling 0035 collision documented in
+  `docs/recovery/r7-e-unexecuted-migrations.md`; R7-X owns convergence).
+- Money: integer minor units everywhere; no floating-point money.

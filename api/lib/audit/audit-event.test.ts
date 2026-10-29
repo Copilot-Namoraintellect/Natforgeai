@@ -87,6 +87,11 @@ describe("audit-event taxonomy", () => {
       "sales_handoff_state_changed",
       "sales_handoff_dispatch",
       "lead_nurture_touch",
+      // R7-E: budget/portfolio durable effects (snapshots, proposals,
+      // authorised instructions; ids/classes/hashes only).
+      "portfolio_snapshot_created",
+      "optimisation_proposal_created",
+      "optimisation_instruction_authorized",
     ]);
   });
 

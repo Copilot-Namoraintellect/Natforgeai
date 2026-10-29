@@ -63,7 +63,7 @@ acceptance):
 | `evidenceRefs` | `string[]` | Opaque upstream ids (out1:/atr1:/lrn1:) cited |
 | `confidenceClass` | `string` | `STRONG \| MODERATE \| WEAK \| INSUFFICIENT` |
 | `reasonCodes` | `string[]` | Closed R7-E explainability codes (≤8) |
-| `constraints` | `{constraintVersion, concentrationCeilingBps, maxShiftPerCycleBps, maxShiftPerCycleMinor, minAllocationMinor, minChangeThresholdMinor}` | Frozen constraint set snapshot |
+| `constraints` | `{constraintVersion, concentrationCeilingBps, maxShiftPerCycleBps, maxShiftPerCycleMinor, minAllocationMinor, minChangeThresholdMinor, weakConfidenceShiftCapBps, moderateConfidenceShiftCapBps}` | Frozen constraint set snapshot |
 | `governance` | `{governanceDecisionId, decision, approvalRequired, policyVersion, riskClass} \| null` | Frozen R7-F binding (null for NO_CHANGE) |
 | `authorisation` | `{instructionId, approvalRequestId, authorisedAt, expiresAt} \| null` | Authorised instruction pointer, once executed through the gate |
 | `algorithmVersion` | `string` | Closed `budget-portfolio-algorithm/v1` |
