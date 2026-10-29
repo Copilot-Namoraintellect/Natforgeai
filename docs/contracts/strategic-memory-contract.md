@@ -201,7 +201,10 @@ source fingerprints all fail closed (§6.3).
 subjectType, subjectId, statementType, statement, evidenceRefs (verbatim,
 order-normalized), sourceAuthority, sourceVersion, sourceIdentity,
 confidenceClass, basis, limitations, validFrom, validUntil, observedAt,
-recordedAt, supersedesMemoryId, contradictsMemoryIds (verbatim)}))`
+supersedesMemoryId, contradictsMemoryIds (verbatim), contextScope}))` —
+`recordedAt` (server acceptance time) is deliberately excluded so a later
+re-ingest of the same upstream record converges as an idempotent replay
+rather than conflicting on clock drift; the row itself remains immutable.
 
 Drift between a retained row and a recomputed hash is tampering and fails
 closed on every read (`STRATEGIC_MEMORY_EVIDENCE_CONFLICT`).

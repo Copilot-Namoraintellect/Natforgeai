@@ -3670,3 +3670,116 @@ export const budgetPortfolioAllocationInstructions = mysqlTable(
 
 export type BudgetPortfolioInstructionRow = typeof budgetPortfolioAllocationInstructions.$inferSelect;
 export type InsertBudgetPortfolioInstructionRow = typeof budgetPortfolioAllocationInstructions.$inferInsert;
+
+// ─── R8-A Strategic Memory — versioned strategic-memory records ───
+// Deterministic "mem1:" identity over tenant + business + source authority +
+// source identity + memory type + context scope; exact-once via durable
+// unique anchors; immutable evidenceHash-bound core (no update path).
+// Supersession/contradiction bind exact predecessors and are enforced via
+// append-only smf1: lifecycle facts + CAS-guarded factStatus. No execution
+// fields exist anywhere in this stream (no spend/experiment/campaign
+// authority). Stream-local provisional migration
+// 0036_r8_a_strategic_memory_foundation (artefact only — NOT executed;
+// R8-X owns canonical sequencing; docs/recovery/r8-a-unexecuted-migrations.md).
+export const strategicMemoryRecords = mysqlTable(
+  "strategic_memory_records",
+  {
+    id: serial("id").primaryKey(),
+    // "mem1:" + 64-hex deterministic memory identity; server-minted only.
+    memoryId: varchar("memoryId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    memoryType: varchar("memoryType", { length: 32 }).notNull(),
+    subjectType: varchar("subjectType", { length: 24 }).notNull(),
+    subjectId: varchar("subjectId", { length: 191 }).notNull(),
+    // FACT | ASSUMPTION — the distinction is contract-binding (§5).
+    statementType: varchar("statementType", { length: 16 }).notNull(),
+    // Denormalized current lifecycle status; CAS-guarded transitions only.
+    factStatus: varchar("factStatus", { length: 16 }).notNull(),
+    // Closed-template render (derived) or bounded attestation object (operator);
+    // stored verbatim — content is never authority.
+    statement: json("statement").notNull(),
+    // Exact upstream identities consumed (verbatim, order-normalized in hashes).
+    evidenceRefs: json("evidenceRefs").notNull(),
+    sourceAuthority: varchar("sourceAuthority", { length: 32 }).notNull(),
+    // Frozen upstream contract version per source (§6.1).
+    sourceVersion: varchar("sourceVersion", { length: 48 }).notNull(),
+    sourceIdentity: varchar("sourceIdentity", { length: 191 }).notNull(),
+    // Hash of the exact upstream material consumed; drift fails closed.
+    sourceFingerprint: varchar("sourceFingerprint", { length: 64 }).notNull(),
+    // Server-derived only; monotonic downward under re-evaluation.
+    confidenceClass: varchar("confidenceClass", { length: 16 }).notNull(),
+    // ASSUMPTION: required {basisType, summary}. FACT: null.
+    basis: json("basis"),
+    limitations: json("limitations").notNull(),
+    // ISO 8601 stored verbatim. validUntil required for ASSUMPTION.
+    validFrom: varchar("validFrom", { length: 32 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }),
+    observedAt: varchar("observedAt", { length: 32 }).notNull(),
+    recordedAt: varchar("recordedAt", { length: 32 }).notNull(),
+    // Lineage bindings (exact predecessors; scope-checked, never deleted).
+    supersedesMemoryId: varchar("supersedesMemoryId", { length: 69 }),
+    contradictsMemoryIds: json("contradictsMemoryIds").notNull(),
+    // Server-derived bounded scope; clients can never widen it.
+    contextScope: json("contextScope").notNull(),
+    // sha256 over the canonical immutable core; drift fails closed.
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    // Optimistic CAS guard for lifecycle transitions.
+    version: int("version").notNull().default(1),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    memoryIdUnique: uniqueIndex("smr_memory_id_uidx").on(table.memoryId),
+    userMemoryUnique: uniqueIndex("smr_user_memory_uidx").on(table.userId, table.memoryId),
+    // Exact-once natural identity: one memory per tenant + business + source
+    // authority + source identity + memory type + context scope (via the
+    // scope-binding key columns below), enforced at the database level.
+    naturalKeyUnique: uniqueIndex("smr_natural_key_uidx").on(
+      table.userId,
+      table.businessId,
+      table.sourceAuthority,
+      table.sourceIdentity,
+      table.memoryType
+    ),
+    userBusinessIdx: index("smr_user_business_idx").on(table.userId, table.businessId),
+    userStatusIdx: index("smr_user_status_idx").on(table.userId, table.factStatus),
+    userSubjectIdx: index("smr_user_subject_idx").on(table.userId, table.subjectType, table.subjectId),
+    userSourceIdx: index("smr_user_source_idx").on(table.userId, table.sourceAuthority),
+  })
+);
+
+export type StrategicMemoryRecordRow = typeof strategicMemoryRecords.$inferSelect;
+export type InsertStrategicMemoryRecordRow = typeof strategicMemoryRecords.$inferInsert;
+
+// ─── R8-A Strategic Memory — immutable lifecycle facts (append-only) ───
+// One deterministic "smf1:" row per memory lifecycle fact (supersession /
+// contradiction / invalidation / staleness / expiry / reaffirmation). Rows are
+// immutable — there is no update path; current state is derived, history is
+// never edited.
+export const strategicMemoryLifecycleEvents = mysqlTable(
+  "strategic_memory_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // "smf1:" + 64-hex deterministic fact identity; server-minted only.
+    memoryLifecycleEventId: varchar("memoryLifecycleEventId", { length: 70 }).notNull(),
+    memoryId: varchar("memoryId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 16 }).notNull(),
+    // Post-fact memory status (contract §8 precedence).
+    targetStatus: varchar("targetStatus", { length: 16 }).notNull(),
+    // Successor binding for supersession/contradiction (mem1: | null).
+    successorMemoryId: varchar("successorMemoryId", { length: 69 }),
+    // Upstream identity that caused a re-evaluation (| null).
+    sourceIdentity: varchar("sourceIdentity", { length: 191 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventIdUnique: uniqueIndex("smle_event_id_uidx").on(table.memoryLifecycleEventId),
+    userMemoryIdx: index("smle_user_memory_idx").on(table.userId, table.memoryId),
+  })
+);
+
+export type StrategicMemoryLifecycleEventRow = typeof strategicMemoryLifecycleEvents.$inferSelect;
+export type InsertStrategicMemoryLifecycleEventRow = typeof strategicMemoryLifecycleEvents.$inferInsert;
