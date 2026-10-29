@@ -87,6 +87,9 @@ describe("audit-event taxonomy", () => {
       "sales_handoff_state_changed",
       "sales_handoff_dispatch",
       "lead_nurture_touch",
+      // R7-C: durable business-learning records and lifecycle transitions
+      // (ids/closed labels/classes/counts only; zero on replay/convergence).
+      "business_learning_recorded",
     ]);
   });
 

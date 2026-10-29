@@ -2927,3 +2927,106 @@ export const nurtureTouchRecords = mysqlTable(
 
 export type NurtureTouchRecordRow = typeof nurtureTouchRecords.$inferSelect;
 export type InsertNurtureTouchRecordRow = typeof nurtureTouchRecords.$inferInsert;
+
+// ─── Business Learning Records (WBS-R7-C) ───
+// R7-C business-outcome learning authority. Immutable, insert-only learning
+// records derived deterministically from frozen R7-A outcome projections +
+// R7-B attribution projections (consumed via seams, never merged). The only
+// mutable column is the CAS-guarded `status`; truthful change is new history
+// (lifecycle facts + successor rows). Governance pins: no client authority
+// field is ever accepted; learning is evidence, not authority.
+export const businessLearningRecords = mysqlTable(
+  "business_learning_records",
+  {
+    id: serial("id").primaryKey(),
+    // "lrn1:" + 64-hex deterministic learning identity (contract §3).
+    learningId: varchar("learningId", { length: 69 }).notNull(),
+    // "evb1:" + 64-hex deterministic evidence-bundle identity (contract §4).
+    evidenceBundleId: varchar("evidenceBundleId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    learningType: varchar("learningType", { length: 32 }).notNull(),
+    subjectType: varchar("subjectType", { length: 24 }).notNull(),
+    subjectId: varchar("subjectId", { length: 191 }).notNull(),
+    outcomeTypeFamily: varchar("outcomeTypeFamily", { length: 64 }).notNull(),
+    // Server-derived bounded context scope (contract §6); clients can never
+    // supply or widen it.
+    contextScope: json("contextScope").notNull(),
+    // Bounded closed-template render (contract §5); no model/client text.
+    statement: json("statement").notNull(),
+    outcomeIds: json("outcomeIds").notNull(),
+    attributionIds: json("attributionIds").notNull(),
+    // Outcome verification/lifecycle state binding at derivation time (§3):
+    // upstream state changes mint new identities, never silent edits.
+    upstreamStateFingerprint: varchar("upstreamStateFingerprint", { length: 64 }).notNull(),
+    supportCount: int("supportCount").notNull(),
+    contradictionCount: int("contradictionCount").notNull(),
+    confidenceClass: varchar("confidenceClass", { length: 24 }).notNull(),
+    evidenceClass: varchar("evidenceClass", { length: 24 }).notNull(),
+    noveltyClass: varchar("noveltyClass", { length: 24 }).notNull(),
+    status: varchar("status", { length: 24 }).notNull().default("CANDIDATE"),
+    // What must NOT be inferred from this record (contract §15).
+    limitations: json("limitations").notNull(),
+    sourceVersions: json("sourceVersions").notNull(),
+    // Untrusted model/agent draft narrative — excluded from every identity
+    // and hash; never authoritative; causal/authority claims rejected.
+    narrativeDraft: text("narrativeDraft"),
+    validUntil: varchar("validUntil", { length: 32 }),
+    supersedesLearningId: varchar("supersedesLearningId", { length: 69 }),
+    // Immutable-core sha256 (contract §12); drift is tampering.
+    recordHash: varchar("recordHash", { length: 64 }).notNull(),
+    // Optimistic-CAS guard for lifecycle transitions.
+    version: int("version").notNull().default(1),
+    derivedAt: varchar("derivedAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    learningIdIdx: uniqueIndex("blr_learning_id_uidx").on(table.learningId),
+    naturalKeyIdx: uniqueIndex("blr_natural_key_uidx").on(
+      table.userId,
+      table.evidenceBundleId,
+      table.learningType,
+      table.subjectType,
+      table.subjectId,
+      table.upstreamStateFingerprint
+    ),
+    userBusinessIdx: index("blr_user_business_idx").on(table.userId, table.businessId),
+    userSubjectIdx: index("blr_user_subject_idx").on(
+      table.userId,
+      table.subjectType,
+      table.subjectId
+    ),
+    userStatusIdx: index("blr_user_status_idx").on(table.userId, table.status),
+  })
+);
+
+export type BusinessLearningRecordRow = typeof businessLearningRecords.$inferSelect;
+export type InsertBusinessLearningRecordRow = typeof businessLearningRecords.$inferInsert;
+
+// ─── Business Learning Lifecycle Events (WBS-R7-C) ───
+// Immutable append-only lifecycle facts. No update path exists. Current
+// state = the record's CAS-guarded status plus this fact history.
+export const businessLearningLifecycleEvents = mysqlTable(
+  "business_learning_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // "lbf1:" + 64-hex deterministic fact identity (contract §9).
+    learningLifecycleEventId: varchar("learningLifecycleEventId", { length: 70 }).notNull(),
+    learningId: varchar("learningId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 24 }).notNull(),
+    status: varchar("status", { length: 24 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventIdIdx: uniqueIndex("bll_event_id_uidx").on(table.learningLifecycleEventId),
+    userLearningIdx: index("bll_user_learning_idx").on(table.userId, table.learningId),
+  })
+);
+
+export type BusinessLearningLifecycleEventRow =
+  typeof businessLearningLifecycleEvents.$inferSelect;
+export type InsertBusinessLearningLifecycleEventRow =
+  typeof businessLearningLifecycleEvents.$inferInsert;
