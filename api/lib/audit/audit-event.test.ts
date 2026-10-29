@@ -87,6 +87,13 @@ describe("audit-event taxonomy", () => {
       "sales_handoff_state_changed",
       "sales_handoff_dispatch",
       "lead_nurture_touch",
+      // R7-D: experimentation durable effects (ids/closed labels/hashes only;
+      // convergence/replay paths emit zero).
+      "experiment_created",
+      "experiment_state_changed",
+      "experiment_assignment_recorded",
+      "experiment_evidence_bound",
+      "experiment_result_recorded",
     ]);
   });
 
