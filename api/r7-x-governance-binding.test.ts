@@ -201,7 +201,7 @@ describe("R7-X X5: canonical R7-F governance binding (D + E seams)", () => {
         context: {
           optimisationGovernanceBinding: {
             governanceDecisionId: decision.governanceDecisionId,
-            policyVersion: decision.policyVersion,
+            policyVersion: decision.policyVersion!,
             proposalFingerprint: decision.proposalFingerprint,
             approvalBindingHash: deriveR7FApprovalBindingHash({
               governanceDecisionId: decision.governanceDecisionId,
