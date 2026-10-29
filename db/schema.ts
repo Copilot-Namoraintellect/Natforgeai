@@ -2927,3 +2927,125 @@ export const nurtureTouchRecords = mysqlTable(
 
 export type NurtureTouchRecordRow = typeof nurtureTouchRecords.$inferSelect;
 export type InsertNurtureTouchRecordRow = typeof nurtureTouchRecords.$inferInsert;
+
+// ─── R7-E Budget & Portfolio Optimisation — append-only, exact-once ───
+// Provisional stream-local tables (migration 0035_r7_e_budget_portfolio_optimisation,
+// artefact only — NOT executed; see docs/recovery/r7-e-unexecuted-migrations.md;
+// R7-X owns canonical sequencing). No FK constraints (house convention:
+// opaque references, predicate enforcement).
+
+export const budgetPortfolioSnapshots = mysqlTable(
+  "budget_portfolio_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    // "psn1:" + 64-hex deterministic snapshot identity (contract §4).
+    portfolioSnapshotId: varchar("portfolioSnapshotId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    budgetPeriod: varchar("budgetPeriod", { length: 7 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    approvedTotalBudgetMinor: bigint("approvedTotalBudgetMinor", { mode: "number" }).notNull(),
+    committedMinor: bigint("committedMinor", { mode: "number" }).notNull(),
+    reservedMinor: bigint("reservedMinor", { mode: "number" }).notNull(),
+    availableReallocatableMinor: bigint("availableReallocatableMinor", { mode: "number" }).notNull(),
+    // JSON: {allocationKey, campaignId, provider, amountMinor}[]
+    currentAllocations: json("currentAllocations").notNull(),
+    // JSON: string[]
+    supportedProviders: json("supportedProviders").notNull(),
+    // JSON: string[]
+    lockedAllocationKeys: json("lockedAllocationKeys").notNull(),
+    // JSON: string[]
+    disabledAllocationKeys: json("disabledAllocationKeys").notNull(),
+    // Capture time (freshness only — never part of the identity).
+    capturedAt: varchar("capturedAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    snapshotIdentityUnique: uniqueIndex("bps_snapshot_identity_uidx").on(table.portfolioSnapshotId),
+    userSnapshotUnique: uniqueIndex("bps_user_snapshot_uidx").on(table.userId, table.portfolioSnapshotId),
+    userBusinessIdx: index("bps_user_business_idx").on(table.userId, table.businessId),
+  })
+);
+
+export type BudgetPortfolioSnapshotRow = typeof budgetPortfolioSnapshots.$inferSelect;
+export type InsertBudgetPortfolioSnapshotRow = typeof budgetPortfolioSnapshots.$inferInsert;
+
+export const budgetPortfolioProposals = mysqlTable(
+  "budget_portfolio_proposals",
+  {
+    id: serial("id").primaryKey(),
+    // "opt1:" + 64-hex deterministic proposal identity (contract §5).
+    optimisationId: varchar("optimisationId", { length: 68 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    portfolioSnapshotId: varchar("portfolioSnapshotId", { length: 69 }).notNull(),
+    budgetPeriod: varchar("budgetPeriod", { length: 7 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    currentTotalBudgetMinor: bigint("currentTotalBudgetMinor", { mode: "number" }).notNull(),
+    // JSON: ProposalAllocationView[]
+    currentAllocations: json("currentAllocations").notNull(),
+    // JSON: ProposalAllocationView[]
+    proposedAllocations: json("proposedAllocations").notNull(),
+    // JSON: {allocationKey, deltaMinor}[]
+    deltaAllocations: json("deltaAllocations").notNull(),
+    // JSON: string[]
+    evidenceRefs: json("evidenceRefs").notNull(),
+    // JSON: string[]
+    learningRefs: json("learningRefs").notNull(),
+    // JSON: string[]
+    attributionRefs: json("attributionRefs").notNull(),
+    // JSON: string[]
+    outcomeRefs: json("outcomeRefs").notNull(),
+    objective: varchar("objective", { length: 48 }).notNull(),
+    algorithmVersion: varchar("algorithmVersion", { length: 48 }).notNull(),
+    constraintVersion: varchar("constraintVersion", { length: 48 }).notNull(),
+    evidenceBundleHash: varchar("evidenceBundleHash", { length: 64 }).notNull(),
+    confidenceClass: varchar("confidenceClass", { length: 16 }).notNull(),
+    // JSON: string[] (closed reason codes, ≤8)
+    reasonCodes: json("reasonCodes").notNull(),
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }),
+    // JSON: frozen R7-F decision view (validated at the seam on read).
+    governanceDecision: json("governanceDecision"),
+    approvalRequired: boolean("approvalRequired").notNull(),
+    status: varchar("status", { length: 24 }).notNull(),
+    proposalContentHash: varchar("proposalContentHash", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    validUntil: varchar("validUntil", { length: 32 }),
+  },
+  (table) => ({
+    optimisationIdentityUnique: uniqueIndex("bpp_optimisation_identity_uidx").on(table.optimisationId),
+    userOptimisationUnique: uniqueIndex("bpp_user_optimisation_uidx").on(table.userId, table.optimisationId),
+    userBusinessIdx: index("bpp_user_business_idx").on(table.userId, table.businessId),
+    userStatusIdx: index("bpp_user_status_idx").on(table.userId, table.status),
+  })
+);
+
+export type BudgetPortfolioProposalRow = typeof budgetPortfolioProposals.$inferSelect;
+export type InsertBudgetPortfolioProposalRow = typeof budgetPortfolioProposals.$inferInsert;
+
+export const budgetPortfolioAllocationInstructions = mysqlTable(
+  "budget_portfolio_allocation_instructions",
+  {
+    id: serial("id").primaryKey(),
+    // "ins1:" + 64-hex deterministic instruction identity.
+    instructionId: varchar("instructionId", { length: 68 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    optimisationId: varchar("optimisationId", { length: 68 }).notNull(),
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }).notNull(),
+    approvalRequestId: bigint("approvalRequestId", { mode: "number", unsigned: true }),
+    policyVersion: varchar("policyVersion", { length: 96 }).notNull(),
+    authorisedAt: varchar("authorisedAt", { length: 32 }).notNull(),
+    expiresAt: varchar("expiresAt", { length: 32 }).notNull(),
+    // JSON: {allocationKey, amountMinor}[] — the authorised target allocation.
+    allocations: json("allocations").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    instructionIdentityUnique: uniqueIndex("bpi_instruction_identity_uidx").on(table.instructionId),
+    userInstructionUnique: uniqueIndex("bpi_user_instruction_uidx").on(table.userId, table.instructionId),
+    userOptimisationIdx: index("bpi_user_optimisation_idx").on(table.userId, table.optimisationId),
+  })
+);
+
+export type BudgetPortfolioInstructionRow = typeof budgetPortfolioAllocationInstructions.$inferSelect;
+export type InsertBudgetPortfolioInstructionRow = typeof budgetPortfolioAllocationInstructions.$inferInsert;

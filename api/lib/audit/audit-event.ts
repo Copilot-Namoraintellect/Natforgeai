@@ -102,6 +102,13 @@ export const AUDIT_EVENT_TYPES = [
   "sales_handoff_dispatch",
   // R6-D: one governed nurture touch (exact-once, cadence-bounded).
   "lead_nurture_touch",
+  // R7-E: budget/portfolio durable effects (snapshots, proposals, authorised
+  // instructions). One canonical event per durable effect; convergence/replay
+  // paths emit zero. Metadata carries ids/classes/hashes/allocations-counts
+  // only — never free-form model output.
+  "portfolio_snapshot_created",
+  "optimisation_proposal_created",
+  "optimisation_instruction_authorized",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
