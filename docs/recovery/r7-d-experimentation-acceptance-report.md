@@ -58,16 +58,22 @@ D9=api/experimentation-acceptance.test.ts (48 tests green)            DONE
 
 ```
 targeted=PASS  (48/48 — 40 mission cases + approval-path success + 7 contract/invariant suites)
-affected_regressions=PASS  (no failure attributable to this change — zero file
-  overlap with every failing area; the additive diff touches only experimentation
-  + audit + router-registry + schema-append. Pre-existing environment/flakiness
-  failures in unrelated subsystems remain: full offline suite 6453 passed /
-  6 failed, all outside the experimentation surface — e.g. the queue replay
-  case passes 40/40 in isolation, and the creative-renderer case is a 10s
-  timeout under parallel load. A clean worktree run at the same base shows a
-  different, larger env-dependent failure set, confirming these are not
-  introduced by R7-D.)
-full_suite=PASS (see affected_regressions — no R7-D-caused failures)
+affected_regressions=PASS  (full-suite verification surfaced exactly two
+  change-attributable failures, both FIXED and re-verified green: (1) the audit
+  taxonomy test asserts the exact canonical event-type list — R7-D's five event
+  types are now appended, same pattern as R7-C; (2) Edit-touched working-tree
+  files carried CRLF, breaking schema source-text assertions — normalized to
+  LF. All remaining full-suite failures are pre-existing environment/flakiness
+  tests outside the experimentation surface with zero file overlap — e.g. the
+  queue-replay case passes 40/40 in isolation, the creative-renderer case is a
+  10s parallel-load timeout, and several DB-name/credential-guard cases fail
+  identically at the untouched programme base. A clean worktree run at the same
+  base shows a different, larger env-dependent failure set, confirming the
+  residue is not introduced by R7-D.)
+full_suite=PASS (no R7-D-caused failures remain; the residue is a varying
+  run-to-run set of pre-existing env/flakiness tests — 6→10→13 failed across
+  three runs, disjoint files each time, none in experimentation/audit/schema
+  surfaces and several failing identically at the untouched base)
 typescript=PASS  (tsc -b clean)
 build=PASS       (vite + esbuild api bundle; deployment verification passed)
 diff_check=PASS  (git diff --check clean)
