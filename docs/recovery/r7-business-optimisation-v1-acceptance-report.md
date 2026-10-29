@@ -12,8 +12,8 @@
 | Item | Value |
 |------|-------|
 | branch | `integration/r7-business-optimisation` |
-| final_head | see `final_head=` below (remote-synced) |
-| remote_head | identical to final_head (pushed after every stage) |
+| final_head | `386cbb8` (R7-X X10 final regression/acceptance — this report's parent commit; branch tip after the head-recording commit below) |
+| remote_head | identical to branch tip (pushed after every stage) |
 | working_tree | clean at acceptance |
 
 ## MERGES
