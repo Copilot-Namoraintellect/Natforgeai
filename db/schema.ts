@@ -738,6 +738,11 @@ export const approvalRequests = mysqlTable("approval_requests", {
     // WBS-R6-D: governed sales-handoff approvals bound to the exact handoff
     // identity + qualification fingerprint + policy version + content snapshot.
     "sales_handoff",
+    // WBS-R7-F: governed optimisation-action approvals bound to the exact
+    // governance decision + proposal fingerprint + policy version + financial
+    // impact + expiry (provisional enum extension; canonical 0035 is NOT
+    // executed — see docs/recovery/r7-f-unexecuted-migrations.md).
+    "optimisation_action",
   ]).notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   description: text("description"),
@@ -1929,6 +1934,65 @@ export const policyDecisions = mysqlTable(
 
 export type PolicyDecisionRow = typeof policyDecisions.$inferSelect;
 export type InsertPolicyDecisionRow = typeof policyDecisions.$inferInsert;
+
+// ─── Optimisation Governance Decisions (WBS-R7-F) ───
+// Durable, immutable optimisation governance decisions. The deterministic
+// governanceDecisionId is the unique convergence anchor: one proposal
+// material + one policy version -> one stable decision. Rows carry
+// explainability (reasonCodes, thresholds) and never store raw proposal
+// content or secrets — only opaque references (proposal ids, fingerprints,
+// hashes). Provisional migration 0035_r7_f_optimisation_governance — NOT
+// executed (see docs/recovery/r7-f-unexecuted-migrations.md; R7-X owns
+// canonical sequencing).
+export const optimisationGovernanceDecisions = mysqlTable(
+  "optimisation_governance_decisions",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic: ogd1_<sha256(...)[:64]>; unique convergence anchor.
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }).notNull(),
+    contractVersion: varchar("contractVersion", { length: 48 }).notNull(),
+    engineVersion: varchar("engineVersion", { length: 48 }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    proposalId: varchar("proposalId", { length: 128 }).notNull(),
+    proposalType: varchar("proposalType", { length: 32 }).notNull(),
+    campaignId: bigint("campaignId", { mode: "number", unsigned: true }),
+    policyVersion: varchar("policyVersion", { length: 96 }),
+    decision: varchar("decision", { length: 24 }).notNull(),
+    reasonCodes: json("reasonCodes").notNull(),
+    riskClass: varchar("riskClass", { length: 16 }).notNull(),
+    financialImpactClass: varchar("financialImpactClass", { length: 48 }).notNull(),
+    financialDeltaMinor: bigint("financialDeltaMinor", { mode: "number" }).notNull(),
+    approvalRequired: boolean("approvalRequired").default(false).notNull(),
+    // ApprovalBinding JSON for REVIEW_REQUIRED decisions (references + hashes).
+    approvalBinding: json("approvalBinding"),
+    evidenceHash: varchar("evidenceHash", { length: 128 }).notNull(),
+    proposalFingerprint: varchar("proposalFingerprint", { length: 64 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }),
+    // ISO 8601 stored verbatim (like audit_events.occurredAt).
+    evaluatedAt: varchar("evaluatedAt", { length: 32 }).notNull(),
+    evaluationFingerprint: varchar("evaluationFingerprint", { length: 64 }).notNull(),
+    // Bounded snapshot of the thresholds used at evaluation time.
+    thresholds: json("thresholds").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    decisionIdUnique: uniqueIndex("ogd_decision_id_idx").on(table.governanceDecisionId),
+    userDecisionUnique: uniqueIndex("ogd_user_decision_idx").on(
+      table.userId,
+      table.governanceDecisionId
+    ),
+    businessIdx: index("ogd_business_idx").on(table.businessId),
+    userIdx: index("ogd_user_idx").on(table.userId),
+    proposalIdx: index("ogd_proposal_idx").on(table.proposalId),
+    decisionIdx: index("ogd_decision_idx").on(table.decision),
+    evaluatedAtIdx: index("ogd_evaluated_idx").on(table.evaluatedAt),
+  })
+);
+
+export type OptimisationGovernanceDecisionRow = typeof optimisationGovernanceDecisions.$inferSelect;
+export type InsertOptimisationGovernanceDecisionRow =
+  typeof optimisationGovernanceDecisions.$inferInsert;
 
 // ─── Engagement Response Contents (WBS-R5-C2) ───
 // Governed, immutable AI response content for an engagement action.

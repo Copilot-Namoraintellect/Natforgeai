@@ -124,6 +124,14 @@ export const AUDIT_EVENT_TYPES = [
   // never evidence text, narrative drafts or PII; replay/convergence paths
   // emit zero events.
   "business_learning_recorded",
+  // R7-F: a governed optimisation governance decision was durably recorded.
+  // Identity references + decision + closed reason codes + bounded financial
+  // labels in metadata only — no model reasoning, no proposal text.
+  "optimisation_governance_decision",
+  // R7-F: a narrow, closed-vocabulary operator recovery action was recorded
+  // against an existing governance decision. Audit-only: the immutable
+  // decision is never mutated by recovery.
+  "optimisation_governance_recovery",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

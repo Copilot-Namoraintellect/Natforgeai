@@ -98,6 +98,10 @@ describe("audit-event taxonomy", () => {
       // R7-C: durable business-learning records and lifecycle transitions
       // (ids/closed labels/classes/counts only; zero on replay/convergence).
       "business_learning_recorded",
+      // R7-F: optimisation governance durable effects (decisions + narrow
+      // audit-only recovery actions; references + closed labels only).
+      "optimisation_governance_decision",
+      "optimisation_governance_recovery",
     ]);
   });
 
