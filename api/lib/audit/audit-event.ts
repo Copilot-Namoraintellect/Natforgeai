@@ -119,6 +119,11 @@ export const AUDIT_EVENT_TYPES = [
   // model/policy change, or outcome lifecycle change). References + bounded
   // labels only.
   "attribution_superseded",
+  // R7-C: one durable business-learning record (or lifecycle transition)
+  // was accepted. Metadata carries ids/closed labels/classes/counts only —
+  // never evidence text, narrative drafts or PII; replay/convergence paths
+  // emit zero events.
+  "business_learning_recorded",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

@@ -95,6 +95,9 @@ describe("audit-event taxonomy", () => {
       // (ids/closed labels/classes/hashes only; convergence emits zero).
       "attribution_calculated",
       "attribution_superseded",
+      // R7-C: durable business-learning records and lifecycle transitions
+      // (ids/closed labels/classes/counts only; zero on replay/convergence).
+      "business_learning_recorded",
     ]);
   });
 
