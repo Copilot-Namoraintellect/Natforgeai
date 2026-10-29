@@ -2927,3 +2927,221 @@ export const nurtureTouchRecords = mysqlTable(
 
 export type NurtureTouchRecordRow = typeof nurtureTouchRecords.$inferSelect;
 export type InsertNurtureTouchRecordRow = typeof nurtureTouchRecords.$inferInsert;
+
+// ─── WBS-R7-D: Experimentation Engine ───
+// (provisional, stream-local; migration 0035_r7_d_experimentation — NOT
+// executed; R7-X owns canonical convergence. See
+// docs/recovery/r7-d-unexecuted-migrations.md and
+// docs/contracts/experimentation-contract.md)
+
+export const EXPERIMENT_DESIGN_TYPE_VALUES = ["A_B", "MULTI_ARM"] as const;
+export const EXPERIMENT_STATUS_VALUES = [
+  "DRAFT",
+  "GOVERNANCE_REQUIRED",
+  "APPROVAL_REQUIRED",
+  "READY",
+  "ACTIVE",
+  "PAUSED",
+  "STOPPED",
+  "COMPLETED",
+  "INVALIDATED",
+  "CANCELLED",
+] as const;
+
+export const experiments = mysqlTable(
+  "experiments",
+  {
+    id: serial("id").primaryKey(),
+    // "exp1:" + 64-hex deterministic experiment identity (contract §3).
+    experimentId: varchar("experimentId", { length: 69 }).notNull(),
+    // "hyp1:" + 64-hex deterministic hypothesis identity (contract §3).
+    hypothesisId: varchar("hypothesisId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    // Server-resolved from the bound learning — never client-supplied.
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    // Opaque lrn1: reference into R7-C learning authority.
+    learningId: varchar("learningId", { length: 69 }).notNull(),
+    statement: varchar("statement", { length: 1024 }).notNull(),
+    designType: mysqlEnum("designType", EXPERIMENT_DESIGN_TYPE_VALUES).notNull(),
+    dimension: varchar("dimension", { length: 24 }).notNull(),
+    controlDefinition: json("controlDefinition").notNull(),
+    treatmentDefinitions: json("treatmentDefinitions").notNull(),
+    allocationPolicy: json("allocationPolicy").notNull(),
+    primaryMetric: json("primaryMetric").notNull(),
+    secondaryMetrics: json("secondaryMetrics").notNull(),
+    guardrails: json("guardrails").notNull(),
+    minimumSamplePerArm: int("minimumSamplePerArm").notNull(),
+    durationDays: int("durationDays").notNull(),
+    // Observation window — set at activation, immutable thereafter (§8).
+    startAt: varchar("startAt", { length: 32 }),
+    endAt: varchar("endAt", { length: 32 }),
+    // Pinned at activation; immutable thereafter (§7).
+    assignmentVersion: varchar("assignmentVersion", { length: 64 }),
+    status: mysqlEnum("status", EXPERIMENT_STATUS_VALUES).notNull().default("DRAFT"),
+    // ogd1: governance reference; approval request reference (§6).
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }),
+    approvalReference: varchar("approvalReference", { length: 64 }),
+    designHash: varchar("designHash", { length: 64 }).notNull(),
+    // "exr1:" result reference once concluded (§10).
+    resultId: varchar("resultId", { length: 69 }),
+    recordHash: varchar("recordHash", { length: 64 }).notNull(),
+    // Untrusted, non-authoritative model-assisted draft (§5).
+    narrativeDraft: text("narrativeDraft"),
+    version: int("version").notNull().default(1),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    experimentIdUnique: uniqueIndex("exp_experiment_id_uidx").on(table.experimentId),
+    naturalKeyUnique: uniqueIndex("exp_natural_key_uidx").on(
+      table.userId,
+      table.learningId,
+      table.hypothesisId,
+      table.designHash
+    ),
+    userBusinessIdx: index("exp_user_business_idx").on(table.userId, table.businessId),
+    userStatusIdx: index("exp_user_status_idx").on(table.userId, table.status),
+  })
+);
+
+export type ExperimentRow = typeof experiments.$inferSelect;
+export type InsertExperimentRow = typeof experiments.$inferInsert;
+
+export const EXPERIMENT_LIFECYCLE_EVENT_VALUES = [
+  "creation",
+  "governance",
+  "approval",
+  "activation",
+  "pause",
+  "resume",
+  "stop",
+  "completion",
+  "invalidation",
+  "cancellation",
+] as const;
+
+export const experimentLifecycleEvents = mysqlTable(
+  "experiment_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // "exl1:" + 64-hex deterministic lifecycle fact identity (§11).
+    experimentLifecycleEventId: varchar("experimentLifecycleEventId", { length: 70 }).notNull(),
+    experimentId: varchar("experimentId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    lifecycleType: mysqlEnum("lifecycleType", EXPERIMENT_LIFECYCLE_EVENT_VALUES).notNull(),
+    fromStatus: varchar("fromStatus", { length: 24 }).notNull(),
+    toStatus: varchar("toStatus", { length: 24 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 191 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventIdUnique: uniqueIndex("exl_event_id_uidx").on(table.experimentLifecycleEventId),
+    userExperimentIdx: index("exl_user_experiment_idx").on(table.userId, table.experimentId),
+  })
+);
+
+export type ExperimentLifecycleEventRow = typeof experimentLifecycleEvents.$inferSelect;
+export type InsertExperimentLifecycleEventRow = typeof experimentLifecycleEvents.$inferInsert;
+
+export const EXPERIMENT_ARM_VALUES = ["CONTROL", "TREATMENT"] as const;
+
+export const experimentAssignments = mysqlTable(
+  "experiment_assignments",
+  {
+    id: serial("id").primaryKey(),
+    // "exa1:" + 64-hex deterministic assignment identity (§7).
+    assignmentId: varchar("assignmentId", { length: 69 }).notNull(),
+    experimentId: varchar("experimentId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    // sha256 of the opaque subject reference — raw subject/PII never persists.
+    subjectKey: varchar("subjectKey", { length: 64 }).notNull(),
+    arm: mysqlEnum("arm", EXPERIMENT_ARM_VALUES).notNull(),
+    armIndex: int("armIndex").notNull(),
+    assignmentHash: varchar("assignmentHash", { length: 64 }).notNull(),
+    assignedAt: varchar("assignedAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    assignmentUnique: uniqueIndex("exa_assignment_uidx").on(table.userId, table.experimentId, table.subjectKey),
+    experimentIdx: index("exa_experiment_idx").on(table.userId, table.experimentId),
+  })
+);
+
+export type ExperimentAssignmentRow = typeof experimentAssignments.$inferSelect;
+export type InsertExperimentAssignmentRow = typeof experimentAssignments.$inferInsert;
+
+export const experimentOutcomeEvidence = mysqlTable(
+  "experiment_outcome_evidence",
+  {
+    id: serial("id").primaryKey(),
+    // "exe1:" + 64-hex deterministic evidence binding identity (§9).
+    evidenceId: varchar("evidenceId", { length: 69 }).notNull(),
+    experimentId: varchar("experimentId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    // Opaque out1: / atr1: source references (§9).
+    outcomeId: varchar("outcomeId", { length: 69 }).notNull(),
+    attributionId: varchar("attributionId", { length: 69 }),
+    subjectKey: varchar("subjectKey", { length: 64 }).notNull(),
+    armIndex: int("armIndex").notNull(),
+    outcomeStatus: varchar("outcomeStatus", { length: 16 }).notNull(),
+    outcomeType: varchar("outcomeType", { length: 32 }).notNull(),
+    // Value snapshot at bind time — results are reproducible without re-reading
+    // the upstream outcome authority.
+    valueType: varchar("valueType", { length: 16 }).notNull(),
+    amountMinor: bigint("amountMinor", { mode: "number" }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    evidenceUnique: uniqueIndex("exe_evidence_uidx").on(table.userId, table.experimentId, table.outcomeId),
+    experimentIdx: index("exe_experiment_idx").on(table.userId, table.experimentId),
+  })
+);
+
+export type ExperimentOutcomeEvidenceRow = typeof experimentOutcomeEvidence.$inferSelect;
+export type InsertExperimentOutcomeEvidenceRow = typeof experimentOutcomeEvidence.$inferInsert;
+
+export const EXPERIMENT_RESULT_VERDICT_VALUES = [
+  "INSUFFICIENT_EVIDENCE",
+  "DIRECTIONAL_SIGNAL",
+  "SUPPORTED_DIFFERENCE",
+  "NO_MEANINGFUL_DIFFERENCE",
+  "INVALID_EXPERIMENT",
+] as const;
+
+export const experimentResults = mysqlTable(
+  "experiment_results",
+  {
+    id: serial("id").primaryKey(),
+    // "exr1:" + 64-hex deterministic result identity (§10).
+    resultId: varchar("resultId", { length: 69 }).notNull(),
+    experimentId: varchar("experimentId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    calculationVersion: varchar("calculationVersion", { length: 48 }).notNull(),
+    verdict: mysqlEnum("verdict", EXPERIMENT_RESULT_VERDICT_VALUES).notNull(),
+    confidenceClass: varchar("confidenceClass", { length: 24 }).notNull(),
+    primaryMetric: json("primaryMetric").notNull(),
+    armSummaries: json("armSummaries").notNull(),
+    comparisons: json("comparisons").notNull(),
+    evidenceCounts: json("evidenceCounts").notNull(),
+    limitations: json("limitations").notNull(),
+    conclusion: varchar("conclusion", { length: 1024 }).notNull(),
+    evidenceFingerprint: varchar("evidenceFingerprint", { length: 64 }).notNull(),
+    resultHash: varchar("resultHash", { length: 64 }).notNull(),
+    calculatedAt: varchar("calculatedAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    resultIdUnique: uniqueIndex("exr_result_uidx").on(table.resultId),
+    resultNaturalUnique: uniqueIndex("exr_natural_uidx").on(
+      table.userId,
+      table.experimentId,
+      table.calculationVersion
+    ),
+    experimentIdx: index("exr_experiment_idx").on(table.userId, table.experimentId),
+  })
+);
+
+export type ExperimentResultRow = typeof experimentResults.$inferSelect;
+export type InsertExperimentResultRow = typeof experimentResults.$inferInsert;
