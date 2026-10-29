@@ -3033,3 +3033,133 @@ export const businessOutcomeLifecycleEvents = mysqlTable(
 
 export type BusinessOutcomeLifecycleEventRow = typeof businessOutcomeLifecycleEvents.$inferSelect;
 export type InsertBusinessOutcomeLifecycleEventRow = typeof businessOutcomeLifecycleEvents.$inferInsert;
+
+// ─── R7-B Attribution Results — immutable attribution records ───
+// Deterministic attribution identity over the calculation material (no
+// wall-clock, no randomness); exact-once via unique attributionId +
+// (userId, outcomeId, modelType, modelVersion, windowStart, windowEnd,
+// journeyHash). Rows are insert-only — supersession is new history linked by
+// supersedesAttributionId, never edits. Opaque references only (no FKs, house
+// convention): outcomeId/conversionId are upstream canonical ids consumed
+// read-only. Credit is integer basis points exactly normalised to 100000.
+// Provisional stream-local migration 0035_r7_b_attribution_foundation
+// (artefact only — NOT executed; R7-X owns canonical R7 sequencing).
+export const ATTRIBUTION_MODEL_TYPE_VALUES = [
+  "FIRST_TOUCH",
+  "LAST_TOUCH",
+  "LINEAR",
+  "POSITION_BASED",
+  "TIME_DECAY",
+] as const;
+
+export const ATTRIBUTION_CONFIDENCE_CLASS_VALUES = [
+  "HIGH",
+  "MEDIUM",
+  "LOW",
+  "NONE",
+] as const;
+
+export const ATTRIBUTION_EVIDENCE_CLASS_VALUES = [
+  "DIRECT_LINKAGE",
+  "STRONG_ASSOCIATION",
+  "WEAK_ASSOCIATION",
+  "INSUFFICIENT_EVIDENCE",
+] as const;
+
+export const attributionResults = mysqlTable(
+  "attribution_results",
+  {
+    id: serial("id").primaryKey(),
+    // "atr1:" + 64-hex deterministic attribution identity (contract §3).
+    attributionId: varchar("attributionId", { length: 69 }).notNull(),
+    // 64-hex content hash of the canonical calculation material.
+    attributionKey: varchar("attributionKey", { length: 64 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    // Canonical R7-A outcome reference (opaque, verbatim).
+    outcomeId: varchar("outcomeId", { length: 69 }).notNull(),
+    // Outcome-carried numeric lead linkage (nullable = no verified linkage).
+    leadId: bigint("leadId", { mode: "number", unsigned: true }),
+    leadIdentityVersion: varchar("leadIdentityVersion", { length: 64 }),
+    // Outcome-carried R6-E conversion reference (opaque, verbatim).
+    conversionId: varchar("conversionId", { length: 69 }).notNull(),
+    // Outcome classification snapshot at calculation time.
+    outcomeType: varchar("outcomeType", { length: 32 }).notNull(),
+    // Outcome state snapshot at calculation time (participates in identity).
+    outcomeStatus: varchar("outcomeStatus", { length: 16 }).notNull(),
+    // Read-only outcome value reference — never mutated, never netted.
+    outcomeAmountMinor: bigint("outcomeAmountMinor", { mode: "number" }),
+    outcomeCurrency: varchar("outcomeCurrency", { length: 3 }),
+    modelType: varchar("modelType", { length: 24 }).notNull(),
+    modelVersion: varchar("modelVersion", { length: 40 }).notNull(),
+    // ISO 8601 window bounds; windowEnd = outcome time.
+    windowStart: varchar("windowStart", { length: 32 }).notNull(),
+    windowEnd: varchar("windowEnd", { length: 32 }).notNull(),
+    // Fingerprint of the eligible touchpoint set (exact-once natural anchor).
+    journeyHash: varchar("journeyHash", { length: 64 }).notNull(),
+    // Eligible touchpoints with allocated integer credit (contract §4).
+    touchpoints: json("touchpoints").notNull(),
+    // Excluded candidates with closed reason codes (audit completeness).
+    excludedTouchpoints: json("excludedTouchpoints").notNull(),
+    // Integer basis points; exactly 100000 for non-empty eligible sets.
+    totalCreditBps: int("totalCreditBps").notNull(),
+    confidenceClass: mysqlEnum("confidenceClass", ATTRIBUTION_CONFIDENCE_CLASS_VALUES).notNull(),
+    evidenceClass: mysqlEnum("evidenceClass", ATTRIBUTION_EVIDENCE_CLASS_VALUES).notNull(),
+    policyVersion: varchar("policyVersion", { length: 96 }).notNull(),
+    // Consumed contract versions (outcome/conversion projection, attribution).
+    sourceVersions: json("sourceVersions").notNull(),
+    // Supersession lineage: the prior result this one supersedes (if any).
+    supersedesAttributionId: varchar("supersedesAttributionId", { length: 69 }),
+    // sha256 over the immutable core; drift fails closed on read.
+    recordHash: varchar("recordHash", { length: 64 }).notNull(),
+    // Calculation time (provenance only; never identity).
+    calculatedAt: varchar("calculatedAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    attributionIdUnique: uniqueIndex("atr_attribution_id_uidx").on(table.attributionId),
+    // Exact-once natural anchor: one result per (outcome, model, version,
+    // window, journey fingerprint). New evidence ⇒ new journeyHash ⇒ new row.
+    naturalKeyUnique: uniqueIndex("atr_natural_key_uidx").on(
+      table.userId,
+      table.outcomeId,
+      table.modelType,
+      table.modelVersion,
+      table.windowStart,
+      table.windowEnd,
+      table.journeyHash
+    ),
+    userOutcomeIdx: index("atr_user_outcome_idx").on(table.userId, table.outcomeId),
+    userBusinessIdx: index("atr_user_business_idx").on(table.userId, table.businessId),
+  })
+);
+
+export type AttributionResultRow = typeof attributionResults.$inferSelect;
+export type InsertAttributionResultRow = typeof attributionResults.$inferInsert;
+
+// ─── R7-B Attribution Lifecycle Events — immutable supersession facts ───
+// One deterministic row per supersession (a newer result replacing an older
+// one for the same outcome + model + version). No update path.
+export const attributionLifecycleEvents = mysqlTable(
+  "attribution_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // "atf1:" + 64-hex deterministic fact identity.
+    attributionLifecycleEventId: varchar("attributionLifecycleEventId", {
+      length: 70,
+    }).notNull(),
+    attributionId: varchar("attributionId", { length: 69 }).notNull(),
+    priorAttributionId: varchar("priorAttributionId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 16 }).notNull(),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventIdUnique: uniqueIndex("atf_event_id_uidx").on(table.attributionLifecycleEventId),
+    userAttributionIdx: index("atf_user_attribution_idx").on(table.userId, table.attributionId),
+  })
+);
+
+export type AttributionLifecycleEventRow = typeof attributionLifecycleEvents.$inferSelect;
+export type InsertAttributionLifecycleEventRow = typeof attributionLifecycleEvents.$inferInsert;

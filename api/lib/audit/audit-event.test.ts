@@ -91,6 +91,10 @@ describe("audit-event taxonomy", () => {
       // inserted outcome; one lifecycle event per inserted fact).
       "business_outcome_recorded",
       "business_outcome_lifecycle",
+      // R7-B: immutable attribution results + supersession facts
+      // (ids/closed labels/classes/hashes only; convergence emits zero).
+      "attribution_calculated",
+      "attribution_superseded",
     ]);
   });
 

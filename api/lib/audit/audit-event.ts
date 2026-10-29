@@ -110,6 +110,15 @@ export const AUDIT_EVENT_TYPES = [
   // (verification / reversal / refund / cancellation / renewal / supersession).
   // One canonical event per inserted fact; convergence paths write zero events.
   "business_outcome_lifecycle",
+  // R7-B: one immutable attribution result was durably calculated (or an
+  // idempotent replay converged to it). Metadata carries ids/closed
+  // labels/classes/hashes only — never social content, PII, or outcome
+  // evidence text. Exactly one event per durable result; convergence emits zero.
+  "attribution_calculated",
+  // R7-B: one attribution result superseded a prior result (new evidence,
+  // model/policy change, or outcome lifecycle change). References + bounded
+  // labels only.
+  "attribution_superseded",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
