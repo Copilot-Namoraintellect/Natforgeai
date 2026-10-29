@@ -225,7 +225,7 @@ describe("R7-X X9: integrated adversarial security", () => {
     const { getOutcomeByOutcomeId, listOutcomeLifecycleEvents } = await import("./lib/outcome/outcome-store");
     const row = await getOutcomeByOutcomeId(1, outcome.outcome.outcomeId, env.db as never);
     const lifecycle = await listOutcomeLifecycleEvents(1, outcome.outcome.outcomeId, env.db as never);
-    const projection = { ...(buildOutcomeProjection(row as never, lifecycle) as Record<string, unknown>), contractVersion: "conversion-outcome/v999" };
+    const projection = { ...(buildOutcomeProjection(row as never, lifecycle) as unknown as Record<string, unknown>), contractVersion: "conversion-outcome/v999" };
     expect(CONSUMED_OUTCOME_PROJECTION_VERSION).toBe("conversion-outcome/v1");
     expect(() => validateConsumedOutcomeProjection(projection)).toThrow(/version/i);
   });
@@ -384,7 +384,7 @@ describe("R7-X X9: integrated adversarial security", () => {
     const policy = getOptimisationGovernancePolicy();
     expect(Object.isFrozen(policy)).toBe(true);
     try {
-      (policy as Record<string, unknown>).financial = { allowAutonomousTotalIncrease: true };
+      (policy as unknown as Record<string, unknown>).financial = { allowAutonomousTotalIncrease: true };
     } catch {
       // strict-mode freeze throws — both outcomes are safe
     }
