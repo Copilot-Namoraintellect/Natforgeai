@@ -47,6 +47,7 @@ import {
 } from "./stability-controls";
 import {
   R7F_DEFAULT_POLICY,
+  deriveR7FEvaluationFingerprint,
   deriveR7FProposalFingerprint,
   normaliseGovernanceFinancialForFingerprint,
   validateGovernanceDecisionView,
@@ -736,6 +737,32 @@ export async function getAuthorisedInstruction(
     throw new BudgetPortfolioError("GOVERNANCE_UNAVAILABLE", "proposal carries no governance decision");
   }
   const decision = validateGovernanceDecisionView(row.governanceDecision);
+
+  // Tamper evidence: the stored decision must be internally consistent — its
+  // evaluation fingerprint covers decision + reason codes + risk + financial
+  // class + approval flag. A tampered decision never matches its fingerprint.
+  const recomputedEvaluationFingerprint = deriveR7FEvaluationFingerprint({
+    governanceDecisionId: decision.governanceDecisionId,
+    decision: decision.decision,
+    reasonCodes: decision.reasonCodes,
+    riskClass: decision.riskClass,
+    financialImpactClass: decision.financialImpactClass,
+    policyVersion: decision.policyVersion,
+    proposalFingerprint: decision.proposalFingerprint,
+    approvalRequired: decision.approvalRequired,
+  });
+  if (recomputedEvaluationFingerprint !== decision.evaluationFingerprint) {
+    throw new BudgetPortfolioError(
+      "GOVERNANCE_UNAVAILABLE",
+      "stored governance decision failed evaluation-fingerprint re-verification (tampering fails closed)"
+    );
+  }
+  if (decision.approvalRequired !== row.approvalRequired) {
+    throw new BudgetPortfolioError(
+      "GOVERNANCE_DECISION_BINDING_MISMATCH",
+      "stored governance decision approval flag does not match the proposal record"
+    );
+  }
 
   // Binding: the stored decision must be for exactly this proposal material.
   // Recompute the R7-F proposal fingerprint from the durable proposal row; a
