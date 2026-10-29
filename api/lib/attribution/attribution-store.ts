@@ -286,6 +286,30 @@ export async function findSupersedeTarget(
 
 // ─── Lifecycle events (immutable, append-only) ───
 
+/**
+ * R7-X canonical lineage read (X4): the attributionId of the row that
+ * superseded `attributionId` for this tenant (null when current). Read-only,
+ * tenant-predicated; consumed by R7-C through its frozen lineage port.
+ */
+export async function findSupersedingAttribution(
+  userId: number,
+  attributionId: string,
+  executor?: AttributionStoreExecutor
+): Promise<string | null> {
+  const db = resolveAttributionDb(executor);
+  const [row] = await db
+    .select({ attributionId: attributionResults.attributionId })
+    .from(attributionResults)
+    .where(
+      and(
+        eq(attributionResults.userId, userId),
+        eq(attributionResults.supersedesAttributionId, attributionId)
+      )
+    )
+    .limit(1);
+  return row?.attributionId ?? null;
+}
+
 export async function insertAttributionLifecycleEvent(
   row: InsertAttributionLifecycleEventRow,
   executor?: AttributionStoreExecutor

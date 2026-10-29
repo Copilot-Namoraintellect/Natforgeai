@@ -1,29 +1,32 @@
-// ─── R7-C Business Learning Engine — frozen upstream consumption seams ───
+// ─── R7-C Business Learning Engine — upstream consumption seams ───
 //
-// R7-C consumes R7-A business outcomes and R7-B attribution results
-// EXCLUSIVELY through the frozen downstream projections defined by the
-// upstream contracts, consumed from the frozen branches by reference —
-// never merged, never imported:
+// R7-X canonical binding (X4): R7-C consumes the ACTUAL integrated R7-A and
+// R7-B authorities. Outcome evidence is read through A's store, A's
+// immutable-core integrity assertion and A's canonical projection builder;
+// attribution evidence through B's store (integrity asserted internally), B's
+// canonical learning projection builder, and B's lineage store. Each
+// projection is then re-validated against C's frozen consumption contract
+// below. C re-derives nothing; upstream disclaimers flow through verbatim.
 //
-//   R7-A  feature/r7-a-conversion-outcome-intelligence @ 3e8aea8
-//         docs/contracts/conversion-outcome-to-attribution-learning-contract.md
-//         projection "conversion-outcome/v1" (27-key frozen allowlist)
-//   R7-B  feature/r7-b-attribution-intelligence @ 6ff9eca
-//         docs/contracts/attribution-to-business-learning-contract.md
-//         projection "attribution-to-learning/v1" (25-key frozen allowlist)
-//
-// These seams validate the frozen projection shapes (exact key set, frozen
-// version, verbatim disclaimers, identity patterns) and re-derive nothing.
-// Any structural drift fails closed (LEARNING_UPSTREAM_CONTRACT_MISMATCH).
-//
-// Production reads run against the upstream tables (business_outcomes,
-// attribution_results) behind guarded information-schema existence checks —
-// both are stream-local provisional artefacts until R7-X convergence. When a
-// table is absent the seam fail-closed degrades to "no such evidence":
-// learning is unavailable, never fabricated.
+// Production reads run against the canonical R7 tables
+// (0035_r7_business_optimisation_foundation — structurally verified,
+// MIGRATION_EXECUTION=False) behind guarded information-schema existence
+// checks. When a table is absent the seam fail-closed degrades to "no such
+// evidence": learning is unavailable, never fabricated.
 
 import { sql } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
+import {
+  getOutcomeByOutcomeId,
+  listOutcomeLifecycleEvents,
+  assertOutcomeEvidenceIntegrity,
+} from "../outcome/outcome-store";
+import { buildOutcomeProjection } from "../outcome/outcome-projection";
+import {
+  getAttributionById,
+  findSupersedingAttribution as findSupersedingAttributionRow,
+} from "../attribution/attribution-store";
+import { buildAttributionLearningProjection } from "../attribution/attribution-projection";
 import {
   LearningStateError,
   HEX_64,
@@ -417,109 +420,16 @@ async function tableExists(db: DbExecutor, tableName: string): Promise<boolean> 
   return exists;
 }
 
-function rowsOf(result: unknown): Record<string, unknown>[] {
-  if (Array.isArray(result)) return result as Record<string, unknown>[];
-  if (result && typeof result === "object" && Array.isArray((result as { rows?: unknown[] }).rows)) {
-    return (result as { rows: Record<string, unknown>[] }).rows;
-  }
-  return [];
-}
-
-function jsonColumn<T>(value: unknown, fallback: T): T {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as T;
-    } catch {
-      return fallback;
-    }
-  }
-  return value as T;
-}
-
 /**
- * Map a raw business_outcomes row (frozen R7-A provisional schema) into the
- * frozen projection shape. R7-C consumes only; it never re-derives outcome
- * authority. The lifecycle summary is a faithful consumption view derived
- * from the row's current status (the R7-A facts table is a sibling-branch
- * artefact until R7-X materialises it).
- */
-function mapOutcomeRow(row: Record<string, unknown>): ConsumedOutcomeProjection {
-  const currency = (row.currency as string | null) ?? null;
-  const raw: Record<string, unknown> = {
-    contractVersion: CONSUMED_OUTCOME_PROJECTION_VERSION,
-    outcomeId: row.outcomeId,
-    businessId: Number(row.businessId),
-    leadId: row.leadId === null || row.leadId === undefined ? null : Number(row.leadId),
-    leadIdentityVersion: row.leadIdentityVersion ?? null,
-    conversionId: row.conversionId,
-    outcomeType: row.outcomeType,
-    outcomeStatus: row.outcomeStatus,
-    valueType: row.valueType,
-    amountMinor:
-      row.amountMinor === null || row.amountMinor === undefined ? null : Number(row.amountMinor),
-    currency,
-    currencyExponent: currency === null ? null : currency === "JPY" ? 0 : 2,
-    quantity: row.quantity === null || row.quantity === undefined ? null : Number(row.quantity),
-    metricUnit: row.metricUnit ?? null,
-    evidenceSource: row.evidenceSource,
-    evidenceAuthority: row.evidenceAuthority,
-    evidenceIdentity: row.evidenceIdentity,
-    evidenceHash: row.evidenceHash,
-    occurredAt: row.occurredAt,
-    recordedAt: row.recordedAt,
-    reversesOutcomeId: row.reversesOutcomeId ?? null,
-    renewsOutcomeId: row.renewsOutcomeId ?? null,
-    supersedesOutcomeId: row.supersedesOutcomeId ?? null,
-    lifecycle: {
-      statuses: [row.outcomeStatus],
-      currentStatus: row.outcomeStatus,
-      eventCount: 1,
-    },
-    causationClaimed: false,
-    causationDisclaimer: CONSUMED_OUTCOME_CAUSATION_DISCLAIMER,
-    attributionClaimed: false,
-    attributionDisclaimer: CONSUMED_OUTCOME_ATTRIBUTION_DISCLAIMER,
-  };
-  return validateConsumedOutcomeProjection(raw);
-}
-
-/** Map a raw attribution_results row into the frozen projection shape. */
-function mapAttributionRow(row: Record<string, unknown>): ConsumedAttributionProjection {
-  const raw: Record<string, unknown> = {
-    contractVersion: CONSUMED_ATTRIBUTION_PROJECTION_VERSION,
-    attributionId: row.attributionId,
-    outcomeId: row.outcomeId,
-    outcomeStatus: row.outcomeStatus,
-    outcomeType: row.outcomeType,
-    businessId: Number(row.businessId),
-    leadId: row.leadId === null || row.leadId === undefined ? null : Number(row.leadId),
-    conversionId: row.conversionId,
-    modelType: row.modelType,
-    modelVersion: row.modelVersion,
-    windowStart: row.windowStart,
-    windowEnd: row.windowEnd,
-    touchpoints: jsonColumn<unknown>(row.touchpoints, []),
-    excludedTouchpoints: jsonColumn<unknown>(row.excludedTouchpoints, []),
-    totalCreditBps: Number(row.totalCreditBps),
-    confidenceClass: row.confidenceClass,
-    evidenceClass: row.evidenceClass,
-    policyVersion: row.policyVersion,
-    sourceVersions: jsonColumn<unknown>(row.sourceVersions, {}),
-    supersedesAttributionId: row.supersedesAttributionId ?? null,
-    journeyHash: row.journeyHash,
-    calculatedAt: row.calculatedAt,
-    causationClaimed: false,
-    causationDisclaimer: CONSUMED_ATTRIBUTION_CAUSATION_DISCLAIMER,
-    attributionClaimed: true,
-  };
-  return validateConsumedAttributionProjection(raw);
-}
-
-/**
- * Production upstream authority: guarded reads of the frozen upstream
- * tables. Until R7-X materialises them, every read degrades fail-closed to
- * "no such evidence" — learning is unavailable, never fabricated.
+ * Production upstream authority (X4 canonical binding). Outcome evidence is
+ * read through the integrated R7-A authority — store read, immutable-core
+ * integrity assertion, canonical projection builder (real lifecycle facts) —
+ * then re-validated against C's frozen consumption contract. Attribution
+ * evidence is read through B's store (record integrity asserted internally)
+ * and projected by B's canonical learning-projection builder. Lineage
+ * (supersession) is B store authority, never re-implemented here. When a
+ * canonical table is absent every read degrades fail-closed to "no such
+ * evidence" — learning is unavailable, never fabricated.
  */
 export function createUpstreamPorts(executor?: DbExecutor): BusinessLearningUpstreamPorts {
   const db = executor ?? getDb();
@@ -527,46 +437,24 @@ export function createUpstreamPorts(executor?: DbExecutor): BusinessLearningUpst
     outcomes: {
       async getOutcomeForLearning(userId, outcomeId) {
         if (!(await tableExists(db, "business_outcomes"))) return null;
-        const result = await db.execute(sql`
-          SELECT outcomeId, businessId, leadId, leadIdentityVersion, conversionId,
-                 outcomeType, outcomeStatus, valueType, amountMinor, currency,
-                 quantity, metricUnit, evidenceSource, evidenceAuthority,
-                 evidenceIdentity, evidenceHash, occurredAt, recordedAt,
-                 reversesOutcomeId, renewsOutcomeId, supersedesOutcomeId
-          FROM business_outcomes
-          WHERE userId = ${userId} AND outcomeId = ${outcomeId}
-          LIMIT 1
-        `);
-        const row = rowsOf(result)[0];
-        return row ? mapOutcomeRow(row) : null;
+        const row = await getOutcomeByOutcomeId(userId, outcomeId, db);
+        if (!row) return null;
+        assertOutcomeEvidenceIntegrity(row as never);
+        const lifecycle = await listOutcomeLifecycleEvents(userId, outcomeId, db);
+        const projection = buildOutcomeProjection(row as never, lifecycle);
+        return validateConsumedOutcomeProjection(projection);
       },
     },
     attributions: {
       async getAttributionForLearning(userId, attributionId) {
         if (!(await tableExists(db, "attribution_results"))) return null;
-        const result = await db.execute(sql`
-          SELECT attributionId, outcomeId, outcomeStatus, outcomeType, businessId,
-                 leadId, conversionId, modelType, modelVersion, windowStart,
-                 windowEnd, touchpoints, excludedTouchpoints, totalCreditBps,
-                 confidenceClass, evidenceClass, policyVersion, sourceVersions,
-                 supersedesAttributionId, journeyHash, calculatedAt
-          FROM attribution_results
-          WHERE userId = ${userId} AND attributionId = ${attributionId}
-          LIMIT 1
-        `);
-        const row = rowsOf(result)[0];
-        return row ? mapAttributionRow(row) : null;
+        const row = await getAttributionById(userId, attributionId, db);
+        if (!row) return null;
+        return validateConsumedAttributionProjection(buildAttributionLearningProjection(row));
       },
       async findSupersedingAttribution(userId, attributionId) {
         if (!(await tableExists(db, "attribution_results"))) return null;
-        const result = await db.execute(sql`
-          SELECT attributionId
-          FROM attribution_results
-          WHERE userId = ${userId} AND supersedesAttributionId = ${attributionId}
-          LIMIT 1
-        `);
-        const row = rowsOf(result)[0];
-        return row ? String(row.attributionId) : null;
+        return findSupersedingAttributionRow(userId, attributionId, db);
       },
     },
   };
