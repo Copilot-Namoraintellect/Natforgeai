@@ -744,6 +744,13 @@ export const approvalRequests = mysqlTable("approval_requests", {
     // R7-X converged; NOT executed —
     // see docs/recovery/r7-migration-convergence.md).
     "optimisation_action",
+    // WBS-R8-F: governed strategic-recommendation approvals bound to the exact
+    // governance decision + proposal fingerprint + evidence fingerprint +
+    // confidence/risk snapshot + policy version + expiry (provisional
+    // 0036_r8_f_strategic_governance_foundation; NOT executed —
+    // see docs/recovery/r8-f-unexecuted-migrations.md; R8-X owns convergence).
+    // Advisory authority only — never execution authority.
+    "strategic_recommendation",
   ]).notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   description: text("description"),
@@ -1993,6 +2000,74 @@ export const optimisationGovernanceDecisions = mysqlTable(
 export type OptimisationGovernanceDecisionRow = typeof optimisationGovernanceDecisions.$inferSelect;
 export type InsertOptimisationGovernanceDecisionRow =
   typeof optimisationGovernanceDecisions.$inferInsert;
+
+// ─── Strategic Governance Decisions (WBS-R8-F) ───
+// Durable, immutable strategic-intelligence governance decisions. The
+// deterministic governanceDecisionId is the unique convergence anchor: one
+// proposal material + one resolved evidence fingerprint + one policy version
+// -> one stable decision. Rows carry explainability (reasonCodes, thresholds)
+// and never store raw recommendation text or secrets — only opaque references
+// (proposal ids, evidence refs, fingerprints, hashes). Server-derived trust /
+// confidence / strategic risk are first-class columns so the read-only
+// operations projection can stay truthful without re-deriving. Provisional
+// migration 0036_r8_f_strategic_governance_foundation (stream-local; NOT
+// executed — see docs/recovery/r8-f-unexecuted-migrations.md; R8-X owns
+// canonical sequencing).
+export const strategicGovernanceDecisions = mysqlTable(
+  "strategic_governance_decisions",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic: sgd1_<sha256(...)[:64]>; unique convergence anchor.
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }).notNull(),
+    contractVersion: varchar("contractVersion", { length: 48 }).notNull(),
+    engineVersion: varchar("engineVersion", { length: 48 }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    proposalId: varchar("proposalId", { length: 128 }).notNull(),
+    recommendationType: varchar("recommendationType", { length: 48 }).notNull(),
+    // Ordered evidence refs (JSON string[]); trust is derived, never stored
+    // per-ref — the evidenceFingerprint binds the server derivation.
+    evidenceRefs: json("evidenceRefs").notNull(),
+    // Server-derived aggregate source trust class (closed vocabulary).
+    sourceTrustClass: varchar("sourceTrustClass", { length: 32 }).notNull(),
+    // Derived (evidence-bounded) confidence class.
+    confidenceClass: varchar("confidenceClass", { length: 16 }).notNull(),
+    // Server-derived strategic risk class (closed vocabulary).
+    strategicRiskClass: varchar("strategicRiskClass", { length: 16 }).notNull(),
+    policyVersion: varchar("policyVersion", { length: 96 }),
+    // ALLOW_RECOMMENDATION | REVIEW_REQUIRED | BLOCK — never EXECUTE.
+    decision: varchar("decision", { length: 24 }).notNull(),
+    reasonCodes: json("reasonCodes").notNull(),
+    approvalRequired: boolean("approvalRequired").default(false).notNull(),
+    // ApprovalBinding JSON for REVIEW_REQUIRED decisions (references + hashes).
+    approvalBinding: json("approvalBinding"),
+    evidenceFingerprint: varchar("evidenceFingerprint", { length: 64 }).notNull(),
+    proposalFingerprint: varchar("proposalFingerprint", { length: 64 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }),
+    // ISO 8601 stored verbatim (like audit_events.occurredAt).
+    evaluatedAt: varchar("evaluatedAt", { length: 32 }).notNull(),
+    evaluationFingerprint: varchar("evaluationFingerprint", { length: 64 }).notNull(),
+    // Bounded snapshot of the thresholds used at evaluation time.
+    thresholds: json("thresholds").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    decisionIdUnique: uniqueIndex("sgd_decision_id_idx").on(table.governanceDecisionId),
+    userDecisionUnique: uniqueIndex("sgd_user_decision_idx").on(
+      table.userId,
+      table.governanceDecisionId
+    ),
+    businessIdx: index("sgd_business_idx").on(table.businessId),
+    userIdx: index("sgd_user_idx").on(table.userId),
+    proposalIdx: index("sgd_proposal_idx").on(table.proposalId),
+    decisionIdx: index("sgd_decision_idx").on(table.decision),
+    evaluatedAtIdx: index("sgd_evaluated_idx").on(table.evaluatedAt),
+  })
+);
+
+export type StrategicGovernanceDecisionRow = typeof strategicGovernanceDecisions.$inferSelect;
+export type InsertStrategicGovernanceDecisionRow =
+  typeof strategicGovernanceDecisions.$inferInsert;
 
 // ─── Engagement Response Contents (WBS-R5-C2) ───
 // Governed, immutable AI response content for an engagement action.

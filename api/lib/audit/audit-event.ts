@@ -149,6 +149,15 @@ export const AUDIT_EVENT_TYPES = [
   "portfolio_snapshot_created",
   "optimisation_proposal_created",
   "optimisation_instruction_authorized",
+  // R8-F: a governed strategic-intelligence governance decision was durably
+  // recorded. Identity references + decision + closed reason codes + bounded
+  // trust/confidence/risk labels in metadata only — never recommendation text,
+  // never evidence content, no model reasoning.
+  "strategic_governance_decision",
+  // R8-F: a narrow, closed-vocabulary operator recovery action was recorded
+  // against an existing strategic governance decision. Audit-only: the
+  // immutable decision is never mutated by recovery.
+  "strategic_governance_recovery",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

@@ -223,6 +223,16 @@ export function createFakeDb(
             throw duplicateKeyError("Duplicate entry 'userId-governanceDecisionId'");
           }
         }
+        if (name === "strategic_governance_decisions") {
+          // R8-F durable convergence anchor: unique (userId, governanceDecisionId).
+          if (
+            rows.some(
+              (r) => r.userId === row.userId && r.governanceDecisionId === row.governanceDecisionId
+            )
+          ) {
+            throw duplicateKeyError("Duplicate entry 'userId-governanceDecisionId'");
+          }
+        }
         if (name === "experiment_outcome_evidence") {
           // R7-D exact-once evidence anchor: unique (userId, experimentId, outcomeId).
           if (
