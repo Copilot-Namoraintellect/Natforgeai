@@ -143,7 +143,9 @@ export async function deriveBusinessLearning(
 
   // (3) Credited campaign ids for the context scope: CAMPAIGN touchpoints
   // were tenant-re-verified by R7-B when materialised; the numeric identity
-  // is consumed verbatim.
+  // is consumed verbatim. R7-B's canonical campaign sourceIdentity is
+  // "campaign:<id>" (upstream durable id verbatim, per the attribution
+  // contract); bare numeric ids are accepted as the provisional-stream form.
   const creditedCampaignIds: number[] = [];
   for (const attribution of evidence.attributions) {
     for (const touchpoint of attribution.touchpoints) {
@@ -152,7 +154,10 @@ export async function deriveBusinessLearning(
         touchpoint.creditBps > 0 &&
         touchpoint.type === "CAMPAIGN"
       ) {
-        const campaignId = Number(touchpoint.sourceIdentity);
+        const raw = touchpoint.sourceIdentity;
+        const campaignId = raw.startsWith("campaign:")
+          ? Number(raw.slice("campaign:".length))
+          : Number(raw);
         if (Number.isInteger(campaignId) && campaignId > 0) creditedCampaignIds.push(campaignId);
       }
     }

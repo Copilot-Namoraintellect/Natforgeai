@@ -187,7 +187,9 @@ export function evaluateEvidence(input: {
   const outcomeById = new Map(bundle.outcomes.map((o) => [o.outcomeId, o]));
   const campaignSubject = (subjectType: string, subjectId: string): string | null => {
     if (subjectType !== "CAMPAIGN") return null;
-    const id = Number(subjectId);
+    // R7-B's canonical campaign sourceIdentity is "campaign:<id>" (upstream
+    // durable id verbatim); bare numeric ids are the provisional-stream form.
+    const id = Number(subjectId.startsWith("campaign:") ? subjectId.slice("campaign:".length) : subjectId);
     if (!Number.isInteger(id) || id <= 0) return null;
     const key = `camp:${id}`;
     return keySet.has(key) ? key : null;
