@@ -1,13 +1,13 @@
 // ─── R7-E Budget & Portfolio Optimisation — production bridge ───
 //
 // Binds a Drizzle client/transaction to the store's structural executor seam
-// and resolves the authority/evidence provider seams against canonical
-// tables. Guarded degradation: R7-owned table availability is probed once per
-// provider instance through information_schema and memoized; reads against an
-// absent R7 schema fail closed (the 0035 artefact is provisional — NOT
-// executed; R7-X owns sequencing). Evidence reads (R7-A/B/C projections) fail
-// closed with EVIDENCE_UNAVAILABLE until R7-X convergence wires the canonical
-// projections — optimisation never guesses evidence.
+// and resolves the authority/evidence provider seams against the canonical
+// integrated R7 authorities (X7 binding). Guarded degradation: R7-owned table
+// availability is probed once per provider instance through information_schema
+// and memoized; reads against an absent R7 schema fail closed (0035 is
+// canonical — NOT executed; MIGRATION_EXECUTION=False). Evidence resolves
+// through the integrated R7-A/B/C store surfaces (tenant-predicated, each
+// authority's own integrity assertions) — optimisation never guesses evidence.
 //
 // The authority provider is tenant-anchored: business ownership verified by
 // BOTH id and owning user; snapshots assembled from canonical tables never
@@ -19,6 +19,14 @@
 import { and, eq as drizzleEq, sql, type SQL } from "drizzle-orm";
 import { businesses, campaigns } from "@db/schema";
 import { getDb } from "../../queries/connection";
+import {
+  getOutcomeByOutcomeId,
+  listOutcomes,
+  assertOutcomeEvidenceIntegrity,
+} from "../outcome/outcome-store";
+import { getAttributionById, listAttributions } from "../attribution/attribution-store";
+import { listLearningForUser } from "../business-learning/business-learning-store";
+import { buildExperimentOptimisationProjection } from "../business-learning/business-learning-projection";
 import {
   PortfolioAuthorityBusinessNotFound,
   type BudgetPortfolioEvidenceProviderPort,
@@ -117,27 +125,93 @@ class BridgeEvidenceProvider implements BudgetPortfolioEvidenceProviderPort {
     return new Set(list.map((r) => r.table_name));
   }
 
-  async getEvidenceBundle(): Promise<unknown> {
-    // Tenant anchoring is enforced when the canonical projection reads land
-    // (R7-X); the probe itself is tenant-scoped by construction.
-    void this.userId;
+  async getEvidenceBundle(input: {
+    businessId: number;
+    outcomeRefs?: readonly string[];
+    attributionRefs?: readonly string[];
+    learningRefs?: readonly string[];
+  }): Promise<unknown> {
     const available = await this.availableTables();
     const missing = EVIDENCE_TABLES.filter((t) => !available.has(t));
     if (missing.length > 0) {
       const error = new BudgetPortfolioError(
         "EVIDENCE_UNAVAILABLE" as BudgetPortfolioErrorCode,
-        `R7 evidence tables unavailable until R7-X convergence (missing: ${missing.join(", ")}); optimisation cannot guess evidence (fail closed)`
+        `canonical R7 evidence tables unavailable (missing: ${missing.join(", ")}); optimisation cannot guess evidence (fail closed)`
       );
       throw error;
     }
-    // Canonical projection reads land at R7-X convergence (R7-A outcome
-    // projections, R7-B attribution projections, R7-C learning projections).
-    // Until then the seam is intentionally inert: no evidence is ever
-    // fabricated.
-    throw new BudgetPortfolioError(
-      "EVIDENCE_UNAVAILABLE" as BudgetPortfolioErrorCode,
-      "canonical R7 evidence projections are wired at R7-X convergence; optimisation cannot guess evidence (fail closed)"
+    // X7 canonical binding: evidence resolves through the integrated A/B/C
+    // authorities (tenant-predicated store reads + each authority's own
+    // integrity assertions). Nothing is fabricated; cross-tenant rows never
+    // resolve because every read is userId-predicated.
+    const db = this.db as never;
+    const now = new Date();
+
+    const outcomeRows = input.outcomeRefs?.length
+      ? (
+          await Promise.all(
+            input.outcomeRefs.map((ref) => getOutcomeByOutcomeId(this.userId, ref, db))
+          )
+        ).filter((row): row is NonNullable<typeof row> => row !== null)
+      : await listOutcomes(this.userId, { businessId: input.businessId, limit: 200 }, db);
+    const outcomes = outcomeRows.map((row) => {
+      assertOutcomeEvidenceIntegrity(row as never);
+      return {
+        outcomeId: row.outcomeId,
+        businessId: Number(row.businessId),
+        outcomeStatus: row.outcomeStatus,
+        valueType: row.valueType,
+        amountMinor: row.amountMinor === null || row.amountMinor === undefined ? null : Number(row.amountMinor),
+        occurredAt: row.occurredAt,
+      };
+    });
+
+    const attributionRows = input.attributionRefs?.length
+      ? (
+          await Promise.all(
+            input.attributionRefs.map((ref) => getAttributionById(this.userId, ref, db))
+          )
+        ).filter((row): row is NonNullable<typeof row> => row !== null)
+      : await listAttributions(this.userId, { businessId: input.businessId, limit: 200 }, db);
+    const attributions = attributionRows.map((row) => ({
+      attributionId: row.attributionId,
+      businessId: Number(row.businessId),
+      outcomeId: row.outcomeId,
+      outcomeStatus: row.outcomeStatus,
+      confidenceClass: row.confidenceClass,
+      evidenceClass: row.evidenceClass,
+      touchpoints: ((row.touchpoints ?? []) as Record<string, unknown>[]).map((t) => ({
+        type: t.type,
+        sourceIdentity: t.sourceIdentity,
+        creditBps: t.creditBps,
+      })),
+    }));
+
+    const learningRows = (await listLearningForUser(this.userId, db)).filter(
+      (row) => Number(row.businessId) === input.businessId
     );
+    const learnings = learningRows
+      .filter((row) => !input.learningRefs?.length || input.learningRefs.includes(row.learningId))
+      .map((row) => {
+        const projection = buildExperimentOptimisationProjection(row as never, now);
+        return {
+          learningId: row.learningId,
+          businessId: Number(row.businessId),
+          subjectType: row.subjectType,
+          subjectId: row.subjectId,
+          status: row.status,
+          confidenceClass: row.confidenceClass,
+          supportCount: Number(row.supportCount),
+          contradictionCount: Number(row.contradictionCount),
+          freshness: {
+            stale: projection.freshness.stale,
+            contradictionUnresolved: projection.freshness.contradictionUnresolved,
+          },
+          derivedAt: row.derivedAt,
+        };
+      });
+
+    return Object.freeze({ outcomes, attributions, learnings });
   }
 }
 

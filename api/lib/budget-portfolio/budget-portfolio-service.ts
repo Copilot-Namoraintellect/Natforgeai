@@ -505,8 +505,14 @@ export async function proposeOptimisation(
   if (!finalSolved.changed) {
     status = "NO_CHANGE";
   } else {
+    // The governance learningReference MUST derive from the learning refs
+    // recorded on the proposal row: the authorised-instruction re-verification
+    // recomputes the R7-F proposal fingerprint from those recorded refs, and
+    // any drift fails closed (GOVERNANCE_DECISION_BINDING_MISMATCH). Learning
+    // evidence still flows into the proposal through the evidence model
+    // (evaluateEvidence) independent of this reference.
     const strongestLearning =
-      bundle.learnings.length > 0
+      learningRefs.length > 0
         ? {
             learningVersion: "business-learning-to-experiment-optimisation/v1",
             computedAt: now,
