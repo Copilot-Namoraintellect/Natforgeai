@@ -8,9 +8,9 @@
 
 ```
 branch=feature/r8-f-strategic-governance
-HEAD=a2c084a1f0bca110a00e51f83632733789cec5f7 (programme base; report finalized on the R8-F commit — see git log)
+HEAD=0f66214 (R8-F governance commit; programme base a2c084a1f0bca110a00e51f83632733789cec5f7)
 remote=origin https://github.com/Copilot-Namoraintellect/Natforgeai.git
-working_tree=clean at report time (all changes committed; see Changed files)
+working_tree=clean (all R8-F changes committed and pushed on the stream branch)
 ```
 
 ## SCOPE DELIVERED
