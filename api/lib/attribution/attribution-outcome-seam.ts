@@ -2,20 +2,29 @@
 //
 // R7-B consumes R7-A business outcomes EXCLUSIVELY through the frozen
 // conversion-outcome/v1 projection defined by the R7-A contract
-// (docs/contracts/conversion-outcome-to-attribution-learning-contract.md,
-// consumed from branch feature/r7-a-conversion-outcome-intelligence @ 3e8aea8
-// by reference — never merged, never imported). This seam validates the
-// frozen projection shape and re-derives nothing. R7-A code never asserts
-// causation; neither does this seam.
+// (docs/contracts/conversion-outcome-to-attribution-learning-contract.md).
+// R7-X canonical binding (X3): the production port reads through the
+// integrated R7-A authority itself — A's store reads, A's immutable-core
+// integrity assertion, and A's projection builder — then re-validates the
+// result against B's frozen consumption contract below. B re-derives nothing;
+// R7-A code never asserts causation; neither does this seam.
 //
-// Production reads run against the R7-A `business_outcomes` table behind a
-// guarded information-schema existence check (the table is a stream-local
-// provisional artefact on the R7-A branch until R7-X convergence). When the
-// table is absent the seam fail-closed degrades to "no outcome" — attribution
-// is unavailable, never fabricated.
+// Production reads run against the canonical R7-A tables
+// (0035_r7_business_optimisation_foundation — structurally verified,
+// MIGRATION_EXECUTION=False) behind a guarded information-schema existence
+// check over the canonical outcome table pair. When the tables are absent the
+// seam fail-closed degrades to "no outcome" — attribution is unavailable,
+// never fabricated.
 
 import { sql } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
+import {
+  getOutcomeByOutcomeId,
+  listOutcomeLifecycleEvents,
+  assertOutcomeEvidenceIntegrity,
+} from "../outcome/outcome-store";
+import { buildOutcomeProjection } from "../outcome/outcome-projection";
+import type { OutcomeProjection } from "../outcome/outcome-projection";
 import { AttributionStateError, HEX_64 } from "./attribution-contract";
 
 /** Frozen projection version consumed (R7-A conversion-outcome/v1). */
@@ -24,8 +33,8 @@ export const CONSUMED_OUTCOME_PROJECTION_VERSION = "conversion-outcome/v1" as co
 /**
  * Exact top-level key allowlist of the frozen R7-A outcome projection
  * (mirrored verbatim from R7-A `api/lib/outcome/outcome-projection.ts`
- * OUTCOME_PROJECTION_FIELD_KEYS on the frozen ref — the compatibility test
- * asserts this list against the frozen contract document).
+ * OUTCOME_PROJECTION_FIELD_KEYS — the compatibility test asserts this list
+ * against the frozen contract document).
  */
 export const CONSUMED_OUTCOME_PROJECTION_FIELD_KEYS = [
   "contractVersion",
@@ -191,7 +200,7 @@ export function validateConsumedOutcomeProjection(raw: unknown): ConsumedOutcome
   return p;
 }
 
-/** Outcome authority port. Production reads the R7-A table; tests inject fakes. */
+/** Outcome authority port. Production reads through integrated R7-A; tests inject fakes. */
 export interface OutcomeAuthorityPort {
   /** Tenant-scoped read of one frozen-shaped outcome projection (or null). */
   getOutcomeForAttribution(userId: number, outcomeId: string): Promise<ConsumedOutcomeProjection | null>;
@@ -199,14 +208,14 @@ export interface OutcomeAuthorityPort {
 
 type DbExecutor = ReturnType<typeof getDb>;
 
-let outcomeTableExistsCache: boolean | null = null;
+let outcomeTablesExistCache: boolean | null = null;
 
-async function businessOutcomesTableExists(db: DbExecutor): Promise<boolean> {
-  if (outcomeTableExistsCache !== null) return outcomeTableExistsCache;
+async function businessOutcomeTablesExist(db: DbExecutor): Promise<boolean> {
+  if (outcomeTablesExistCache !== null) return outcomeTablesExistCache;
   try {
     const result = (await db.execute(sql`
       SELECT COUNT(*) AS c FROM information_schema.TABLES
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'business_outcomes'
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('business_outcomes', 'business_outcome_lifecycle_events')
     `)) as unknown;
     const rows = Array.isArray(result)
       ? (result as unknown[][])
@@ -218,89 +227,36 @@ async function businessOutcomesTableExists(db: DbExecutor): Promise<boolean> {
       first && typeof first === "object"
         ? Number((first as Record<string, unknown>).c ?? (first as unknown[])[0])
         : 0;
-    outcomeTableExistsCache = Number.isInteger(count) && count > 0;
+    // Canonical pair: both R7-A tables must exist for a faithful projection.
+    outcomeTablesExistCache = Number.isInteger(count) && count === 2;
   } catch {
-    outcomeTableExistsCache = false;
+    outcomeTablesExistCache = false;
   }
-  return outcomeTableExistsCache;
+  return outcomeTablesExistCache;
 }
 
 /**
- * Map a raw business_outcomes row (R7-A provisional schema, frozen contract §4)
- * into the frozen projection shape. R7-B consumes only; it never re-derives
- * outcome authority. The R7-A lifecycle facts table is not materialised on
- * this branch, so the lifecycle summary is derived from the row's current
- * status (statuses: [row.outcomeStatus]) — a faithful consumption view, not a
- * re-implementation.
+ * Production outcome authority: canonical read through the integrated R7-A
+ * authority (X3 binding). The immutable-core integrity assertion is A's own —
+ * a hash-drifted row is tampering and fails closed before B ever sees it.
+ * The projection is A's canonical builder (real lifecycle facts), re-validated
+ * here against B's frozen consumption contract.
  */
-function mapOutcomeRow(row: Record<string, unknown>): ConsumedOutcomeProjection {
-  const currency = (row.currency as string | null) ?? null;
-  const currencyExponent = currency === null ? null : currency === "JPY" ? 0 : 2;
-  const raw: Record<string, unknown> = {
-    contractVersion: CONSUMED_OUTCOME_PROJECTION_VERSION,
-    outcomeId: row.outcomeId,
-    businessId: Number(row.businessId),
-    leadId: row.leadId === null || row.leadId === undefined ? null : Number(row.leadId),
-    leadIdentityVersion: row.leadIdentityVersion ?? null,
-    conversionId: row.conversionId,
-    outcomeType: row.outcomeType,
-    outcomeStatus: row.outcomeStatus,
-    valueType: row.valueType,
-    amountMinor: row.amountMinor === null || row.amountMinor === undefined ? null : Number(row.amountMinor),
-    currency,
-    currencyExponent,
-    quantity: row.quantity === null || row.quantity === undefined ? null : Number(row.quantity),
-    metricUnit: row.metricUnit ?? null,
-    evidenceSource: row.evidenceSource,
-    evidenceAuthority: row.evidenceAuthority,
-    evidenceIdentity: row.evidenceIdentity,
-    evidenceHash: row.evidenceHash,
-    occurredAt: row.occurredAt,
-    recordedAt: row.recordedAt,
-    reversesOutcomeId: row.reversesOutcomeId ?? null,
-    renewsOutcomeId: row.renewsOutcomeId ?? null,
-    supersedesOutcomeId: row.supersedesOutcomeId ?? null,
-    lifecycle: {
-      statuses: [row.outcomeStatus],
-      currentStatus: row.outcomeStatus,
-      eventCount: 1,
-    },
-    causationClaimed: false,
-    causationDisclaimer: CONSUMED_OUTCOME_CAUSATION_DISCLAIMER,
-    attributionClaimed: false,
-    attributionDisclaimer: CONSUMED_OUTCOME_ATTRIBUTION_DISCLAIMER,
-  };
-  return validateConsumedOutcomeProjection(raw);
-}
-
-/** Production outcome authority: guarded read of the R7-A table. */
 export function createOutcomeAuthorityPort(executor?: DbExecutor): OutcomeAuthorityPort {
   const db = executor ?? getDb();
   return {
     async getOutcomeForAttribution(userId, outcomeId) {
-      if (!(await businessOutcomesTableExists(db))) {
-        // Fail-closed degradation: until R7-X materialises the R7-A tables,
-        // no outcomes are readable. Attribution is unavailable, not fabricated.
+      if (!(await businessOutcomeTablesExist(db))) {
+        // Fail-closed degradation: without the canonical R7-A tables no
+        // outcomes are readable. Attribution is unavailable, not fabricated.
         return null;
       }
-      const result = (await db.execute(sql`
-        SELECT outcomeId, businessId, leadId, leadIdentityVersion, conversionId,
-               outcomeType, outcomeStatus, valueType, amountMinor, currency,
-               quantity, metricUnit, evidenceSource, evidenceAuthority,
-               evidenceIdentity, evidenceHash, occurredAt, recordedAt,
-               reversesOutcomeId, renewsOutcomeId, supersedesOutcomeId
-        FROM business_outcomes
-        WHERE userId = ${userId} AND outcomeId = ${outcomeId}
-        LIMIT 1
-      `)) as unknown;
-      const rows = Array.isArray(result)
-        ? (result as Record<string, unknown>[])
-        : Array.isArray((result as { rows?: unknown[] }).rows)
-          ? (result as { rows: Record<string, unknown>[] }).rows
-          : [];
-      const row = rows[0];
+      const row = await getOutcomeByOutcomeId(userId, outcomeId, db);
       if (!row) return null;
-      return mapOutcomeRow(row);
+      assertOutcomeEvidenceIntegrity(row as never);
+      const lifecycle = await listOutcomeLifecycleEvents(userId, outcomeId, db);
+      const projection = buildOutcomeProjection(row as never, lifecycle) as OutcomeProjection;
+      return validateConsumedOutcomeProjection(projection);
     },
   };
 }
