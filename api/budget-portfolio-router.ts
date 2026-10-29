@@ -9,10 +9,11 @@
  * instructions only — no billing, payments, provider spend, campaign or
  * strategy execution exists here.
  *
- * Production governance note: R7-F is a sibling stream consumed at R7-X
- * convergence. Until the real R7-F engine is bound, the governance seam fails
- * closed (GOVERNANCE_UNAVAILABLE) — proposals may be created, but no proposal
- * can become execution-eligible and no instruction can be authorised.
+ * Production governance (X5 binding): the canonical integrated R7-F engine
+ * evaluates every material proposal through the tenant-anchored governance
+ * port; if governance authority is unavailable the failure is fail-closed —
+ * proposals may be created, but no proposal can become execution-eligible
+ * and no instruction can be authorised.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -34,7 +35,7 @@ import {
   listPortfolioSnapshotsForUser,
   proposeOptimisation,
 } from "./lib/budget-portfolio/budget-portfolio-service";
-import { createUnavailableGovernancePort } from "./lib/budget-portfolio/governance-seam";
+import { createCanonicalGovernancePort } from "./lib/budget-portfolio/governance-seam";
 import {
   BudgetPortfolioError,
   CreatePortfolioSnapshotInputSchema,
@@ -94,7 +95,9 @@ function depsFor(tx: unknown, userId: number) {
       tx as Parameters<typeof createBudgetPortfolioEvidenceProvider>[0],
       userId
     ),
-    governance: createUnavailableGovernancePort(),
+    governance: createCanonicalGovernancePort(
+      tx as Parameters<typeof createCanonicalGovernancePort>[0]
+    ),
   };
 }
 

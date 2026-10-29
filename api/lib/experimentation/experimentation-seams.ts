@@ -1,40 +1,56 @@
-// ─── R7-D Experimentation Engine — frozen upstream consumption seams ───
+// ─── R7-D Experimentation Engine — upstream consumption seams ───
 //
-// R7-D consumes ALL upstream authority EXCLUSIVELY through the frozen
-// downstream projections defined by the upstream contracts, consumed from the
-// frozen branches by reference — never merged, never imported:
+// R7-X canonical binding (X5/X6): R7-D consumes the ACTUAL integrated R7-C
+// learning projection, R7-A outcome authority, R7-B attribution authority
+// and R7-F governance authority in-process:
 //
-//   R7-C  feature/r7-c-business-learning @ 53b2ff4
-//         docs/contracts/business-learning-to-experiment-optimisation-contract.md
-//         projection "business-learning-to-experiment-optimisation/v1" (23-key allowlist)
-//   R7-A  feature/r7-a-conversion-outcome-intelligence @ 3e8aea8
-//         projection "conversion-outcome/v1" (28-key allowlist)
-//   R7-B  feature/r7-b-attribution-intelligence @ 6ff9eca
-//         projection "attribution-to-learning/v1" (25-key allowlist)
-//   R7-F  feature/r7-f-optimisation-governance @ 5e4ab95
-//         decision record + approval ledger (optimisation-governance/v1)
+//   R7-C  business-learning-to-experiment-optimisation/v1 (23-key allowlist)
+//         via C's tenant-scoped experiment projection builder
+//   R7-A  conversion-outcome/v1 (28-key allowlist) via A's store + projection
+//   R7-B  attribution-to-learning/v1 (25-key allowlist) via B's store +
+//         learning-projection builder
+//   R7-F  optimisation-governance/v1 via F's own evaluate/read services and
+//         the F bridge provider bound to the canonical tables
 //
 // These seams validate the frozen shapes (exact key set, frozen version,
 // verbatim disclaimers, identity patterns) and re-derive nothing. Any
 // structural drift fails closed (EXPERIMENT_UPSTREAM_CONTRACT_MISMATCH).
 //
-// Production reads run against the upstream durable tables behind guarded
-// information-schema existence checks — all are stream-local provisional
-// artefacts until R7-X convergence. When a table is absent the seam
-// fail-closed degrades to "authority unavailable": experiments cannot be
-// created/activated and evidence cannot be bound — never fabricated. Tenant
-// scope is re-verified on every read (userId predicates), the security intent
-// of every upstream handoff contract. R7-X may rewire any port to the
-// upstream pure builders without touching this module's consumers.
+// Production reads run against the canonical R7 tables
+// (0035_r7_business_optimisation_foundation — structurally verified,
+// MIGRATION_EXECUTION=False) behind guarded information-schema existence
+// checks. When a table is absent the seam fail-closed degrades to "authority
+// unavailable": experiments cannot be created/activated and evidence cannot
+// be bound — never fabricated. Tenant scope is re-verified on every read
+// (userId predicates), the security intent of every upstream handoff contract.
 //
 // R7-D never evaluates governance itself: the decision content is consumed
-// verbatim from R7-F's durable rows; the execution gate below only verifies
-// the consumed decision + approval binding are intact, current and
-// tenant-consistent (the same deterministic checks R7-F's
+// verbatim from R7-F's durable rows / service results; the execution gate
+// below only verifies the consumed decision + approval binding are intact,
+// current and tenant-consistent (the same deterministic checks R7-F's
 // assertOptimisationActionExecutable performs over its own rows).
 
 import { sql } from "drizzle-orm";
 import { getDb } from "../../queries/connection";
+import {
+  getOutcomeByOutcomeId,
+  listOutcomeLifecycleEvents,
+  assertOutcomeEvidenceIntegrity,
+} from "../outcome/outcome-store";
+import { buildOutcomeProjection } from "../outcome/outcome-projection";
+import { getAttributionById } from "../attribution/attribution-store";
+import { buildAttributionLearningProjection } from "../attribution/attribution-projection";
+import { getExperimentOptimisationProjection } from "../business-learning/business-learning-service";
+import {
+  createOptimisationGovernanceBridgeProvider,
+  bindOptimisationGovernanceStoreExecutor,
+} from "../optimisation-governance/optimisation-governance-bridge";
+import {
+  evaluateOptimisationGovernanceForProposal,
+  getOptimisationGovernanceDecisionForUser,
+} from "../optimisation-governance/optimisation-governance-service";
+import { getOptimisationGovernancePolicy } from "../optimisation-governance/optimisation-policy";
+import { OptimisationGovernanceInputError } from "../optimisation-governance/optimisation-governance-contract";
 import {
   ExperimentStateError,
   HEX_64,
@@ -652,75 +668,8 @@ function jsonColumn<T>(value: unknown, fallback: T): T {
 function unavailable(what: string): ExperimentStateError {
   return new ExperimentStateError(
     "EXPERIMENT_AUTHORITY_UNAVAILABLE",
-    `${what} is unavailable: the upstream R7 table is not materialised (R7-X owns convergence). Failing closed.`
+    `${what} is unavailable: the canonical R7 table is not materialised (0035_r7_business_optimisation_foundation, MIGRATION_EXECUTION=False). Failing closed.`
   );
-}
-
-function mapOutcomeRow(row: Record<string, unknown>): ConsumedOutcomeProjection {
-  const currency = (row.currency as string | null) ?? null;
-  return validateConsumedOutcomeProjection({
-    contractVersion: CONSUMED_OUTCOME_PROJECTION_VERSION,
-    outcomeId: row.outcomeId,
-    businessId: Number(row.businessId),
-    leadId: row.leadId === null || row.leadId === undefined ? null : Number(row.leadId),
-    leadIdentityVersion: row.leadIdentityVersion ?? null,
-    conversionId: row.conversionId,
-    outcomeType: row.outcomeType,
-    outcomeStatus: row.outcomeStatus,
-    valueType: row.valueType,
-    amountMinor: row.amountMinor === null || row.amountMinor === undefined ? null : Number(row.amountMinor),
-    currency,
-    currencyExponent: currency === null ? null : currency === "JPY" ? 0 : 2,
-    quantity: row.quantity === null || row.quantity === undefined ? null : Number(row.quantity),
-    metricUnit: row.metricUnit ?? null,
-    evidenceSource: row.evidenceSource,
-    evidenceAuthority: row.evidenceAuthority,
-    evidenceIdentity: row.evidenceIdentity,
-    evidenceHash: row.evidenceHash,
-    occurredAt: row.occurredAt,
-    recordedAt: row.recordedAt,
-    reversesOutcomeId: row.reversesOutcomeId ?? null,
-    renewsOutcomeId: row.renewsOutcomeId ?? null,
-    supersedesOutcomeId: row.supersedesOutcomeId ?? null,
-    lifecycle: {
-      statuses: [row.outcomeStatus],
-      currentStatus: row.outcomeStatus,
-    },
-    causationClaimed: false,
-    causationDisclaimer: CONSUMED_OUTCOME_CAUSATION_DISCLAIMER,
-    attributionClaimed: false,
-    attributionDisclaimer: CONSUMED_OUTCOME_ATTRIBUTION_DISCLAIMER,
-  });
-}
-
-function mapAttributionRow(row: Record<string, unknown>): ConsumedAttributionProjection {
-  return validateConsumedAttributionProjection({
-    contractVersion: CONSUMED_ATTRIBUTION_PROJECTION_VERSION,
-    attributionId: row.attributionId,
-    outcomeId: row.outcomeId,
-    outcomeStatus: row.outcomeStatus,
-    outcomeType: row.outcomeType,
-    businessId: Number(row.businessId),
-    leadId: row.leadId === null || row.leadId === undefined ? null : Number(row.leadId),
-    conversionId: row.conversionId,
-    modelType: row.modelType,
-    modelVersion: row.modelVersion,
-    windowStart: row.windowStart,
-    windowEnd: row.windowEnd,
-    touchpoints: jsonColumn(row.touchpoints, [] as unknown[]),
-    excludedTouchpoints: jsonColumn(row.excludedTouchpoints, [] as unknown[]),
-    totalCreditBps: Number(row.totalCreditBps),
-    confidenceClass: row.confidenceClass,
-    evidenceClass: row.evidenceClass,
-    policyVersion: row.policyVersion,
-    sourceVersions: jsonColumn(row.sourceVersions, {}),
-    supersedesAttributionId: row.supersedesAttributionId ?? null,
-    journeyHash: row.journeyHash,
-    calculatedAt: row.calculatedAt,
-    causationClaimed: false,
-    causationDisclaimer: CONSUMED_ATTRIBUTION_CAUSATION_DISCLAIMER,
-    attributionClaimed: true,
-  });
 }
 
 function mapDecisionRow(row: Record<string, unknown>): ConsumedGovernanceDecision {
@@ -768,65 +717,81 @@ function mapDecisionRow(row: Record<string, unknown>): ConsumedGovernanceDecisio
   };
 }
 
-/** Production ports: guarded upstream table reads; fail closed when absent. */
+/** Production ports: canonical in-process bindings; fail closed when absent. */
 export function createUpstreamPorts(executor?: DbExecutor): ExperimentationUpstreamPorts {
   const db = executor ?? getDb();
+  const governanceStore = bindOptimisationGovernanceStoreExecutor(db);
 
-  // R7-C handoff contract §2 forbids direct learning-table reads: learning is
-  // consumed ONLY through R7-C's tenant-scoped projection surface. Until R7-X
-  // wires R7-C's projection builder in-process, learning authority is
-  // unavailable and experiment creation fails closed — never fabricated.
+  // R7-C handoff contract §2: learning is consumed ONLY through R7-C's
+  // tenant-scoped experiment projection surface (canonical integrated
+  // builder). X5 wires it in-process; a structural drift fails closed in
+  // the frozen-shape validator below.
   const learning: LearningAuthorityPort = {
-    async getLearningForExperiment() {
-      throw new ExperimentStateError(
-        "EXPERIMENT_AUTHORITY_UNAVAILABLE",
-        "Learning authority is unavailable until R7-X wires the R7-C experiment projection in-process. Failing closed."
-      );
+    async getLearningForExperiment(userId, learningId) {
+      const projection = await getExperimentOptimisationProjection(userId, learningId, {
+        executor: db,
+      });
+      if (!projection) return null;
+      return validateConsumedLearningProjection(projection);
     },
   };
 
   const outcomes: OutcomeAuthorityPort = {
     async getOutcomeForExperiment(userId, outcomeId) {
       if (!(await tableExists(db, "business_outcomes"))) throw unavailable("Outcome authority");
-      const result = await db.execute(sql`
-        SELECT * FROM business_outcomes WHERE userId = ${userId} AND outcomeId = ${outcomeId} LIMIT 1
-      `);
-      const row = rowsOf(result)[0];
-      return row ? mapOutcomeRow(row) : null;
+      const row = await getOutcomeByOutcomeId(userId, outcomeId, db);
+      if (!row) return null;
+      assertOutcomeEvidenceIntegrity(row as never);
+      const lifecycle = await listOutcomeLifecycleEvents(userId, outcomeId, db);
+      return validateConsumedOutcomeProjection(buildOutcomeProjection(row as never, lifecycle));
     },
   };
 
   const attributions: AttributionAuthorityPort = {
     async getAttributionForExperiment(userId, attributionId) {
       if (!(await tableExists(db, "attribution_results"))) throw unavailable("Attribution authority");
-      const result = await db.execute(sql`
-        SELECT * FROM attribution_results WHERE userId = ${userId} AND attributionId = ${attributionId} LIMIT 1
-      `);
-      const row = rowsOf(result)[0];
-      return row ? mapAttributionRow(row) : null;
+      const row = await getAttributionById(userId, attributionId, db);
+      if (!row) return null;
+      return validateConsumedAttributionProjection(buildAttributionLearningProjection(row));
     },
   };
 
   const governance: GovernanceAuthorityPort = {
-    async evaluateProposal() {
-      // R7-F owns evaluation. Until R7-X wires the R7-F module in-process,
-      // governance-dependent paths fail closed rather than fabricating
-      // authority.
-      throw new ExperimentStateError(
-        "EXPERIMENT_AUTHORITY_UNAVAILABLE",
-        "Governance evaluation is unavailable until R7-X wires the R7-F authority in-process. Failing closed."
+    async evaluateProposal(userId, proposal) {
+      // Fail-closed degradation: without the canonical governance table no
+      // decision can be minted — experiments cannot be created/activated.
+      if (!(await tableExists(db, "optimisation_governance_decisions"))) {
+        throw unavailable("Governance authority");
+      }
+      // R7-F owns evaluation (canonical integrated service). The bridge
+      // provider is tenant-anchored; unavailable authority fails closed via
+      // ProviderAuthorityUnavailable — never a fabricated decision.
+      const { decision } = await evaluateOptimisationGovernanceForProposal(
+        { userId, proposal },
+        { provider: createOptimisationGovernanceBridgeProvider(db, userId) },
+        governanceStore
       );
+      return mapDecisionRow(decision as unknown as Record<string, unknown>);
     },
     async getDecision(userId, governanceDecisionId) {
       if (!(await tableExists(db, "optimisation_governance_decisions"))) {
         throw unavailable("Governance authority");
       }
-      const result = await db.execute(sql`
-        SELECT * FROM optimisation_governance_decisions
-        WHERE userId = ${userId} AND governanceDecisionId = ${governanceDecisionId} LIMIT 1
-      `);
-      const row = rowsOf(result)[0];
-      return row ? mapDecisionRow(row) : null;
+      try {
+        const row = await getOptimisationGovernanceDecisionForUser(
+          { userId, governanceDecisionId },
+          governanceStore
+        );
+        return mapDecisionRow(row as unknown as Record<string, unknown>);
+      } catch (err) {
+        if (
+          err instanceof OptimisationGovernanceInputError &&
+          err.code === "GOVERNANCE_DECISION_NOT_FOUND"
+        ) {
+          return null;
+        }
+        throw err;
+      }
     },
     async getApprovalForDecision(userId, governanceDecisionId) {
       if (!(await tableExists(db, "approval_requests"))) throw unavailable("Approval authority");
@@ -853,10 +818,8 @@ export function createUpstreamPorts(executor?: DbExecutor): ExperimentationUpstr
       return null;
     },
     async getCurrentPolicyVersion() {
-      // Policy registry is R7-F code; until wired in-process, report
-      // unavailable (null) so the execution gate fails closed on
-      // STALE_POLICY_VERSION.
-      return null;
+      // Canonical R7-F policy registry: the active code-level policy version.
+      return getOptimisationGovernancePolicy().policyVersion ?? null;
     },
     async assertExecutable(input) {
       return verifyExecutionGate(input);

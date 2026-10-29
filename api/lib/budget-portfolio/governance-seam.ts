@@ -1,25 +1,39 @@
 // ─── R7-E Budget & Portfolio Optimisation — R7-F governance seam (E6) ───
 //
-// FROZEN consumption surface for the R7-F Optimisation Governance authority
-// (docs/contracts/business-optimisation-governance-contract.md @ 5e4ab95).
-// This module contains:
+// CANONICAL consumption surface for the R7-F Optimisation Governance
+// authority (X5 binding, integrated at R7-X). This module contains:
 //
 //   1. Frozen shape types + validators for the R7-F decision record, proposal
 //      material and approval view. R7-E re-validates every governance payload
 //      at this boundary — untrusted until accepted.
 //   2. `OptimisationGovernancePort` — the narrow seam the service calls.
-//      Production default on this branch: UNAVAILABLE (fail closed) — R7-F is
-//      a sibling stream consumed at R7-X convergence, never merged here.
-//   3. `FakeDefaultPolicyGovernancePort` — TEST-ONLY double implementing the
-//      published default-policy behaviour (contract §2/§5-§7 formulas). It
-//      exists so R7-E acceptance can prove correct handling of
-//      ALLOW / REVIEW_REQUIRED / BLOCK, forged approvals and modified
-//      proposals. Canonical authority is R7-F's real engine at R7-X.
+//   3. `createCanonicalGovernancePort` — the production binding over the
+//      integrated R7-F engine: evaluation via F's governed evaluate service
+//      (bridge provider tenant-anchored), the execution gate delegated to F's
+//      own assertOptimisationActionExecutable, and approval-ledger reads from
+//      the shared approval_requests table. Governance-unavailable fails
+//      closed — never guessed, never a generic ALLOW.
+//   4. `FakeDefaultPolicyGovernancePort` — TEST-ONLY double implementing the
+//      published default-policy behaviour (contract §2/§5-§7 formulas) for
+//      isolated acceptance runs. Not used in production wiring.
 //
 // R7-E never modifies a governance decision, never self-approves, and never
 // exposes an endpoint that marks a proposal allowed.
 
 import { createHash } from "crypto";
+import { sql } from "drizzle-orm";
+import { getDb } from "../../queries/connection";
+import {
+  evaluateOptimisationGovernanceForProposal,
+} from "../optimisation-governance/optimisation-governance-service";
+import {
+  assertOptimisationActionExecutable,
+} from "../optimisation-governance/optimisation-approval";
+import { getOptimisationGovernancePolicy } from "../optimisation-governance/optimisation-policy";
+import {
+  createOptimisationGovernanceBridgeProvider,
+  bindOptimisationGovernanceStoreExecutor,
+} from "../optimisation-governance/optimisation-governance-bridge";
 import {
   BudgetPortfolioError,
   BudgetPortfolioValidationError,
@@ -218,6 +232,138 @@ export function createUnavailableGovernancePort(): OptimisationGovernancePort {
     assertActionExecutable: () => unavailable(),
   };
 }
+
+// ─── Canonical R7-X binding: the integrated R7-F engine (X5) ───
+//
+// Evaluation runs through F's governed evaluate service with the tenant-
+// anchored bridge provider; the execution gate is F's own
+// assertOptimisationActionExecutable — E never re-derives gate logic. If F
+// authority is unavailable (missing canonical table, provider failure), the
+// failure propagates fail-closed: no decision, no ALLOW, no instruction.
+
+type GovernanceDb = ReturnType<typeof getDb>;
+
+async function governanceTableAvailable(db: GovernanceDb): Promise<boolean> {
+  try {
+    const result = (await db.execute(sql`
+      SELECT COUNT(*) AS c FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'optimisation_governance_decisions'
+    `)) as unknown;
+    const rows = Array.isArray(result)
+      ? (result as unknown[][])
+      : Array.isArray((result as { rows?: unknown[] }).rows)
+        ? (result as { rows: unknown[] }).rows
+        : [];
+    const first = rows[0] as unknown;
+    const count =
+      first && typeof first === "object"
+        ? Number((first as Record<string, unknown>).c ?? (first as unknown[])[0])
+        : 0;
+    return Number.isInteger(count) && count > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function createCanonicalGovernancePort(db: GovernanceDb): OptimisationGovernancePort {
+  const store = bindOptimisationGovernanceStoreExecutor(db);
+  return {
+    getCurrentPolicyVersion() {
+      return getOptimisationGovernancePolicy().policyVersion;
+    },
+    async evaluateProposal(input: {
+      userId: number;
+      proposal: unknown;
+      policyVersion?: string;
+    }) {
+      // Fail-closed degradation: without the canonical governance table no
+      // decision can be minted — no proposal becomes execution-eligible.
+      if (!(await governanceTableAvailable(db))) {
+        throw new BudgetPortfolioError(
+          "GOVERNANCE_UNAVAILABLE",
+          "R7-F optimisation governance authority is unavailable (canonical governance table not materialised); failing closed"
+        );
+      }
+      const { decision, duplicateClassification } = await evaluateOptimisationGovernanceForProposal(
+        { userId: input.userId, proposal: input.proposal, policyVersion: input.policyVersion },
+        { provider: createOptimisationGovernanceBridgeProvider(db, input.userId) },
+        store
+      );
+      // Boundary re-validation: the consumed decision must match the frozen
+      // R7-F shape exactly (E never trusts an unvalidated payload).
+      return {
+        decision: validateGovernanceDecisionView(decision),
+        duplicateClassification,
+      };
+    },
+    async getApprovalForDecision(input: {
+      userId: number;
+      governanceDecisionId: string;
+    }): Promise<OptimisationApprovalView | null> {
+      const result = (await db.execute(sql`
+        SELECT id, userId, status, context FROM approval_requests
+        WHERE userId = ${input.userId} AND approvalType = 'optimisation_action'
+        ORDER BY id ASC
+      `)) as unknown;
+      const rows = Array.isArray(result)
+        ? (result as Record<string, unknown>[])
+        : Array.isArray((result as { rows?: unknown[] }).rows)
+          ? (result as { rows: Record<string, unknown>[] }).rows
+          : [];
+      for (const row of rows) {
+        let context: unknown = row.context;
+        if (typeof context === "string") {
+          try {
+            context = JSON.parse(context);
+          } catch {
+            context = null;
+          }
+        }
+        const binding = (context as Record<string, unknown> | null)?.optimisationGovernanceBinding as
+          | { governanceDecisionId?: string }
+          | undefined;
+        if (binding && binding.governanceDecisionId === input.governanceDecisionId) {
+          return {
+            id: Number(row.id),
+            userId: Number(row.userId),
+            status: row.status as OptimisationApprovalView["status"],
+            context,
+          };
+        }
+      }
+      return null;
+    },
+    assertActionExecutable(input: {
+      decision: GovernanceDecisionView;
+      approval: OptimisationApprovalView | null;
+      currentPolicyVersion: string | null;
+      now: string;
+    }): OptimisationActionExecutionVerdict {
+      const verdict = assertOptimisationActionExecutable({
+        decision: input.decision as never,
+        approval: input.approval,
+        currentPolicyVersion: input.currentPolicyVersion,
+        now: input.now,
+      });
+      if (verdict.executable) {
+        return {
+          executable: true,
+          authorization: {
+            governanceDecisionId: verdict.authorization.governanceDecisionId,
+            proposalId: verdict.authorization.proposalId,
+            decision: verdict.authorization.decision,
+            approvalRequestId: verdict.authorization.approvalRequestId,
+            policyVersion: verdict.authorization.policyVersion,
+            authorizedAt: verdict.authorization.authorizedAt,
+            expiresAt: verdict.authorization.expiresAt,
+          },
+        };
+      }
+      return { executable: false, reason: verdict.reason, permanent: verdict.permanent };
+    },
+  };
+}
+
 
 // ─── Deterministic published derivations (contract §1/§7 formulas) ───
 

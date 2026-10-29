@@ -261,6 +261,7 @@ async function applyTransition(
 function buildGovernanceProposal(input: {
   experiment: ExperimentRow;
   proposalType: "EXPERIMENT_CREATE" | "EXPERIMENT_ACTIVATE";
+  requestedAt: string;
 }): Record<string, unknown> {
   const e = input.experiment;
   const budgetCap = (e.guardrails as { guardrail: string; params?: Record<string, number | string> }[]).find(
@@ -279,14 +280,17 @@ function buildGovernanceProposal(input: {
       hypothesisId: e.hypothesisId,
     })
   );
+  // Canonical R7-F proposal shape (optimisation-governance/v1): experiments
+  // move no allocations (empty delta set), but the financial material must be
+  // present — experiment actions are not recommendation-only under F. The
+  // budget cap is experiment material; any real money movement would be a
+  // separate BUDGET_* proposal under its own governed evaluation. R7-F
+  // validates this shape strictly (fail closed).
   return {
     proposalId: e.experimentId,
     businessId: e.businessId,
     proposalType: input.proposalType,
-    financial: {
-      budgetMinor,
-      financialImpactClass: budgetMinor > 0 ? "REALLOCATION_WITHIN_APPROVED_TOTAL" : "RECOMMENDATION_ONLY",
-    },
+    financial: { currency: "USD", allocationDeltas: [] },
     experiment: {
       experimentKey: e.experimentId,
       dimensions: [e.dimension],
@@ -294,10 +298,11 @@ function buildGovernanceProposal(input: {
       durationDays: e.durationDays,
       touchesProtectedTraits: [],
     },
-    portfolio: {},
-    learningReference: { learningId: e.learningId },
+    portfolio: null,
+    learningReference: null,
     campaignId: null,
     evidenceHash,
+    requestedAt: input.requestedAt,
   };
 }
 
@@ -435,7 +440,11 @@ export async function submitGovernance(
     );
   }
 
-  const proposal = buildGovernanceProposal({ experiment, proposalType: "EXPERIMENT_CREATE" });
+  const proposal = buildGovernanceProposal({
+    experiment,
+    proposalType: "EXPERIMENT_CREATE",
+    requestedAt: resolveNow(deps).toISOString(),
+  });
   const decision = await ports.governance.evaluateProposal(userId, proposal);
 
   if (decision.businessId !== experiment.businessId || decision.userId !== userId) {
@@ -531,7 +540,11 @@ export async function activateExperiment(
   }
 
   // Revalidate immediately before activation with fresh proposal material.
-  const activationProposal = buildGovernanceProposal({ experiment: current, proposalType: "EXPERIMENT_ACTIVATE" });
+  const activationProposal = buildGovernanceProposal({
+    experiment: current,
+    proposalType: "EXPERIMENT_ACTIVATE",
+    requestedAt: resolveNow(deps).toISOString(),
+  });
   const activationDecision = await ports.governance.evaluateProposal(userId, activationProposal);
   if (activationDecision.decision === "BLOCK") {
     throw new ExperimentStateError(
