@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "efe8e7f1-a000-4b76-9c22-0f8fae500b8f",
+  "id": "caa337f5-c6fc-4abb-8a02-d7e5b4f6e6cc",
   "prevId": "6cdb2ffa-89b1-4716-9618-1a6a3dcb1cf4",
   "tables": {
     "agent_runs": {
@@ -338,7 +338,7 @@
         },
         "approvalType": {
           "name": "approvalType",
-          "type": "enum('campaign_launch','budget_increase','sensitive_reply','high_value_proposal','ad_spend','shutdown','brand_risk','strategy_review','marketing_action','sales_handoff')",
+          "type": "enum('campaign_launch','budget_increase','sensitive_reply','high_value_proposal','ad_spend','shutdown','brand_risk','strategy_review','marketing_action','sales_handoff','optimisation_action')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -429,6 +429,354 @@
       "compositePrimaryKeys": {
         "approval_requests_id": {
           "name": "approval_requests_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "attribution_lifecycle_events": {
+      "name": "attribution_lifecycle_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "attributionLifecycleEventId": {
+          "name": "attributionLifecycleEventId",
+          "type": "varchar(70)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "attributionId": {
+          "name": "attributionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "priorAttributionId": {
+          "name": "priorAttributionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "lifecycleType": {
+          "name": "lifecycleType",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "occurredAt": {
+          "name": "occurredAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "atf_event_id_uidx": {
+          "name": "atf_event_id_uidx",
+          "columns": [
+            "attributionLifecycleEventId"
+          ],
+          "isUnique": true
+        },
+        "atf_user_attribution_idx": {
+          "name": "atf_user_attribution_idx",
+          "columns": [
+            "userId",
+            "attributionId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "attribution_lifecycle_events_id": {
+          "name": "attribution_lifecycle_events_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "attribution_results": {
+      "name": "attribution_results",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "attributionId": {
+          "name": "attributionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "attributionKey": {
+          "name": "attributionKey",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeId": {
+          "name": "outcomeId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "leadId": {
+          "name": "leadId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "leadIdentityVersion": {
+          "name": "leadIdentityVersion",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "conversionId": {
+          "name": "conversionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeType": {
+          "name": "outcomeType",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeStatus": {
+          "name": "outcomeStatus",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeAmountMinor": {
+          "name": "outcomeAmountMinor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "outcomeCurrency": {
+          "name": "outcomeCurrency",
+          "type": "varchar(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "modelType": {
+          "name": "modelType",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "modelVersion": {
+          "name": "modelVersion",
+          "type": "varchar(40)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "windowStart": {
+          "name": "windowStart",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "windowEnd": {
+          "name": "windowEnd",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "journeyHash": {
+          "name": "journeyHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "touchpoints": {
+          "name": "touchpoints",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "excludedTouchpoints": {
+          "name": "excludedTouchpoints",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "totalCreditBps": {
+          "name": "totalCreditBps",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "confidenceClass": {
+          "name": "confidenceClass",
+          "type": "enum('HIGH','MEDIUM','LOW','NONE')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceClass": {
+          "name": "evidenceClass",
+          "type": "enum('DIRECT_LINKAGE','STRONG_ASSOCIATION','WEAK_ASSOCIATION','INSUFFICIENT_EVIDENCE')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "policyVersion": {
+          "name": "policyVersion",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceVersions": {
+          "name": "sourceVersions",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "supersedesAttributionId": {
+          "name": "supersedesAttributionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "recordHash": {
+          "name": "recordHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "calculatedAt": {
+          "name": "calculatedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "atr_attribution_id_uidx": {
+          "name": "atr_attribution_id_uidx",
+          "columns": [
+            "attributionId"
+          ],
+          "isUnique": true
+        },
+        "atr_natural_key_uidx": {
+          "name": "atr_natural_key_uidx",
+          "columns": [
+            "userId",
+            "outcomeId",
+            "modelType",
+            "modelVersion",
+            "windowStart",
+            "windowEnd",
+            "journeyHash"
+          ],
+          "isUnique": true
+        },
+        "atr_user_outcome_idx": {
+          "name": "atr_user_outcome_idx",
+          "columns": [
+            "userId",
+            "outcomeId"
+          ],
+          "isUnique": false
+        },
+        "atr_user_business_idx": {
+          "name": "atr_user_business_idx",
+          "columns": [
+            "userId",
+            "businessId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "attribution_results_id": {
+          "name": "attribution_results_id",
           "columns": [
             "id"
           ]
@@ -884,6 +1232,525 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "budget_portfolio_allocation_instructions": {
+      "name": "budget_portfolio_allocation_instructions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "instructionId": {
+          "name": "instructionId",
+          "type": "varchar(68)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "optimisationId": {
+          "name": "optimisationId",
+          "type": "varchar(68)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "governanceDecisionId": {
+          "name": "governanceDecisionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approvalRequestId": {
+          "name": "approvalRequestId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "policyVersion": {
+          "name": "policyVersion",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authorisedAt": {
+          "name": "authorisedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expiresAt": {
+          "name": "expiresAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "allocations": {
+          "name": "allocations",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "bpi_instruction_identity_uidx": {
+          "name": "bpi_instruction_identity_uidx",
+          "columns": [
+            "instructionId"
+          ],
+          "isUnique": true
+        },
+        "bpi_user_instruction_uidx": {
+          "name": "bpi_user_instruction_uidx",
+          "columns": [
+            "userId",
+            "instructionId"
+          ],
+          "isUnique": true
+        },
+        "bpi_user_optimisation_idx": {
+          "name": "bpi_user_optimisation_idx",
+          "columns": [
+            "userId",
+            "optimisationId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "budget_portfolio_allocation_instructions_id": {
+          "name": "budget_portfolio_allocation_instructions_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "budget_portfolio_proposals": {
+      "name": "budget_portfolio_proposals",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "optimisationId": {
+          "name": "optimisationId",
+          "type": "varchar(68)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "portfolioSnapshotId": {
+          "name": "portfolioSnapshotId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "budgetPeriod": {
+          "name": "budgetPeriod",
+          "type": "varchar(7)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "varchar(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "currentTotalBudgetMinor": {
+          "name": "currentTotalBudgetMinor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "currentAllocations": {
+          "name": "currentAllocations",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proposedAllocations": {
+          "name": "proposedAllocations",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "deltaAllocations": {
+          "name": "deltaAllocations",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceRefs": {
+          "name": "evidenceRefs",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "learningRefs": {
+          "name": "learningRefs",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "attributionRefs": {
+          "name": "attributionRefs",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeRefs": {
+          "name": "outcomeRefs",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "objective": {
+          "name": "objective",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "algorithmVersion": {
+          "name": "algorithmVersion",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "constraintVersion": {
+          "name": "constraintVersion",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceBundleHash": {
+          "name": "evidenceBundleHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "confidenceClass": {
+          "name": "confidenceClass",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reasonCodes": {
+          "name": "reasonCodes",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "governanceDecisionId": {
+          "name": "governanceDecisionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "governanceDecision": {
+          "name": "governanceDecision",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "approvalRequired": {
+          "name": "approvalRequired",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proposalContentHash": {
+          "name": "proposalContentHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "validUntil": {
+          "name": "validUntil",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "bpp_optimisation_identity_uidx": {
+          "name": "bpp_optimisation_identity_uidx",
+          "columns": [
+            "optimisationId"
+          ],
+          "isUnique": true
+        },
+        "bpp_user_optimisation_uidx": {
+          "name": "bpp_user_optimisation_uidx",
+          "columns": [
+            "userId",
+            "optimisationId"
+          ],
+          "isUnique": true
+        },
+        "bpp_user_business_idx": {
+          "name": "bpp_user_business_idx",
+          "columns": [
+            "userId",
+            "businessId"
+          ],
+          "isUnique": false
+        },
+        "bpp_user_status_idx": {
+          "name": "bpp_user_status_idx",
+          "columns": [
+            "userId",
+            "status"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "budget_portfolio_proposals_id": {
+          "name": "budget_portfolio_proposals_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "budget_portfolio_snapshots": {
+      "name": "budget_portfolio_snapshots",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "portfolioSnapshotId": {
+          "name": "portfolioSnapshotId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "budgetPeriod": {
+          "name": "budgetPeriod",
+          "type": "varchar(7)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "varchar(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approvedTotalBudgetMinor": {
+          "name": "approvedTotalBudgetMinor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "committedMinor": {
+          "name": "committedMinor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reservedMinor": {
+          "name": "reservedMinor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "availableReallocatableMinor": {
+          "name": "availableReallocatableMinor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "currentAllocations": {
+          "name": "currentAllocations",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "supportedProviders": {
+          "name": "supportedProviders",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "lockedAllocationKeys": {
+          "name": "lockedAllocationKeys",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "disabledAllocationKeys": {
+          "name": "disabledAllocationKeys",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "capturedAt": {
+          "name": "capturedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "bps_snapshot_identity_uidx": {
+          "name": "bps_snapshot_identity_uidx",
+          "columns": [
+            "portfolioSnapshotId"
+          ],
+          "isUnique": true
+        },
+        "bps_user_snapshot_uidx": {
+          "name": "bps_user_snapshot_uidx",
+          "columns": [
+            "userId",
+            "portfolioSnapshotId"
+          ],
+          "isUnique": true
+        },
+        "bps_user_business_idx": {
+          "name": "bps_user_business_idx",
+          "columns": [
+            "userId",
+            "businessId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "budget_portfolio_snapshots_id": {
+          "name": "budget_portfolio_snapshots_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
     "business_dna_snapshots": {
       "name": "business_dna_snapshots",
       "columns": {
@@ -1020,6 +1887,371 @@
           ]
         }
       },
+      "checkConstraint": {}
+    },
+    "business_learning_lifecycle_events": {
+      "name": "business_learning_lifecycle_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "learningLifecycleEventId": {
+          "name": "learningLifecycleEventId",
+          "type": "varchar(70)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "learningId": {
+          "name": "learningId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "lifecycleType": {
+          "name": "lifecycleType",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reasonCode": {
+          "name": "reasonCode",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "occurredAt": {
+          "name": "occurredAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "bll_event_id_uidx": {
+          "name": "bll_event_id_uidx",
+          "columns": [
+            "learningLifecycleEventId"
+          ],
+          "isUnique": true
+        },
+        "bll_user_learning_idx": {
+          "name": "bll_user_learning_idx",
+          "columns": [
+            "userId",
+            "learningId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "business_learning_lifecycle_events_id": {
+          "name": "business_learning_lifecycle_events_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "business_learning_records": {
+      "name": "business_learning_records",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "learningId": {
+          "name": "learningId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceBundleId": {
+          "name": "evidenceBundleId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "learningType": {
+          "name": "learningType",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "subjectType": {
+          "name": "subjectType",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "subjectId": {
+          "name": "subjectId",
+          "type": "varchar(191)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeTypeFamily": {
+          "name": "outcomeTypeFamily",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "contextScope": {
+          "name": "contextScope",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "statement": {
+          "name": "statement",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeIds": {
+          "name": "outcomeIds",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "attributionIds": {
+          "name": "attributionIds",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "upstreamStateFingerprint": {
+          "name": "upstreamStateFingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "supportCount": {
+          "name": "supportCount",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "contradictionCount": {
+          "name": "contradictionCount",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "confidenceClass": {
+          "name": "confidenceClass",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceClass": {
+          "name": "evidenceClass",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "noveltyClass": {
+          "name": "noveltyClass",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'CANDIDATE'"
+        },
+        "limitations": {
+          "name": "limitations",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sourceVersions": {
+          "name": "sourceVersions",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "narrativeDraft": {
+          "name": "narrativeDraft",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "validUntil": {
+          "name": "validUntil",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "supersedesLearningId": {
+          "name": "supersedesLearningId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "recordHash": {
+          "name": "recordHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "derivedAt": {
+          "name": "derivedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "blr_learning_id_uidx": {
+          "name": "blr_learning_id_uidx",
+          "columns": [
+            "learningId"
+          ],
+          "isUnique": true
+        },
+        "blr_natural_key_uidx": {
+          "name": "blr_natural_key_uidx",
+          "columns": [
+            "userId",
+            "evidenceBundleId",
+            "learningType",
+            "subjectType",
+            "subjectId",
+            "upstreamStateFingerprint"
+          ],
+          "isUnique": true
+        },
+        "blr_user_business_idx": {
+          "name": "blr_user_business_idx",
+          "columns": [
+            "userId",
+            "businessId"
+          ],
+          "isUnique": false
+        },
+        "blr_user_subject_idx": {
+          "name": "blr_user_subject_idx",
+          "columns": [
+            "userId",
+            "subjectType",
+            "subjectId"
+          ],
+          "isUnique": false
+        },
+        "blr_user_status_idx": {
+          "name": "blr_user_status_idx",
+          "columns": [
+            "userId",
+            "status"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "business_learning_records_id": {
+          "name": "business_learning_records_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
       "checkConstraint": {}
     },
     "business_outcome_lifecycle_events": {
@@ -4343,6 +5575,776 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "experiment_assignments": {
+      "name": "experiment_assignments",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "assignmentId": {
+          "name": "assignmentId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "experimentId": {
+          "name": "experimentId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "subjectKey": {
+          "name": "subjectKey",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "arm": {
+          "name": "arm",
+          "type": "enum('CONTROL','TREATMENT')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "armIndex": {
+          "name": "armIndex",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "assignmentHash": {
+          "name": "assignmentHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "assignedAt": {
+          "name": "assignedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "exa_assignment_uidx": {
+          "name": "exa_assignment_uidx",
+          "columns": [
+            "userId",
+            "experimentId",
+            "subjectKey"
+          ],
+          "isUnique": true
+        },
+        "exa_experiment_idx": {
+          "name": "exa_experiment_idx",
+          "columns": [
+            "userId",
+            "experimentId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "experiment_assignments_id": {
+          "name": "experiment_assignments_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "experiment_lifecycle_events": {
+      "name": "experiment_lifecycle_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "experimentLifecycleEventId": {
+          "name": "experimentLifecycleEventId",
+          "type": "varchar(70)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "experimentId": {
+          "name": "experimentId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "lifecycleType": {
+          "name": "lifecycleType",
+          "type": "enum('creation','governance','approval','activation','pause','resume','stop','completion','invalidation','cancellation')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fromStatus": {
+          "name": "fromStatus",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "toStatus": {
+          "name": "toStatus",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reasonCode": {
+          "name": "reasonCode",
+          "type": "varchar(191)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "occurredAt": {
+          "name": "occurredAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "exl_event_id_uidx": {
+          "name": "exl_event_id_uidx",
+          "columns": [
+            "experimentLifecycleEventId"
+          ],
+          "isUnique": true
+        },
+        "exl_user_experiment_idx": {
+          "name": "exl_user_experiment_idx",
+          "columns": [
+            "userId",
+            "experimentId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "experiment_lifecycle_events_id": {
+          "name": "experiment_lifecycle_events_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "experiment_outcome_evidence": {
+      "name": "experiment_outcome_evidence",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "evidenceId": {
+          "name": "evidenceId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "experimentId": {
+          "name": "experimentId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeId": {
+          "name": "outcomeId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "attributionId": {
+          "name": "attributionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "subjectKey": {
+          "name": "subjectKey",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "armIndex": {
+          "name": "armIndex",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeStatus": {
+          "name": "outcomeStatus",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcomeType": {
+          "name": "outcomeType",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "valueType": {
+          "name": "valueType",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "amountMinor": {
+          "name": "amountMinor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "occurredAt": {
+          "name": "occurredAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceHash": {
+          "name": "evidenceHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "exe_evidence_uidx": {
+          "name": "exe_evidence_uidx",
+          "columns": [
+            "userId",
+            "experimentId",
+            "outcomeId"
+          ],
+          "isUnique": true
+        },
+        "exe_experiment_idx": {
+          "name": "exe_experiment_idx",
+          "columns": [
+            "userId",
+            "experimentId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "experiment_outcome_evidence_id": {
+          "name": "experiment_outcome_evidence_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "experiment_results": {
+      "name": "experiment_results",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "resultId": {
+          "name": "resultId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "experimentId": {
+          "name": "experimentId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "calculationVersion": {
+          "name": "calculationVersion",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "verdict": {
+          "name": "verdict",
+          "type": "enum('INSUFFICIENT_EVIDENCE','DIRECTIONAL_SIGNAL','SUPPORTED_DIFFERENCE','NO_MEANINGFUL_DIFFERENCE','INVALID_EXPERIMENT')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "confidenceClass": {
+          "name": "confidenceClass",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "primaryMetric": {
+          "name": "primaryMetric",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "armSummaries": {
+          "name": "armSummaries",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "comparisons": {
+          "name": "comparisons",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceCounts": {
+          "name": "evidenceCounts",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "limitations": {
+          "name": "limitations",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "conclusion": {
+          "name": "conclusion",
+          "type": "varchar(1024)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidenceFingerprint": {
+          "name": "evidenceFingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "resultHash": {
+          "name": "resultHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "calculatedAt": {
+          "name": "calculatedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "exr_result_uidx": {
+          "name": "exr_result_uidx",
+          "columns": [
+            "resultId"
+          ],
+          "isUnique": true
+        },
+        "exr_natural_uidx": {
+          "name": "exr_natural_uidx",
+          "columns": [
+            "userId",
+            "experimentId",
+            "calculationVersion"
+          ],
+          "isUnique": true
+        },
+        "exr_experiment_idx": {
+          "name": "exr_experiment_idx",
+          "columns": [
+            "userId",
+            "experimentId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "experiment_results_id": {
+          "name": "experiment_results_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "experiments": {
+      "name": "experiments",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "experimentId": {
+          "name": "experimentId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "hypothesisId": {
+          "name": "hypothesisId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "learningId": {
+          "name": "learningId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "statement": {
+          "name": "statement",
+          "type": "varchar(1024)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "designType": {
+          "name": "designType",
+          "type": "enum('A_B','MULTI_ARM')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "dimension": {
+          "name": "dimension",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "controlDefinition": {
+          "name": "controlDefinition",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "treatmentDefinitions": {
+          "name": "treatmentDefinitions",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "allocationPolicy": {
+          "name": "allocationPolicy",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "primaryMetric": {
+          "name": "primaryMetric",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "secondaryMetrics": {
+          "name": "secondaryMetrics",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "guardrails": {
+          "name": "guardrails",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "minimumSamplePerArm": {
+          "name": "minimumSamplePerArm",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "durationDays": {
+          "name": "durationDays",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "startAt": {
+          "name": "startAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "endAt": {
+          "name": "endAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "assignmentVersion": {
+          "name": "assignmentVersion",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "enum('DRAFT','GOVERNANCE_REQUIRED','APPROVAL_REQUIRED','READY','ACTIVE','PAUSED','STOPPED','COMPLETED','INVALIDATED','CANCELLED')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'DRAFT'"
+        },
+        "governanceDecisionId": {
+          "name": "governanceDecisionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "approvalReference": {
+          "name": "approvalReference",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "designHash": {
+          "name": "designHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "resultId": {
+          "name": "resultId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "recordHash": {
+          "name": "recordHash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "narrativeDraft": {
+          "name": "narrativeDraft",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "exp_experiment_id_uidx": {
+          "name": "exp_experiment_id_uidx",
+          "columns": [
+            "experimentId"
+          ],
+          "isUnique": true
+        },
+        "exp_natural_key_uidx": {
+          "name": "exp_natural_key_uidx",
+          "columns": [
+            "userId",
+            "learningId",
+            "hypothesisId",
+            "designHash"
+          ],
+          "isUnique": true
+        },
+        "exp_user_business_idx": {
+          "name": "exp_user_business_idx",
+          "columns": [
+            "userId",
+            "businessId"
+          ],
+          "isUnique": false
+        },
+        "exp_user_status_idx": {
+          "name": "exp_user_status_idx",
+          "columns": [
+            "userId",
+            "status"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "experiments_id": {
+          "name": "experiments_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
     "generated_images": {
       "name": "generated_images",
       "columns": {
@@ -7574,6 +9576,244 @@
       "compositePrimaryKeys": {
         "opportunity_suppressions_id": {
           "name": "opportunity_suppressions_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "optimisation_governance_decisions": {
+      "name": "optimisation_governance_decisions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "governanceDecisionId": {
+          "name": "governanceDecisionId",
+          "type": "varchar(69)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "contractVersion": {
+          "name": "contractVersion",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "engineVersion": {
+          "name": "engineVersion",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "businessId": {
+          "name": "businessId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proposalId": {
+          "name": "proposalId",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proposalType": {
+          "name": "proposalType",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "campaignId": {
+          "name": "campaignId",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "policyVersion": {
+          "name": "policyVersion",
+          "type": "varchar(96)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "decision": {
+          "name": "decision",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reasonCodes": {
+          "name": "reasonCodes",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "riskClass": {
+          "name": "riskClass",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "financialImpactClass": {
+          "name": "financialImpactClass",
+          "type": "varchar(48)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "financialDeltaMinor": {
+          "name": "financialDeltaMinor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "approvalRequired": {
+          "name": "approvalRequired",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "approvalBinding": {
+          "name": "approvalBinding",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "evidenceHash": {
+          "name": "evidenceHash",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "proposalFingerprint": {
+          "name": "proposalFingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "validUntil": {
+          "name": "validUntil",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "evaluatedAt": {
+          "name": "evaluatedAt",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evaluationFingerprint": {
+          "name": "evaluationFingerprint",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "thresholds": {
+          "name": "thresholds",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "ogd_decision_id_idx": {
+          "name": "ogd_decision_id_idx",
+          "columns": [
+            "governanceDecisionId"
+          ],
+          "isUnique": true
+        },
+        "ogd_user_decision_idx": {
+          "name": "ogd_user_decision_idx",
+          "columns": [
+            "userId",
+            "governanceDecisionId"
+          ],
+          "isUnique": true
+        },
+        "ogd_business_idx": {
+          "name": "ogd_business_idx",
+          "columns": [
+            "businessId"
+          ],
+          "isUnique": false
+        },
+        "ogd_user_idx": {
+          "name": "ogd_user_idx",
+          "columns": [
+            "userId"
+          ],
+          "isUnique": false
+        },
+        "ogd_proposal_idx": {
+          "name": "ogd_proposal_idx",
+          "columns": [
+            "proposalId"
+          ],
+          "isUnique": false
+        },
+        "ogd_decision_idx": {
+          "name": "ogd_decision_idx",
+          "columns": [
+            "decision"
+          ],
+          "isUnique": false
+        },
+        "ogd_evaluated_idx": {
+          "name": "ogd_evaluated_idx",
+          "columns": [
+            "evaluatedAt"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "optimisation_governance_decisions_id": {
+          "name": "optimisation_governance_decisions_id",
           "columns": [
             "id"
           ]

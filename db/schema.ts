@@ -740,8 +740,9 @@ export const approvalRequests = mysqlTable("approval_requests", {
     "sales_handoff",
     // WBS-R7-F: governed optimisation-action approvals bound to the exact
     // governance decision + proposal fingerprint + policy version + financial
-    // impact + expiry (provisional enum extension; canonical 0035 is NOT
-    // executed — see docs/recovery/r7-f-unexecuted-migrations.md).
+    // impact + expiry (canonical 0035_r7_business_optimisation_foundation,
+    // R7-X converged; NOT executed —
+    // see docs/recovery/r7-migration-convergence.md).
     "optimisation_action",
   ]).notNull(),
   title: varchar("title", { length: 255 }).notNull(),
@@ -1941,9 +1942,8 @@ export type InsertPolicyDecisionRow = typeof policyDecisions.$inferInsert;
 // material + one policy version -> one stable decision. Rows carry
 // explainability (reasonCodes, thresholds) and never store raw proposal
 // content or secrets — only opaque references (proposal ids, fingerprints,
-// hashes). Provisional migration 0035_r7_f_optimisation_governance — NOT
-// executed (see docs/recovery/r7-f-unexecuted-migrations.md; R7-X owns
-// canonical sequencing).
+// hashes). Canonical migration 0035_r7_business_optimisation_foundation
+// (R7-X converged; NOT executed — see docs/recovery/r7-migration-convergence.md).
 export const optimisationGovernanceDecisions = mysqlTable(
   "optimisation_governance_decisions",
   {
@@ -3001,9 +3001,8 @@ export type InsertNurtureTouchRecordRow = typeof nurtureTouchRecords.$inferInser
 // Verification state and evidence authority are server-derived only; monetary
 // value is integer minor units (signed for reversal outcomes); non-monetary
 // outcomes carry quantity + closed metric unit and never fabricate currency.
-// Provisional migration 0035_r7_a_conversion_outcome_foundation (artefact only
-// — NOT executed; see docs/recovery/r7-a-unexecuted-migrations.md; R7-X owns
-// canonical R7 sequencing).
+// Canonical migration 0035_r7_business_optimisation_foundation (R7-X
+// converged; NOT executed — see docs/recovery/r7-migration-convergence.md).
 export const businessOutcomes = mysqlTable(
   "business_outcomes",
   {
@@ -3106,8 +3105,8 @@ export type InsertBusinessOutcomeLifecycleEventRow = typeof businessOutcomeLifec
 // supersedesAttributionId, never edits. Opaque references only (no FKs, house
 // convention): outcomeId/conversionId are upstream canonical ids consumed
 // read-only. Credit is integer basis points exactly normalised to 100000.
-// Provisional stream-local migration 0035_r7_b_attribution_foundation
-// (artefact only — NOT executed; R7-X owns canonical R7 sequencing).
+// Canonical migration 0035_r7_business_optimisation_foundation (R7-X
+// converged; NOT executed — see docs/recovery/r7-migration-convergence.md).
 export const ATTRIBUTION_MODEL_TYPE_VALUES = [
   "FIRST_TOUCH",
   "LAST_TOUCH",
@@ -3231,7 +3230,7 @@ export type InsertAttributionLifecycleEventRow = typeof attributionLifecycleEven
 // ─── Business Learning Records (WBS-R7-C) ───
 // R7-C business-outcome learning authority. Immutable, insert-only learning
 // records derived deterministically from frozen R7-A outcome projections +
-// R7-B attribution projections (consumed via seams, never merged). The only
+// R7-B attribution projections (consumed via frozen seams bound at R7-X). The only
 // mutable column is the CAS-guarded `status`; truthful change is new history
 // (lifecycle facts + successor rows). Governance pins: no client authority
 // field is ever accepted; learning is evidence, not authority.
@@ -3333,9 +3332,8 @@ export type InsertBusinessLearningLifecycleEventRow =
 
 
 // ─── WBS-R7-D: Experimentation Engine ───
-// (provisional, stream-local; migration 0035_r7_d_experimentation — NOT
-// executed; R7-X owns canonical convergence. See
-// docs/recovery/r7-d-unexecuted-migrations.md and
+// (canonical migration 0035_r7_business_optimisation_foundation — NOT
+// executed; see docs/recovery/r7-migration-convergence.md and
 // docs/contracts/experimentation-contract.md)
 
 export const EXPERIMENT_DESIGN_TYPE_VALUES = ["A_B", "MULTI_ARM"] as const;
@@ -3552,9 +3550,9 @@ export type InsertExperimentResultRow = typeof experimentResults.$inferInsert;
 
 
 // ─── R7-E Budget & Portfolio Optimisation — append-only, exact-once ───
-// Provisional stream-local tables (migration 0035_r7_e_budget_portfolio_optimisation,
-// artefact only — NOT executed; see docs/recovery/r7-e-unexecuted-migrations.md;
-// R7-X owns canonical sequencing). No FK constraints (house convention:
+// Canonical migration 0035_r7_business_optimisation_foundation (R7-X
+// converged; NOT executed — see docs/recovery/r7-migration-convergence.md).
+// No FK constraints (house convention:
 // opaque references, predicate enforcement).
 
 export const budgetPortfolioSnapshots = mysqlTable(
