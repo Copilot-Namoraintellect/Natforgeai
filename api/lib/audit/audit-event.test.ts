@@ -102,6 +102,13 @@ describe("audit-event taxonomy", () => {
       // audit-only recovery actions; references + closed labels only).
       "optimisation_governance_decision",
       "optimisation_governance_recovery",
+      // R7-D: experimentation durable effects (ids/closed labels/hashes only;
+      // convergence/replay paths emit zero).
+      "experiment_created",
+      "experiment_state_changed",
+      "experiment_assignment_recorded",
+      "experiment_evidence_bound",
+      "experiment_result_recorded",
     ]);
   });
 

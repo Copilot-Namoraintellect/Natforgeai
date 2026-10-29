@@ -132,6 +132,16 @@ export const AUDIT_EVENT_TYPES = [
   // against an existing governance decision. Audit-only: the immutable
   // decision is never mutated by recovery.
   "optimisation_governance_recovery",
+  // R7-D: experimentation durable effects. One canonical event per durable
+  // effect; convergence/replay paths emit zero. Metadata carries ids, closed
+  // labels, classes and hashes only — never subject references, evidence text
+  // or PII. An experiment result is scoped causal evidence, never a general
+  // causal claim.
+  "experiment_created",
+  "experiment_state_changed",
+  "experiment_assignment_recorded",
+  "experiment_evidence_bound",
+  "experiment_result_recorded",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
