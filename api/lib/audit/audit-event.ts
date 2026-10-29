@@ -102,6 +102,14 @@ export const AUDIT_EVENT_TYPES = [
   "sales_handoff_dispatch",
   // R6-D: one governed nurture touch (exact-once, cadence-bounded).
   "lead_nurture_touch",
+  // R7-A: a durable business outcome record was accepted (exactly one per
+  // inserted outcome; convergence/replay paths emit zero). Metadata carries
+  // ids/closed labels/authority classes only — never evidence text or PII.
+  "business_outcome_recorded",
+  // R7-A: one immutable outcome lifecycle fact was durably recorded
+  // (verification / reversal / refund / cancellation / renewal / supersession).
+  // One canonical event per inserted fact; convergence paths write zero events.
+  "business_outcome_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

@@ -87,6 +87,10 @@ describe("audit-event taxonomy", () => {
       "sales_handoff_state_changed",
       "sales_handoff_dispatch",
       "lead_nurture_touch",
+      // R7-A: business outcome durable effects (exactly one recorded event per
+      // inserted outcome; one lifecycle event per inserted fact).
+      "business_outcome_recorded",
+      "business_outcome_lifecycle",
     ]);
   });
 

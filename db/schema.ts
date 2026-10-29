@@ -2927,3 +2927,109 @@ export const nurtureTouchRecords = mysqlTable(
 
 export type NurtureTouchRecordRow = typeof nurtureTouchRecords.$inferSelect;
 export type InsertNurtureTouchRecordRow = typeof nurtureTouchRecords.$inferInsert;
+
+// ─── R7-A Business Outcomes (authoritative business-outcome authority) ───
+// Immutable after acceptance: the evidenceHash proves byte-stability of the
+// immutable core (drift fails closed). outcomeId = "out1:" + sha256 over
+// {tenantUserId, businessId, conversionId, evidenceSource, evidenceIdentity}
+// so same business + same canonical conversion + same authoritative evidence
+// → same identity, and cross-tenant/cross-business correlation is impossible.
+// Verification state and evidence authority are server-derived only; monetary
+// value is integer minor units (signed for reversal outcomes); non-monetary
+// outcomes carry quantity + closed metric unit and never fabricate currency.
+// Provisional migration 0035_r7_a_conversion_outcome_foundation (artefact only
+// — NOT executed; see docs/recovery/r7-a-unexecuted-migrations.md; R7-X owns
+// canonical R7 sequencing).
+export const businessOutcomes = mysqlTable(
+  "business_outcomes",
+  {
+    id: serial("id").primaryKey(),
+    // "out1:" + 64-hex identity; server-minted only.
+    outcomeId: varchar("outcomeId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    // Conversion-carried numeric lead reference, re-verified from durable rows.
+    leadId: bigint("leadId", { mode: "number", unsigned: true }),
+    // Opaque R6-A reference stored verbatim from the canonical conversion.
+    leadIdentityVersion: varchar("leadIdentityVersion", { length: 64 }),
+    // Canonical R6-E conversion reference (opaque, verbatim).
+    conversionId: varchar("conversionId", { length: 69 }).notNull(),
+    outcomeType: varchar("outcomeType", { length: 32 }).notNull(),
+    outcomeStatus: varchar("outcomeStatus", { length: 16 }).notNull(),
+    valueType: varchar("valueType", { length: 16 }).notNull(),
+    // Integer minor units; SIGNED so reversal outcomes carry negative amounts.
+    amountMinor: bigint("amountMinor", { mode: "number" }),
+    currency: varchar("currency", { length: 3 }),
+    quantity: int("quantity"),
+    metricUnit: varchar("metricUnit", { length: 32 }),
+    evidenceSource: varchar("evidenceSource", { length: 32 }).notNull(),
+    // Server-derived from the closed evidence registry (never client-supplied).
+    evidenceAuthority: varchar("evidenceAuthority", { length: 24 }).notNull(),
+    evidenceIdentity: varchar("evidenceIdentity", { length: 191 }).notNull(),
+    // sha256 over the canonical immutable core; drift fails closed.
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    // Outcome time and acceptance/record time, ISO 8601 verbatim.
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    recordedAt: varchar("recordedAt", { length: 32 }).notNull(),
+    // Lineage references (at most one per row; each bound to its outcome family).
+    reversesOutcomeId: varchar("reversesOutcomeId", { length: 69 }),
+    renewsOutcomeId: varchar("renewsOutcomeId", { length: 69 }),
+    supersedesOutcomeId: varchar("supersedesOutcomeId", { length: 69 }),
+    // Optimistic CAS guard for governed lifecycle transitions.
+    version: int("version").notNull().default(1),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    outcomeIdUnique: uniqueIndex("bo_outcome_id_uidx").on(table.outcomeId),
+    // Exact-once natural identity: one business outcome per tenant + conversion
+    // + authoritative evidence, enforced at the database level (retries converge).
+    naturalKeyUnique: uniqueIndex("bo_natural_key_uidx").on(
+      table.userId,
+      table.conversionId,
+      table.evidenceSource,
+      table.evidenceIdentity
+    ),
+    userBusinessIdx: index("bo_user_business_idx").on(table.userId, table.businessId),
+    userConversionIdx: index("bo_user_conversion_idx").on(table.userId, table.conversionId),
+    userLeadIdx: index("bo_user_lead_idx").on(table.userId, table.leadId),
+    userStatusIdx: index("bo_user_status_idx").on(table.userId, table.outcomeStatus),
+  })
+);
+
+export type BusinessOutcomeRow = typeof businessOutcomes.$inferSelect;
+export type InsertBusinessOutcomeRow = typeof businessOutcomes.$inferInsert;
+
+// ─── R7-A Business Outcome Lifecycle Events (immutable, append-only) ───
+// One deterministic row per outcome lifecycle fact (verification/reversal/
+// refund/cancellation/renewal/supersession). outcomeLifecycleEventId =
+// "obf1:" + sha256(canonicalJson(...)); the (outcomeId, externalLifecycleId)
+// pair is the provider-retry convergence anchor (NULL external ids are
+// distinct per house convention). Rows are immutable — there is no update path.
+export const businessOutcomeLifecycleEvents = mysqlTable(
+  "business_outcome_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // "obf1:" + 64-hex identity; server-minted only.
+    outcomeLifecycleEventId: varchar("outcomeLifecycleEventId", { length: 70 }).notNull(),
+    outcomeId: varchar("outcomeId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 16 }).notNull(),
+    // Target outcome status for this lifecycle fact.
+    outcomeStatus: varchar("outcomeStatus", { length: 16 }).notNull(),
+    amountMinor: bigint("amountMinor", { mode: "number" }),
+    currency: varchar("currency", { length: 3 }),
+    externalLifecycleId: varchar("externalLifecycleId", { length: 191 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventIdUnique: uniqueIndex("bole_event_id_uidx").on(table.outcomeLifecycleEventId),
+    // Provider-retry convergence anchor; NULLs distinct in MySQL.
+    externalUnique: uniqueIndex("bole_external_uidx").on(table.outcomeId, table.externalLifecycleId),
+    userOutcomeIdx: index("bole_user_outcome_idx").on(table.userId, table.outcomeId),
+  })
+);
+
+export type BusinessOutcomeLifecycleEventRow = typeof businessOutcomeLifecycleEvents.$inferSelect;
+export type InsertBusinessOutcomeLifecycleEventRow = typeof businessOutcomeLifecycleEvents.$inferInsert;
