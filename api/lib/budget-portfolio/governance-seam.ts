@@ -425,9 +425,16 @@ export class FakeDefaultPolicyGovernancePort implements OptimisationGovernancePo
   private readonly approvals = new Map<string, OptimisationApprovalView>();
   private approvalSeq = 0;
   private readonly authority: FakeGovernanceAuthorityState;
+  private readonly now: () => Date;
 
-  constructor(authority: FakeGovernanceAuthorityState) {
+  constructor(authority: FakeGovernanceAuthorityState, options?: { now?: () => Date }) {
     this.authority = authority;
+    this.now = options?.now ?? (() => new Date());
+  }
+
+  /** Refresh the server-resolved authority snapshot (capturedAt drift etc.). */
+  updateAuthority(partial: Partial<FakeGovernanceAuthorityState>): void {
+    Object.assign(this.authority, partial);
   }
 
   getCurrentPolicyVersion(): string {
@@ -516,7 +523,7 @@ export class FakeDefaultPolicyGovernancePort implements OptimisationGovernancePo
       proposal,
       fingerprint,
       decisionId,
-      now: new Date().toISOString(),
+      now: this.now().toISOString(),
     });
     this.decisions.set(decisionId, evaluated);
     return { decision: evaluated, duplicateClassification: "none" };

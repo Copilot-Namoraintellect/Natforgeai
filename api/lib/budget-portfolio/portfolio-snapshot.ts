@@ -45,6 +45,12 @@ export interface PortfolioAuthorityMaterial {
   readonly lockedAllocationKeys: readonly string[];
   /** Funds held by reservations (minor units) — immutable to optimisation. */
   readonly reservedMinor: number;
+  /**
+   * Server-resolved approved total for the period (minor units). Absent ⇒
+   * the conservative baseline derivation (committed campaign envelope, no
+   * autonomous headroom — inventory §10-F1). Never client-supplied.
+   */
+  readonly approvedTotalBudgetMinor?: number;
 }
 
 function fail(message: string): never {
@@ -109,6 +115,13 @@ export function validatePortfolioAuthorityMaterial(
     if (typeof k !== "string" || k.trim().length === 0) fail("lockedAllocationKeys entries must be non-blank strings");
   }
   if (!isNonNegativeInt(r.reservedMinor)) fail("reservedMinor must be a non-negative integer");
+  if (
+    r.approvedTotalBudgetMinor !== null &&
+    r.approvedTotalBudgetMinor !== undefined &&
+    !isNonNegativeInt(r.approvedTotalBudgetMinor)
+  ) {
+    fail("approvedTotalBudgetMinor must be a non-negative integer when present");
+  }
 
   if (!Array.isArray(r.campaigns)) fail("campaigns must be an array");
   const campaigns: PortfolioAuthorityCampaign[] = [];
@@ -155,6 +168,10 @@ export function validatePortfolioAuthorityMaterial(
     supportedProviders: Object.freeze([...r.supportedProviders]),
     lockedAllocationKeys: Object.freeze([...r.lockedAllocationKeys]),
     reservedMinor: r.reservedMinor,
+    approvedTotalBudgetMinor:
+      r.approvedTotalBudgetMinor === null || r.approvedTotalBudgetMinor === undefined
+        ? undefined
+        : r.approvedTotalBudgetMinor,
   };
 }
 
@@ -237,14 +254,14 @@ export function buildPortfolioSnapshot(
   currentAllocations.sort((a, b) => a.allocationKey.localeCompare(b.allocationKey));
   disabledAllocationKeys.sort();
 
-  const approvedTotalBudgetMinor = committedMinor;
-  const availableReallocatableMinor = approvedTotalBudgetMinor - committedMinor - material.reservedMinor;
-  if (availableReallocatableMinor < 0) {
+  const approvedTotalBudgetMinor = material.approvedTotalBudgetMinor ?? committedMinor;
+  if (approvedTotalBudgetMinor < committedMinor + material.reservedMinor) {
     throw new BudgetPortfolioValidationError(
       "PROVIDER_AUTHORITY_UNAVAILABLE",
-      "authority material implies reserved funds exceed the approved envelope (fail closed)"
+      "authority material implies committed+reserved funds exceed the approved envelope (fail closed)"
     );
   }
+  const availableReallocatableMinor = approvedTotalBudgetMinor - committedMinor - material.reservedMinor;
 
   const currentByKey: Record<string, number> = {};
   for (const entry of currentAllocations) currentByKey[entry.allocationKey] = entry.amountMinor;

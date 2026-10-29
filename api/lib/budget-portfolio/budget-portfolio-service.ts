@@ -903,6 +903,8 @@ export interface OptimisationStrategyHandoff {
     readonly maxShiftPerCycleMinor: number;
     readonly minAllocationMinor: number;
     readonly minChangeThresholdMinor: number;
+    readonly weakConfidenceShiftCapBps: number;
+    readonly moderateConfidenceShiftCapBps: number;
   };
   readonly governance: {
     readonly governanceDecisionId: string | null;
@@ -989,6 +991,8 @@ export async function getStrategyHandoffProjection(
       maxShiftPerCycleMinor: DEFAULT_OPTIMISATION_CONSTRAINTS.maxShiftPerCycleMinor,
       minAllocationMinor: DEFAULT_OPTIMISATION_CONSTRAINTS.minAllocationMinor,
       minChangeThresholdMinor: DEFAULT_OPTIMISATION_CONSTRAINTS.minChangeThresholdMinor,
+      weakConfidenceShiftCapBps: DEFAULT_OPTIMISATION_CONSTRAINTS.weakConfidenceShiftCapBps,
+      moderateConfidenceShiftCapBps: DEFAULT_OPTIMISATION_CONSTRAINTS.moderateConfidenceShiftCapBps,
     }),
     governance: decision
       ? Object.freeze({

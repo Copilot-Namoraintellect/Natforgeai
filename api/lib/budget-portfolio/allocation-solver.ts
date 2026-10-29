@@ -42,6 +42,8 @@ export interface OptimisationConstraints {
   readonly minChangeThresholdMinor: number;
   /** Confidence-capped shift ceilings: WEAK evidence moves at most this bps. */
   readonly weakConfidenceShiftCapBps: number;
+  /** PROVISIONAL-class evidence (MODERATE confidence) moves at most this bps. */
+  readonly moderateConfidenceShiftCapBps: number;
 }
 
 export const DEFAULT_OPTIMISATION_CONSTRAINTS: OptimisationConstraints = Object.freeze({
@@ -51,6 +53,7 @@ export const DEFAULT_OPTIMISATION_CONSTRAINTS: OptimisationConstraints = Object.
   minAllocationMinor: 100, // $1.00 floor where affordable
   minChangeThresholdMinor: 50, // $0.50 gross movement floor
   weakConfidenceShiftCapBps: 500, // 5% — weak evidence cannot shift aggressively
+  moderateConfidenceShiftCapBps: 1000, // 10% — provisional-class evidence moves cautiously
 });
 
 const BPS = 10_000n;
@@ -232,6 +235,10 @@ export function solvePortfolioAllocation(input: {
   let shiftCapBps = constraints.maxShiftPerCycleBps;
   if (evidence.confidenceClass === "WEAK") {
     shiftCapBps = Math.min(shiftCapBps, constraints.weakConfidenceShiftCapBps);
+  } else if (evidence.confidenceClass === "MODERATE") {
+    // Provisional-class evidence (verified outcomes absent or contradictions
+    // present) moves cautiously: verified outcomes always carry more weight.
+    shiftCapBps = Math.min(shiftCapBps, constraints.moderateConfidenceShiftCapBps);
   }
   const totalAllocated = eligible.reduce((s, k) => s + targets[k], 0);
   const deltaByKey: Record<string, number> = {};

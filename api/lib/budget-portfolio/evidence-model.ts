@@ -242,10 +242,13 @@ export function evaluateEvidence(input: {
   }
 
   // ── Pass 2: single-event cap — no one outcome drives runaway allocation ──
+  // Cap is expressed in basis points (4000 bps = 40% of the total mass).
   let totalRaw = 0;
   for (const list of rawContributions.values()) for (const c of list) totalRaw += c;
   const perEventCap =
-    totalRaw > 0 ? Math.max(1, Math.floor((totalRaw * EVIDENCE_WEIGHTS.singleEventCapBps) / BPS_DENOMINATOR)) : 0;
+    totalRaw > 0
+      ? Math.max(1, Math.floor((totalRaw * EVIDENCE_WEIGHTS.singleEventCapBps) / 10_000))
+      : 0;
 
   const byKey: Record<string, AllocationEvidence> = {};
   let usableMass = 0;

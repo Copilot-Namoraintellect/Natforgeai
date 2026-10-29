@@ -521,6 +521,29 @@ describe("bounded solver (E4)", () => {
     expect(solved.reasonCodes).toContain("CHANGE_BELOW_MINIMUM_THRESHOLD");
   });
 
+  it("minimum allocation floor applied where affordable (raised floor)", () => {
+    const material = makeMaterial({
+      campaigns: [
+        { id: 1, userId: TENANT, businessId: BUSINESS, status: "active" as const, budget: 300, provider: null },
+        { id: 2, userId: TENANT, businessId: BUSINESS, status: "active" as const, budget: 700, provider: null },
+      ],
+    });
+    const snap = buildPortfolioSnapshot(material, NOW);
+    const evidence = evidenceWithScores({ "camp:1": { score: 10 }, "camp:2": { score: 990 } });
+    const solved = solvePortfolioAllocation({
+      snapshot: snap,
+      evidence,
+      objective: "MAXIMISE_EVIDENCE_WEIGHTED_VALUE",
+      constraints: { ...DEFAULT_OPTIMISATION_CONSTRAINTS, minAllocationMinor: 5000 },
+    });
+    expect(solved.reasonCodes).toContain("MIN_ALLOCATION_FLOOR_APPLIED");
+    // Under-floor funded keys are lifted to the floor before the ceiling binds.
+    const camp1 = solved.proposedByKey["camp:1"];
+    expect(camp1).toBeGreaterThanOrEqual(3000);
+    const deltaTotal = Object.values(solved.deltaByKey).reduce((s, v) => s + v, 0);
+    expect(deltaTotal).toBe(0);
+  });
+
   it("rebalance objective spreads evenly", () => {
     const material = makeMaterial({
       campaigns: [

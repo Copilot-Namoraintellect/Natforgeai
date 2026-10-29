@@ -19,7 +19,10 @@ import {
   budgetPortfolioProposals,
   budgetPortfolioSnapshots,
 } from "@db/schema";
-import type { OptimisationProposalStatus } from "./budget-portfolio-contract";
+import {
+  BudgetPortfolioStateConflictError,
+  type OptimisationProposalStatus,
+} from "./budget-portfolio-contract";
 
 // ─── Table handles (canonical @db/schema imports) ───
 
@@ -275,8 +278,9 @@ export async function insertProposal(
     if (existing) {
       // Conflict detection: same identity, different material is tampering.
       if (existing.proposalContentHash !== row.proposalContentHash) {
-        throw new Error(
-          `OPTIMISATION_REPLAY_CONFLICT: optimisation ${row.optimisationId} already exists with different material`
+        throw new BudgetPortfolioStateConflictError(
+          "OPTIMISATION_REPLAY_CONFLICT",
+          `optimisation ${row.optimisationId} already exists with different material`
         );
       }
       return { inserted: false, duplicateClassification: "idempotent_replay" };
