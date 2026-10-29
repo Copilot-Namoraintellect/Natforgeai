@@ -223,6 +223,36 @@ export function createFakeDb(
             throw duplicateKeyError("Duplicate entry 'userId-governanceDecisionId'");
           }
         }
+        if (name === "experiment_outcome_evidence") {
+          // R7-D exact-once evidence anchor: unique (userId, experimentId, outcomeId).
+          if (
+            rows.some(
+              (r) =>
+                r.userId === row.userId &&
+                r.experimentId === row.experimentId &&
+                r.outcomeId === row.outcomeId
+            )
+          ) {
+            throw duplicateKeyError("Duplicate entry 'userId-experimentId-outcomeId'");
+          }
+        }
+        if (name === "experiment_results") {
+          // R7-D exact-once result anchors: unique resultId and
+          // (userId, experimentId, calculationVersion).
+          if (rows.some((r) => r.resultId === row.resultId)) {
+            throw duplicateKeyError("Duplicate entry 'resultId'");
+          }
+          if (
+            rows.some(
+              (r) =>
+                r.userId === row.userId &&
+                r.experimentId === row.experimentId &&
+                r.calculationVersion === row.calculationVersion
+            )
+          ) {
+            throw duplicateKeyError("Duplicate entry 'userId-experimentId-calculationVersion'");
+          }
+        }
         const id = rows.reduce((max, r) => Math.max(max, Number(r.id) || 0), 0) + 1;
         rows.push({ ...row, id });
         return [{ insertId: id, affectedRows: 1 }];
