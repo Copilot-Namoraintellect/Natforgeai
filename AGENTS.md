@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-10 (R7-X integration: §21 R7-A Conversion Outcome; §22 R7-B Attribution; §23 R7-F Optimisation Governance; §24 R7-E Budget & Portfolio Optimisation)
+> **Last updated:** 2026-11-10 (R7-X integration: §21 R7-A Conversion Outcome; §22 R7-B Attribution; §23 R7-F Optimisation Governance; §24 R7-E Budget & Portfolio; §25 R7-X Business Optimisation Integration)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -31,6 +31,7 @@
 22. [Attribution Intelligence (WBS-R7-B)](#22-attribution-intelligence-wbs-r7-b)
 23. [Optimisation Governance (WBS-R7-F)](#23-optimisation-governance-wbs-r7-f)
 24. [Budget & Portfolio Optimisation (WBS-R7-E)](#24-budget--portfolio-optimisation-wbs-r7-e)
+25. [Business Optimisation Integration (WBS-R7-X)](#25-business-optimisation-integration-wbs-r7-x)
 
 ---
 
@@ -1074,21 +1075,56 @@ proposes; governance authorizes.**
   before authorisation; `assertActionExecutable` is the only execution gate.
   `BLOCK` never executes; `REVIEW_REQUIRED` needs a human approval on the
   ledger; forged/expired/edited approvals and modified proposals fail closed.
-  On this branch the production port is the fail-closed UNAVAILABLE port —
-  canonical R7-F binds at R7-X (`governance-seam.ts`).
+  Production wiring (R7-X X5): the canonical port
+  (`createCanonicalGovernancePort`) binds the integrated R7-F engine — real
+  governed evaluation with the tenant-anchored bridge provider, approval
+  reads from the shared ledger, and F's own execution gate; governance
+  table absent ⇒ fail-closed (`governance-seam.ts`).
 - Execution boundary (E7): emits read-only authorised optimisation
   instructions (`ins1:`) only — no billing/payment/provider/campaign/strategy
   execution anywhere in the stream.
 - Downstream (E8): `budgetPortfolio.getStrategyHandoff` exposes the frozen
-  23-key read-only projection for future R8 planning
-  (`docs/contracts/business-optimisation-to-strategy-contract.md`).
+  23-key read-only projection for R8 strategic intelligence
+  (`docs/contracts/business-optimisation-to-strategy-contract.md`,
+  `docs/contracts/business-optimisation-to-strategic-intelligence-contract.md`).
 - Contracts: `docs/contracts/budget-portfolio-optimisation-contract.md`
   (canonical) + the strategy handoff contract. Inventory:
   `docs/recovery/r7-e-budget-portfolio-inventory.md`. Acceptance:
   `docs/recovery/r7-e-budget-portfolio-optimisation-acceptance-report.md`.
 - Schema: `budget_portfolio_snapshots`, `budget_portfolio_proposals`,
-  `budget_portfolio_allocation_instructions` — stream-local provisional
-  migration `0035_r7_e_budget_portfolio_optimisation` (artefact only, **NOT
-  executed**; sibling 0035 collision documented in
-  `docs/recovery/r7-e-unexecuted-migrations.md`; R7-X owns convergence).
+  `budget_portfolio_allocation_instructions` — canonical migration
+  `0035_r7_business_optimisation_foundation` (R7-X converged; artefact only,
+  **NOT executed**; see `docs/recovery/r7-migration-convergence.md`).
 - Money: integer minor units everywhere; no floating-point money.
+
+---
+
+## 25. Business Optimisation Integration (WBS-R7-X)
+
+The integrated Business Optimisation system (streams R7-A/B/C/D/E/F merged on
+`integration/r7-business-optimisation`; connected lifecycle: R6 conversion →
+R7-A outcome truth → R7-B attribution → R7-C learning → R7-D governed
+experiment → result → revised learning → R7-E bounded proposal → R7-F
+governance/approval → authorised instruction → R8 read-only handoff).
+
+- **Canonical migration:** one `0035_r7_business_optimisation_foundation` (15
+  R7 tables + F's accepted `approval_requests.optimisation_action` enum
+  extension). Journal/snapshot chain verified; NOT executed
+  (`docs/recovery/r7-migration-convergence.md`).
+- **Canonical bindings (no duplicate authorities):** B consumes A through
+  A's store + integrity assertion + projection builder (X3); C consumes A/B
+  the same way with B-lineage reads (X4); D consumes C's experiment
+  projection, A/B stores and F's governed evaluation in-process (X5/X6); E's
+  evidence provider resolves A/B/C store surfaces and its governance port
+  binds F's engine (X5/X7). R7-B's canonical campaign touchpoint identity is
+  `campaign:<id>` — C and E parse it prefix-tolerantly.
+- **Governance:** R7-F remains the single governance authority; D/E call F's
+  evaluate + execution gate; REVIEW_REQUIRED paths need bound human
+  approvals; fail-closed when governance is unavailable.
+- **Harnesses:** `api/r7-x-harness.test.ts` (40 connected scenarios),
+  `api/r7-x-security-acceptance.test.ts` (21 adversarial cases), plus X3–X7
+  binding suites. Acceptance:
+  `docs/recovery/r7-business-optimisation-v1-acceptance-report.md`.
+- **R8 handoff:**
+  `docs/contracts/business-optimisation-to-strategic-intelligence-contract.md`
+  (read-only strategic evidence; R8 never mutates R7 authority).

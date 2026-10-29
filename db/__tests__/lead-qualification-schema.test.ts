@@ -26,7 +26,9 @@ function tableBlock(source: string, name: string): string {
 }
 
 describe("lead qualification schema — exact-once anchors", () => {
-  const schema = readFileSync(schemaPath, "utf8");
+  // Line-ending normalisation: the working-tree schema file may carry CRLF
+  // (git core.autocrlf); the structural assertions below are exact either way.
+  const schema = readFileSync(schemaPath, "utf8").replace(/\r\n/g, "\n");
 
   it("lead_qualifications enforces unique (userId, qualificationId) convergence", () => {
     const block = tableBlock(schema, "leadQualifications");

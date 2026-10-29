@@ -1256,7 +1256,10 @@ describe("creative generation claim primitive (DB)", () => {
 });
 
 describe("creative generation claim database safety guard", () => {
-  it("reports the configured database name without printing credentials", () => {
+  // Guarded like the suite's describeIfSafe convention: only meaningful when a
+  // database is actually configured in the environment.
+  const itIfConfigured = dbName ? it : it.skip;
+  itIfConfigured("reports the configured database name without printing credentials", () => {
     expect(dbName).toBeTruthy();
     expect(dbName).not.toMatch(/:\/\//);
   });
