@@ -5,6 +5,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
+import { bindCanonicalStrategicGovernanceEngine } from "./lib/strategic-governance/strategic-governance-engine-binding";
 import { startPublishingRunner } from "./lib/workflow/publishing-runner";
 import { startCreditRenewalScheduler } from "./lib/jobs/credit-renewal";
 import { startPostLiveLifecycleScheduler } from "./lib/workflow/post-live-lifecycle-scheduler";
@@ -74,6 +75,11 @@ if (env.socialListeningPollingEnabled) {
     intervalMs: env.socialListeningPollingIntervalMs,
   });
 }
+
+// R8-X: bind the canonical R8-F strategic-governance engine into the R8-D/R8-E
+// governance registration ports. Without this, every governed reasoning /
+// candidate evaluation fails closed with GOVERNANCE_AUTHORITY_UNAVAILABLE.
+bindCanonicalStrategicGovernanceEngine();
 
 // WBS-R4 A3: crash-recovery reconciliation for dangling approval
 // continuations (a decision committed but its post-commit dispatch did not
