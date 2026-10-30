@@ -114,6 +114,10 @@ describe("audit-event taxonomy", () => {
       "portfolio_snapshot_created",
       "optimisation_proposal_created",
       "optimisation_instruction_authorized",
+      // R8-C: market/external signal durable effects (ids/labels/classes/hashes
+      // only — never claim text or source content).
+      "external_signal_recorded",
+      "external_signal_lifecycle",
     ]);
   });
 

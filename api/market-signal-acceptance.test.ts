@@ -752,8 +752,10 @@ describe("R8-C market & external signal acceptance", () => {
     const lifecycleAudits = harness.tables.audit_events.filter((e: any) => e.eventType === "external_signal_lifecycle");
     expect(lifecycleAudits.length).toBeGreaterThanOrEqual(1);
     const aAudit = recorded.find((e: any) => e.artifactId === a.signal.signalId);
-    expect(aAudit.metadata.signalId).toBe(a.signal.signalId);
-    expect(aAudit.metadata.sourceTrustClass).toBeDefined();
+    expect(aAudit).toBeDefined();
+    const aMetadata = aAudit?.metadata as { signalId: string; sourceTrustClass: string };
+    expect(aMetadata.signalId).toBe(a.signal.signalId);
+    expect(aMetadata.sourceTrustClass).toBeDefined();
     // metadata hygiene: no claim text in the ledger
     expect(JSON.stringify(harness.tables.audit_events)).not.toContain("warehouse entry");
   });
