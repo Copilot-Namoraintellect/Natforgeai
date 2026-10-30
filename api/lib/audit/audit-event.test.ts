@@ -114,6 +114,10 @@ describe("audit-event taxonomy", () => {
       "portfolio_snapshot_created",
       "optimisation_proposal_created",
       "optimisation_instruction_authorized",
+      // R8-D: strategic-reasoning durable effects (conclusions + lifecycle
+      // demotions; ids/closed labels/classes/hashes only).
+      "strategic_reasoning_recorded",
+      "strategic_reasoning_lifecycle",
     ]);
   });
 
