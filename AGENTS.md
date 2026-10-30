@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-10 (R7-X integration: §21 R7-A Conversion Outcome; §22 R7-B Attribution; §23 R7-F Optimisation Governance; §24 R7-E Budget & Portfolio; §25 R7-X Business Optimisation Integration)
+> **Last updated:** 2026-11-10 (R8-E Strategic Opportunity & Risk Intelligence §26)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -32,6 +32,7 @@
 23. [Optimisation Governance (WBS-R7-F)](#23-optimisation-governance-wbs-r7-f)
 24. [Budget & Portfolio Optimisation (WBS-R7-E)](#24-budget--portfolio-optimisation-wbs-r7-e)
 25. [Business Optimisation Integration (WBS-R7-X)](#25-business-optimisation-integration-wbs-r7-x)
+26. [Strategic Opportunity & Risk Intelligence (WBS-R8-E)](#26-strategic-opportunity--risk-intelligence-wbs-r8-e)
 
 ---
 
@@ -1128,3 +1129,52 @@ governance/approval → authorised instruction → R8 read-only handoff).
 - **R8 handoff:**
   `docs/contracts/business-optimisation-to-strategic-intelligence-contract.md`
   (read-only strategic evidence; R8 never mutates R7 authority).
+
+---
+
+## 26. Strategic Opportunity & Risk Intelligence (WBS-R8-E)
+
+The strategic opportunity/risk authority: transforms governed R8-D
+conclusions into bounded, evidence-preserving OPPORTUNITY/RISK candidates for
+downstream R9 mission-control consideration. Owns candidate identity
+(`sor1:`), kind/type classification, deterministic integer impact/urgency/
+time-horizon/confidence/priority classification (weak confidence caps
+priority; high impact + weak confidence ⇒ review/monitor), support/
+contradiction accounting, deduplication + overlap/portfolio interaction
+(relations are lineage, never score inputs), lifecycle (`sorl1:` facts,
+CAS-versioned status), R8-F governance binding, and the read-only R9 handoff
+projection (`strategic-intelligence-to-mission-control/v1`, 37-key exact
+allowlist; candidate ≠ mission; recommendation ≠ execution authorization).
+
+- Core modules: `api/lib/strategic-opportunity-risk/` (`-contract`,
+  `-identity`, `-reasoning-seam`, `-governance-seam`, `-classification`,
+  `-overlap`, `-store`, `-service`, `-projection`); router
+  `api/strategic-opportunity-risk-router.ts` (tRPC `strategicOpportunityRisk`):
+  `derive`, `get`, `list`, `listRelations`, `listLifecycle`, `reevaluate`,
+  `getMissionControlHandoff`.
+- **Consumption (frozen upstreams, branch ref only — never merged):** R8-D via
+  the `strategic-reasoning-to-opportunity-risk/v1` 34-key projection
+  (registration port + raw-SQL durable-row rebuild behind a guarded
+  information-schema check; absence fails closed). R8-F mandatory: proposals
+  only — decisions `ALLOW_RECOMMENDATION/REVIEW_REQUIRED/BLOCK` bound verbatim;
+  approvals read from the shared `strategic_recommendation` ledger with the F5
+  binding-hash check; `assertCandidateConsumable` is the only eligibility gate
+  (`RECOMMENDATION_ONLY`). R8-A/B/C evidence arrives as lineage refs
+  (`mem1:`/`chg1:`/`xsig1:`) through R8-D only.
+- **Never owns/never does:** R8-D/A/B/C/F authority, mission planning, strategy
+  or Business DNA mutation, budget/campaign/experiment execution,
+  provider/payment/billing. No `EXECUTE` semantics anywhere.
+- Contracts: `docs/contracts/strategic-opportunity-risk-contract.md` (canonical),
+  `docs/contracts/strategic-intelligence-to-mission-control-contract.md`
+  (R9 handoff). Inventory/acceptance:
+  `docs/recovery/r8-e-strategic-opportunity-risk-inventory.md`,
+  `docs/recovery/r8-e-strategic-opportunity-risk-acceptance-report.md`.
+- Schema: `strategic_opportunity_risk_candidates/relations/lifecycle_events` —
+  stream-local provisional `0036_r8_e_strategic_opportunity_risk_foundation`
+  (artefact only, NOT executed; collision documented,
+  `docs/recovery/r8-e-unexecuted-migrations.md`; R8-X owns convergence).
+- Audit: additive `strategic_candidate_derived` / `strategic_candidate_lifecycle`
+  (one per durable effect; convergence emits zero).
+- Acceptance: `api/strategic-opportunity-risk-acceptance.test.ts` (46 connected
+  cases) + `api/strategic-opportunity-risk-security.test.ts` (11 adversarial
+  cases).

@@ -114,6 +114,10 @@ describe("audit-event taxonomy", () => {
       "portfolio_snapshot_created",
       "optimisation_proposal_created",
       "optimisation_instruction_authorized",
+      // R8-E: strategic opportunity/risk durable effects (candidate derived,
+      // lifecycle fact; ids/closed classes/hashes only).
+      "strategic_candidate_derived",
+      "strategic_candidate_lifecycle",
     ]);
   });
 
