@@ -127,6 +127,10 @@ describe("audit-event taxonomy", () => {
       // text or evidence content).
       "business_change_detected",
       "business_change_lifecycle",
+      // R8-C: market/external signal durable effects (ids/labels/classes/hashes
+      // only — never claim text or source content).
+      "external_signal_recorded",
+      "external_signal_lifecycle",
     ]);
   });
 

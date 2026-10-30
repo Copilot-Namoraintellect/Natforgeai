@@ -3976,3 +3976,229 @@ export const businessChangeLifecycleEvents = mysqlTable(
 
 export type BusinessChangeLifecycleEventRow = typeof businessChangeLifecycleEvents.$inferSelect;
 export type InsertBusinessChangeLifecycleEventRow = typeof businessChangeLifecycleEvents.$inferInsert;
+// ─── R8-C External Sources — server-side registered-source registry ───
+// Tenant-scoped source registry. sourceId = "src1:" + sha256({tenantUserId,
+// originKey}); one durable row per (userId, originKey) — duplicate deliveries
+// of equivalent source copies converge. sourceRegistryClass is SERVER-DERIVED
+// only (code-level official/catalog policy); a source can never mark itself
+// trusted. Opaque references only (no FKs, house convention). Stream-local
+// provisional migration 0036_r8_c_market_external_signal_foundation (NOT
+// executed — see docs/recovery/r8-c-unexecuted-migrations.md; R8-X owns
+// convergence/collision with the R8-A/R8-F provisional 0036s).
+export const MARKET_SIGNAL_SOURCE_TYPE_VALUES = [
+  "OFFICIAL_GOVERNMENT",
+  "OFFICIAL_REGULATOR",
+  "OFFICIAL_COMPANY",
+  "NEWS_WIRE",
+  "NEWS_MEDIA",
+  "INDUSTRY_ANALYST",
+  "SOCIAL_PLATFORM",
+  "AGGREGATOR",
+  "UNKNOWN_SOURCE",
+] as const;
+
+export const MARKET_SIGNAL_REGISTRY_CLASS_VALUES = ["OFFICIAL", "VERIFIED", "UNVERIFIED"] as const;
+
+export const externalSources = mysqlTable(
+  "external_sources",
+  {
+    id: serial("id").primaryKey(),
+    // "src1:" + 64-hex deterministic source identity (contract §5.2).
+    sourceId: varchar("sourceId", { length: 70 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    // Closed source-kind classification (client-proposed, server-validated).
+    sourceType: varchar("sourceType", { length: 32 }).notNull(),
+    // Normalized publisher/origin key (lowercase host, no leading www.).
+    originKey: varchar("originKey", { length: 191 }).notNull(),
+    // Safe normalized source reference (scheme+host+path; no creds/query/frag).
+    sourceUriRef: varchar("sourceUriRef", { length: 191 }).notNull(),
+    // Server-derived registry standing (never client-supplied).
+    registryClass: varchar("registryClass", { length: 24 }).notNull(),
+    // Spoof annotation: origin resembled an official origin without being it.
+    spoofFlagged: varchar("spoofFlagged", { length: 16 }),
+    firstSeenAt: varchar("firstSeenAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    sourceIdentityUnique: uniqueIndex("xsr_source_identity_uidx").on(table.sourceId),
+    // Exact-once source identity: one row per tenant + origin (deterministic).
+    naturalKeyUnique: uniqueIndex("xsr_natural_key_uidx").on(table.userId, table.originKey),
+    userRegistryIdx: index("xsr_user_registry_idx").on(table.userId, table.registryClass),
+  })
+);
+
+export type ExternalSourceRow = typeof externalSources.$inferSelect;
+export type InsertExternalSourceRow = typeof externalSources.$inferInsert;
+
+// ─── R8-C External Signals — immutable market/external evidence records ───
+// signalId = "xsig1:" + sha256({tenantUserId, businessId, sourceId, eventKey});
+// exact-once via (userId, sourceId, eventKey); conflicting replay fails closed.
+// Rows are insert-only for the immutable core (evidenceHash-bound); derived
+// trust/relevance/freshness/corroboration classes and lineage-derived id lists
+// are recomputed server-side and CAS-guarded (version). claimText is inert
+// untrusted evidence (contentIsolation = INERT_EVIDENCE), never authority.
+export const MARKET_SIGNAL_TYPE_VALUES = [
+  "COMPETITOR_ACTION",
+  "MARKET_DEMAND",
+  "PRICING_CHANGE",
+  "PRODUCT_LAUNCH",
+  "REGULATORY_CHANGE",
+  "TECHNOLOGY_CHANGE",
+  "CHANNEL_PLATFORM_CHANGE",
+  "MACRO_ENVIRONMENT",
+  "REPUTATION_SIGNAL",
+  "ECOSYSTEM_CHANGE",
+] as const;
+
+export const MARKET_SIGNAL_SUBJECT_TYPE_VALUES = [
+  "COMPETITOR",
+  "MARKET_CATEGORY",
+  "PRODUCT",
+  "SERVICE",
+  "REGULATION",
+  "TECHNOLOGY",
+  "CHANNEL",
+  "PLATFORM",
+  "BRAND",
+  "CONSUMER_SEGMENT",
+  "SUPPLIER",
+  "PARTNER",
+  "MACRO_INDICATOR",
+  "BUSINESS_SELF",
+  "UNKNOWN",
+] as const;
+
+export const MARKET_SIGNAL_TRUST_CLASS_VALUES = [
+  "VERIFIED_EXTERNAL",
+  "CORROBORATED_EXTERNAL",
+  "SINGLE_EXTERNAL_SOURCE",
+  "UNVERIFIED",
+  "CONTRADICTED",
+  "MALFORMED",
+] as const;
+
+export const MARKET_SIGNAL_FRESHNESS_CLASS_VALUES = ["CURRENT", "AGING", "STALE", "EXPIRED"] as const;
+
+export const MARKET_SIGNAL_CORROBORATION_STATUS_VALUES = [
+  "UNCORROBORATED",
+  "CORROBORATED",
+  "MIXED",
+  "CONTRADICTED",
+] as const;
+
+export const MARKET_SIGNAL_RELEVANCE_CLASS_VALUES = ["DIRECT", "RELATED", "WEAK", "IRRELEVANT"] as const;
+
+export const MARKET_SIGNAL_CONFIDENCE_CLASS_VALUES = ["NONE", "LOW", "MEDIUM", "HIGH"] as const;
+
+export const MARKET_SIGNAL_STATUS_VALUES = [
+  "OBSERVED",
+  "CORROBORATED",
+  "CONTRADICTED",
+  "SUPERSEDED",
+  "STALE",
+  "INVALIDATED",
+] as const;
+
+export const externalSignals = mysqlTable(
+  "external_signals",
+  {
+    id: serial("id").primaryKey(),
+    // "xsig1:" + 64-hex deterministic signal identity (contract §5.3).
+    signalId: varchar("signalId", { length: 71 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    signalType: varchar("signalType", { length: 32 }).notNull(),
+    subjectType: varchar("subjectType", { length: 24 }).notNull(),
+    subjectRef: varchar("subjectRef", { length: 191 }).notNull(),
+    claimAspect: varchar("claimAspect", { length: 64 }).notNull(),
+    // Opaque source reference (no FK, house convention).
+    sourceId: varchar("sourceId", { length: 70 }).notNull(),
+    sourceType: varchar("sourceType", { length: 32 }).notNull(),
+    sourceUriRef: varchar("sourceUriRef", { length: 191 }).notNull(),
+    // Normalized publication/event identity within the source.
+    eventKey: varchar("eventKey", { length: 191 }).notNull(),
+    // Server-derived provenance/trust fields (never client-supplied).
+    registryClass: varchar("registryClass", { length: 24 }).notNull(),
+    sourceTrustClass: varchar("sourceTrustClass", { length: 28 }).notNull(),
+    sourceIndependenceKey: varchar("sourceIndependenceKey", { length: 191 }).notNull(),
+    // Inert untrusted evidence (NFC-normalized, ≤2048 chars post-normalization).
+    claimText: text("claimText").notNull(),
+    // Deterministic claim fingerprints (corroboration/contradiction family).
+    claimKey: varchar("claimKey", { length: 64 }).notNull(),
+    claimFamilyKey: varchar("claimFamilyKey", { length: 64 }).notNull(),
+    // sha256 over the immutable core; drift fails closed on read.
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    // ISO 8601 verbatim timestamps.
+    observedAt: varchar("observedAt", { length: 32 }).notNull(),
+    publishedAt: varchar("publishedAt", { length: 32 }),
+    ingestedAt: varchar("ingestedAt", { length: 32 }).notNull(),
+    // Denormalized server-derived classes (recomputed identically at read).
+    freshnessClass: varchar("freshnessClass", { length: 16 }).notNull(),
+    freshnessPolicyVersion: varchar("freshnessPolicyVersion", { length: 48 }).notNull(),
+    corroborationStatus: varchar("corroborationStatus", { length: 20 }).notNull(),
+    // Derived lineage-visible id lists (bounded, order-normalized newest first).
+    corroboratingSignalIds: json("corroboratingSignalIds").notNull(),
+    contradictingSignalIds: json("contradictingSignalIds").notNull(),
+    // Server-derived relevance (bounded by deterministic term evidence).
+    relevanceClass: varchar("relevanceClass", { length: 16 }).notNull(),
+    relevanceEvidence: json("relevanceEvidence").notNull(),
+    // Server-derived confidence (trust ∩ freshness ceilings; §10).
+    confidenceClass: varchar("confidenceClass", { length: 12 }).notNull(),
+    // Denormalized lifecycle status (CAS-guarded; derived facts in events table).
+    signalStatus: varchar("signalStatus", { length: 16 }).notNull(),
+    // Constant INERT_EVIDENCE — external content is never authority.
+    contentIsolation: varchar("contentIsolation", { length: 24 }).notNull(),
+    injectionSuspected: varchar("injectionSuspected", { length: 8 }).notNull().default("false"),
+    limitations: json("limitations").notNull(),
+    // Bounded candidate-extraction metadata; excluded from identity and hashes.
+    modelAssistance: json("modelAssistance"),
+    // Lineage (at most one; each bound to its signal family).
+    supersedesSignalId: varchar("supersedesSignalId", { length: 71 }),
+    // Optimistic-CAS guard for derived/lifecycle transitions.
+    version: int("version").notNull().default(1),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    signalIdentityUnique: uniqueIndex("xsg_signal_identity_uidx").on(table.signalId),
+    // Exact-once natural identity: one signal per tenant + source + event.
+    naturalKeyUnique: uniqueIndex("xsg_natural_key_uidx").on(table.userId, table.sourceId, table.eventKey),
+    userBusinessIdx: index("xsg_user_business_idx").on(table.userId, table.businessId),
+    userClaimIdx: index("xsg_user_claim_idx").on(table.userId, table.claimKey),
+    userFamilyIdx: index("xsg_user_family_idx").on(table.userId, table.claimFamilyKey),
+    userStatusIdx: index("xsg_user_status_idx").on(table.userId, table.signalStatus),
+  })
+);
+
+export type ExternalSignalRow = typeof externalSignals.$inferSelect;
+export type InsertExternalSignalRow = typeof externalSignals.$inferInsert;
+
+// ─── R8-C External Signal Lifecycle Events — immutable, append-only ───
+// One deterministic row per lifecycle fact (corroboration / contradiction /
+// supersession / staleness / invalidation). signalLifecycleEventId =
+// "xsf1:" + sha256(canonicalJson(...)); unique per fact. Rows are immutable —
+// there is no update path; corrections are new facts.
+export const externalSignalLifecycleEvents = mysqlTable(
+  "external_signal_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // "xsf1:" + 64-hex deterministic fact identity.
+    signalLifecycleEventId: varchar("signalLifecycleEventId", { length: 71 }).notNull(),
+    signalId: varchar("signalId", { length: 71 }).notNull(),
+    // Counterparty signal for CORROBORATION/CONTRADICTION facts (NULL otherwise).
+    counterpartySignalId: varchar("counterpartySignalId", { length: 71 }),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 20 }).notNull(),
+    // Post-fact status of the target signal.
+    toStatus: varchar("toStatus", { length: 16 }).notNull(),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventIdentityUnique: uniqueIndex("xsf_event_identity_uidx").on(table.signalLifecycleEventId),
+    userSignalIdx: index("xsf_user_signal_idx").on(table.userId, table.signalId),
+  })
+);
+
+export type ExternalSignalLifecycleEventRow = typeof externalSignalLifecycleEvents.$inferSelect;
+export type InsertExternalSignalLifecycleEventRow = typeof externalSignalLifecycleEvents.$inferInsert;

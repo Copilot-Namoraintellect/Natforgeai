@@ -177,6 +177,12 @@ export const AUDIT_EVENT_TYPES = [
   // reaffirmation). One canonical event per inserted fact; convergence paths
   // write zero.
   "business_change_lifecycle",
+  // R8-C: market/external signal durable effects. One canonical event per
+  // inserted signal and one per inserted lifecycle fact; convergence/replay
+  // paths emit zero. Metadata carries ids/closed labels/classes/hashes only —
+  // never claim text, source content, or model reasoning.
+  "external_signal_recorded",
+  "external_signal_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
