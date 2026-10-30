@@ -4202,3 +4202,115 @@ export const externalSignalLifecycleEvents = mysqlTable(
 
 export type ExternalSignalLifecycleEventRow = typeof externalSignalLifecycleEvents.$inferSelect;
 export type InsertExternalSignalLifecycleEventRow = typeof externalSignalLifecycleEvents.$inferInsert;
+
+// ─── Strategic Reasoning (WBS-R8-D) ───
+//
+// Bounded, evidence-preserving strategic conclusions synthesized from frozen
+// upstream authorities (R8-A memory, R8-B business change, R8-C external
+// signals, R8-F governance). Reasoning records are insert-only and immutable;
+// corrections are new records that supersede. No execution columns exist —
+// a conclusion recommends attention, never action. Canonical stream-local
+// provisional migration 0036_r8_d_strategic_reasoning_foundation (NOT executed;
+// see docs/recovery/r8-d-unexecuted-migrations.md; R8-X owns convergence).
+export const strategicReasoningBundles = mysqlTable(
+  "strategic_reasoning_bundles",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic evb1:<sha256> identity over the exact bound evidence set.
+    bundleId: varchar("bundleId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    // JSON: {memoryRefs, changeRefs, externalSignalRefs, resolved[]} — the
+    // server-resolved evidence snapshot (ids + bound versions/timestamps).
+    evidenceRefs: json("evidenceRefs").notNull(),
+    evidenceFingerprint: varchar("evidenceFingerprint", { length: 64 }).notNull(),
+    // JSON: bounded reasoning graph (nodes + typed edges, deterministic).
+    reasoningGraph: json("reasoningGraph").notNull(),
+    sourceVersions: json("sourceVersions").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    bundleIdentityUnique: uniqueIndex("srb_bundle_identity_uidx").on(table.bundleId),
+    userBundleUnique: uniqueIndex("srb_user_bundle_uidx").on(table.userId, table.bundleId),
+    userBusinessIdx: index("srb_user_business_idx").on(table.userId, table.businessId),
+  })
+);
+
+export type StrategicReasoningBundleRow = typeof strategicReasoningBundles.$inferSelect;
+export type InsertStrategicReasoningBundleRow = typeof strategicReasoningBundles.$inferInsert;
+
+export const strategicReasoningRecords = mysqlTable(
+  "strategic_reasoning_records",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic rsn1:<sha256> identity; unique convergence anchor.
+    reasoningId: varchar("reasoningId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    bundleId: varchar("bundleId", { length: 69 }).notNull(),
+    // Deterministic hyp1:<sha256> hypothesis identity.
+    hypothesisId: varchar("hypothesisId", { length: 69 }).notNull(),
+    hypothesisType: varchar("hypothesisType", { length: 40 }).notNull(),
+    implicationType: varchar("implicationType", { length: 32 }).notNull(),
+    // JSON: [{ref, evidenceClass, role}] — support preserved verbatim.
+    supportingEvidence: json("supportingEvidence").notNull(),
+    // JSON: [{ref, evidenceClass}] — contradictions stay visible.
+    contradictingEvidence: json("contradictingEvidence").notNull(),
+    // JSON: closed missing-evidence classes (explicit unknowns).
+    missingEvidence: json("missingEvidence").notNull(),
+    confidenceClass: varchar("confidenceClass", { length: 16 }).notNull(),
+    // JSON: closed uncertainty classes (≤6).
+    uncertaintyClasses: json("uncertaintyClasses").notNull(),
+    // Carried verbatim from the bound R8-F decision (null pre-governance).
+    strategicRiskClass: varchar("strategicRiskClass", { length: 16 }),
+    status: varchar("status", { length: 28 }).notNull(),
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }),
+    governanceDecision: varchar("governanceDecision", { length: 28 }),
+    // JSON: the bound R8-F decision record persisted verbatim — the approval
+    // binding is validated against THESE fingerprints (never re-derived).
+    governanceDecisionRecord: json("governanceDecisionRecord"),
+    policyVersion: varchar("policyVersion", { length: 96 }),
+    evidenceFingerprint: varchar("evidenceFingerprint", { length: 64 }).notNull(),
+    reasoningFingerprint: varchar("reasoningFingerprint", { length: 64 }).notNull(),
+    // JSON: bounded limitations (≤8), preserved verbatim.
+    limitations: json("limitations").notNull(),
+    validUntil: varchar("validUntil", { length: 32 }),
+    supersedesReasoningId: varchar("supersedesReasoningId", { length: 69 }),
+    // JSON: bound upstream contract versions.
+    sourceVersions: json("sourceVersions").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    reasoningIdentityUnique: uniqueIndex("srr_reasoning_identity_uidx").on(table.reasoningId),
+    userReasoningUnique: uniqueIndex("srr_user_reasoning_uidx").on(table.userId, table.reasoningId),
+    userBusinessIdx: index("srr_user_business_idx").on(table.userId, table.businessId),
+    governanceDecisionIdx: index("srr_governance_decision_idx").on(table.governanceDecisionId),
+  })
+);
+
+export type StrategicReasoningRecordRow = typeof strategicReasoningRecords.$inferSelect;
+export type InsertStrategicReasoningRecordRow = typeof strategicReasoningRecords.$inferInsert;
+
+export const strategicReasoningLifecycleEvents = mysqlTable(
+  "strategic_reasoning_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic srl1:<sha256> lifecycle fact identity.
+    lifecycleEventId: varchar("lifecycleEventId", { length: 70 }).notNull(),
+    reasoningId: varchar("reasoningId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 24 }).notNull(),
+    targetStatus: varchar("targetStatus", { length: 28 }).notNull(),
+    successorReasoningId: varchar("successorReasoningId", { length: 69 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    lifecycleIdentityUnique: uniqueIndex("srle_lifecycle_identity_uidx").on(table.lifecycleEventId),
+    userReasoningIdx: index("srle_user_reasoning_idx").on(table.userId, table.reasoningId),
+  })
+);
+
+export type StrategicReasoningLifecycleEventRow = typeof strategicReasoningLifecycleEvents.$inferSelect;
+export type InsertStrategicReasoningLifecycleEventRow = typeof strategicReasoningLifecycleEvents.$inferInsert;

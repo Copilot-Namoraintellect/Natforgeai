@@ -131,6 +131,10 @@ describe("audit-event taxonomy", () => {
       // only — never claim text or source content).
       "external_signal_recorded",
       "external_signal_lifecycle",
+      // R8-D: strategic-reasoning durable effects (conclusions + lifecycle
+      // demotions; ids/closed labels/classes/hashes only).
+      "strategic_reasoning_recorded",
+      "strategic_reasoning_lifecycle",
     ]);
   });
 

@@ -34,6 +34,7 @@
 25. [Business Optimisation Integration (WBS-R7-X)](#25-business-optimisation-integration-wbs-r7-x)
 26. [Strategic Memory (WBS-R8-A)](#26-strategic-memory-wbs-r8-a)
 27. [Business Change Intelligence (WBS-R8-B)](#27-business-change-intelligence-wbs-r8-b)
+28. [Strategic Reasoning (WBS-R8-D)](#28-strategic-reasoning-wbs-r8-d)
 
 ---
 
@@ -633,6 +634,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `strategicMemory` | `api/strategic-memory-router.ts` | WBS-R8-A strategic memory: durable, versioned fact/assumption memory derived from R7 authorities, Business DNA and strategy snapshots via the frozen seam, plus governed operator attestation; supersession/contradiction/expiry with immutable history; read-only current-state projection for R8-B/C/D/E; no execution authority of any kind (`record`, `ingestR7`, `get`, `list`, `r8Projections`, `listLifecycle`, `sweepExpiry`). Contract: `docs/contracts/strategic-memory-contract.md` |
 | `businessChange` | `api/business-change-router.ts` | R8-B business change intelligence: deterministic detection/classification of meaningful internal changes by comparing R8-A current strategic memory (previous state, read-only) against newly observed governed evidence (R7 budget/learning/governance, Business DNA, strategy snapshots) or bounded operator attestation; `chg1:` identity, immutable evidenceHash cores, closed domains/types, confidence-capped significance, confirmation/contradiction/supersession lifecycle, read-only downstream projection for R8-D/E (`evaluate`, `attest`, `correct`, `get`, `list`, `r8Projections`, `listLifecycle`, `sweepExpiry`). Never mutates memory/DNA/strategy/budget/operations. Contracts: `docs/contracts/business-change-intelligence-contract.md`, `docs/contracts/business-change-to-strategic-reasoning-contract.md` |
 | `marketSignal` | `api/market-signal-router.ts` | WBS-R8-C market & external signal intelligence: safe ingest/normalization/corroboration/classification of external strategic evidence — deterministic source/signal identity, server-side source registry + spoof rejection, inert-content injection detection, R8-F-vocabulary trust, independent-only corroboration, per-type freshness, bounded business relevance, visible contradiction/supersession lifecycle, read-only `external-signal/v1` projection for R8-D/E (`ingest`, `get`, `list`, `listLifecycle`, `r8Projections`, `listSources`). Contracts: `docs/contracts/market-external-signal-contract.md`, `docs/contracts/external-signal-to-strategic-reasoning-contract.md` |
+| `strategicReasoning` | `api/strategic-reasoning-router.ts` | WBS-R8-D strategic reasoning: deterministic evidence-bundle + rule-first synthesis over R8-A/B/C evidence, confidence/uncertainty caps, mandatory R8-F governance binding, immutable conclusion lifecycle + re-evaluation, read-only R8-E handoff projection (`evaluate`, `get`, `list`, `listLifecycle`, `reevaluate`, `getHandoffProjections`). Never owns upstream truth, never executes. Contract: `docs/contracts/strategic-reasoning-contract.md` |
 
 ### Context
 
@@ -1263,3 +1265,51 @@ no LLM is final change authority.
   `feature/r8-a-strategic-memory` @ `23d0f22`; R8-F
   `feature/r8-f-strategic-governance` @ `44118e3` (by contract reference for
   the advisory eligibility hint; R8-F remains the recommendation authority).
+---
+
+## 28. Strategic Reasoning (WBS-R8-D)
+
+The authoritative strategic-reasoning layer: synthesizes frozen upstream
+authorities (R8-A strategic memory `23d0f22`, R8-B business change `055eece`,
+R8-C external signals `b366c5e`, R8-F strategic governance `44118e3`) into
+bounded, evidence-preserving strategic conclusions. Owns reasoning-session
+identity, evidence bundles (`evb1:`), the bounded reasoning graph,
+hypotheses, implication classification, support/contradiction accounting,
+confidence/uncertainty classification, conclusion lifecycle and governance
+binding — never upstream truth, governance authority, opportunity/risk
+ranking, strategy mutation or execution.
+
+- **Core modules:** `api/lib/strategic-reasoning/` (`-contract`,
+  `-identity`, `-evidence-seam`, `-graph`, `-synthesis`,
+  `-governance-seam`, `-store`, `-projection`, `-service`); router
+  `api/strategic-reasoning-router.ts` (`strategicReasoning`).
+- **Evidence:** clients supply `mem1:`/`chg1:`/`xsig1:` reference ids only;
+  every row is server-resolved READ-ONLY behind guarded information-schema
+  checks and re-validated (tenant/business scope, frozen contract versions,
+  identity patterns, hashes). Cross-tenant/cross-business/unknown/stale-
+  version/malformed all fail closed. Same evidence set ⇒ same `evb1:` bundle.
+- **Synthesis:** deterministic rule-first engine; model candidates (optional,
+  untrusted) may only select among rule-produced hypotheses — never invent
+  evidence, raise confidence, suppress contradiction or mint causation.
+  Confidence derives from evidence-quality caps (external-only ⇒ LOW,
+  single-source ⇒ LOW, assumption-memory ⇒ MODERATE cap, contradiction ⇒
+  MODERATE cap, corroborated + verified internal ⇒ HIGH eligible).
+- **Governance:** R8-F is mandatory for voiced recommendations; the engine
+  binds through a registration port (no second engine; absence fails closed).
+  Decisions persist verbatim; REVIEW_REQUIRED approvals are derived read-only
+  through F5 binding-hash validation — self-approval is impossible.
+- **Lifecycle:** insert-only conclusions (`rsn1:`); re-evaluation mints
+  superseding records and records contradiction/staleness as append-only
+  `srl1:` facts; history is never edited.
+- **Downstream:** `strategic-reasoning-to-opportunity-risk/v1` frozen 34-key
+  read-only projection for R8-E (verbatim causation/attribution/execution
+  disclaimers). Contracts:
+  `docs/contracts/strategic-reasoning-contract.md`,
+  `docs/contracts/strategic-reasoning-to-opportunity-risk-contract.md`.
+- **Acceptance:** `api/strategic-reasoning-acceptance.test.ts` (42 connected
+  cases), `api/strategic-reasoning-security.test.ts` (13 rogue-agent cases).
+  Report: `docs/recovery/r8-d-strategic-reasoning-acceptance-report.md`.
+- **Schema:** `strategic_reasoning_bundles`, `strategic_reasoning_records`,
+  `strategic_reasoning_lifecycle_events` — provisional migration
+  `0036_r8_d_strategic_reasoning_foundation` (artefact only, NOT executed;
+  `docs/recovery/r8-d-unexecuted-migrations.md`; R8-X owns convergence).
