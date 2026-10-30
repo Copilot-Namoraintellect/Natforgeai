@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-10 (R7-X integration: §21 R7-A Conversion Outcome; §22 R7-B Attribution; §23 R7-F Optimisation Governance; §24 R7-E Budget & Portfolio; §25 R7-X Business Optimisation Integration)
+> **Last updated:** 2026-11-10 (R8-A: §26 Strategic Memory)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -32,6 +32,7 @@
 23. [Optimisation Governance (WBS-R7-F)](#23-optimisation-governance-wbs-r7-f)
 24. [Budget & Portfolio Optimisation (WBS-R7-E)](#24-budget--portfolio-optimisation-wbs-r7-e)
 25. [Business Optimisation Integration (WBS-R7-X)](#25-business-optimisation-integration-wbs-r7-x)
+26. [Strategic Memory (WBS-R8-A)](#26-strategic-memory-wbs-r8-a)
 
 ---
 
@@ -628,6 +629,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `businessLearning` | `api/business-learning-router.ts` | WBS-R7-C business learning engine: deterministic context-scoped learning derived from R7-A outcomes + R7-B attribution via frozen projections; evidence bundles, contradiction/novelty handling, honest confidence, immutable records + lifecycle (`derive`, `get`, `list`, `listLifecycle`). Contracts: `docs/contracts/business-learning-contract.md`, `docs/contracts/business-learning-to-experiment-optimisation-contract.md` |
 | `experimentation` | `api/experimentation-router.ts` | WBS-R7-D experimentation engine: governed experiment designs over R7-C learning, deterministic assignment, R7-A/R7-B-sourced evidence binding, immutable results scoped to design assumptions (`createDesign`, `getDesign`, `activate`, `assign`, `bindEvidence`, `calculateResult`, `getResult`, lifecycle reads). Contract: `docs/contracts/experimentation-contract.md` |
 | `budgetPortfolio` | `api/budget-portfolio-router.ts` | WBS-R7-E budget & portfolio optimisation: portfolio snapshots, evidence model, bounded reallocation solver under stability constraints, R7-F-governed proposals and read-only authorised instructions; never raises total approved budget, never moves locked/reserved funds, no billing (`snapshotPortfolio`, `generateProposal`, `getInstruction`, `listProposals`, `getStrategyHandoff`). Contract: `docs/contracts/budget-portfolio-optimisation-contract.md` |
+| `strategicMemory` | `api/strategic-memory-router.ts` | WBS-R8-A strategic memory: durable, versioned fact/assumption memory derived from R7 authorities, Business DNA and strategy snapshots via the frozen seam, plus governed operator attestation; supersession/contradiction/expiry with immutable history; read-only current-state projection for R8-B/C/D/E; no execution authority of any kind (`record`, `ingestR7`, `get`, `list`, `r8Projections`, `listLifecycle`, `sweepExpiry`). Contract: `docs/contracts/strategic-memory-contract.md` |
 
 ### Context
 
@@ -1128,3 +1130,65 @@ governance/approval → authorised instruction → R8 read-only handoff).
 - **R8 handoff:**
   `docs/contracts/business-optimisation-to-strategic-intelligence-contract.md`
   (read-only strategic evidence; R8 never mutates R7 authority).
+
+---
+
+## 26. Strategic Memory (WBS-R8-A)
+
+The authoritative strategic-memory layer: turns durable upstream authorities
+(R7-A outcomes, R7-B attribution, R7-C learning, R7-D experiment results,
+R7-E proposals/instructions, R7-F governance decisions) plus stable business
+context (Business DNA, goals/objectives, strategy history, historical
+decisions) into a **versioned strategic memory** — durable context over time,
+never rewritten, never silently refreshed. Owns strategic-memory records and
+strategic-memory lifecycle only.
+
+**Required principle:** *strategic memory is durable context, not autonomous
+strategy.* Facts and assumptions stay distinct; history is immutable;
+contradictions stay visible; stale/expired facts never silently remain active;
+model-generated summaries are never source authority; no memory record may
+authorize spend, experiments, campaigns or strategy changes.
+
+- Core modules: `api/lib/strategic-memory/` (`strategic-memory-contract`,
+  `strategic-memory-identity`, `strategic-memory-temporal`,
+  `strategic-memory-store`, `strategic-memory-upstream-seam`,
+  `strategic-memory-service`, `strategic-memory-projection`); router
+  `api/strategic-memory-router.ts` (tRPC namespace `strategicMemory`).
+- Identity: deterministic `memoryId = "mem1:" + sha256({tenantUserId,
+  businessId, sourceAuthority, sourceIdentity, memoryType, contextScope})`;
+  exact-once via durable unique anchors; conflicting replay fails closed;
+  immutable-core `evidenceHash`; append-only `smf1:` lifecycle facts with
+  CAS-guarded `factStatus` (`CURRENT | STALE | SUPERSEDED | CONTRADICTED |
+  EXPIRED | INVALIDATED`).
+- Memory types (closed): `BUSINESS_FACT`, `BUSINESS_ASSUMPTION`,
+  `STRATEGIC_OBJECTIVE`, `STRATEGIC_DECISION`, `OUTCOME_PATTERN`,
+  `LEARNING_PATTERN`, `EXPERIMENT_RESULT`, `OPTIMISATION_DECISION`,
+  `CONSTRAINT`. FACT derives only from governed ingestion (R7 authorities,
+  Business DNA, strategy snapshots); the operator path (`record`) attests
+  ASSUMPTION / objective / decision / constraint only — never FACT.
+- R7 ingestion (`ingestR7`) loads every authority field through the frozen
+  seam (`strategic-memory-upstream-seam.ts`) — never client-supplied material;
+  upstream supersession chains and invalidations (outcome reversal,
+  attribution supersession, contradicted learning) re-evaluate dependent
+  memory with insert-first lifecycle facts. Attribution stays *association*
+  (verbatim disclaimers); experiment results keep design-assumption
+  limitations; optimisation memory keeps its governance bound.
+- Fail closed on: unknown source, cross-tenant/cross-business evidence,
+  stale source contract versions, tampered fingerprints, client-authority
+  smuggling (`STRATEGIC_MEMORY_CLIENT_AUTHORITY_FIELD_FORBIDDEN`),
+  protected-trait material, assumption without basis/limitations/expiry.
+- Downstream: frozen 30-key `strategic-memory-to-reasoning/v1` read-only
+  projection for R8-B/C/D/E (`r8Projections` returns only CURRENT memory as
+  active). Contracts: `docs/contracts/strategic-memory-contract.md` (canonical),
+  `docs/contracts/strategic-memory-to-reasoning-contract.md` (downstream).
+- Non-billable, non-executing: no billing, payments, providers, CRM,
+  campaigns, experiments, strategy or R7-table writes anywhere in the stream.
+- Schema: `strategic_memory_records` + `strategic_memory_lifecycle_events`;
+  stream-local provisional migration `0036_r8_a_strategic_memory_foundation`
+  (artefact only, NOT executed — `docs/recovery/r8-a-unexecuted-migrations.md`;
+  R8-X owns canonical sequencing). Audit: additive
+  `strategic_memory_recorded` / `strategic_memory_lifecycle` (one per durable
+  effect; convergence emits zero).
+- Acceptance: `api/strategic-memory-acceptance.test.ts` (36 connected
+  adversarial cases over REAL upstream routers/stores + the REAL memory
+  router). Report: `docs/recovery/r8-a-strategic-memory-acceptance-report.md`.

@@ -132,6 +132,15 @@ export const AUDIT_EVENT_TYPES = [
   // against an existing governance decision. Audit-only: the immutable
   // decision is never mutated by recovery.
   "optimisation_governance_recovery",
+  // R8-A: a durable strategic-memory record was accepted (exactly one per
+  // inserted memory; convergence/replay paths emit zero). Metadata carries
+  // ids/closed labels/classes only — never statement text or evidence content.
+  "strategic_memory_recorded",
+  // R8-A: one immutable strategic-memory lifecycle fact was durably recorded
+  // (supersession / contradiction / invalidation / staleness / expiry /
+  // reaffirmation). One canonical event per inserted fact; convergence paths
+  // write zero.
+  "strategic_memory_lifecycle",
   // R7-D: experimentation durable effects. One canonical event per durable
   // effect; convergence/replay paths emit zero. Metadata carries ids, closed
   // labels, classes and hashes only — never subject references, evidence text

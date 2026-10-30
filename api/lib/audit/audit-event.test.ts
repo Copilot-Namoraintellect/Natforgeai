@@ -102,6 +102,10 @@ describe("audit-event taxonomy", () => {
       // audit-only recovery actions; references + closed labels only).
       "optimisation_governance_decision",
       "optimisation_governance_recovery",
+      // R8-A: strategic-memory durable effects (memory records + immutable
+      // lifecycle facts; ids/closed labels/classes only — never statement text).
+      "strategic_memory_recorded",
+      "strategic_memory_lifecycle",
       // R7-D: experimentation durable effects (ids/closed labels/hashes only;
       // convergence/replay paths emit zero).
       "experiment_created",
