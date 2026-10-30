@@ -48,13 +48,15 @@ export function bindCanonicalStrategicGovernanceEngine(): void {
     }): Promise<unknown> {
       const db = getDb();
       const provider = createStrategicGovernanceBridgeProvider(db, input.userId);
-      return await db.transaction(async (tx) =>
+      const result = await db.transaction(async (tx) =>
         evaluateStrategicGovernanceForProposal(
           { userId: input.userId, proposal: input.proposal, policyVersion: input.policyVersion },
           { provider },
           bindStrategicGovernanceStoreExecutor(tx)
         )
       );
+      // Consuming seams validate the raw immutable decision payload.
+      return result.decision;
     },
   };
   registerStrategicGovernanceEnginePort(port);

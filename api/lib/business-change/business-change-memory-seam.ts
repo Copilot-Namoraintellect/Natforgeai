@@ -61,17 +61,30 @@ function escapeSqlString(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/"/g, '\\"');
 }
 
-/** Deterministic WHERE fragment per subject (server-derived constants only). */
-export function memoryPredicateForSubject(subjectType: BusinessChangeSubjectType, subjectId: string): string {
+/**
+ * Deterministic WHERE fragment per subject (server-derived constants only).
+ * R8-X convergence binding: R8-A mints governed-source memories with A's
+ * canonical coordinates — business_dna memories are subjectType BUSINESS /
+ * subjectId business:<id>; r7_budget_portfolio memories are subjectType
+ * OPTIMISATION keyed by upstream optimisation id; r7_governance memories are
+ * keyed by decision id. The previous-state lookup therefore anchors on the
+ * source authority (latest CURRENT row for this tenant + business, id DESC),
+ * never on B-local subject coordinates that A does not mint.
+ */
+export function memoryPredicateForSubject(
+  subjectType: BusinessChangeSubjectType,
+  subjectId: string,
+  businessId: number
+): string {
   switch (subjectType) {
     case "OBJECTIVE":
       return `memoryType = 'STRATEGIC_OBJECTIVE' AND subjectId = '${escapeSqlString(subjectId)}'`;
     case "PRODUCT_SET":
     case "AUDIENCE_SET":
-      return `sourceAuthority = 'business_dna' AND subjectType = 'BUSINESS' AND subjectId = '${escapeSqlString(subjectId)}'`;
+      return `sourceAuthority = 'business_dna' AND subjectType = 'BUSINESS' AND subjectId = 'business:${businessId}'`;
     case "BUDGET_ENVELOPE":
     case "PROVIDER_CAPABILITY":
-      return `sourceAuthority = 'r7_budget_portfolio' AND subjectId = '${escapeSqlString(subjectId)}'`;
+      return `sourceAuthority = 'r7_budget_portfolio'`;
     case "LEARNING": {
       // Learning changes bind to the pattern-family anchor (e.g.
       // learning:campaign:500); the previous-state memory is the CURRENT
@@ -88,7 +101,7 @@ export function memoryPredicateForSubject(subjectType: BusinessChangeSubjectType
       return `sourceAuthority = 'r7_governance' AND subjectId = '${escapeSqlString(decisionId)}'`;
     }
     case "RISK_POSTURE":
-      return `sourceAuthority = 'r7_governance' AND subjectType = 'GOVERNANCE' AND subjectId = '${escapeSqlString(subjectId)}'`;
+      return `sourceAuthority = 'r7_governance' AND subjectType = 'GOVERNANCE'`;
     default:
       throw new BusinessChangeInputError("CHANGE_DOMAIN_UNSUPPORTED", `No memory predicate for subjectType ${subjectType}.`);
   }
@@ -169,7 +182,7 @@ export function createBusinessChangeMemoryPort(now: string): BusinessChangeMemor
     async getCurrentMemoryForSubject(userId, businessId, subjectType, subjectId) {
       const db = getDb();
       if (!(await memoryTableExists(db))) return null;
-      const predicate = memoryPredicateForSubject(subjectType, subjectId);
+      const predicate = memoryPredicateForSubject(subjectType, subjectId, businessId);
       const rows = normalizeSqlRows(
         await db.execute(sql`
           SELECT memoryId, sourceAuthority, sourceIdentity, sourceVersion, statementType,
@@ -201,26 +214,31 @@ export function createInMemoryBusinessChangePort(rows: FakeMemoryRow[]): Busines
   return {
     async getCurrentMemoryForSubject(_userId, _businessId, subjectType, subjectId) {
       const current = rows.filter((row) => row.factStatus === "CURRENT");
-      const match = current.find((row) => {
+      // Newest-first so the latest CURRENT row wins (parity with id DESC).
+      const match = [...current].reverse().find((row) => {
         if (subjectType === "OBJECTIVE") {
           return row.memoryType === "STRATEGIC_OBJECTIVE" && row.subjectId === subjectId;
         }
         if (subjectType === "PRODUCT_SET" || subjectType === "AUDIENCE_SET") {
-          return row.sourceAuthority === "business_dna" && row.subjectId === subjectId;
+          // R8-X binding: R8-A mints DNA memories as subjectType BUSINESS /
+          // subjectId business:<id>.
+          return row.sourceAuthority === "business_dna" && row.subjectId === `business:${_businessId}`;
         }
         if (subjectType === "BUDGET_ENVELOPE" || subjectType === "PROVIDER_CAPABILITY") {
-          return row.sourceAuthority === "r7_budget_portfolio" && row.subjectId === subjectId;
+          return row.sourceAuthority === "r7_budget_portfolio";
         }
         if (subjectType === "LEARNING") {
           return row.memoryType === "LEARNING_PATTERN" && `learning:${row.subjectId}` === subjectId;
-        }        if (subjectType === "STRATEGY") {
+        }
+        if (subjectType === "STRATEGY") {
           return row.sourceAuthority === "strategy_snapshot" && `strategy:${row.subjectId}` === subjectId;
         }
         if (subjectType === "CONSTRAINT") {
           return row.sourceAuthority === "r7_governance" && `constraint:${row.subjectId}` === subjectId;
         }
         if (subjectType === "RISK_POSTURE") {
-          return row.sourceAuthority === "r7_governance" && row.subjectId === subjectId;
+          // R8-X binding: latest CURRENT r7_governance memory is the posture.
+          return row.sourceAuthority === "r7_governance";
         }
         return false;
       });

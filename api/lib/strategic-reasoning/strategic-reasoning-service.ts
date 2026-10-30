@@ -173,6 +173,7 @@ function buildGovernanceProposal(input: {
   evidenceRefs: readonly string[];
   externalEvidenceInvolved: boolean;
   injectionSuspected: boolean;
+  requestedAt: string;
 }): Record<string, unknown> {
   const recommendationType = IMPLICATION_TO_GOVERNANCE_RECOMMENDATION_TYPE[
     input.implicationType as keyof typeof IMPLICATION_TO_GOVERNANCE_RECOMMENDATION_TYPE
@@ -198,6 +199,7 @@ function buildGovernanceProposal(input: {
       highUncertainty: input.uncertaintyClasses.length > 0,
       injectionSuspected: input.injectionSuspected,
     },
+    requestedAt: input.requestedAt,
   };
 }
 
@@ -323,6 +325,7 @@ export async function evaluateStrategicReasoning(
       evidenceRefs,
       externalEvidenceInvolved: views.some((v) => v.evidenceClass === "EXTERNAL_SIGNAL"),
       injectionSuspected: views.some((v) => v.evidenceClass === "EXTERNAL_SIGNAL" && v.injectionSuspected),
+      requestedAt: now.toISOString(),
     });
     const raw = await engine.evaluateProposal({
       userId: input.userId,

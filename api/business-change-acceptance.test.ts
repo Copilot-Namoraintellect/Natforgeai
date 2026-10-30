@@ -597,7 +597,8 @@ describe("R8-B business change intelligence — connected acceptance (B9)", () =
       tag: "prod_5",
       memoryType: "BUSINESS_FACT",
       subjectType: "BUSINESS",
-      subjectId: "product-set:business:10",
+      // R8-X binding: A mints DNA memories with subjectId business:<id>.
+      subjectId: "business:10",
       sourceAuthority: "business_dna",
       sourceIdentity: prevId,
       sourceVersion: "business-dna/v1",
@@ -882,7 +883,8 @@ describe("R8-B business change intelligence — connected acceptance (B9)", () =
       tag: "r15",
       memoryType: "BUSINESS_FACT",
       subjectType: "BUSINESS",
-      subjectId: "product-set:business:10",
+      // R8-X binding: A mints DNA memories with subjectId business:<id>.
+      subjectId: "business:10",
       sourceAuthority: "business_dna",
       sourceIdentity: prevId,
       statementType: "FACT",
@@ -1277,7 +1279,8 @@ describe("R8-B business change intelligence — connected acceptance (B9)", () =
     seedMemory({
       tag: "dna_31m",
       subjectType: "BUSINESS",
-      subjectId: "product-set:business:10",
+      // R8-X binding: A mints DNA memories with subjectId business:<id>.
+      subjectId: "business:10",
       sourceAuthority: "business_dna",
       sourceIdentity: prevId,
       statementType: "FACT",
@@ -1395,7 +1398,8 @@ describe("R8-B business change intelligence — connected acceptance (B9)", () =
     seedMemory({
       tag: "pa_36m",
       subjectType: "BUSINESS",
-      subjectId: "product-set:business:10",
+      // R8-X binding: A mints DNA memories with subjectId business:<id>.
+      subjectId: "business:10",
       sourceAuthority: "business_dna",
       sourceIdentity: prevId,
       statementType: "FACT",
@@ -1475,11 +1479,13 @@ describe("R8-B business change intelligence — connected acceptance (B9)", () =
         new Date().toISOString()
       )
     ).rejects.toMatchObject({ code: "CHANGE_PREVIOUS_STATE_MISSING" });
-    // Predicate table shape is stable for every subject type.
-    expect(memoryPredicateForSubject("OBJECTIVE", "objective:growth")).toContain("STRATEGIC_OBJECTIVE");
-    expect(memoryPredicateForSubject("BUDGET_ENVELOPE", "budget-envelope:business:10")).toContain("r7_budget_portfolio");
-    expect(memoryPredicateForSubject("STRATEGY", "strategy:campaign:500")).toContain("strategy_snapshot");
-    expect(memoryPredicateForSubject("CONSTRAINT", "constraint:ogd1_abc")).toContain("r7_governance");
+    // Predicate table shape is stable for every subject type (R8-X binding:
+    // governed-source predicates anchor on R8-A's canonical coordinates).
+    expect(memoryPredicateForSubject("OBJECTIVE", "objective:growth", 10)).toContain("STRATEGIC_OBJECTIVE");
+    expect(memoryPredicateForSubject("BUDGET_ENVELOPE", "budget-envelope:business:10", 10)).toContain("r7_budget_portfolio");
+    expect(memoryPredicateForSubject("STRATEGY", "strategy:campaign:500", 10)).toContain("strategy_snapshot");
+    expect(memoryPredicateForSubject("CONSTRAINT", "constraint:ogd1_abc", 10)).toContain("r7_governance");
+    expect(memoryPredicateForSubject("PRODUCT_SET", "product-set:business:10", 10)).toContain("subjectId = 'business:10'");
   });
 
   it("re-observation after the memory anchor advances produces no duplicate change", async () => {
