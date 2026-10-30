@@ -11,14 +11,16 @@
 //
 // The provider is tenant-anchored: authority queries predicate the
 // authenticated tenant — business ownership is verified by BOTH id and owning
-// user. Strategic evidence stores belong to sibling R8 streams (market
-// intelligence, strategic memory); until R8-X binds a canonical evidence
-// authority, evidence resolution fails closed (EVIDENCE_AUTHORITY_UNAVAILABLE)
-// rather than guessing. The trusted-source registry is likewise empty until
-// R8-X provides one — so no external source is implicitly trusted (F3).
+// user. R8-X convergence binds the strategic evidence authority: mem1:/chg1:/
+// xsig1: references resolve read-only against the canonical R8-A/B/C stores
+// (tenant-predicated, never cross-tenant — an unresolvable reference returns
+// null and F's trust derivation classifies it MALFORMED/CROSS_TENANT, failing
+// the evaluation closed). The trusted-source registry reads the R8-C server
+// registry (OFFICIAL/VERIFIED classes only — a source can never mark itself
+// trusted). Approval status reads the shared approval ledger read-only.
 
-import { and, eq as drizzleEq, sql, type SQL } from "drizzle-orm";
-import { businesses } from "@db/schema";
+import { and, eq as drizzleEq, inArray, sql, type SQL } from "drizzle-orm";
+import { businesses, externalSources } from "@db/schema";
 import { getDb } from "../../queries/connection";
 import {
   ProviderAuthorityUnavailable,
@@ -34,6 +36,48 @@ import type {
 } from "./strategic-governance-store";
 
 const AUTHORITY_TABLES = ["strategic_governance_decisions"] as const;
+
+/** Canonical evidence stores bound at R8-X convergence (read-only). */
+function parseJsonArray(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string" && raw.length > 0) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function parseJsonObject(raw: unknown): Record<string, unknown> | null {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw === "string" && raw.length > 0) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function normalizeSqlRows(result: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(result)) {
+    const first = result[0];
+    if (Array.isArray(first)) return first as Array<Record<string, unknown>>;
+    if (first && typeof first === "object") return [first as Record<string, unknown>];
+    return [];
+  }
+  if (result && typeof result === "object" && Array.isArray((result as { rows?: unknown[] }).rows)) {
+    return (result as { rows: Array<Record<string, unknown>> }).rows;
+  }
+  return [];
+}
 
 /**
  * Structural db seam: the default getDb() client and a Drizzle transaction
@@ -102,33 +146,174 @@ class StrategicGovernanceBridgeProvider implements StrategicGovernanceAuthorityP
     };
   }
 
-  async resolveEvidence(): Promise<unknown> {
-    // Strategic evidence stores (market signals, strategic memory, business
-    // change records) are owned by sibling R8 streams. R8-F consumes them
-    // only through this seam; until R8-X binds a canonical, tenant-scoped
-    // evidence authority, resolution fails closed rather than fabricating
-    // evidence truth (charter F3; EVIDENCE_AUTHORITY_UNAVAILABLE).
-    throw new ProviderAuthorityUnavailable(
-      "strategic evidence",
-      "no canonical strategic evidence authority bound at R8-F; R8-X convergence wires the evidence stores"
-    );
+  private evidenceTablePresence = new Map<string, Promise<boolean>>();
+
+  /** Per-evidence-table existence probe (memoized). Absent ⇒ resolution returns null (fail closed). */
+  private evidenceTablePresent(table: string): Promise<boolean> {
+    let probe = this.evidenceTablePresence.get(table);
+    if (!probe) {
+      probe = (async () => {
+        try {
+          const rows = normalizeSqlRows(
+            await this.db.execute(sql`
+              SELECT COUNT(*) AS c FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${table}
+            `)
+          );
+          const first = rows[0];
+          const count = first ? Number(first.c ?? 0) : 0;
+          return Number.isInteger(count) && count > 0;
+        } catch {
+          return false;
+        }
+      })();
+      this.evidenceTablePresence.set(table, probe);
+    }
+    return probe;
   }
 
+  /**
+   * Canonical R8-X evidence resolution. Prefix dispatch over the frozen R8
+   * identity vocabularies; every read is tenant-predicated and read-only.
+   * Unknown prefixes and absent rows resolve null — F's trust derivation then
+   * classifies MALFORMED/CROSS_TENANT and the evaluation fails closed.
+   *
+   * Conservative mapping (documented, deterministic):
+   *   mem1:  FACT → INTERNAL_AUTHORITATIVE; ASSUMPTION → MODEL_GENERATED
+   *          (assumptions are never source truth; they can never mint
+   *          AUTHORITATIVE_INTERNAL trust); CONTRADICTED status poisons trust.
+   *   chg1:  INTERNAL_AUTHORITATIVE (the change record is authoritative
+   *          internal evidence of a detected change); CONTRADICTED poisons.
+   *   xsig1: EXTERNAL_SOURCE with the R8-C registry sourceId, corroboration
+   *          count and contradiction flag carried verbatim; the SERVER-side
+   *          trusted registry (getTrustedSourceKeys) decides VERIFIED_EXTERNAL.
+   */
+  async resolveEvidence(evidenceRef: string): Promise<unknown> {
+    if (evidenceRef.startsWith("mem1:")) {
+      if (!(await this.evidenceTablePresent("strategic_memory_records"))) return null;
+      const rows = normalizeSqlRows(
+        await this.db.execute(sql`
+          SELECT userId, businessId, statementType, factStatus, observedAt
+          FROM strategic_memory_records
+          WHERE userId = ${this.userId} AND memoryId = ${evidenceRef}
+          LIMIT 1
+        `)
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        ownerUserId: Number(row.userId),
+        businessId: row.businessId === null || row.businessId === undefined ? null : Number(row.businessId),
+        sourceKind: row.statementType === "FACT" ? "INTERNAL_AUTHORITATIVE" : "MODEL_GENERATED",
+        registeredSourceKey: null,
+        corroborationCount: 0,
+        contradictionFlag: row.factStatus === "CONTRADICTED",
+        observedAt: String(row.observedAt ?? ""),
+      };
+    }
+    if (evidenceRef.startsWith("chg1:")) {
+      if (!(await this.evidenceTablePresent("business_change_events"))) return null;
+      const rows = normalizeSqlRows(
+        await this.db.execute(sql`
+          SELECT userId, businessId, status, detectedAt
+          FROM business_change_events
+          WHERE userId = ${this.userId} AND changeId = ${evidenceRef}
+          LIMIT 1
+        `)
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        ownerUserId: Number(row.userId),
+        businessId: row.businessId === null || row.businessId === undefined ? null : Number(row.businessId),
+        sourceKind: "INTERNAL_AUTHORITATIVE",
+        registeredSourceKey: null,
+        corroborationCount: 0,
+        contradictionFlag: row.status === "CONTRADICTED",
+        observedAt: String(row.detectedAt ?? ""),
+      };
+    }
+    if (evidenceRef.startsWith("xsig1:")) {
+      if (!(await this.evidenceTablePresent("external_signals"))) return null;
+      const rows = normalizeSqlRows(
+        await this.db.execute(sql`
+          SELECT userId, businessId, sourceId, sourceTrustClass, corroborationStatus,
+                 corroboratingSignalIds, contradictingSignalIds, observedAt
+          FROM external_signals
+          WHERE userId = ${this.userId} AND signalId = ${evidenceRef}
+          LIMIT 1
+        `)
+      );
+      const row = rows[0];
+      if (!row) return null;
+      const corroborating = parseJsonArray(row.corroboratingSignalIds);
+      const contradicting = parseJsonArray(row.contradictingSignalIds);
+      const corroborationStatus = String(row.corroborationStatus ?? "");
+      return {
+        ownerUserId: Number(row.userId),
+        businessId: row.businessId === null || row.businessId === undefined ? null : Number(row.businessId),
+        sourceKind: "EXTERNAL_SOURCE",
+        registeredSourceKey: typeof row.sourceId === "string" ? row.sourceId : null,
+        corroborationCount: corroborationStatus === "CORROBORATED" ? corroborating.length : 0,
+        contradictionFlag: corroborationStatus === "CONTRADICTED" || contradicting.length > 0,
+        observedAt: String(row.observedAt ?? ""),
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Server-side trusted-source registry: R8-C external_sources rows in the
+   * OFFICIAL/VERIFIED registry classes for this tenant. A source can never
+   * mark itself trusted — this registry is the only authority (F3).
+   */
   async getTrustedSourceKeys(): Promise<readonly string[]> {
-    // The registered/trusted external-source registry is a server-side
-    // authority provided at R8-X. Until then it is empty: no external source
-    // is implicitly trusted, so external evidence derives at best
-    // SINGLE_EXTERNAL_SOURCE / UNVERIFIED (F3).
-    return [];
+    const rows: Array<{ sourceId: string }> = await this.db
+      .select()
+      .from(externalSources)
+      .where(
+        and(
+          drizzleEq(externalSources.userId, this.userId),
+          inArray(externalSources.registryClass, ["OFFICIAL", "VERIFIED"])
+        )
+      );
+    return rows.map((r) => String(r.sourceId));
   }
 
-  async getApprovalStatusByDecisionId(): Promise<
-    Readonly<Map<string, { status: "pending" | "approved" | "rejected" } | null>>
-  > {
-    // The approval ledger is keyed by approval row, not decision id; a lookup
-    // index over context JSON is added with the R8-X convergence. Until then
-    // the projection reports approval status as unknown.
-    return new Map();
+  /**
+   * Approval-ledger read view for the operations projection. Reads the shared
+   * approval_requests ledger (approvalType 'strategic_recommendation') and
+   * folds per-decision status with conservative precedence: rejected wins over
+   * approved/edited wins over pending. The ledger remains the approval
+   * authority — this is a read view only.
+   */
+  async getApprovalStatusByDecisionId(
+    userId: number,
+    governanceDecisionIds: readonly string[]
+  ): Promise<Readonly<Map<string, { status: "pending" | "approved" | "rejected" } | null>>> {
+    const wanted = new Set(governanceDecisionIds);
+    const out = new Map<string, { status: "pending" | "approved" | "rejected" } | null>();
+    if (wanted.size === 0) return out;
+    const rows = normalizeSqlRows(
+      await this.db.execute(sql`
+        SELECT status, context FROM approval_requests
+        WHERE userId = ${userId} AND approvalType = 'strategic_recommendation'
+      `)
+    );
+    const rank = { pending: 0, approved: 1, rejected: 2 } as const;
+    for (const row of rows) {
+      const context = parseJsonObject(row.context);
+      const binding = context && parseJsonObject(context.binding);
+      const decisionId = binding && typeof binding.governanceDecisionId === "string" ? binding.governanceDecisionId : null;
+      if (!decisionId || !wanted.has(decisionId)) continue;
+      const rawStatus = String(row.status ?? "pending");
+      const status: "pending" | "approved" | "rejected" =
+        rawStatus === "rejected" ? "rejected" : rawStatus === "approved" || rawStatus === "edited" ? "approved" : "pending";
+      const existing = out.get(decisionId);
+      if (!existing || rank[status] > rank[existing.status]) out.set(decisionId, { status });
+    }
+    for (const id of wanted) if (!out.has(id)) out.set(id, null);
+    return out;
   }
 
   async assertGovernanceTableAvailable(): Promise<void> {

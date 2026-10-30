@@ -171,15 +171,33 @@ Legend — classification:
 
 - seam=strategic-governance/strategic-governance-bridge.ts
 - owner=R8-F
-- classification=KEEP
-- reason=Tenant-anchored evidence/provider resolution and the drizzle-shaped
-  store executor binding (same structural pattern as the R7-F bridge). Own
-  tables are probed through information_schema with memoized existence checks;
-  evidence resolution failures fail the whole evaluation closed
-  (`ProviderAuthorityUnavailable`) — evidence truth is never guessed.
-- security_effect=Read-only provider over canonical tables; no write path.
-- authority_effect=None — F evaluates; it never fabricates A/B/C/D/E truth.
-- tests=api/lib/strategic-governance/r8-f-acceptance.test.ts (39).
+- classification=BOUND (evidence / trusted-source / approval-read stubs) + KEEP
+  (store executor + table probes)
+- reason=Stream development shipped three deliberate R8-X stubs: `resolveEvidence`
+  threw ProviderAuthorityUnavailable, `getTrustedSourceKeys` returned [] and
+  `getApprovalStatusByDecisionId` returned an empty map ("wired at R8-X").
+  X4 BIND now implements all three against the integrated repository
+  authority: mem1:/chg1:/xsig1: evidence resolves read-only against the
+  canonical R8-A/B/C stores (tenant-predicated raw SQL behind memoized
+  information-schema probes; conservative documented mapping — memory FACT →
+  INTERNAL_AUTHORITATIVE, memory ASSUMPTION → MODEL_GENERATED so assumptions
+  can never mint authoritative trust; change records → INTERNAL_AUTHORITATIVE
+  with CONTRADICTED poisoning; external signals → EXTERNAL_SOURCE carrying the
+  R8-C registry sourceId, corroboration count and contradiction flag);
+  trusted source keys read the R8-C registry (OFFICIAL/VERIFIED only — a
+  source can never mark itself trusted); approval status reads the shared
+  approval ledger with conservative precedence (rejected > approved/edited >
+  pending). The store executor binding and the decisions-table availability
+  probe remain the correct structural adapters (KEEP).
+- security_effect=Every evidence read is tenant-predicated; unresolvable /
+  cross-tenant / forged references return null and F's trust derivation
+  classifies MALFORMED/CROSS_TENANT, failing the evaluation closed. Absent
+  evidence tables degrade per-reference fail-closed, never guess.
+- authority_effect=F still only evaluates; it fabricates no A/B/C/D/E truth —
+  it reads their canonical rows.
+- tests=api/lib/strategic-governance/r8-f-acceptance.test.ts (39), X7
+  connected harness (real bound engine resolving real seeded A/B/C rows,
+  trusted-registry and approval-status cases).
 
 ---
 
@@ -187,9 +205,10 @@ Legend — classification:
 
 - seams inspected: 9 (covering A-upstream, B→A, B-upstream, C→F vocabulary,
   D→A/B/C, D→F, E→D, E→F, F bridge)
-- KEEP: 8
-- BIND: 2 (D→F engine port, E→F engine port — both bound by the one canonical
-  binding module at boot)
+- KEEP: 5 (A-upstream, B→A, B-upstream, C→F vocabulary, E→D, F store executor
+  grouped under bridge)
+- BIND: 3 (D→F engine port, E→F engine port — one canonical boot binding;
+  F bridge evidence/trusted-source/approval stubs — canonical repository reads)
 - REMOVE: 0
 - unresolved_seams: 0
 
