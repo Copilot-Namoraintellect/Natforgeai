@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-10 (R8-A: §26 Strategic Memory; R8-B: §27 Business Change Intelligence; R8-D §28 Strategic Reasoning; R8-E §29 Strategic Opportunity & Risk Intelligence)
+> **Last updated:** 2026-11-10 (R8-X: §30 Strategic Intelligence Integration — STRATEGIC_INTELLIGENCE_V1_READY)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -36,6 +36,7 @@
 27. [Business Change Intelligence (WBS-R8-B)](#27-business-change-intelligence-wbs-r8-b)
 28. [Strategic Reasoning (WBS-R8-D)](#28-strategic-reasoning-wbs-r8-d)
 29. [Strategic Opportunity & Risk Intelligence (WBS-R8-E)](#29-strategic-opportunity--risk-intelligence-wbs-r8-e)
+30. [Strategic Intelligence Integration (WBS-R8-X)](#30-strategic-intelligence-integration-wbs-r8-x)
 
 ---
 
@@ -1365,3 +1366,30 @@ allowlist; candidate ≠ mission; recommendation ≠ execution authorization).
 - Acceptance: `api/strategic-opportunity-risk-acceptance.test.ts` (46 connected
   cases) + `api/strategic-opportunity-risk-security.test.ts` (11 adversarial
   cases).
+
+---
+
+## 30. Strategic Intelligence Integration (WBS-R8-X)
+
+The integrated R8 system (streams A/B/C/D/E/F merged on
+`integration/r8-strategic-intelligence`). Verdict:
+**STRATEGIC_INTELLIGENCE_V1_READY** — `R8_STATUS=FROZEN`.
+
+- **Connected flow:** R7/business authorities → R8-A memory → R8-B change +
+  R8-C signals → R8-D reasoning (R8-F governs throughout) → R8-E
+  opportunity/risk → governed R9 handoff. Governance binds at reasoning and
+  derivation; approvals are exact-bound ledger records.
+- **Canonical binding:** `api/lib/strategic-governance/strategic-governance-engine-binding.ts`
+  binds the real R8-F engine into the D/E registration ports at boot; the F
+  bridge resolves evidence against the canonical A/B/C stores; the B→A memory
+  predicate is aligned to A's coordinates.
+- **Canonical migration:** `0036_r8_strategic_intelligence_foundation`
+  (artefact only, NOT executed; six provisionals retired after proven-complete
+  coverage).
+- **Acceptance:** `api/r8-x-harness.test.ts` (56 connected scenarios),
+  `api/r8-x-security.test.ts` (20 rogue-agent cases). Report:
+  `docs/recovery/r8-x-strategic-intelligence-final-acceptance-report.md`.
+- **Execution boundary:** R8 never mutates DNA/strategy/budget/campaigns/
+  experiments/providers/billing; `candidate != mission`;
+  `recommendation != execution authorization`.
+- Real-MySQL concurrency remains the R10 / pre-production gate.
