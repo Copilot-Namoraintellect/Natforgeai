@@ -33,6 +33,15 @@ owns objective planning, dependency analysis, task planning and execution
 coordination under separate governance; nothing in this projection pre-arms,
 pre-approves or bypasses R9's own gates.
 
+**R8 governance approval authorizes recommendation consumption only. It does
+not authorize R9 execution.** An `ALLOW_RECOMMENDATION` decision or a valid
+bound human approval on a `REVIEW_REQUIRED` decision (§3) is, at most,
+authority for R9 to *consume the candidate as a governed recommendation*. It
+is never authority to plan against it autonomously, and never authority to
+execute anything: mission formulation, objective definition, dependency
+planning, task planning, sequencing and execution coordination remain R9
+authority under R9's own governance.
+
 ## 2. Consuming surface
 
 R9 reads **only** through the tenant-scoped tRPC procedure on the
@@ -144,3 +153,22 @@ missionDisclaimer: "A strategic candidate is ranked evidence for
 
 **R9: plan missions on your own authority. These candidates inform; they
 never instruct.**
+
+---
+
+## X10 acceptance stamp (R8-X integration)
+
+Verified connected at R8-X against the integrated system
+(`api/r8-x-harness.test.ts`):
+
+- R8 creates no missions, schedules no missions, executes no strategy,
+  allocates no spend, mutates no Business DNA/objectives, launches no
+  campaigns, activates no experiments, invokes no CRM/provider/payment/billing
+  (T46–T56).
+- `candidate != mission` and `recommendation != execution authorization`
+  travel verbatim on every projection payload (T34–T35).
+- Ungoverned candidates never reach the handoff (T29, T55); `BLOCK` is
+  terminal (T16/T29); `REVIEW_REQUIRED` requires an exact bound human
+  approval (T30–T32).
+- The 37-key allowlist is enforced exactly (T33); no execution or mission
+  fields exist in the projection vocabulary.
