@@ -167,6 +167,16 @@ export const AUDIT_EVENT_TYPES = [
   // against an existing strategic governance decision. Audit-only: the
   // immutable decision is never mutated by recovery.
   "strategic_governance_recovery",
+  // R8-B: business-change durable effects. One canonical event per inserted
+  // change row; convergence/replay/corroboration-converged paths emit zero.
+  // Metadata carries ids/closed labels/classes/hashes only — never state text,
+  // never evidence content.
+  "business_change_detected",
+  // R8-B: one immutable change lifecycle fact was durably recorded
+  // (confirmation / contradiction / supersession / invalidation / expiry /
+  // reaffirmation). One canonical event per inserted fact; convergence paths
+  // write zero.
+  "business_change_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

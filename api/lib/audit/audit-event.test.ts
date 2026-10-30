@@ -122,6 +122,11 @@ describe("audit-event taxonomy", () => {
       // narrow audit-only recovery actions; references + closed labels only).
       "strategic_governance_decision",
       "strategic_governance_recovery",
+      // R8-B: business-change durable effects (change events + immutable
+      // lifecycle facts; ids/closed labels/classes/hashes only — never state
+      // text or evidence content).
+      "business_change_detected",
+      "business_change_lifecycle",
     ]);
   });
 
