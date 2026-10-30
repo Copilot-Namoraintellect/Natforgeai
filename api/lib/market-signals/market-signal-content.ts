@@ -34,7 +34,7 @@ const INJECTION_PATTERNS: readonly { readonly name: string; readonly pattern: Re
   },
   {
     name: "tool_invocation",
-    pattern: /\b(call|invoke|execute|run)\s+(the\s+)?(tool|function|plugin|api)\b|<tool_call|tool_use\W|function_call/i,
+    pattern: /\b(call|invoke|execute|run)\b[^.\n]{0,40}\b(tool|function|plugin|api)\b|<tool_call|tool_use\W|function_call/i,
   },
   {
     name: "secret_request",

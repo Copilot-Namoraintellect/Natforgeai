@@ -69,7 +69,7 @@ export const MARKET_REGISTRY_CLASSES = ["OFFICIAL", "VERIFIED", "UNVERIFIED"] as
  * redefined). AUTHORITATIVE_INTERNAL exists in R8-F for internal evidence and
  * never applies to external signals.
  */
-export const MARKET_SOURCE_TRUST_CLASSES = [
+export const EXTERNAL_MARKET_FROZEN_TRUST_VOCABULARY = [
   "VERIFIED_EXTERNAL",
   "CORROBORATED_EXTERNAL",
   "SINGLE_EXTERNAL_SOURCE",
@@ -77,6 +77,8 @@ export const MARKET_SOURCE_TRUST_CLASSES = [
   "CONTRADICTED",
   "MALFORMED",
 ] as const;
+
+export const MARKET_SOURCE_TRUST_CLASSES = EXTERNAL_MARKET_FROZEN_TRUST_VOCABULARY;
 
 export const MARKET_FRESHNESS_CLASSES = ["CURRENT", "AGING", "STALE", "EXPIRED"] as const;
 
@@ -222,6 +224,9 @@ export const SOURCE_ID_PATTERN = /^src1:[a-f0-9]{64}$/;
 /** Bounded safe reference pattern (opaque ids/refs; house convention). */
 export const SAFE_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_\-./|]{0,190}$/;
 
+/** Subject references may be natural names (single spaces, no control chars). */
+export const SUBJECT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_\-./| ]{0,190}$/;
+
 const ISO_8601_STRICT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:?\d{2})$/;
 
 export function assertIso8601(value: string, field: string): void {
@@ -260,7 +265,7 @@ export const marketSignalIngestInputSchema = z.strictObject({
   businessId: z.number().int().positive(),
   signalType: MarketSignalTypeEnum,
   subjectType: MarketSubjectTypeEnum,
-  subjectRef: z.string().min(1).max(191).regex(SAFE_REFERENCE_PATTERN, "subjectRef has invalid shape"),
+  subjectRef: z.string().min(1).max(191).regex(SUBJECT_REF_PATTERN, "subjectRef has invalid shape"),
   claimAspect: z.string().min(1).max(64).regex(SAFE_REFERENCE_PATTERN, "claimAspect has invalid shape"),
   source: marketSignalSourceInputSchema,
   /** Normalized publication/event identity within the source. */

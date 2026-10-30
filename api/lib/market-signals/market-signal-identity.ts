@@ -10,6 +10,7 @@
 import {
   MarketSignalInputError,
   SAFE_REFERENCE_PATTERN,
+  SUBJECT_REF_PATTERN,
   canonicalJson,
   sha256Hex,
   type MarketSignalIngestInput,
@@ -145,7 +146,7 @@ export function deriveClaimFamilyKey(input: {
   subjectRef: string;
   claimAspect: string;
 }): string {
-  if (!SAFE_REFERENCE_PATTERN.test(input.subjectRef) || !SAFE_REFERENCE_PATTERN.test(input.claimAspect)) {
+  if (!SUBJECT_REF_PATTERN.test(input.subjectRef) || !SAFE_REFERENCE_PATTERN.test(input.claimAspect)) {
     throw new MarketSignalInputError("MARKET_SIGNAL_INPUT_INVALID", "subjectRef/claimAspect have invalid shape.");
   }
   return sha256Hex(
