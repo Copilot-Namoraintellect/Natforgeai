@@ -149,6 +149,12 @@ export const AUDIT_EVENT_TYPES = [
   "portfolio_snapshot_created",
   "optimisation_proposal_created",
   "optimisation_instruction_authorized",
+  // R8-D: strategic-reasoning durable effects (conclusions + lifecycle
+  // demotions). One canonical event per durable effect; convergence/replay
+  // paths emit zero. Metadata carries ids/closed labels/classes/hashes only —
+  // never evidence text, model reasoning or recommendation narrative.
+  "strategic_reasoning_recorded",
+  "strategic_reasoning_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
