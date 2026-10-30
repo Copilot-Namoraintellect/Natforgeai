@@ -3670,3 +3670,121 @@ export const budgetPortfolioAllocationInstructions = mysqlTable(
 
 export type BudgetPortfolioInstructionRow = typeof budgetPortfolioAllocationInstructions.$inferSelect;
 export type InsertBudgetPortfolioInstructionRow = typeof budgetPortfolioAllocationInstructions.$inferInsert;
+
+// ─── R8-B Business Change Intelligence — immutable change events ───
+// Deterministic "chg1:" identity over tenant + business + subject + change
+// type + previous/current state fingerprints; exact-once via durable unique
+// anchors; immutable evidenceHash-bound core (no update path). Supersession
+// binds exact predecessors and is enforced via append-only bcl1: lifecycle
+// facts + CAS-guarded status. No execution fields exist anywhere in this
+// stream (no spend/experiment/campaign authority). Stream-local provisional
+// migration 0036_r8_b_business_change_foundation (artefact only — NOT
+// executed; R8-X owns canonical sequencing/collision resolution with the
+// R8-A/R8-F stream-local 0036 provisionals;
+// docs/recovery/r8-b-unexecuted-migrations.md).
+export const businessChangeEvents = mysqlTable(
+  "business_change_events",
+  {
+    id: serial("id").primaryKey(),
+    // "chg1:" + 64-hex deterministic change identity; server-minted only.
+    changeId: varchar("changeId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    changeDomain: varchar("changeDomain", { length: 32 }).notNull(),
+    changeType: varchar("changeType", { length: 40 }).notNull(),
+    subjectType: varchar("subjectType", { length: 24 }).notNull(),
+    subjectId: varchar("subjectId", { length: 191 }).notNull(),
+    // Closed shape {authority, memoryId, sourceIdentity, sourceVersion,
+    // statementType, stateFingerprint} (contract §3.5).
+    previousStateRef: json("previousStateRef").notNull(),
+    currentStateRef: json("currentStateRef").notNull(),
+    // Denormalised exact-once natural-key columns (JSON paths are not
+    // indexable); identical values to the refs' stateFingerprint fields.
+    previousStateFingerprint: varchar("previousStateFingerprint", { length: 64 }).notNull(),
+    currentStateFingerprint: varchar("currentStateFingerprint", { length: 64 }).notNull(),
+    // Version-independent canonical VALUE fingerprints of the compared state
+    // views — the deterministic anchor for revert/contradiction detection
+    // (contract §9.2). Never part of identity.
+    previousStateValueFingerprint: varchar("previousStateValueFingerprint", { length: 64 }).notNull(),
+    currentStateValueFingerprint: varchar("currentStateValueFingerprint", { length: 64 }).notNull(),
+    // Exact upstream identities consumed (verbatim, order-normalised in hashes).
+    evidenceRefs: json("evidenceRefs").notNull(),
+    sourceAuthority: varchar("sourceAuthority", { length: 32 }).notNull(),
+    // Frozen upstream contract version per source (§6.1).
+    sourceVersion: varchar("sourceVersion", { length: 48 }).notNull(),
+    // Server-derived only; confidence-capped (§7).
+    significanceClass: varchar("significanceClass", { length: 16 }).notNull(),
+    // Server-derived only; never client-supplied, never promotable.
+    confidenceClass: varchar("confidenceClass", { length: 16 }).notNull(),
+    // Denormalized current lifecycle status; CAS-guarded transitions only.
+    status: varchar("status", { length: 16 }).notNull(),
+    // ISO 8601 stored verbatim.
+    detectedAt: varchar("detectedAt", { length: 32 }).notNull(),
+    effectiveAt: varchar("effectiveAt", { length: 32 }).notNull(),
+    recordedAt: varchar("recordedAt", { length: 32 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }),
+    // Lineage binding (exact predecessor; scope-checked, never deleted).
+    supersedesChangeId: varchar("supersedesChangeId", { length: 69 }),
+    limitations: json("limitations").notNull(),
+    // sha256 over the canonical immutable core; drift fails closed.
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    // Optimistic CAS guard for lifecycle transitions.
+    version: int("version").notNull().default(1),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    changeIdUnique: uniqueIndex("bce_change_id_uidx").on(table.changeId),
+    userChangeUnique: uniqueIndex("bce_user_change_uidx").on(table.userId, table.changeId),
+    // Exact-once natural identity: one change per tenant + business + subject
+    // + change type + the exact before/after state pair.
+    naturalKeyUnique: uniqueIndex("bce_natural_key_uidx").on(
+      table.userId,
+      table.businessId,
+      table.subjectType,
+      table.subjectId,
+      table.changeType,
+      table.previousStateFingerprint,
+      table.currentStateFingerprint
+    ),
+    userBusinessIdx: index("bce_user_business_idx").on(table.userId, table.businessId),
+    userStatusIdx: index("bce_user_status_idx").on(table.userId, table.status),
+    userSubjectIdx: index("bce_user_subject_idx").on(table.userId, table.subjectType, table.subjectId),
+    userSourceIdx: index("bce_user_source_idx").on(table.userId, table.sourceAuthority),
+  })
+);
+
+export type BusinessChangeEventRow = typeof businessChangeEvents.$inferSelect;
+export type InsertBusinessChangeEventRow = typeof businessChangeEvents.$inferInsert;
+
+// ─── R8-B Business Change Intelligence — immutable lifecycle facts ───
+// One deterministic "bcl1:" row per change lifecycle fact (confirmation /
+// contradiction / supersession / invalidation / expiry / reaffirmation). Rows
+// are immutable — there is no update path; current state is derived, history
+// is never edited.
+export const businessChangeLifecycleEvents = mysqlTable(
+  "business_change_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // "bcl1:" + 64-hex deterministic fact identity; server-minted only.
+    changeLifecycleEventId: varchar("changeLifecycleEventId", { length: 69 }).notNull(),
+    changeId: varchar("changeId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 16 }).notNull(),
+    // Post-fact change status (contract §8 precedence).
+    targetStatus: varchar("targetStatus", { length: 16 }).notNull(),
+    // Successor binding for supersession/contradiction (chg1: | null).
+    successorChangeId: varchar("successorChangeId", { length: 69 }),
+    // Upstream identity that caused the fact (| null).
+    sourceIdentity: varchar("sourceIdentity", { length: 191 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventIdUnique: uniqueIndex("bcle_event_id_uidx").on(table.changeLifecycleEventId),
+    userChangeIdx: index("bcle_user_change_idx").on(table.userId, table.changeId),
+  })
+);
+
+export type BusinessChangeLifecycleEventRow = typeof businessChangeLifecycleEvents.$inferSelect;
+export type InsertBusinessChangeLifecycleEventRow = typeof businessChangeLifecycleEvents.$inferInsert;

@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-10 (R7-X integration: §21 R7-A Conversion Outcome; §22 R7-B Attribution; §23 R7-F Optimisation Governance; §24 R7-E Budget & Portfolio; §25 R7-X Business Optimisation Integration)
+> **Last updated:** 2026-11-10 (R8-B: §26 Business Change Intelligence)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -32,6 +32,7 @@
 23. [Optimisation Governance (WBS-R7-F)](#23-optimisation-governance-wbs-r7-f)
 24. [Budget & Portfolio Optimisation (WBS-R7-E)](#24-budget--portfolio-optimisation-wbs-r7-e)
 25. [Business Optimisation Integration (WBS-R7-X)](#25-business-optimisation-integration-wbs-r7-x)
+26. [Business Change Intelligence (WBS-R8-B)](#26-business-change-intelligence-wbs-r8-b)
 
 ---
 
@@ -628,6 +629,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `businessLearning` | `api/business-learning-router.ts` | WBS-R7-C business learning engine: deterministic context-scoped learning derived from R7-A outcomes + R7-B attribution via frozen projections; evidence bundles, contradiction/novelty handling, honest confidence, immutable records + lifecycle (`derive`, `get`, `list`, `listLifecycle`). Contracts: `docs/contracts/business-learning-contract.md`, `docs/contracts/business-learning-to-experiment-optimisation-contract.md` |
 | `experimentation` | `api/experimentation-router.ts` | WBS-R7-D experimentation engine: governed experiment designs over R7-C learning, deterministic assignment, R7-A/R7-B-sourced evidence binding, immutable results scoped to design assumptions (`createDesign`, `getDesign`, `activate`, `assign`, `bindEvidence`, `calculateResult`, `getResult`, lifecycle reads). Contract: `docs/contracts/experimentation-contract.md` |
 | `budgetPortfolio` | `api/budget-portfolio-router.ts` | WBS-R7-E budget & portfolio optimisation: portfolio snapshots, evidence model, bounded reallocation solver under stability constraints, R7-F-governed proposals and read-only authorised instructions; never raises total approved budget, never moves locked/reserved funds, no billing (`snapshotPortfolio`, `generateProposal`, `getInstruction`, `listProposals`, `getStrategyHandoff`). Contract: `docs/contracts/budget-portfolio-optimisation-contract.md` |
+| `businessChange` | `api/business-change-router.ts` | R8-B business change intelligence: deterministic detection/classification of meaningful internal changes by comparing R8-A current strategic memory (previous state, read-only) against newly observed governed evidence (R7 budget/learning/governance, Business DNA, strategy snapshots) or bounded operator attestation; `chg1:` identity, immutable evidenceHash cores, closed domains/types, confidence-capped significance, confirmation/contradiction/supersession lifecycle, read-only downstream projection for R8-D/E (`evaluate`, `attest`, `correct`, `get`, `list`, `r8Projections`, `listLifecycle`, `sweepExpiry`). Never mutates memory/DNA/strategy/budget/operations. Contracts: `docs/contracts/business-change-intelligence-contract.md`, `docs/contracts/business-change-to-strategic-reasoning-contract.md` |
 
 ### Context
 
@@ -1128,3 +1130,74 @@ governance/approval → authorised instruction → R8 read-only handoff).
 - **R8 handoff:**
   `docs/contracts/business-optimisation-to-strategic-intelligence-contract.md`
   (read-only strategic evidence; R8 never mutates R7 authority).
+
+---
+
+## 26. Business Change Intelligence (WBS-R8-B)
+
+The authoritative internal-business-change detection layer: R8-A knows the
+durable strategic state; R8-B detects and classifies meaningful internal
+changes to that state. Owns change detection and change evidence only — not
+external market signals (R8-C), strategic reasoning (R8-D), opportunity/risk
+conclusions (R8-E), strategy mutation, Business DNA mutation, budget changes,
+campaign execution, governance approval (R8-F), or provider/payment/billing
+execution.
+
+**Required principle:** change detection compares authoritative states; it
+does not invent change. No change may be inferred solely from model narrative;
+no LLM is final change authority.
+
+- Core modules: `api/lib/business-change/` (`-contract`, `-identity`,
+  `-detection`, `-significance`, `-temporal`, `-store`,
+  `-upstream-seam`, `-memory-seam`, `-projection`, `-service`); router
+  `businessChange` (`api/business-change-router.ts`) — `evaluate`, `attest`,
+  `correct`, `get`, `list`, `r8Projections`, `listLifecycle`, `sweepExpiry`.
+- Flow: R8-A current memory (previous state, read-only via the memory seam
+  behind a guarded information-schema check) + newly observed governed
+  evidence (R7 budget snapshot / learning / governance, Business DNA snapshot,
+  strategy snapshot — all server-loaded) or bounded operator attestation →
+  canonical-normalised state comparison → rule-first detection (closed
+  directional change types over closed domains: BUSINESS_OBJECTIVE,
+  PRODUCT_SERVICE, AUDIENCE, BUDGET, CAPABILITY, PORTFOLIO_PERFORMANCE,
+  STRATEGIC_CONSTRAINT, RISK_POSTURE) → confidence-capped significance
+  (LOW/MODERATE/HIGH/CRITICAL; PROVISIONAL/OBSERVED evidence can never rank
+  HIGH/CRITICAL; only AUTHORITATIVE snapshots can mint CRITICAL) → immutable
+  `chg1:` change event (`business_change_events`, evidenceHash-bound core,
+  insert-only) → append-only `bcl1:` lifecycle facts (`business_change_lifecycle_events`:
+  confirmation via independent-source corroboration only, contradiction via
+  exact state-pair revert, supersession via corrections, invalidation, expiry)
+  → read-only `business-change-to-reasoning/v1` projection for R8-D/E
+  (28-key allowlist, verbatim causation disclaimer, labelled reference-only
+  memory candidate, advisory governance eligibility hint).
+- Identity/exact-once: `changeId = "chg1:" + sha256(tenant + business +
+  subject + changeType + previousStateFingerprint + currentStateFingerprint)`;
+  durable unique anchors; replays converge (`idempotent_replay`); the same
+  compared states from a different source mint exactly one confirmation fact
+  (`corroborating_replay`); conflicting same-source replay fails closed
+  (`CHANGE_IDENTITY_CONFLICT`).
+- Fail closed on: missing previous/current state, wrong business,
+  unsupported/stale source versions, cross-tenant/cross-business sources,
+  tampered state fingerprints/evidence hashes, protected-trait material,
+  client-supplied authority fields (changeId/status/significance/confidence/
+  refs/fingerprints), direct CONFIRMED marking (no boundary path).
+- Security: session `userId` anchors everything; ownership re-verified per
+  call; prompt-injected text is inert bounded content; a runtime agent can
+  never fabricate state, raise significance, suppress contradiction, confirm
+  its own evidence, mutate strategic memory/DNA/strategy/budget, execute
+  shell/SQL/tools, access secrets, or change its own permissions.
+- Non-billable, non-executing: no billing, payments, providers, CRM, campaigns,
+  experiments, approvals, or any R7/R8-A table write. Audit via the canonical
+  `audit_events` ledger (`business_change_detected`, `business_change_lifecycle`).
+- Schema: `business_change_events` + `business_change_lifecycle_events`
+  (stream-local provisional migration `0036_r8_b_business_change_foundation`,
+  artefact only — NOT executed; 0036 collision with the R8-A/R8-F provisionals
+  documented, R8-X owns canonical convergence;
+  `docs/recovery/r8-b-unexecuted-migrations.md`). R7's `0035` untouched.
+- Contracts: `docs/contracts/business-change-intelligence-contract.md`
+  (canonical), `docs/contracts/business-change-to-strategic-reasoning-contract.md`
+  (R8-D/E handoff). Inventory: `docs/recovery/r8-b-business-change-inventory.md`.
+  Acceptance: `docs/recovery/r8-b-business-change-acceptance-report.md`.
+- Upstream (frozen, consumed by branch ref only, NOT merged): R8-A
+  `feature/r8-a-strategic-memory` @ `23d0f22`; R8-F
+  `feature/r8-f-strategic-governance` @ `44118e3` (by contract reference for
+  the advisory eligibility hint; R8-F remains the recommendation authority).

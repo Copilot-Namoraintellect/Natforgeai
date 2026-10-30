@@ -114,6 +114,11 @@ describe("audit-event taxonomy", () => {
       "portfolio_snapshot_created",
       "optimisation_proposal_created",
       "optimisation_instruction_authorized",
+      // R8-B: business-change durable effects (change events + immutable
+      // lifecycle facts; ids/closed labels/classes/hashes only — never state
+      // text or evidence content).
+      "business_change_detected",
+      "business_change_lifecycle",
     ]);
   });
 
