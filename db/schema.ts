@@ -4314,3 +4314,127 @@ export const strategicReasoningLifecycleEvents = mysqlTable(
 
 export type StrategicReasoningLifecycleEventRow = typeof strategicReasoningLifecycleEvents.$inferSelect;
 export type InsertStrategicReasoningLifecycleEventRow = typeof strategicReasoningLifecycleEvents.$inferInsert;
+
+// ─── R8-E Strategic Opportunity & Risk (stream-local provisional schema; the
+// 0036_r8_e_strategic_opportunity_risk_foundation artefact is NOT executed —
+// R8-X owns canonical sequencing/collision resolution with the other
+// stream-local 0036 provisionals. Candidates are strategic evidence, never
+// execution instructions. No execution columns exist.
+
+export const strategicOpportunityRiskCandidates = mysqlTable(
+  "strategic_opportunity_risk_candidates",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic sor1:<sha256> identity; unique convergence anchor.
+    candidateId: varchar("candidateId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    candidateKind: varchar("candidateKind", { length: 16 }).notNull(),
+    candidateType: varchar("candidateType", { length: 32 }).notNull(),
+    // JSON: string[] — governing R8-D conclusions (sorted rsn1: refs).
+    reasoningIds: json("reasoningIds").notNull(),
+    // JSON: string[] — lineage through R8-D, verbatim.
+    memoryRefs: json("memoryRefs").notNull(),
+    changeRefs: json("changeRefs").notNull(),
+    signalRefs: json("signalRefs").notNull(),
+    // JSON: [{ref, evidenceClass, role}] — preserved verbatim from R8-D.
+    supportingEvidence: json("supportingEvidence").notNull(),
+    // JSON: [{ref, evidenceClass}] — conflict stays visible.
+    contradictingEvidence: json("contradictingEvidence").notNull(),
+    // JSON: string[] — deterministic anchor refs (subject derivation).
+    anchorRefs: json("anchorRefs").notNull(),
+    subjectKey: varchar("subjectKey", { length: 512 }).notNull(),
+    evidenceBundleFingerprint: varchar("evidenceBundleFingerprint", { length: 64 }).notNull(),
+    candidateFingerprint: varchar("candidateFingerprint", { length: 64 }).notNull(),
+    impactClass: varchar("impactClass", { length: 16 }).notNull(),
+    urgencyClass: varchar("urgencyClass", { length: 16 }).notNull(),
+    timeHorizon: varchar("timeHorizon", { length: 16 }).notNull(),
+    confidenceClass: varchar("confidenceClass", { length: 16 }).notNull(),
+    evidenceQualityScore: int("evidenceQualityScore").notNull(),
+    priorityScore: int("priorityScore").notNull(),
+    priorityClass: varchar("priorityClass", { length: 20 }).notNull(),
+    // Carried verbatim from the bound R8-F decision — never derived here.
+    strategicRiskClass: varchar("strategicRiskClass", { length: 16 }),
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }),
+    governanceDecision: varchar("governanceDecision", { length: 28 }),
+    // JSON: validated R8-F decision payload (opaque; seam-validated on read).
+    governanceRecord: json("governanceRecord"),
+    policyVersion: varchar("policyVersion", { length: 96 }),
+    approvalStatus: varchar("approvalStatus", { length: 12 }).notNull(),
+    status: varchar("status", { length: 28 }).notNull(),
+    portfolioRelation: varchar("portfolioRelation", { length: 16 }).notNull(),
+    // JSON: string[] — linked candidates (lineage, never score input).
+    relationCandidateIds: json("relationCandidateIds").notNull(),
+    derivationOutcome: varchar("derivationOutcome", { length: 20 }).notNull(),
+    // JSON: string[] (≤8)
+    limitations: json("limitations").notNull(),
+    validUntil: varchar("validUntil", { length: 32 }),
+    supersedesCandidateId: varchar("supersedesCandidateId", { length: 69 }),
+    sourceVersions: json("sourceVersions").notNull(),
+    // Optimistic version for CAS lifecycle transitions.
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    candidateIdentityUnique: uniqueIndex("sorc_candidate_identity_uidx").on(table.candidateId),
+    userCandidateUnique: uniqueIndex("sorc_user_candidate_uidx").on(table.userId, table.candidateId),
+    userBusinessIdx: index("sorc_user_business_idx").on(table.userId, table.businessId),
+    userStatusIdx: index("sorc_user_status_idx").on(table.userId, table.status),
+    governanceDecisionIdx: index("sorc_governance_decision_idx").on(table.governanceDecisionId),
+  })
+);
+
+export type StrategicOpportunityRiskCandidateRow =
+  typeof strategicOpportunityRiskCandidates.$inferSelect;
+export type InsertStrategicOpportunityRiskCandidateRow =
+  typeof strategicOpportunityRiskCandidates.$inferInsert;
+
+export const strategicOpportunityRiskRelations = mysqlTable(
+  "strategic_opportunity_risk_relations",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic relation identity over the ordered candidate pair.
+    relationId: varchar("relationId", { length: 64 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    candidateId: varchar("candidateId", { length: 69 }).notNull(),
+    relatedCandidateId: varchar("relatedCandidateId", { length: 69 }).notNull(),
+    relation: varchar("relation", { length: 16 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    relationIdentityUnique: uniqueIndex("sorrel_relation_identity_uidx").on(table.relationId),
+    userCandidateIdx: index("sorrel_user_candidate_idx").on(table.userId, table.candidateId),
+  })
+);
+
+export type StrategicOpportunityRiskRelationRow = typeof strategicOpportunityRiskRelations.$inferSelect;
+export type InsertStrategicOpportunityRiskRelationRow =
+  typeof strategicOpportunityRiskRelations.$inferInsert;
+
+export const strategicOpportunityRiskLifecycleEvents = mysqlTable(
+  "strategic_opportunity_risk_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic sorl1:<sha256> lifecycle fact identity.
+    lifecycleEventId: varchar("lifecycleEventId", { length: 70 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    candidateId: varchar("candidateId", { length: 69 }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 24 }).notNull(),
+    targetStatus: varchar("targetStatus", { length: 28 }).notNull(),
+    successorCandidateId: varchar("successorCandidateId", { length: 69 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    lifecycleIdentityUnique: uniqueIndex("sorle_lifecycle_identity_uidx").on(table.lifecycleEventId),
+    userCandidateIdx: index("sorle_user_candidate_idx").on(table.userId, table.candidateId),
+  })
+);
+
+export type StrategicOpportunityRiskLifecycleEventRow =
+  typeof strategicOpportunityRiskLifecycleEvents.$inferSelect;
+export type InsertStrategicOpportunityRiskLifecycleEventRow =
+  typeof strategicOpportunityRiskLifecycleEvents.$inferInsert;

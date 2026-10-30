@@ -135,6 +135,10 @@ describe("audit-event taxonomy", () => {
       // demotions; ids/closed labels/classes/hashes only).
       "strategic_reasoning_recorded",
       "strategic_reasoning_lifecycle",
+      // R8-E: strategic opportunity/risk durable effects (candidate derived,
+      // lifecycle fact; ids/closed classes/hashes only).
+      "strategic_candidate_derived",
+      "strategic_candidate_lifecycle",
     ]);
   });
 

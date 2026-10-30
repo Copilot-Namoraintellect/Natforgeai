@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-10 (R8-A: §26 Strategic Memory; R8-B: §27 Business Change Intelligence)
+> **Last updated:** 2026-11-10 (R8-A: §26 Strategic Memory; R8-B: §27 Business Change Intelligence; R8-D §28 Strategic Reasoning; R8-E §29 Strategic Opportunity & Risk Intelligence)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -35,6 +35,7 @@
 26. [Strategic Memory (WBS-R8-A)](#26-strategic-memory-wbs-r8-a)
 27. [Business Change Intelligence (WBS-R8-B)](#27-business-change-intelligence-wbs-r8-b)
 28. [Strategic Reasoning (WBS-R8-D)](#28-strategic-reasoning-wbs-r8-d)
+29. [Strategic Opportunity & Risk Intelligence (WBS-R8-E)](#29-strategic-opportunity--risk-intelligence-wbs-r8-e)
 
 ---
 
@@ -1138,6 +1139,8 @@ governance/approval → authorised instruction → R8 read-only handoff).
 
 ---
 
+---
+
 ## 26. Strategic Memory (WBS-R8-A)
 
 The authoritative strategic-memory layer: turns durable upstream authorities
@@ -1313,3 +1316,51 @@ ranking, strategy mutation or execution.
   `strategic_reasoning_lifecycle_events` — provisional migration
   `0036_r8_d_strategic_reasoning_foundation` (artefact only, NOT executed;
   `docs/recovery/r8-d-unexecuted-migrations.md`; R8-X owns convergence).
+---
+
+## 29. Strategic Opportunity & Risk Intelligence (WBS-R8-E)
+
+The strategic opportunity/risk authority: transforms governed R8-D
+conclusions into bounded, evidence-preserving OPPORTUNITY/RISK candidates for
+downstream R9 mission-control consideration. Owns candidate identity
+(`sor1:`), kind/type classification, deterministic integer impact/urgency/
+time-horizon/confidence/priority classification (weak confidence caps
+priority; high impact + weak confidence ⇒ review/monitor), support/
+contradiction accounting, deduplication + overlap/portfolio interaction
+(relations are lineage, never score inputs), lifecycle (`sorl1:` facts,
+CAS-versioned status), R8-F governance binding, and the read-only R9 handoff
+projection (`strategic-intelligence-to-mission-control/v1`, 37-key exact
+allowlist; candidate ≠ mission; recommendation ≠ execution authorization).
+
+- Core modules: `api/lib/strategic-opportunity-risk/` (`-contract`,
+  `-identity`, `-reasoning-seam`, `-governance-seam`, `-classification`,
+  `-overlap`, `-store`, `-service`, `-projection`); router
+  `api/strategic-opportunity-risk-router.ts` (tRPC `strategicOpportunityRisk`):
+  `derive`, `get`, `list`, `listRelations`, `listLifecycle`, `reevaluate`,
+  `getMissionControlHandoff`.
+- **Consumption (frozen upstreams, branch ref only — never merged):** R8-D via
+  the `strategic-reasoning-to-opportunity-risk/v1` 34-key projection
+  (registration port + raw-SQL durable-row rebuild behind a guarded
+  information-schema check; absence fails closed). R8-F mandatory: proposals
+  only — decisions `ALLOW_RECOMMENDATION/REVIEW_REQUIRED/BLOCK` bound verbatim;
+  approvals read from the shared `strategic_recommendation` ledger with the F5
+  binding-hash check; `assertCandidateConsumable` is the only eligibility gate
+  (`RECOMMENDATION_ONLY`). R8-A/B/C evidence arrives as lineage refs
+  (`mem1:`/`chg1:`/`xsig1:`) through R8-D only.
+- **Never owns/never does:** R8-D/A/B/C/F authority, mission planning, strategy
+  or Business DNA mutation, budget/campaign/experiment execution,
+  provider/payment/billing. No `EXECUTE` semantics anywhere.
+- Contracts: `docs/contracts/strategic-opportunity-risk-contract.md` (canonical),
+  `docs/contracts/strategic-intelligence-to-mission-control-contract.md`
+  (R9 handoff). Inventory/acceptance:
+  `docs/recovery/r8-e-strategic-opportunity-risk-inventory.md`,
+  `docs/recovery/r8-e-strategic-opportunity-risk-acceptance-report.md`.
+- Schema: `strategic_opportunity_risk_candidates/relations/lifecycle_events` —
+  stream-local provisional `0036_r8_e_strategic_opportunity_risk_foundation`
+  (artefact only, NOT executed; collision documented,
+  `docs/recovery/r8-e-unexecuted-migrations.md`; R8-X owns convergence).
+- Audit: additive `strategic_candidate_derived` / `strategic_candidate_lifecycle`
+  (one per durable effect; convergence emits zero).
+- Acceptance: `api/strategic-opportunity-risk-acceptance.test.ts` (46 connected
+  cases) + `api/strategic-opportunity-risk-security.test.ts` (11 adversarial
+  cases).
