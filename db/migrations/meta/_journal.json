@@ -253,6 +253,13 @@
       "when": 1793291616388,
       "tag": "0035_r7_business_optimisation_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "5",
+      "when": 1793305854219,
+      "tag": "0036_r8_f_strategic_governance_foundation",
+      "breakpoints": true
     }
   ]
 }

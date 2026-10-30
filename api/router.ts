@@ -38,6 +38,7 @@ import { outcomeRouter } from "./outcome-router";
 import { attributionRouter } from "./attribution-router";
 import { businessLearningRouter } from "./business-learning-router";
 import { optimisationGovernanceRouter } from "./optimisation-governance-router";
+import { strategicGovernanceRouter } from "./strategic-governance-router";
 import { experimentationRouter } from "./experimentation-router";
 import { budgetPortfolioRouter } from "./budget-portfolio-router";
 import { strategicMemoryRouter } from "./strategic-memory-router";
@@ -104,6 +105,7 @@ export const appRouter = createRouter({
   attribution: attributionRouter,
   businessLearning: businessLearningRouter,
   optimisationGovernance: optimisationGovernanceRouter,
+  strategicGovernance: strategicGovernanceRouter,
   experimentation: experimentationRouter,
   budgetPortfolio: budgetPortfolioRouter,
   strategicMemory: strategicMemoryRouter,
