@@ -11,7 +11,6 @@
 // publication identity; syndicated copies of one source never count).
 
 import {
-  MARKET_SIGNAL_SOURCE_SPOOFED,
   MarketSignalInputError,
   type MarketConfidenceClass,
   type MarketRegistryClass,
@@ -33,7 +32,6 @@ interface OfficialEntry {
 }
 
 const OFFICIAL_GOVT: readonly MarketSourceType[] = ["OFFICIAL_GOVERNMENT", "OFFICIAL_REGULATOR"];
-const OFFICIAL_COMPANY: readonly MarketSourceType[] = ["OFFICIAL_COMPANY"];
 
 export const OFFICIAL_ORIGIN_ALLOWLIST: readonly OfficialEntry[] = [
   { origin: "sec.gov", families: OFFICIAL_GOVT },
@@ -113,7 +111,7 @@ export interface SourceRegistryEvaluation {
 export function deriveRegistryClass(originKey: string, sourceType: MarketSourceType): SourceRegistryEvaluation {
   if (detectSpoofedOrigin(originKey)) {
     throw new MarketSignalInputError(
-      MARKET_SIGNAL_SOURCE_SPOOFED,
+      "MARKET_SIGNAL_SOURCE_SPOOFED",
       `Source origin "${originKey}" resembles a registered official/verified origin without being it; spoofed source metadata rejected.`
     );
   }

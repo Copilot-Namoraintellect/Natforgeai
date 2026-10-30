@@ -27,7 +27,7 @@ export const MARKET_STATUS_PRECEDENCE: readonly MarketSignalStatus[] = [
 ];
 
 export interface LifecycleFactInput {
-  readonly lifecycleType: MarketLifecycleType;
+  readonly lifecycleType: string;
 }
 
 /**

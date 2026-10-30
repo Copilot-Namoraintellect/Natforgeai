@@ -35,6 +35,20 @@ const STOPWORDS: ReadonlySet<string> = new Set([
   "help", "helps", "make", "made", "like", "just", "per", "each", "very", "really", "great", "best",
 ]);
 
+/**
+ * Closed protected-trait set (aligned with R8-A §3.8). Relevance matching
+ * never uses protected-trait terms: they are excluded from the business term
+ * set and from matched evidence, so a signal can never become strategically
+ * "relevant" by targeting a protected trait (C9 protected-trait inference
+ * rejection). Observation of external evidence is unaffected — only the
+ * relevance inference is constrained.
+ */
+export const PROTECTED_TRAIT_TOKENS: ReadonlySet<string> = new Set([
+  "race", "racial", "ethnicity", "ethnic", "religion", "religious", "belief", "beliefs", "health", "medical",
+  "genetic", "biometric", "political", "politics", "opinion", "union", "membership", "sexual", "orientation",
+  "geolocation", "disability", "pregnancy", "creed",
+]);
+
 function tokenize(text: string | null | undefined): string[] {
   if (!text) return [];
   const raw = text.toLowerCase().normalize("NFC").split(/[^a-z0-9]+/);
@@ -47,7 +61,7 @@ function tokenize(text: string | null | undefined): string[] {
   return out;
 }
 
-/** Bounded business term set from the verified business row. */
+/** Bounded business term set from the verified business row (protected-trait-free). */
 export function buildBusinessTermSet(ctx: BusinessRelevanceContext): ReadonlySet<string> {
   const terms = new Set<string>();
   const fields = [
@@ -63,6 +77,7 @@ export function buildBusinessTermSet(ctx: BusinessRelevanceContext): ReadonlySet
   ];
   for (const field of fields) {
     for (const token of tokenize(field)) {
+      if (PROTECTED_TRAIT_TOKENS.has(token)) continue;
       terms.add(token);
       if (terms.size >= 200) return terms;
     }
@@ -116,11 +131,13 @@ export function evaluateRelevance(input: {
   businessTerms: ReadonlySet<string>;
   proposedRelevanceClass?: MarketRelevanceClass | undefined;
 }): RelevanceResult {
-  const signalTerms = new Set<string>([
-    ...tokenize(input.subjectRef),
-    ...tokenize(input.claimAspect),
-    ...tokenize(input.claimText),
-  ]);
+  const signalTerms = new Set<string>(
+    [
+      ...tokenize(input.subjectRef),
+      ...tokenize(input.claimAspect),
+      ...tokenize(input.claimText),
+    ].filter((term) => !PROTECTED_TRAIT_TOKENS.has(term))
+  );
   const matched: string[] = [];
   for (const term of signalTerms) {
     if (input.businessTerms.has(term)) matched.push(term);
