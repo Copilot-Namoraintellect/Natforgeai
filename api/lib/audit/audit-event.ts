@@ -149,6 +149,16 @@ export const AUDIT_EVENT_TYPES = [
   "portfolio_snapshot_created",
   "optimisation_proposal_created",
   "optimisation_instruction_authorized",
+  // R8-E: one durable strategic opportunity/risk candidate was derived (or an
+  // idempotent replay converged to it). Exactly one event per inserted
+  // candidate; convergence emits zero. Metadata carries ids/closed
+  // classes/hashes/reasoning refs only — never evidence text or PII.
+  "strategic_candidate_derived",
+  // R8-E: one immutable candidate lifecycle fact was durably recorded
+  // (supersession / contradiction / staleness / invalidation / resolution /
+  // governance rebind). One canonical event per inserted fact; convergence
+  // paths write zero events.
+  "strategic_candidate_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
