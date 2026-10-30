@@ -3938,6 +3938,16 @@ export const businessChangeEvents = mysqlTable(
     userStatusIdx: index("bce_user_status_idx").on(table.userId, table.status),
     userSubjectIdx: index("bce_user_subject_idx").on(table.userId, table.subjectType, table.subjectId),
     userSourceIdx: index("bce_user_source_idx").on(table.userId, table.sourceAuthority),
+    // Canonical 0036 convergence: index accepted in R8-B's provisional
+    // migration artefact (0036_r8_b) but missing from the stream schema
+    // snapshot; restored so the canonical migration covers every accepted
+    // R8-B object exactly once.
+    userValueFpIdx: index("bce_user_value_fp_idx").on(
+      table.userId,
+      table.subjectType,
+      table.subjectId,
+      table.currentStateValueFingerprint
+    ),
   })
 );
 

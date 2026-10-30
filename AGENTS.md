@@ -1192,9 +1192,10 @@ authorize spend, experiments, campaigns or strategy changes.
 - Non-billable, non-executing: no billing, payments, providers, CRM,
   campaigns, experiments, strategy or R7-table writes anywhere in the stream.
 - Schema: `strategic_memory_records` + `strategic_memory_lifecycle_events`;
-  stream-local provisional migration `0036_r8_a_strategic_memory_foundation`
-  (artefact only, NOT executed — `docs/recovery/r8-a-unexecuted-migrations.md`;
-  R8-X owns canonical sequencing). Audit: additive
+  converged at R8-X into the canonical migration
+  `0036_r8_strategic_intelligence_foundation` (artefact only, NOT executed —
+  coverage proof `docs/recovery/r8-x-migration-convergence.md`; the stream-local
+  `0036_r8_a` provisional was retired after COMPLETE coverage). Audit: additive
   `strategic_memory_recorded` / `strategic_memory_lifecycle` (one per durable
   effect; convergence emits zero).
 - Acceptance: `api/strategic-memory-acceptance.test.ts` (36 connected
@@ -1256,10 +1257,10 @@ no LLM is final change authority.
   experiments, approvals, or any R7/R8-A table write. Audit via the canonical
   `audit_events` ledger (`business_change_detected`, `business_change_lifecycle`).
 - Schema: `business_change_events` + `business_change_lifecycle_events`
-  (stream-local provisional migration `0036_r8_b_business_change_foundation`,
-  artefact only — NOT executed; 0036 collision with the R8-A/R8-F provisionals
-  documented, R8-X owns canonical convergence;
-  `docs/recovery/r8-b-unexecuted-migrations.md`). R7's `0035` untouched.
+  (converged at R8-X into the canonical migration
+  `0036_r8_strategic_intelligence_foundation`, artefact only — NOT executed;
+  `bce_user_value_fp_idx` reconciled into `db/schema.ts` at convergence;
+  `docs/recovery/r8-x-migration-convergence.md`). R7's `0035` untouched.
 - Contracts: `docs/contracts/business-change-intelligence-contract.md`
   (canonical), `docs/contracts/business-change-to-strategic-reasoning-contract.md`
   (R8-D/E handoff). Inventory: `docs/recovery/r8-b-business-change-inventory.md`.
@@ -1313,9 +1314,9 @@ ranking, strategy mutation or execution.
   cases), `api/strategic-reasoning-security.test.ts` (13 rogue-agent cases).
   Report: `docs/recovery/r8-d-strategic-reasoning-acceptance-report.md`.
 - **Schema:** `strategic_reasoning_bundles`, `strategic_reasoning_records`,
-  `strategic_reasoning_lifecycle_events` — provisional migration
-  `0036_r8_d_strategic_reasoning_foundation` (artefact only, NOT executed;
-  `docs/recovery/r8-d-unexecuted-migrations.md`; R8-X owns convergence).
+  `strategic_reasoning_lifecycle_events` — converged at R8-X into the canonical
+  migration `0036_r8_strategic_intelligence_foundation` (artefact only, NOT
+  executed; `docs/recovery/r8-x-migration-convergence.md`).
 ---
 
 ## 29. Strategic Opportunity & Risk Intelligence (WBS-R8-E)
@@ -1356,9 +1357,9 @@ allowlist; candidate ≠ mission; recommendation ≠ execution authorization).
   `docs/recovery/r8-e-strategic-opportunity-risk-inventory.md`,
   `docs/recovery/r8-e-strategic-opportunity-risk-acceptance-report.md`.
 - Schema: `strategic_opportunity_risk_candidates/relations/lifecycle_events` —
-  stream-local provisional `0036_r8_e_strategic_opportunity_risk_foundation`
-  (artefact only, NOT executed; collision documented,
-  `docs/recovery/r8-e-unexecuted-migrations.md`; R8-X owns convergence).
+  converged at R8-X into the canonical migration
+  `0036_r8_strategic_intelligence_foundation` (artefact only, NOT executed;
+  `docs/recovery/r8-x-migration-convergence.md`).
 - Audit: additive `strategic_candidate_derived` / `strategic_candidate_lifecycle`
   (one per durable effect; convergence emits zero).
 - Acceptance: `api/strategic-opportunity-risk-acceptance.test.ts` (46 connected
