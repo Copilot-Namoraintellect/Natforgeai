@@ -1,8 +1,8 @@
 {
+  "id": "5ee1d313-930b-4b1e-8d20-73ec3c122553",
+  "prevId": "b6b35d7c-8fc9-44de-99cc-e36f080d15f5",
   "version": "5",
   "dialect": "mysql",
-  "id": "a48d7abf-7fa2-476f-b6e8-5dc285d6bf62",
-  "prevId": "b6b35d7c-8fc9-44de-99cc-e36f080d15f5",
   "tables": {
     "agent_runs": {
       "name": "agent_runs",
@@ -338,7 +338,7 @@
         },
         "approvalType": {
           "name": "approvalType",
-          "type": "enum('campaign_launch','budget_increase','sensitive_reply','high_value_proposal','ad_spend','shutdown','brand_risk','strategy_review','marketing_action','sales_handoff','optimisation_action','strategic_recommendation','mission_action')",
+          "type": "enum('campaign_launch','budget_increase','sensitive_reply','high_value_proposal','ad_spend','shutdown','brand_risk','strategy_review','marketing_action','sales_handoff','optimisation_action','strategic_recommendation')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -16199,244 +16199,13 @@
       },
       "uniqueConstraints": {},
       "checkConstraint": {}
-    },
-    "mission_governance_decisions": {
-      "name": "mission_governance_decisions",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "governanceDecisionId": {
-          "name": "governanceDecisionId",
-          "type": "varchar(69)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "contractVersion": {
-          "name": "contractVersion",
-          "type": "varchar(48)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "engineVersion": {
-          "name": "engineVersion",
-          "type": "varchar(48)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "businessId": {
-          "name": "businessId",
-          "type": "bigint unsigned",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "userId": {
-          "name": "userId",
-          "type": "bigint unsigned",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "missionRef": {
-          "name": "missionRef",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "planRef": {
-          "name": "planRef",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "taskRef": {
-          "name": "taskRef",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "subjectClass": {
-          "name": "subjectClass",
-          "type": "varchar(24)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "actionType": {
-          "name": "actionType",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "actionParamsFingerprint": {
-          "name": "actionParamsFingerprint",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "missionRiskClass": {
-          "name": "missionRiskClass",
-          "type": "varchar(16)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "riskFactors": {
-          "name": "riskFactors",
-          "type": "json",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "policyVersion": {
-          "name": "policyVersion",
-          "type": "varchar(96)",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "decision": {
-          "name": "decision",
-          "type": "varchar(24)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "reasonCodes": {
-          "name": "riskFactors",
-          "type": "json",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "approvalRequired": {
-          "name": "approvalRequired",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "approvalBinding": {
-          "name": "approvalBinding",
-          "type": "json",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "evaluationFingerprint": {
-          "name": "actionParamsFingerprint",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "validUntil": {
-          "name": "validUntil",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "evaluatedAt": {
-          "name": "evaluatedAt",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "thresholds": {
-          "name": "thresholds",
-          "type": "json",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(now())"
-        }
-      },
-      "indexes": {
-        "mgd_decision_id_idx": {
-          "name": "mgd_decision_id_idx",
-          "columns": [
-            "governanceDecisionId"
-          ],
-          "isUnique": true
-        },
-        "mgd_user_decision_idx": {
-          "name": "mgd_user_decision_idx",
-          "columns": [
-            "userId",
-            "governanceDecisionId"
-          ],
-          "isUnique": true
-        },
-        "mgd_business_idx": {
-          "name": "mgd_business_idx",
-          "columns": [
-            "businessId"
-          ],
-          "isUnique": false
-        },
-        "mgd_user_idx": {
-          "name": "mgd_user_idx",
-          "columns": [
-            "userId"
-          ],
-          "isUnique": false
-        },
-        "mgd_mission_idx": {
-          "name": "mgd_mission_idx",
-          "columns": [
-            "missionRef"
-          ],
-          "isUnique": false
-        },
-        "mgd_decision_idx": {
-          "name": "mgd_decision_idx",
-          "columns": [
-            "decision"
-          ],
-          "isUnique": false
-        },
-        "mgd_evaluated_idx": {
-          "name": "mgd_evaluated_idx",
-          "columns": [
-            "evaluatedAt"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraint": {}
     }
   },
   "views": {},
   "_meta": {
+    "columns": {},
     "schemas": {},
-    "tables": {},
-    "columns": {}
+    "tables": {}
   },
   "internal": {
     "tables": {},
