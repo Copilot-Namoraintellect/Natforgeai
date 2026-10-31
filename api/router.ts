@@ -50,6 +50,7 @@ import { missionAuthorityRouter } from "./mission-authority-router";
 import { missionGovernanceRouter } from "./mission-governance-router";
 import { missionPlanningRouter } from "./mission-planning-router";
 import { missionSchedulingRouter } from "./mission-scheduling-router";
+import { executionCoordinationRouter } from "./execution-coordination-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -125,6 +126,7 @@ export const appRouter = createRouter({
   missionGovernance: missionGovernanceRouter,
   missionPlanning: missionPlanningRouter,
   missionScheduling: missionSchedulingRouter,
+  execution: executionCoordinationRouter,
 });
 
 export type AppRouter = typeof appRouter;

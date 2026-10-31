@@ -244,6 +244,12 @@ export const AUDIT_EVENT_TYPES = [
   // cancellation). One canonical event per inserted fact; convergence paths
   // write zero events. No EXECUTING status exists anywhere in this stream.
   "mission_schedule_lifecycle",
+  // R9-D: execution coordination durable effects (dispatch intents, attempts,
+  // lifecycle facts). Identity references + closed labels/hashes in metadata
+  // only — never action parameters, secrets or provider payloads.
+  "execution_action_prepared",
+  "execution_attempt_recorded",
+  "execution_attempt_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
