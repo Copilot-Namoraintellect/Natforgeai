@@ -4448,3 +4448,127 @@ export type StrategicOpportunityRiskLifecycleEventRow =
   typeof strategicOpportunityRiskLifecycleEvents.$inferSelect;
 export type InsertStrategicOpportunityRiskLifecycleEventRow =
   typeof strategicOpportunityRiskLifecycleEvents.$inferInsert;
+
+// ─── R9-D Execution Coordination ───
+//
+// Stream-local provisional tables for the execution coordination authority
+// (docs/contracts/mission-execution-coordination-contract.md). Provisional
+// migration 0037_r9_d_execution_coordination_foundation is ARTEFACT ONLY —
+// NOT executed; R9-X owns canonical 0037 convergence. R8 canonical 0036 is
+// never modified. Insert-first durable unique anchors give structural
+// exact-once convergence; rows are immutable (hash-drift = tamper).
+
+export const executionActions = mysqlTable(
+  "execution_actions",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic exa1:<sha256> identity — the execution action envelope.
+    executionActionId: varchar("executionActionId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    planId: varchar("planId", { length: 128 }).notNull(),
+    scheduleId: varchar("scheduleId", { length: 69 }).notNull(),
+    taskId: varchar("taskId", { length: 128 }).notNull(),
+    taskType: varchar("taskType", { length: 64 }).notNull(),
+    actionType: varchar("actionType", { length: 32 }).notNull(),
+    // sha256 over the bounded action material — raw parameters never persist.
+    actionParametersHash: varchar("actionParametersHash", { length: 64 }).notNull(),
+    // JSON: bounded reference strings only (≤16).
+    inputRefs: json("inputRefs").notNull(),
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }).notNull(),
+    // Bound approval_requests.id for REVIEW_REQUIRED decisions; null for ALLOW.
+    approvalReference: bigint("approvalReference", { mode: "number", unsigned: true }),
+    authorizationFingerprint: varchar("authorizationFingerprint", { length: 64 }).notNull(),
+    // Deterministic idem1:<sha256> — never client-generated.
+    idempotencyKey: varchar("idempotencyKey", { length: 70 }).notNull(),
+    adapterType: varchar("adapterType", { length: 24 }).notNull(),
+    capability: varchar("capability", { length: 40 }).notNull(),
+    validFrom: varchar("validFrom", { length: 32 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }).notNull(),
+    // NEVER_ATTEMPTED | DISPATCH_PREPARED | DISPATCHED | ACKNOWLEDGED |
+    // SUCCEEDED | FAILED | UNCERTAIN | CANCELLED
+    dispatchState: varchar("dispatchState", { length: 20 }).notNull(),
+    dispatchFingerprint: varchar("dispatchFingerprint", { length: 64 }).notNull(),
+    attemptCount: int("attemptCount").notNull(),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    actionIdentityUnique: uniqueIndex("exa_action_identity_uidx").on(table.executionActionId),
+    userActionUnique: uniqueIndex("exa_user_action_uidx").on(table.userId, table.executionActionId),
+    userIdempotencyUnique: uniqueIndex("exa_user_idempotency_uidx").on(table.userId, table.idempotencyKey),
+    userTaskIdx: index("exa_user_task_idx").on(table.userId, table.taskId),
+    userMissionIdx: index("exa_user_mission_idx").on(table.userId, table.missionId),
+  })
+);
+
+export type ExecutionActionRow = typeof executionActions.$inferSelect;
+export type InsertExecutionActionRow = typeof executionActions.$inferInsert;
+
+export const executionAttempts = mysqlTable(
+  "execution_attempts",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic exr1:<sha256> attempt identity.
+    attemptId: varchar("attemptId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    executionActionId: varchar("executionActionId", { length: 69 }).notNull(),
+    attemptNumber: int("attemptNumber").notNull(),
+    dispatchFingerprint: varchar("dispatchFingerprint", { length: 64 }).notNull(),
+    adapterType: varchar("adapterType", { length: 24 }).notNull(),
+    capability: varchar("capability", { length: 40 }).notNull(),
+    // Server-issued reference awaiting callback binding; null when none.
+    externalReference: varchar("externalReference", { length: 191 }),
+    // SUCCEEDED | FAILED_RETRYABLE | FAILED_FINAL | PENDING_EXTERNAL | UNCERTAIN
+    resultStatus: varchar("resultStatus", { length: 20 }),
+    // sha256 over the redacted classification material — never raw payloads.
+    resultHash: varchar("resultHash", { length: 64 }),
+    failureClass: varchar("failureClass", { length: 24 }).notNull(),
+    uncertaintyClass: varchar("uncertaintyClass", { length: 28 }).notNull(),
+    startedAt: varchar("startedAt", { length: 32 }).notNull(),
+    completedAt: varchar("completedAt", { length: 32 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    attemptIdentityUnique: uniqueIndex("exr_attempt_identity_uidx").on(table.attemptId),
+    userAttemptUnique: uniqueIndex("exr_user_attempt_uidx").on(table.userId, table.attemptId),
+    userActionAttemptUnique: uniqueIndex("exr_user_action_attempt_uidx").on(
+      table.userId,
+      table.executionActionId,
+      table.attemptNumber
+    ),
+    userActionIdx: index("exr_user_action_idx").on(table.userId, table.executionActionId),
+  })
+);
+
+export type ExecutionAttemptRow = typeof executionAttempts.$inferSelect;
+export type InsertExecutionAttemptRow = typeof executionAttempts.$inferInsert;
+
+export const executionLifecycleEvents = mysqlTable(
+  "execution_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic exl1:<sha256> lifecycle fact identity.
+    lifecycleEventId: varchar("lifecycleEventId", { length: 70 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    executionActionId: varchar("executionActionId", { length: 69 }).notNull(),
+    attemptId: varchar("attemptId", { length: 69 }),
+    // dispatch_state_changed | result_recorded | retry_candidate_emitted
+    lifecycleType: varchar("lifecycleType", { length: 28 }).notNull(),
+    fromState: varchar("fromState", { length: 20 }),
+    toState: varchar("toState", { length: 20 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    lifecycleIdentityUnique: uniqueIndex("exl_lifecycle_identity_uidx").on(table.lifecycleEventId),
+    userActionIdx: index("exl_user_action_idx").on(table.userId, table.executionActionId),
+  })
+);
+
+export type ExecutionLifecycleEventRow = typeof executionLifecycleEvents.$inferSelect;
+export type InsertExecutionLifecycleEventRow = typeof executionLifecycleEvents.$inferInsert;
