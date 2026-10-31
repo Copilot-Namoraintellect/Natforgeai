@@ -4448,3 +4448,136 @@ export type StrategicOpportunityRiskLifecycleEventRow =
   typeof strategicOpportunityRiskLifecycleEvents.$inferSelect;
 export type InsertStrategicOpportunityRiskLifecycleEventRow =
   typeof strategicOpportunityRiskLifecycleEvents.$inferInsert;
+
+// ─── R9-B Mission Planning & Decomposition (stream-local provisional schema;
+// canonical at R9-X convergence — see docs/recovery/r9-b-mission-planning-inventory.md).
+// Mission plans are bounded task-definition authority, never execution
+// authorization; plan lifecycle has no EXECUTING status. ───
+
+export const missionPlans = mysqlTable(
+  "mission_plans",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic pln1:<sha256> plan identity; unique convergence anchor.
+    planId: varchar("planId", { length: 69 }).notNull(),
+    planVersion: int("planVersion").notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    // Governed R9-A mission reference, verbatim (mission authority is read-only here).
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    // The R9-A missionFingerprint (immutable mission material core) this plan binds.
+    missionAuthorityVersion: varchar("missionAuthorityVersion", { length: 64 }).notNull(),
+    // R9-A optimistic version observed at formation — drift metadata, not identity.
+    boundMissionVersion: int("boundMissionVersion").notNull(),
+    planScopeKey: varchar("planScopeKey", { length: 512 }).notNull(),
+    // JSON: string[] — ordered tsk1: identities of this plan version.
+    taskIds: json("taskIds").notNull(),
+    taskSetFingerprint: varchar("taskSetFingerprint", { length: 64 }).notNull(),
+    constraintSetFingerprint: varchar("constraintSetFingerprint", { length: 64 }).notNull(),
+    // JSON: verbatim mission constraint set (immutable input).
+    missionConstraints: json("missionConstraints").notNull(),
+    // JSON: {statement}[] — client-declared bounded assumptions (≤8).
+    planningAssumptions: json("planningAssumptions").notNull(),
+    // JSON: unresolved planning work (≤16).
+    unresolvedItems: json("unresolvedItems").notNull(),
+    completenessStatus: varchar("completenessStatus", { length: 24 }).notNull(),
+    status: varchar("status", { length: 24 }).notNull(),
+    validFrom: varchar("validFrom", { length: 32 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }).notNull(),
+    supersedesPlanId: varchar("supersedesPlanId", { length: 69 }),
+    // Immutable plan core fingerprint — replay-conflict anchor.
+    planFingerprint: varchar("planFingerprint", { length: 64 }).notNull(),
+    modelAssistanceFlagged: boolean("modelAssistanceFlagged").notNull().default(false),
+    // Optimistic version for CAS lifecycle transitions.
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    planIdentityUnique: uniqueIndex("mplans_plan_identity_uidx").on(table.planId),
+    userPlanUnique: uniqueIndex("mplans_user_plan_uidx").on(table.userId, table.planId),
+    userMissionVersionUnique: uniqueIndex("mplans_user_mission_version_uidx").on(
+      table.userId,
+      table.missionId,
+      table.planVersion
+    ),
+    userMissionIdx: index("mplans_user_mission_idx").on(table.userId, table.missionId),
+    userStatusIdx: index("mplans_user_status_idx").on(table.userId, table.status),
+  })
+);
+
+export type MissionPlanRow = typeof missionPlans.$inferSelect;
+export type InsertMissionPlanRow = typeof missionPlans.$inferInsert;
+
+export const missionPlanTasks = mysqlTable(
+  "mission_plan_tasks",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic tsk1:<sha256> task identity.
+    taskId: varchar("taskId", { length: 69 }).notNull(),
+    planId: varchar("planId", { length: 69 }).notNull(),
+    planVersion: int("planVersion").notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    taskType: varchar("taskType", { length: 32 }).notNull(),
+    taskSequence: int("taskSequence").notNull(),
+    // Server-derived canonical objective (never client/model text).
+    taskObjective: text("taskObjective").notNull(),
+    // Advisory model rewording — inert bounded text; never authority.
+    objectiveWordingDraft: text("objectiveWordingDraft"),
+    // JSON: closed artifact vocabulary.
+    requiredInputs: json("requiredInputs").notNull(),
+    expectedOutputs: json("expectedOutputs").notNull(),
+    // JSON: closed capability vocabulary.
+    requiredCapabilities: json("requiredCapabilities").notNull(),
+    // JSON: verbatim mission constraint set inherited by the task.
+    constraints: json("constraints").notNull(),
+    // JSON: {condition, ref}[] closed condition vocabulary.
+    preconditions: json("preconditions").notNull(),
+    postconditions: json("postconditions").notNull(),
+    governanceClass: varchar("governanceClass", { length: 28 }).notNull(),
+    sideEffectClass: varchar("sideEffectClass", { length: 28 }).notNull(),
+    executionClass: varchar("executionClass", { length: 32 }).notNull(),
+    capabilityStatus: varchar("capabilityStatus", { length: 28 }).notNull(),
+    // JSON: declarative governance characteristics (R9-F material only).
+    governanceCharacteristics: json("governanceCharacteristics").notNull(),
+    status: varchar("status", { length: 28 }).notNull(),
+    // Immutable task core fingerprint.
+    taskFingerprint: varchar("taskFingerprint", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    taskIdentityUnique: uniqueIndex("mptasks_task_identity_uidx").on(table.taskId),
+    userTaskUnique: uniqueIndex("mptasks_user_task_uidx").on(table.userId, table.taskId),
+    userPlanIdx: index("mptasks_user_plan_idx").on(table.userId, table.planId),
+  })
+);
+
+export type MissionPlanTaskRow = typeof missionPlanTasks.$inferSelect;
+export type InsertMissionPlanTaskRow = typeof missionPlanTasks.$inferInsert;
+
+export const missionPlanLifecycleEvents = mysqlTable(
+  "mission_plan_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic mpl1:<sha256> lifecycle fact identity.
+    lifecycleEventId: varchar("lifecycleEventId", { length: 70 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    planId: varchar("planId", { length: 69 }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 24 }).notNull(),
+    targetStatus: varchar("targetStatus", { length: 24 }).notNull(),
+    successorPlanId: varchar("successorPlanId", { length: 69 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    lifecycleIdentityUnique: uniqueIndex("mpl_lifecycle_identity_uidx").on(table.lifecycleEventId),
+    userPlanIdx: index("mpl_user_plan_idx").on(table.userId, table.planId),
+  })
+);
+
+export type MissionPlanLifecycleEventRow = typeof missionPlanLifecycleEvents.$inferSelect;
+export type InsertMissionPlanLifecycleEventRow = typeof missionPlanLifecycleEvents.$inferInsert;

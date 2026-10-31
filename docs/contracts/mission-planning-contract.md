@@ -118,6 +118,7 @@ planId = "pln1:" + sha256(canonicalJson({
   businessId,
   missionId,               // governed R9-A mission (reference only)
   missionAuthorityVersion, // R9-A missionFingerprint — the immutable mission core
+  planVersion,             // per-mission monotonic version (revision mints N+1)
   planScopeKey,            // canonical planning scope (never client/model text)
   taskSetFingerprint,      // canonical derived task set
   constraintSetFingerprint // verbatim mission constraint set fingerprint
@@ -127,9 +128,12 @@ planScopeKey = "<missionScopeKey>"            // carried from R9-A scopeKey, ver
              + "|planning:v1"
 
 taskSetFingerprint = sha256(canonicalJson({ v:1, tasks: [
-  // one canonical task core per derived task, sorted by taskId:
-  { taskId, taskType, taskObjective,
+  // one canonical task core per derived task, sorted by (taskType|taskObjective):
+  { taskType, taskObjective,
     inputsFingerprint, outputsFingerprint, constraintsFingerprint }
+  // taskIds are NOT an input: taskId binds planId, and planId binds the
+  // task-set fingerprint — including taskId here would be circular. The
+  // task-set core above contains every input from which a taskId derives.
 ] }))
 
 constraintSetFingerprint = sha256(canonicalJson({ v:1, constraints: [

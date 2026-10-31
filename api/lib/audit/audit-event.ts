@@ -199,6 +199,16 @@ export const AUDIT_EVENT_TYPES = [
   // governance rebind). One canonical event per inserted fact; convergence
   // paths write zero events.
   "strategic_candidate_lifecycle",
+  // R9-B: one durable mission plan was created (bounded task-definition
+  // authority — never execution authorization; an idempotent replay
+  // converged to it). Exactly one event per inserted plan; convergence emits
+  // zero. Metadata carries ids/closed classes/hashes only.
+  "mission_plan_created",
+  // R9-B: one immutable mission plan lifecycle fact was durably recorded
+  // (validation / readiness / supersession / blockage / staleness /
+  // cancellation / invalidation). One canonical event per inserted fact;
+  // convergence paths write zero events.
+  "mission_plan_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

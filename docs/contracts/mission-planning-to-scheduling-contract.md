@@ -78,6 +78,9 @@ plan is never scheduling-consumable.
 | `executionClaimed` | `false` | always false |
 | `executionDisclaimer` | string | verbatim (§5) |
 | `limitations` | string[] | Bounded projection limitations |
+| `missionAuthorityVersion` | `<sha256>` | Bound R9-A mission material fingerprint (staleness binding) |
+| `supersedesPlanId` | `pln1:\|null` | Exact predecessor plan version |
+| `eligibleTaskIds` | `tsk1:[]` | Task ids schedulable under §3 (empty when ineligible) |
 
 ### 4.1 Task view (exact, 20 keys)
 
@@ -100,6 +103,9 @@ plan is never scheduling-consumable.
 | `governanceCharacteristics` | object (§7 of canonical contract) |
 | `status` | closed enum (7) |
 | `schedulable` | bool — `true` only when the task is `READY_FOR_SCHEDULING`-capable and the plan is scheduling-eligible |
+| `planId` | `pln1:…` (ownership reference, verbatim) |
+| `missionId` | `mis1:…` (ownership reference, verbatim) |
+| `businessId` | number (server-verified) |
 
 ## 5. Verbatim disclaimers (on every projection)
 
