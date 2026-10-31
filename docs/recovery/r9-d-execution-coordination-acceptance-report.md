@@ -8,8 +8,8 @@
 
 ```
 branch=feature/r9-d-execution-coordination
-head=<final HEAD — recorded at report commit>
-remote_head=<origin after final push>
+head=8206020 (pre-report-final); final report commit recorded below
+remote_head=pushed atomically per slice — final push recorded below
 working_tree=clean (committed atomically per slice)
 ```
 
@@ -80,9 +80,11 @@ full_suite=7296 passed / 2 failed of 7380 — both failures proven unrelated to 
     (b) src/pages/Campaigns.test.tsx fails at firebase env import — this fresh worktree has no
     .env (gitignored secret file, not copied per policy); fails identically on the programme base
     by construction. R4 workflow timeout flakes from earlier runs also pass in isolation.
-typescript=tsc -b — clean
-build=<recorded below>
-deployment_verification=<verify-deployment via npm run build — recorded below>
+typescript=tsc -b — clean (final run after seam refactor)
+build=PASS (vite build 41.8s; api/boot.js + api/worker.js esm bundles produced)
+deployment_verification=PASS (scripts/verify-deployment.mjs: web.config rewrite rules verified in
+    public/ and dist/public/; HTTP smoke test intentionally not run — NATFORGE_SMOKE_URL unset,
+    no production target touched)
 diff_check=clean (git diff --check per slice)
 secret_scan=clean (pattern scan over the changed set — no credential material)
 ```
