@@ -99,11 +99,14 @@ governance + R6-X harness/security — no failures)
 affected=Business DNA / strategy snapshot / campaign / audit taxonomy /
 approval / auth / tenant isolation / business isolation / replay-idempotency /
 lifecycle / CAS-structural suites — all green in the full run
-full_suite=7223 passed, 2 failed, 68 skipped, 14 todo (7307 total). The 2
-failures + 1 load failure are PROVEN environmental/interference: both fail
-only under full-suite parallel load and PASS in isolation (61/61 rerun);
-Campaigns.test.tsx passes once VITE_FIREBASE_* env vars exist (module-load
-failure, no R8 involvement). Confirmation rerun executed.
+full_suite=confirmation rerun: 7224 passed, 1 failed, 68 skipped, 14 todo
+(7307 total; first run 7223 passed / 2 failed). Every failure is PROVEN
+unrelated to R8: (a) terminal-content-replay-executor "exact replay binding
+is idempotent" is an order-dependent pre-existing queue test — last modified
+by pre-R8 commit 6f2466d, untouched by any R8 stream (git-verified), fails
+only under full-suite parallel load, passes 61/61 in isolation on repeated
+reruns; (b) Campaigns.test.tsx module-load failure passes once VITE_FIREBASE_*
+env vars exist (no R8 involvement). No R8-X regression exists.
 typescript=tsc -b clean
 build=PASS (vite + esbuild bundles + `verify-deployment.mjs`: "Deployment
 verification passed" — repository-native, non-deploying)
