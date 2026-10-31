@@ -96,7 +96,6 @@ export interface ScheduleAuthorityView {
   readonly status: string;
   readonly orderedTaskIds: readonly string[];
   readonly blockingStates: readonly ScheduleBlockingState[];
-  readonly constraints: readonly unknown[];
   readonly dependencyRefs: readonly ScheduleDependencyRef[];
   readonly validFrom: string;
   readonly validUntil: string;
@@ -255,7 +254,6 @@ function shapeScheduleRow(row: Record<string, unknown>): ScheduleAuthorityView {
       reasons: parseJsonArray(e.reasons).map(String),
     };
   });
-  const constraints = parseJsonArray(row.constraints);
   const dependencyRefs = parseJsonArray(row.dependencyRefs).map((entry) => {
     const e = (entry ?? {}) as Record<string, unknown>;
     return {
@@ -275,7 +273,6 @@ function shapeScheduleRow(row: Record<string, unknown>): ScheduleAuthorityView {
     status,
     orderedTaskIds: parseJsonArray(row.orderedTaskIds).map(String),
     blockingStates,
-    constraints,
     dependencyRefs,
     validFrom,
     validUntil,
@@ -391,7 +388,7 @@ export function createExecutionUpstreamAuthority(
       await guarded("mission_schedules");
       const row = await rawOne(sql`
         SELECT scheduleId, userId, businessId, missionId, planId, planFingerprint, status,
-               orderedTaskIds, blockingStates, constraints, dependencyRefs,
+               orderedTaskIds, blockingStates, dependencyRefs,
                validFrom, validUntil, scheduleFingerprint
         FROM mission_schedules WHERE userId = ${userId} AND scheduleId = ${scheduleId} LIMIT 1
       `);

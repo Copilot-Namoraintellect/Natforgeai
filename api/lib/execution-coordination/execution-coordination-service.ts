@@ -288,9 +288,12 @@ async function runUpstreamGate(
       `task ${input.taskId} is blocked (${blocked.readiness}: ${blocked.reasons.join(", ")}).`
     );
   }
-  for (const constraint of schedule.constraints) {
+  // Task-level TIME_WINDOW constraints (R9-B task row, verbatim plan
+  // material) must admit `now`. The frozen mission_schedules table carries
+  // no constraints column — scheduling projects them from the plan document.
+  for (const constraint of task.constraints) {
     const c = (constraint ?? {}) as Record<string, unknown>;
-    if (c["taskId"] !== input.taskId || c["constraintType"] !== "TIME_WINDOW") continue;
+    if (c["constraintType"] !== "TIME_WINDOW") continue;
     const notBefore = typeof c["notBefore"] === "string" ? c["notBefore"] : null;
     const notAfter = typeof c["notAfter"] === "string" ? c["notAfter"] : null;
     if (notBefore && isIsoUtc(notBefore) && Date.parse(nowIso) < Date.parse(notBefore)) {
