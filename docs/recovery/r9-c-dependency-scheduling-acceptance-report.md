@@ -94,11 +94,16 @@ CAS-guarded lifecycle.
 
 - **R9-C targeted:** 49/49 (35 acceptance + 14 security), plus 32/32 audit suite.
 - **tsc -b:** clean.
-- **Full offline suite:** 7272 passed / 2 failed → after the additive audit
-  taxonomy assertion was extended (house convention for the closed taxonomy
-  list test), failures resolved. The `r4-x6-full-autonomy-e2e` hook timeout is a
-  load-dependent flake: passes in isolation (21/21) and is untouched by this
-  stream (final confirmation recorded below in §8).
+- **Full offline suite (final, at stream HEAD):** **7274 passed · 0 failed
+  tests · 68 skipped · 14 todo** of 7356. One test FILE reported a failure
+  with zero failed tests: `r4-x6-full-autonomy-e2e` — a `beforeEach` hook
+  timeout (10s budget under 443-file parallel load). It passes in isolation
+  (21/21, reconfirmed twice) and is untouched by this stream (`git diff
+  --name-only 4fc43c3..HEAD` includes no workflow files); the programme base
+  carries the same load-dependent characteristic (X11 base evidence records a
+  pre-existing unrelated single failure). The earlier full-run test failures
+  (audit taxonomy closed-list assertion) were resolved by extending that
+  house-convention assertion with the three additive R9-C event types.
 - **Build:** `vite build` fails at `tailwind.config.js` with
   `ReferenceError: module is not defined` — **proven pre-existing on the
   programme base** (identical failure reproduced from a clean `4fc43c3`
@@ -150,9 +155,14 @@ disclaimers) — **gate satisfied**.
 
 ## 8. Final confirmation
 
-Final full-suite run recorded at stream HEAD after all fixes (see git history):
-targeted 49/49, audit 32/32, tsc clean, backend bundle clean, `git diff --check`
-clean, provisional migration artefact only. No deploy, no migration execution,
-no production access, no live CRM/provider/payment/billing invocation.
+Final full-suite evidence at stream HEAD: **7274 passed · 0 failed tests**
+(7356 total; the single file-level report is the load-dependent r4-x6 hook
+flake documented in §6, green in isolation). Targeted R9-C suites: 49/49
+(35 acceptance + 14 rogue-agent security); audit suite 32/32; tsc -b clean;
+backend esbuild bundle clean (the `vite build` tailwind failure is proven
+pre-existing on base); `git diff --check` clean; provisional migration
+artefact only (`MIGRATION_EXECUTION=False`). No deploy, no migration
+execution, no production access, no live CRM/provider/payment/billing
+invocation. Branch pushed: `origin/feature/r9-c-dependency-scheduling`.
 
 **FINAL VERDICT: DEPENDENCY_SCHEDULING_READY**
