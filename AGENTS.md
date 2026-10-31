@@ -37,6 +37,7 @@
 28. [Strategic Reasoning (WBS-R8-D)](#28-strategic-reasoning-wbs-r8-d)
 29. [Strategic Opportunity & Risk Intelligence (WBS-R8-E)](#29-strategic-opportunity--risk-intelligence-wbs-r8-e)
 30. [Strategic Intelligence Integration (WBS-R8-X)](#30-strategic-intelligence-integration-wbs-r8-x)
+31. [Mission State, Recovery & Observability (WBS-R9-E)](#31-mission-state-recovery--observability-wbs-r9-e)
 
 ---
 
@@ -637,6 +638,7 @@ Browser → Vite Dev Server → Hono (api/boot.ts) → tRPC fetchRequestHandler
 | `businessChange` | `api/business-change-router.ts` | R8-B business change intelligence: deterministic detection/classification of meaningful internal changes by comparing R8-A current strategic memory (previous state, read-only) against newly observed governed evidence (R7 budget/learning/governance, Business DNA, strategy snapshots) or bounded operator attestation; `chg1:` identity, immutable evidenceHash cores, closed domains/types, confidence-capped significance, confirmation/contradiction/supersession lifecycle, read-only downstream projection for R8-D/E (`evaluate`, `attest`, `correct`, `get`, `list`, `r8Projections`, `listLifecycle`, `sweepExpiry`). Never mutates memory/DNA/strategy/budget/operations. Contracts: `docs/contracts/business-change-intelligence-contract.md`, `docs/contracts/business-change-to-strategic-reasoning-contract.md` |
 | `marketSignal` | `api/market-signal-router.ts` | WBS-R8-C market & external signal intelligence: safe ingest/normalization/corroboration/classification of external strategic evidence — deterministic source/signal identity, server-side source registry + spoof rejection, inert-content injection detection, R8-F-vocabulary trust, independent-only corroboration, per-type freshness, bounded business relevance, visible contradiction/supersession lifecycle, read-only `external-signal/v1` projection for R8-D/E (`ingest`, `get`, `list`, `listLifecycle`, `r8Projections`, `listSources`). Contracts: `docs/contracts/market-external-signal-contract.md`, `docs/contracts/external-signal-to-strategic-reasoning-contract.md` |
 | `strategicReasoning` | `api/strategic-reasoning-router.ts` | WBS-R8-D strategic reasoning: deterministic evidence-bundle + rule-first synthesis over R8-A/B/C evidence, confidence/uncertainty caps, mandatory R8-F governance binding, immutable conclusion lifecycle + re-evaluation, read-only R8-E handoff projection (`evaluate`, `get`, `list`, `listLifecycle`, `reevaluate`, `getHandoffProjections`). Never owns upstream truth, never executes. Contract: `docs/contracts/strategic-reasoning-contract.md` |
+| `missionStateRecovery` | `api/mission-state-recovery-router.ts` | WBS-R9-E mission state, recovery & observability: deterministic derived mission/task operational state over R9-A/B/C lifecycle + R9-D immutable execution history, mission health classification, conservative failure/uncertainty classification, advisory recovery candidates (`rcn1:`) with frozen R9-F governance binding/consumption, governed execution-recovery handoff back to R9-D, append-only `mot1:` operational timeline, stale/drift re-evaluation, frozen `mission-state-to-mission-control/v1` projection (`observe`, `getMissionState`, `listMissionTaskStates`, `listExecutionAttempts`, `listRecoveryCandidates`, `proposeRecovery`, `bindRecoveryGovernance`, `consumeRecovery`, `reevaluate`, `cancelRecovery`, `getOperationalTimeline`, `getMissionHealth`, `getMissionControlHandoff`). Never owns mission objective/planning/scheduling/execution history/governance; never authorizes or executes recovery. Contracts: `docs/contracts/mission-state-recovery-contract.md`, `docs/contracts/mission-state-to-mission-control-contract.md` |
 
 ### Context
 
@@ -1392,4 +1394,66 @@ The integrated R8 system (streams A/B/C/D/E/F merged on
 - **Execution boundary:** R8 never mutates DNA/strategy/budget/campaigns/
   experiments/providers/billing; `candidate != mission`;
   `recommendation != execution authorization`.
+- Real-MySQL concurrency remains the R10 / pre-production gate.
+
+
+---
+
+## 31. Mission State, Recovery & Observability (WBS-R9-E)
+
+The mission-state/recovery/observability authority (branch
+`feature/r9-e-mission-state-recovery`). Consumes frozen upstreams by branch
+ref only (never merged): R9-A `273ce40`, R9-B `a358f53`, R9-C `1c5837f`,
+R9-D `2b7735e` (`mission-execution-to-state-recovery/v1` projection), R9-F
+`1665d2f` (frozen `assertMissionActionConsumable` gate semantics).
+
+**Required principle:** *execution history is immutable input; observability
+!= authority; recovery proposal != recovery authorization.* Mission state is
+derived — never set by client or model; no inferred success anywhere.
+
+- Core modules: `api/lib/mission-state-recovery/` (`-contract`,
+  `-identity`, `-upstream-seam`, `mission-execution-seam`,
+  `mission-recovery-governance-seam`, `-derivation`, `-store`,
+  `-service`, `-projection`); router `missionStateRecovery`
+  (`api/mission-state-recovery-router.ts`) — authed-only, `z.strictObject`.
+- Derivation (E2/E3/E5): rule-ordered task operational statuses
+  (`PENDING|READY|DISPATCHED|PENDING_EXTERNAL|SUCCEEDED|FAILED_RETRYABLE|
+  FAILED_FINAL|UNCERTAIN|BLOCKED|STALE|CANCELLED`) from R9-A/B/C lifecycle +
+  R9-D attempts; health `HEALTHY|DEGRADED|BLOCKED|AT_RISK|FAILED|UNCERTAIN|
+  COMPLETED` (COMPLETED only when every required task — current schedule ∩
+  current plan — is SUCCEEDED from authoritative evidence; unknown external
+  results prevent false completion). Conservative failure/uncertainty
+  classes (closed); required task set is schedule-membership-derived — the
+  upstream contracts define no optionality marker and E never invents one.
+- Recovery (E4/E6/E7): deterministic `rcn1:` candidates binding tenant +
+  business + mission + task/action + failure/uncertainty + **latest
+  authoritative attempt** + recovery type (`RETRY|REVALIDATE|WAIT_EXTERNAL|
+  REQUEST_HUMAN_REVIEW|RESCHEDULE|REPLAN|CANCEL_TASK|CANCEL_MISSION|
+  ESCALATE`); scope is verbatim from durable R9-D rows (drift ⇒
+  `INVALIDATED`); candidates are **advisory**. Governance binding/consumption
+  runs the frozen R9-F gate (exact subject/action/refs/params fingerprint,
+  policy version, approval binding-hash revalidation); `AUTHORIZED` performs
+  nothing — consumable recoveries emit a read-only execution-recovery
+  handoff for R9-D; lifecycle `PROPOSED|REVIEW_REQUIRED|AUTHORIZED|
+  IN_PROGRESS|RESOLVED|FAILED|SUPERSEDED|STALE|CANCELLED|INVALIDATED`.
+- Observability (E8/E9): append-only `mot1:` timeline (closed event types,
+  labels only — no secrets, no chain-of-thought); stale/drift re-evaluation
+  re-derives state and stales/invalidates/supersedes bound candidates; never
+  silently continues from stale authority.
+- Downstream (E11): frozen 21-key `mission-state-to-mission-control/v1`
+  read-only projection (`getMissionControlHandoff`) with verbatim
+  disclaimers.
+- Schema: `mission_state_records`, `mission_task_states`,
+  `mission_recovery_candidates`, `mission_operational_timeline_events` —
+  provisional migration `0037_r9_e_mission_state_recovery_foundation`
+  (artefact only, NOT executed; R9-X owns canonical 0037 convergence).
+  Audit: additive `mission_state_derived`,
+  `mission_recovery_candidate_proposed`, `mission_recovery_lifecycle`.
+- Acceptance: `api/mission-state-recovery-acceptance.test.ts` (50 connected
+  cases E12.1–E12.50), `api/mission-state-recovery-security.test.ts`
+  (20 rogue-agent cases). Report:
+  `docs/recovery/r9-e-mission-state-recovery-acceptance-report.md`.
+- Execution boundary: no provider/adapter/registry code, no billing, no CRM,
+  no live execution anywhere in the stream; upstream tables are read-only
+  behind guarded information-schema seams that fail closed when absent.
 - Real-MySQL concurrency remains the R10 / pre-production gate.

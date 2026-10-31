@@ -4448,3 +4448,170 @@ export type StrategicOpportunityRiskLifecycleEventRow =
   typeof strategicOpportunityRiskLifecycleEvents.$inferSelect;
 export type InsertStrategicOpportunityRiskLifecycleEventRow =
   typeof strategicOpportunityRiskLifecycleEvents.$inferInsert;
+
+
+// ─── R9-E Mission State, Recovery & Observability ───
+// Stream-local authority tables (mission-state-recovery/v1). Provisional
+// migration 0037_r9_e_mission_state_recovery_foundation — ARTEFACT ONLY, NOT
+// executed; R9-X owns canonical 0037 convergence. Canonical R8 0036 is never
+// modified by these definitions.
+
+export const missionStateRecords = mysqlTable(
+  "mission_state_records",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic mst1:<sha256> observation identity; unique anchor.
+    missionStateId: varchar("missionStateId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    planId: varchar("planId", { length: 128 }).notNull(),
+    scheduleId: varchar("scheduleId", { length: 69 }).notNull(),
+    // Verbatim R9-A mission status (never derived into a lie downstream).
+    missionStatus: varchar("missionStatus", { length: 28 }).notNull(),
+    healthClass: varchar("healthClass", { length: 16 }).notNull(),
+    // JSON: { total, byStatus, requiredTotal, requiredSucceeded }.
+    taskSummary: json("taskSummary").notNull(),
+    // JSON: string[] — latest exa1:/exr1: refs per task, newest first.
+    latestExecutionRefs: json("latestExecutionRefs").notNull(),
+    // JSON: closed blocking reasons (≤8).
+    blockingReasons: json("blockingReasons").notNull(),
+    // JSON: closed uncertainty classes (≤8).
+    uncertainties: json("uncertainties").notNull(),
+    // JSON: rcn1:[] — current (non-terminal) recovery candidate ids.
+    recoveryCandidateIds: json("recoveryCandidateIds").notNull(),
+    observedAt: varchar("observedAt", { length: 32 }).notNull(),
+    // stateDerivationHash of the authoritative inputs.
+    derivedFromVersion: varchar("derivedFromVersion", { length: 64 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }).notNull(),
+    // Optimistic version for CAS lifecycle effects.
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    missionStateIdentityUnique: uniqueIndex("msr_state_identity_uidx").on(table.missionStateId),
+    userMissionStateUnique: uniqueIndex("msr_user_state_uidx").on(table.userId, table.missionStateId),
+    userMissionIdx: index("msr_user_mission_idx").on(table.userId, table.missionId),
+  })
+);
+
+export type MissionStateRecordRow = typeof missionStateRecords.$inferSelect;
+export type InsertMissionStateRecordRow = typeof missionStateRecords.$inferInsert;
+
+export const missionTaskStates = mysqlTable(
+  "mission_task_states",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic tst1:<sha256> task-state identity; unique anchor.
+    taskStateId: varchar("taskStateId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    planId: varchar("planId", { length: 128 }).notNull(),
+    scheduleId: varchar("scheduleId", { length: 69 }).notNull(),
+    taskId: varchar("taskId", { length: 128 }).notNull(),
+    latestAttemptId: varchar("latestAttemptId", { length: 69 }),
+    status: varchar("status", { length: 20 }).notNull(),
+    failureClass: varchar("failureClass", { length: 32 }).notNull(),
+    uncertaintyClass: varchar("uncertaintyClass", { length: 28 }).notNull(),
+    // Proposal eligibility only — NEVER retry authorization.
+    retryEligibility: boolean("retryEligibility").notNull(),
+    recoveryRequired: boolean("recoveryRequired").notNull(),
+    // JSON: closed blocking reasons (≤8).
+    blockingReasons: json("blockingReasons").notNull(),
+    // JSON: closed uncertainty classes (≤8).
+    uncertainties: json("uncertainties").notNull(),
+    lastUpdatedAt: varchar("lastUpdatedAt", { length: 32 }).notNull(),
+    // Immutable core hash; drift fails closed (MISSION_STATE_TAMPER).
+    stateHash: varchar("stateHash", { length: 64 }).notNull(),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    taskStateIdentityUnique: uniqueIndex("mts_state_identity_uidx").on(table.taskStateId),
+    userTaskStateUnique: uniqueIndex("mts_user_state_uidx").on(table.userId, table.taskStateId),
+    userMissionTaskIdx: index("mts_user_mission_task_idx").on(table.userId, table.missionId, table.taskId),
+  })
+);
+
+export type MissionTaskStateRow = typeof missionTaskStates.$inferSelect;
+export type InsertMissionTaskStateRow = typeof missionTaskStates.$inferInsert;
+
+export const missionRecoveryCandidates = mysqlTable(
+  "mission_recovery_candidates",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic rcn1:<sha256> candidate identity; unique anchor.
+    recoveryCandidateId: varchar("recoveryCandidateId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    planId: varchar("planId", { length: 128 }).notNull(),
+    scheduleId: varchar("scheduleId", { length: 69 }).notNull(),
+    taskId: varchar("taskId", { length: 128 }).notNull(),
+    executionActionId: varchar("executionActionId", { length: 69 }),
+    // The EXACT failed/uncertain attempt bound into the candidate.
+    latestAttemptId: varchar("latestAttemptId", { length: 69 }),
+    failureClass: varchar("failureClass", { length: 32 }).notNull(),
+    uncertaintyClass: varchar("uncertaintyClass", { length: 28 }).notNull(),
+    recoveryType: varchar("recoveryType", { length: 28 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull(),
+    // JSON: verbatim original mission/task/action scope (server-loaded).
+    scope: json("scope").notNull(),
+    // Immutable proposal core hash; drift fails closed / invalidates.
+    proposalHash: varchar("proposalHash", { length: 64 }).notNull(),
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }),
+    governanceStatus: varchar("governanceStatus", { length: 20 }),
+    // JSON: consumed authorization snapshot (gate verdict), read-only.
+    consumedAuthorization: json("consumedAuthorization"),
+    supersededByRecoveryId: varchar("supersededByRecoveryId", { length: 69 }),
+    validUntil: varchar("validUntil", { length: 32 }),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    recoveryIdentityUnique: uniqueIndex("mrc_identity_uidx").on(table.recoveryCandidateId),
+    userRecoveryUnique: uniqueIndex("mrc_user_recovery_uidx").on(table.userId, table.recoveryCandidateId),
+    userMissionIdx: index("mrc_user_mission_idx").on(table.userId, table.missionId),
+    userTaskIdx: index("mrc_user_task_idx").on(table.userId, table.taskId),
+  })
+);
+
+export type MissionRecoveryCandidateRow = typeof missionRecoveryCandidates.$inferSelect;
+export type InsertMissionRecoveryCandidateRow = typeof missionRecoveryCandidates.$inferInsert;
+
+export const missionOperationalTimelineEvents = mysqlTable(
+  "mission_operational_timeline_events",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic mot1:<sha256> event identity; unique anchor.
+    timelineEventId: varchar("timelineEventId", { length: 70 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    scheduleId: varchar("scheduleId", { length: 69 }),
+    taskId: varchar("taskId", { length: 128 }),
+    recoveryCandidateId: varchar("recoveryCandidateId", { length: 69 }),
+    eventType: varchar("eventType", { length: 32 }).notNull(),
+    // Closed/bounded label only — never content, secrets or reasoning.
+    eventLabel: varchar("eventLabel", { length: 64 }).notNull(),
+    fromStatus: varchar("fromStatus", { length: 28 }),
+    toStatus: varchar("toStatus", { length: 28 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    // Immutable core hash; drift fails closed.
+    eventHash: varchar("eventHash", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    timelineIdentityUnique: uniqueIndex("mote_identity_uidx").on(table.timelineEventId),
+    userTimelineUnique: uniqueIndex("mote_user_timeline_uidx").on(table.userId, table.timelineEventId),
+    userMissionIdx: index("mote_user_mission_idx").on(table.userId, table.missionId),
+  })
+);
+
+export type MissionOperationalTimelineEventRow = typeof missionOperationalTimelineEvents.$inferSelect;
+export type InsertMissionOperationalTimelineEventRow =
+  typeof missionOperationalTimelineEvents.$inferInsert;

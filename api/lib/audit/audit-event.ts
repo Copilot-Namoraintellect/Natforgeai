@@ -199,6 +199,19 @@ export const AUDIT_EVENT_TYPES = [
   // governance rebind). One canonical event per inserted fact; convergence
   // paths write zero events.
   "strategic_candidate_lifecycle",
+  // R9-E: a derived mission operational-state observation was durably
+  // recorded (exactly one per inserted state record; replay converges with
+  // zero). Metadata carries ids/closed labels/hashes only — never content.
+  "mission_state_derived",
+  // R9-E: a recovery candidate was durably proposed (advisory only — never
+  // authorization). Exactly one per inserted candidate; convergence emits
+  // zero. Metadata carries ids/closed classes/types only.
+  "mission_recovery_candidate_proposed",
+  // R9-E: one immutable recovery lifecycle fact was durably recorded
+  // (governance binding / consumption handoff / supersession / staleness /
+  // invalidation / cancellation / resolution). One per inserted fact;
+  // convergence paths write zero events.
+  "mission_recovery_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
