@@ -39,7 +39,6 @@ import {
   listMissionDependenciesSchema,
   listMissionSchedulesSchema,
   cancelMissionScheduleSchema,
-  missionTaskPlanPortSchema,
   produceMissionScheduleSchema,
   recordMissionDependencySchema,
 } from "./lib/mission-scheduling/mission-scheduling-contract";
@@ -48,9 +47,14 @@ import {
   getMissionSchedule,
   produceMissionSchedule,
   recordMissionDependency,
-  registerMissionTaskPlan,
   sweepMissionScheduleExpiry,
 } from "./lib/mission-scheduling/mission-scheduling-service";
+import { getDb } from "./queries/connection";
+import {
+  createCanonicalPlanPortDeps,
+  RegisterPlanFromAuthorityInputSchema,
+  registerMissionTaskPlanFromAuthority,
+} from "./lib/mission-scheduling/mission-scheduling-plan-port";
 import { createMissionUpstreamAuthority } from "./lib/mission-scheduling/mission-scheduling-upstream-seam";
 import { createMissionGovernanceAuthority } from "./lib/mission-scheduling/mission-scheduling-governance-seam";
 import {
@@ -95,15 +99,27 @@ function productionDeps(): MissionSchedulingServiceDeps {
 
 export const missionSchedulingRouter = createRouter({
   /**
-   * Register (or replay) an accepted mission-task-plan/v1 port document as
-   * verbatim scheduling material. The mission must exist for the tenant; the
-   * port version must be exactly mission-task-plan/v1. Re-registration with
-   * identical material converges; a changed plan mints a new fingerprint
-   * version. Scheduling never rewrites plan content.
+   * Register (or replay) the plan's scheduling material, derived server-side
+   * from the frozen R9-B planning authority. The client references
+   * { missionId, planId } only — the mission-task-plan/v1 port document is
+   * built from R9-B's durable plan rows through B's own scheduling-handoff
+   * service (tenant/business/mission/plan/task validation, freshness and
+   * eligibility enforced by B; fail closed on drift). The supported-
+   * capability environment contract is the server-owned closed registry,
+   * never client input. Re-registration with identical material converges; a
+   * changed plan mints a new fingerprint version. Scheduling never rewrites
+   * plan content.
    */
-  registerPlan: authedQuery.input(missionTaskPlanPortSchema).mutation(async ({ ctx, input }) => {
+  registerPlan: authedQuery.input(RegisterPlanFromAuthorityInputSchema).mutation(async ({ ctx, input }) => {
     try {
-      return await registerMissionTaskPlan(undefined, productionDeps(), { userId: ctx.user.id }, input);
+      const db = getDb();
+      return await registerMissionTaskPlanFromAuthority(
+        undefined,
+        productionDeps(),
+        createCanonicalPlanPortDeps(db),
+        { userId: ctx.user.id },
+        input
+      );
     } catch (err) {
       toTrpcError(err);
     }

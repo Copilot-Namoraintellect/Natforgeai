@@ -36,8 +36,10 @@ import {
 import {
   produceMissionSchedule,
   recordMissionDependency,
-  registerMissionTaskPlan,
 } from "./lib/mission-scheduling/mission-scheduling-service";
+import { registerMissionTaskPlanFromAuthority } from "./lib/mission-scheduling/mission-scheduling-plan-port";
+import { createRawSqlMissionAuthorityReadPort } from "./lib/mission-planning/mission-planning-mission-seam";
+import { bindMissionPlanningStoreExecutor } from "./lib/mission-planning/mission-planning-store";
 import { createInMemoryMissionUpstreamAuthority } from "./lib/mission-scheduling/mission-scheduling-upstream-seam";
 import { createInMemoryMissionGovernanceAuthority } from "./lib/mission-scheduling/mission-scheduling-governance-seam";
 
@@ -86,6 +88,12 @@ const UNIQUE_CHECKS: Record<string, string[][]> = {
   ],
   mission_schedules: [["scheduleId"], ["userId", "scheduleId"]],
   mission_schedule_lifecycle_events: [["lifecycleEventId"]],
+  mission_plans: [
+    ["planFingerprint"],
+    ["userId", "planId"],
+    ["userId", "missionId", "planVersion"],
+  ],
+  mission_plan_tasks: [["taskFingerprint"], ["userId", "taskId"]],
   audit_events: [["eventFingerprint"]],
 };
 
@@ -122,6 +130,9 @@ function makeFakeDb(seed: Record<string, Record<string, unknown>[]> = {}) {
   const tables: Record<string, Record<string, unknown>[]> = {
     mission_proposals: [],
     mission_governance_decisions: [],
+    mission_plans: [],
+    mission_plan_tasks: [],
+    businesses: [],
     mission_task_plan_snapshots: [],
     mission_dependency_edges: [],
     mission_schedules: [],
@@ -238,6 +249,14 @@ function makeFakeDb(seed: Record<string, Record<string, unknown>[]> = {}) {
       for (const [marker, pred] of pairs) {
         if (text.includes(marker)) rows = rows.filter(pred);
       }
+      return [rows];
+    }
+    if (text.includes("FROM businesses")) {
+      let rows = (tables.businesses ?? []).slice();
+      const businessId = text.match(/id = (\d+)/);
+      const userId = text.match(/userId = (\d+)/);
+      if (businessId) rows = rows.filter((r) => Number(r.id) === Number(businessId[1]));
+      if (userId) rows = rows.filter((r) => Number(r.userId) === Number(userId[1]));
       return [rows];
     }
     return [[]];
@@ -357,43 +376,118 @@ function seedGovernanceAllow(
   });
 }
 
-interface TaskOverrides {
+/**
+ * R9-X canonical C→B binding: the client boundary no longer accepts port
+ * documents. The harness seeds the frozen R9-B durable rows (mission_plans +
+ * mission_plan_tasks — the planning authority) and registration derives the
+ * mission-task-plan/v1 document server-side from those rows. The business
+ * scope is read from the already-seeded R9-A mission row.
+ */
+interface TaskSeed {
+  taskId: string;
   taskType?: string;
   preconditions?: string[];
   postconditions?: string[];
   requiredCapabilities?: string[];
   constraints?: Array<Record<string, unknown>>;
-  governance?: Record<string, unknown>;
-  validity?: { validFrom: string; validUntil: string } | null;
+  requiresApproval?: boolean;
+  capabilityStatus?: string;
+  financialEffect?: string;
+  sideEffectClass?: string;
 }
 
-function taskSpec(taskId: string, overrides: TaskOverrides = {}) {
-  return {
-    taskId,
-    taskType: overrides.taskType ?? "generic",
-    preconditions: overrides.preconditions ?? [],
-    postconditions: overrides.postconditions ?? [],
-    requiredCapabilities: overrides.requiredCapabilities ?? [],
-    constraints: overrides.constraints ?? [],
-    governanceCharacteristics: {
-      requiresApproval: false,
-      irreversible: false,
-      financialExposure: false,
-      sideEffectClass: "OBSERVATION",
-      ...(overrides.governance ?? {}),
-    },
-    validity: overrides.validity === undefined ? null : overrides.validity,
-  };
+function taskSeed(taskId: string, overrides: Omit<TaskSeed, "taskId"> = {}): TaskSeed {
+  return { taskId, ...overrides };
 }
 
-function planPort(missionId: string, planId: string, tasks: unknown[], supportedCapabilities: string[] = []) {
-  return {
-    portVersion: "mission-task-plan/v1",
+/** Deterministic B-shape condition encoding (mirrors the X4 port mapping). */
+function seedConditions(refs: string[] | undefined): string {
+  return JSON.stringify((refs ?? []).map((ref) => ({ condition: "INPUT_ARTIFACT_READY", ref })));
+}
+
+/** Seed the frozen R9-B plan row + task rows (planning authority material). */
+function seedPlan(userId: number, missionId: string, planId: string, tasks: TaskSeed[]) {
+  const mission = fakeDb._tables.mission_proposals.find(
+    (m: Record<string, unknown>) => m.missionId === missionId && m.userId === userId
+  ) as Record<string, unknown> | undefined;
+  if (!mission) throw new Error(`seedPlan: mission ${missionId} not seeded for user ${userId}`);
+  const businessId = Number(mission.businessId);
+  fakeDb._tables.businesses.push({ id: businessId, userId });
+  fakeDb._tables.mission_plans.push({
+    id: fakeDb._tables.mission_plans.length + 1,
+    planId,
+    planVersion: 1,
+    userId,
+    businessId,
+    missionId,
+    missionAuthorityVersion: sha256Hex(canonicalJson({ v: 1, missionId, k: "mav" })),
+    boundMissionVersion: 1,
+    planScopeKey: `scope:${planId}`,
+    taskIds: JSON.stringify(tasks.map((t) => t.taskId)),
+    taskSetFingerprint: sha256Hex(canonicalJson({ v: 1, planId, k: "taskset" })),
+    constraintSetFingerprint: sha256Hex(canonicalJson({ v: 1, planId, k: "cset" })),
+    missionConstraints: "[]",
+    planningAssumptions: "[]",
+    unresolvedItems: "[]",
+    completenessStatus: "COMPLETE",
+    status: "READY_FOR_SCHEDULING",
+    validFrom: HOURS_FROM_NOW(-24),
+    validUntil: MISSION_VALID_UNTIL,
+    supersedesPlanId: null,
+    planFingerprint: sha256Hex(canonicalJson({ v: 1, planId, k: "pfp" })),
+    modelAssistanceFlagged: false,
+    version: 1,
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  tasks.forEach((task, index) => {
+    fakeDb._tables.mission_plan_tasks.push({
+      id: fakeDb._tables.mission_plan_tasks.length + 1,
+      taskId: task.taskId,
+      planId,
+      planVersion: 1,
+      userId,
+      businessId,
+      missionId,
+      taskType: task.taskType ?? "generic",
+      taskSequence: index + 1,
+      taskObjective: `objective:${task.taskId}`,
+      objectiveWordingDraft: null,
+      requiredInputs: "[]",
+      expectedOutputs: "[]",
+      requiredCapabilities: JSON.stringify(task.requiredCapabilities ?? []),
+      constraints: JSON.stringify(task.constraints ?? []),
+      preconditions: seedConditions(task.preconditions),
+      postconditions: seedConditions(task.postconditions),
+      governanceClass: task.requiresApproval ? "HUMAN_REVIEW_REQUIRED" : "AUTONOMY_CANDIDATE",
+      sideEffectClass: task.sideEffectClass ?? "NONE",
+      executionClass: "INTERNAL_ONLY",
+      capabilityStatus: task.capabilityStatus ?? "SUPPORTED",
+      governanceCharacteristics: JSON.stringify({
+        financialEffect: task.financialEffect ?? "NONE",
+        externalCommunication: false,
+        providerUse: false,
+        irreversibleMutation: false,
+        dataMutation: false,
+        customerImpact: false,
+        campaignActivation: false,
+        reviewHints: [],
+      }),
+      status: "READY_FOR_SCHEDULING",
+      taskFingerprint: sha256Hex(canonicalJson({ v: 1, planId, taskId: task.taskId, k: "tfp" })),
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+  });
+}
+
+/** Seed the frozen R9-B plan + register its scheduling material (canonical path). */
+async function registerSeededPlan(userId: number, missionId: string, planId: string, tasks: TaskSeed[]) {
+  seedPlan(userId, missionId, planId, tasks);
+  return missionSchedulingRouter.createCaller(buildCtx({ id: userId, role: "user" })).registerPlan({
     missionId,
     planId,
-    supportedCapabilities,
-    tasks,
-  };
+  } as never);
 }
 
 function edgeInput(
@@ -427,9 +521,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.1 valid acyclic plan produces a graph and schedule", async () => {
     const missionId = misId("m1");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(
-      planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b"), taskSpec("task-c")]) as never
-    );
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b"), taskSeed("task-c")]);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-b") as never);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-b", "task-c") as never);
     const produced = await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
@@ -445,7 +537,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.2 self-cycle is rejected", async () => {
     const missionId = misId("m2");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a")]);
     await expect(
       caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-a") as never)
     ).rejects.toThrowError(/SELF_DEPENDENCY/);
@@ -454,7 +546,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.3 direct cycle is rejected", async () => {
     const missionId = misId("m3");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-b") as never);
     await expect(
       caller().recordDependency(edgeInput(missionId, "plan-1", "task-b", "task-a") as never)
@@ -464,9 +556,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.4 indirect cycle is rejected", async () => {
     const missionId = misId("m4");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(
-      planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b"), taskSpec("task-c")]) as never
-    );
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b"), taskSeed("task-c")]);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-b") as never);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-b", "task-c") as never);
     await expect(
@@ -477,7 +567,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.5 unknown predecessor is rejected", async () => {
     const missionId = misId("m5");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a")]);
     await expect(
       caller().recordDependency(edgeInput(missionId, "plan-1", "task-ghost", "task-a") as never)
     ).rejects.toThrowError(/UNKNOWN_PREDECESSOR_TASK/);
@@ -486,7 +576,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.6 unknown successor is rejected", async () => {
     const missionId = misId("m6");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a")]);
     await expect(
       caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-ghost") as never)
     ).rejects.toThrowError(/UNKNOWN_SUCCESSOR_TASK/);
@@ -497,8 +587,8 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
     const missionB = misId("m7b");
     seedMission(USER1.id, missionA, 10);
     seedMission(USER1.id, missionB, 10);
-    await caller().registerPlan(planPort(missionA, "plan-a", [taskSpec("task-a")]) as never);
-    await caller().registerPlan(planPort(missionB, "plan-b", [taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionA, "plan-a", [taskSeed("task-a")]);
+    await registerSeededPlan(USER1.id, missionB, "plan-b", [taskSeed("task-b")]);
     await expect(
       caller().recordDependency(edgeInput(missionA, "plan-a", "task-b", "task-a") as never)
     ).rejects.toThrowError(/CROSS_MISSION_DEPENDENCY/);
@@ -516,9 +606,9 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
     const missionA = misId("m9a");
     seedMission(USER1.id, missionA, 10);
     seedMission(USER1.id, misId("m9b"), 30);
-    await caller().registerPlan(planPort(missionA, "plan-a", [taskSpec("task-a")]) as never);
+    await registerSeededPlan(USER1.id, missionA, "plan-a", [taskSeed("task-a")]);
     // task-b lives under business 30 of the same tenant (another plan).
-    await caller().registerPlan(planPort(misId("m9b"), "plan-b", [taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, misId("m9b"), "plan-b", [taskSeed("task-b")]);
     await expect(
       caller().recordDependency(edgeInput(missionA, "plan-a", "task-b", "task-a") as never)
     ).rejects.toThrowError(/CROSS_BUSINESS_DEPENDENCY/);
@@ -527,7 +617,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.10 hard dependency blocks the successor", async () => {
     const missionId = misId("m10");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-b") as never);
     const produced = await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     expect(produced.schedule.status).toBe("BLOCKED");
@@ -539,7 +629,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.11 completed predecessor unblocks the successor where valid", async () => {
     const missionId = misId("m11");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-b") as never);
     const produced = await caller().produceSchedule({
       missionId,
@@ -553,7 +643,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.12 approval dependency remains blocked without approval", async () => {
     const missionId = misId("m12");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     await caller().recordDependency(
       edgeInput(missionId, "plan-1", "task-a", "task-b", "REQUIRES_APPROVAL") as never
     );
@@ -569,14 +659,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.13 capability dependency remains blocked without capability", async () => {
     const missionId = misId("m13");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(
-      planPort(
-        missionId,
-        "plan-1",
-        [taskSpec("task-a", { requiredCapabilities: ["whatsapp"] }), taskSpec("task-b")],
-        ["email"]
-      ) as never
-    );
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a", { requiredCapabilities: ["whatsapp"] }), taskSeed("task-b")]);
     await caller().recordDependency(
       edgeInput(missionId, "plan-1", "task-b", "task-a", "REQUIRES_CAPABILITY") as never
     );
@@ -588,7 +671,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.14 expired mission is not scheduled", async () => {
     const missionId = misId("m14");
     seedMission(USER1.id, missionId, 10, "ELIGIBLE_FOR_PLANNING", MISSION_EXPIRED_UNTIL);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a")]);
     const before = fakeDb._tables.mission_schedules.length;
     await expect(caller().produceSchedule({ missionId, planId: "plan-1" } as never)).rejects.toThrowError(
       /MISSION_EXPIRED/
@@ -596,27 +679,27 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
     expect(fakeDb._tables.mission_schedules.length).toBe(before);
   });
 
-  it("C11.15 stale task is not scheduled", async () => {
+  it("C11.15 expired task time window is not scheduled", async () => {
     const missionId = misId("m15");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(
-      planPort(missionId, "plan-1", [
-        taskSpec("task-a"),
-        taskSpec("task-b", { validity: { validFrom: HOURS_FROM_NOW(-24), validUntil: HOURS_FROM_NOW(-1) } }),
-      ]) as never
-    );
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [
+      taskSeed("task-a"),
+      // R9-B carries per-task windows as TIME_WINDOW scheduling constraints;
+      // the canonical port binds them verbatim into the task spec.
+      taskSeed("task-b", { constraints: [{ constraintType: "TIME_WINDOW", notAfter: HOURS_FROM_NOW(-1) }] }),
+    ]);
     const produced = await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     expect(produced.schedule.orderedTaskIds).toEqual(["task-a"]);
     const stale = (produced.schedule.blockingStates as Array<{ taskId: string; readiness: string }>).find(
       (b) => b.taskId === "task-b"
     );
-    expect(stale?.readiness).toBe("STALE");
+    expect(stale?.readiness).toBe("BLOCKED_TIME_WINDOW");
   });
 
   it("C11.16 independent tasks may run in parallel", async () => {
     const missionId = misId("m16");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     const produced = await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     expect(produced.schedule.parallelGroups).toEqual([["task-a", "task-b"]]);
   });
@@ -624,7 +707,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.17 mutually exclusive tasks are serialized", async () => {
     const missionId = misId("m17");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     await caller().recordDependency(
       edgeInput(missionId, "plan-1", "task-b", "task-a", "MUTUAL_EXCLUSION") as never
     );
@@ -641,15 +724,21 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
     ) as Record<string, unknown>;
     missionRow.validFrom = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
     missionRow.validUntil = new Date(NOW.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString();
-    const plan = planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]);
+    seedPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     const deps = {
       upstream: createInMemoryMissionUpstreamAuthority(
         fakeDb._tables.mission_proposals.map((row: Record<string, unknown>) => ({ row }))
       ),
       governance: createInMemoryMissionGovernanceAuthority([]),
     };
-    await registerMissionTaskPlan(fakeDb, deps, { userId: USER1.id }, plan);
-    await recordMissionDependency(fakeDb, deps, { userId: USER1.id }, edgeInput(missionId, "plan-1", "task-a", "task-b"), NOW_ISO);
+    // Register through the canonical C→B binding (service level, same fake db).
+    await registerMissionTaskPlanFromAuthority(
+      fakeDb,
+      deps,
+      { planning: { missionAuthority: createRawSqlMissionAuthorityReadPort(fakeDb as never) }, executor: bindMissionPlanningStoreExecutor(fakeDb as never) },
+      { userId: USER1.id },
+      { missionId, planId: "plan-1" }
+    );    await recordMissionDependency(fakeDb, deps, { userId: USER1.id }, edgeInput(missionId, "plan-1", "task-a", "task-b"), NOW_ISO);
     const t1 = new Date(NOW.getTime() + 1000).toISOString();
     const t2 = new Date(NOW.getTime() + 9000).toISOString();
     const p1 = await produceMissionSchedule(fakeDb, deps, { userId: USER1.id }, { missionId, planId: "plan-1" }, t1);
@@ -662,7 +751,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.19 duplicate request converges with zero new effects", async () => {
     const missionId = misId("m19");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a")]);
     await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     const schedulesBefore = fakeDb._tables.mission_schedules.length;
     const lifecycleBefore = fakeDb._tables.mission_schedule_lifecycle_events.length;
@@ -677,7 +766,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.20 conflicting replay fails closed", async () => {
     const missionId = misId("m20");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a")]);
     const first = await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     // Tamper: same scheduleId, different fingerprint (simulated replay drift).
     const row = fakeDb._tables.mission_schedules.find((r: Record<string, unknown>) => r.scheduleId === first.schedule.scheduleId)!;
@@ -690,7 +779,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.21 a model cannot remove a dependency", async () => {
     const missionId = misId("m21");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-b") as never);
     await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     // No removal path exists anywhere on the surface; the durable edge set is
@@ -705,7 +794,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.22 a model cannot override cycle detection (tampered edge fails closed)", async () => {
     const missionId = misId("m22");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-b") as never);
     // Tamper with the stored edge material: integrity assertion fires before
     // any graph verdict can be influenced.
@@ -718,7 +807,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.23 a client cannot mark a task ready", async () => {
     const missionId = misId("m23");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-b") as never);
     await expect(
       caller().produceSchedule({
@@ -744,12 +833,10 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.24 a client cannot mark an approval satisfied", async () => {
     const missionId = misId("m24");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(
-      planPort(missionId, "plan-1", [
-        taskSpec("task-a", { governance: { requiresApproval: true } }),
-        taskSpec("task-b"),
-      ]) as never
-    );
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [
+        taskSeed("task-a", { requiresApproval: true }),
+        taskSeed("task-b"),
+      ]);
     await expect(
       caller().produceSchedule({
         missionId,
@@ -776,10 +863,12 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
     nearRow.validFrom = validFrom;
     nearRow.validUntil = nearUntilTight;
 
-    await caller().registerPlan(planPort(missionFar, "plan-1", [taskSpec("task-a")]) as never);
-    await caller().registerPlan(planPort(missionNear, "plan-1", [taskSpec("task-a")]) as never);
-    const farSchedule = await caller().produceSchedule({ missionId: missionFar, planId: "plan-1" } as never);
-    const nearSchedule = await caller().produceSchedule({ missionId: missionNear, planId: "plan-1" } as never);
+    // Each mission binds its own R9-B plan identity (planId is a durable B
+    // row scoped to the tenant).
+    await registerSeededPlan(USER1.id, missionFar, "plan-far", [taskSeed("task-a")]);
+    await registerSeededPlan(USER1.id, missionNear, "plan-near", [taskSeed("task-a")]);
+    const farSchedule = await caller().produceSchedule({ missionId: missionFar, planId: "plan-far" } as never);
+    const nearSchedule = await caller().produceSchedule({ missionId: missionNear, planId: "plan-near" } as never);
     // Both carry LOW-risk tasks; the near-expiry (urgent) mission is raised,
     // never lowered, and never below the far-expiry mission's class.
     expect(farSchedule.schedule.riskClass).toBe("LOW");
@@ -792,20 +881,29 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.26 scheduling cannot modify the task definition", async () => {
     const missionId = misId("m26");
     seedMission(USER1.id, missionId, 10);
-    const port = planPort(missionId, "plan-1", [taskSpec("task-a", { preconditions: ["lead-data"] })]);
-    await caller().registerPlan(port as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [
+      taskSeed("task-a", { preconditions: ["lead-data"] })
+    ]);
     await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     const snapshot = fakeDb._tables.mission_task_plan_snapshots[0];
-    expect(snapshot.planDocument).toEqual(port);
+    // The stored document is the canonical port derived from the frozen R9-B
+    // rows — B's [{condition, ref}] material maps deterministically onto C's
+    // bounded task refs and is stored verbatim.
     const storedTask = (snapshot.planDocument as { tasks: Array<{ preconditions: string[] }> }).tasks[0];
-    expect(storedTask.preconditions).toEqual(["lead-data"]);
+    expect(storedTask.preconditions).toEqual(["INPUT_ARTIFACT_READY:lead-data"]);
+    // Re-registration replays the identical derived document (no drift, no
+    // rewrite of the stored scheduling material).
+    const before = JSON.parse(JSON.stringify(snapshot));
+    await caller().registerPlan({ missionId, planId: "plan-1" } as never);
+    expect(fakeDb._tables.mission_task_plan_snapshots).toHaveLength(1);
+    expect(JSON.parse(JSON.stringify(fakeDb._tables.mission_task_plan_snapshots[0]))).toEqual(before);
   });
 
   it("C11.27 scheduling cannot modify the mission objective", async () => {
     const missionId = misId("m27");
     seedMission(USER1.id, missionId, 10);
     const before = JSON.parse(JSON.stringify(fakeDb._tables.mission_proposals));
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a")]);
     await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     expect(JSON.parse(JSON.stringify(fakeDb._tables.mission_proposals))).toEqual(before);
   });
@@ -813,7 +911,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.28 scheduling cannot grant execution authority", async () => {
     const missionId = misId("m28");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a")]);
     const produced = await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     expect(produced.projection.executionClaimed).toBe(false);
     expect(produced.projection.scheduleClaimed).toBe(false);
@@ -826,9 +924,11 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.29 scheduling cannot invoke a provider", async () => {
     const missionId = misId("m29");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(
-      planPort(missionId, "plan-1", [taskSpec("task-a", { requiredCapabilities: ["email"] })], ["email"]) as never
-    );
+    // The environment genuinely supports this capability (closed planning
+    // registry), yet producing a schedule still invokes nothing.
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [
+      taskSeed("task-a", { requiredCapabilities: ["content_generation"] })
+    ]);
     await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     // Zero external effects: no queue/provider/billing tables touched; only
     // R9-C tables + system-sourced audit events exist.
@@ -844,7 +944,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.30 schedule status can never become EXECUTING", async () => {
     const missionId = misId("m30");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a")]);
     await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     await caller().sweepExpiry({} as never);
     const statuses = (fakeDb._tables.mission_schedules as Array<{ status: string }>).map((r) => r.status);
@@ -858,7 +958,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.31 schedule revision preserves lineage", async () => {
     const missionId = misId("m31");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     const first = await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     const second = await caller().produceSchedule({
       missionId,
@@ -881,9 +981,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.32 changed dependency supersedes the schedule", async () => {
     const missionId = misId("m32");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(
-      planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b"), taskSpec("task-c")]) as never
-    );
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b"), taskSeed("task-c")]);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-b") as never);
     const first = await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-b", "task-c") as never);
@@ -904,12 +1002,10 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.33 changed approval expiry re-evaluates readiness", async () => {
     const missionId = misId("m33");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(
-      planPort(missionId, "plan-1", [
-        taskSpec("task-a", { governance: { requiresApproval: true } }),
-        taskSpec("task-b"),
-      ]) as never
-    );
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [
+        taskSeed("task-a", { requiresApproval: true }),
+        taskSeed("task-b"),
+      ]);
     seedGovernanceAllow(USER1.id, 10, missionId, "task-a", MISSION_VALID_UNTIL);
     const approved = await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     expect(approved.schedule.status).toBe("READY");
@@ -928,14 +1024,7 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.34 downstream projection is read-only and exactly shaped", async () => {
     const missionId = misId("m34");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(
-      planPort(
-        missionId,
-        "plan-1",
-        [taskSpec("task-a", { constraints: [{ constraintType: "TIME_WINDOW", notAfter: MISSION_VALID_UNTIL }] })],
-        ["email"]
-      ) as never
-    );
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a", { constraints: [{ constraintType: "TIME_WINDOW", notAfter: MISSION_VALID_UNTIL }] })]);
     const produced = await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     expect(Object.keys(produced.projection).sort()).toEqual([...MISSION_EXECUTION_PROJECTION_FIELD_KEYS].sort());
     expect(produced.projection.contractVersion).toBe(MISSION_SCHEDULING_PROJECTION_VERSION);
@@ -954,14 +1043,18 @@ describe("R9-C dependency & scheduling intelligence — connected acceptance (C1
   it("C11.35 no production action: only scheduling tables + scheduling audits exist", async () => {
     const missionId = misId("m35");
     seedMission(USER1.id, missionId, 10);
-    await caller().registerPlan(planPort(missionId, "plan-1", [taskSpec("task-a"), taskSpec("task-b")]) as never);
+    await registerSeededPlan(USER1.id, missionId, "plan-1", [taskSeed("task-a"), taskSeed("task-b")]);
     await caller().recordDependency(edgeInput(missionId, "plan-1", "task-a", "task-b") as never);
     await caller().produceSchedule({ missionId, planId: "plan-1" } as never);
     const tables = fakeDb._tables as Record<string, unknown[]>;
     for (const name of Object.keys(tables)) {
       if (
         [
+          // Harness-seeded upstream R9-A/R9-B authority rows (read-only to C).
           "mission_proposals",
+          "mission_plans",
+          "mission_plan_tasks",
+          "businesses",
           "mission_governance_decisions",
           "mission_task_plan_snapshots",
           "mission_dependency_edges",
