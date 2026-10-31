@@ -62,7 +62,7 @@ Every candidate execution is a deterministic **execution action**. Fields
 | `taskId` | `tsk1:` / opaque task coordinate | R9-B task reference, verbatim |
 | `taskType` | string ≤ 64 | From the R9-B task row (server-read), verbatim |
 | `actionType` | closed enum | `EXECUTE_TASK` \| `EXECUTE_STEP` \| `RETRY_STEP` (R9-F closed action taxonomy subset) |
-| `actionParametersHash` | `<sha256>` | `sha256(canonicalJson({v:1, parameters}))` over the bounded action material |
+| `actionParametersHash` | `<sha256>` | Governance fingerprint of the canonical action parameters (scheduleId + taskId + taskType + actionType + adapterType + capability + bounded parameters); raw parameters never persist |
 | `inputRefs` | string[] ≤ 16 | Bounded reference strings (server-validated identities only) |
 | `governanceDecisionId` | `mgd1:<sha256>` | The exact R9-F decision referenced for consumption |
 | `approvalReference` | number \| null | Bound `approval_requests.id` for REVIEW_REQUIRED decisions; null for ALLOW |
@@ -76,7 +76,11 @@ Every candidate execution is a deterministic **execution action**. Fields
 ## 3. Deterministic identity (D2)
 
 ```
-actionParametersHash    = sha256(canonicalJson({ v: 1, parameters }))
+actionParametersHash    = sha256(canonicalJson({ v: 1, params: {
+                          scheduleId, taskId, taskType, actionType, adapterType,
+                          capability, parameters }}))
+                          — identical to R9-F's actionParamsFingerprint binding;
+                          the raw bounded parameters never persist
 
 authorizationFingerprint = sha256(canonicalJson({
   v: 1, governanceDecisionId, policyVersion, approvalRequestId|null,
