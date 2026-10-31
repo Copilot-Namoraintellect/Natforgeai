@@ -139,6 +139,19 @@ describe("audit-event taxonomy", () => {
       // lifecycle fact; ids/closed classes/hashes only).
       "strategic_candidate_derived",
       "strategic_candidate_lifecycle",
+      // R9-A: mission authority durable effects (proposal formulated,
+      // lifecycle fact; ids/closed classes/hashes only — never wording).
+      "mission_proposed",
+      "mission_lifecycle",
+      // R9-F: mission-governance durable effects (immutable decision receipt;
+      // audit-only operator recovery; ids/closed labels/classes/hashes only).
+      "mission_governance_decision",
+      "mission_governance_recovery",
+      // R9-B: mission plan durable effects (bounded task-definition
+      // authority — never execution authorization). One canonical event per
+      // inserted plan / lifecycle fact; convergence emits zero.
+      "mission_plan_created",
+      "mission_plan_lifecycle",
       // R9-C: mission dependency & scheduling durable effects (immutable
       // edges, committed schedules + lifecycle facts; ids/closed labels/hashes
       // only — never task content; convergence/replay paths emit zero).
