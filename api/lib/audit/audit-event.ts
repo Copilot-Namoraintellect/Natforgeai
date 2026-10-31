@@ -199,6 +199,20 @@ export const AUDIT_EVENT_TYPES = [
   // governance rebind). One canonical event per inserted fact; convergence
   // paths write zero events.
   "strategic_candidate_lifecycle",
+  // R9-C: one immutable mission dependency edge was durably recorded
+  // (scheduling authority only — never mission, task-definition, governance
+  // or execution authority). References + closed labels/hashes in metadata
+  // only; idempotent replays return the existing row and emit zero events.
+  "mission_dependency_recorded",
+  // R9-C: one deterministic mission schedule was committed (validated DAG +
+  // readiness/blocking report + ordering). Scheduling is never execution
+  // authorization; convergence/replay paths emit zero events.
+  "mission_schedule_committed",
+  // R9-C: one immutable schedule lifecycle fact was durably recorded
+  // (creation / validation / supersession / staleness / invalidation /
+  // cancellation). One canonical event per inserted fact; convergence paths
+  // write zero events. No EXECUTING status exists anywhere in this stream.
+  "mission_schedule_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

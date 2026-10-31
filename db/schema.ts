@@ -4448,3 +4448,154 @@ export type StrategicOpportunityRiskLifecycleEventRow =
   typeof strategicOpportunityRiskLifecycleEvents.$inferSelect;
 export type InsertStrategicOpportunityRiskLifecycleEventRow =
   typeof strategicOpportunityRiskLifecycleEvents.$inferInsert;
+
+// ─── R9-C Dependency & Scheduling Intelligence ───
+// Stream-local provisional tables (canonical migration 0037 owned by R9-X;
+// artefact only in db/migrations/0037_r9_c_dependency_scheduling_foundation.sql
+// — NOT executed). R9-C owns dependency structure + scheduling semantics only:
+// no mission authority, no governance decisions, no execution state.
+
+// ─── R9-C — accepted task-plan snapshots (mission-task-plan/v1 port material) ───
+// Verbatim scheduling-material copies of the typed R9-B input port bound at
+// R9-X. The plan is B-owned authority; R9-C stores, validates and schedules
+// around it, never rewrites it. One row per (user, mission, plan, fingerprint);
+// a re-registered plan with new material mints a new fingerprint version.
+export const missionTaskPlanSnapshots = mysqlTable(
+  "mission_task_plan_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    planId: varchar("planId", { length: 128 }).notNull(),
+    // Verbatim mission-task-plan/v1 port document (validated by the port schema).
+    planDocument: json("planDocument").notNull(),
+    supportedCapabilities: json("supportedCapabilities").notNull(),
+    taskIds: json("taskIds").notNull(),
+    planFingerprint: varchar("planFingerprint", { length: 64 }).notNull(),
+    planHash: varchar("planHash", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    planFingerprintUnique: uniqueIndex("mtps_plan_fingerprint_uidx").on(table.planFingerprint),
+    coordinateFingerprintUnique: uniqueIndex("mtps_coordinate_fingerprint_uidx").on(
+      table.userId,
+      table.missionId,
+      table.planId,
+      table.planFingerprint
+    ),
+    userMissionPlanIdx: index("mtps_user_mission_plan_idx").on(table.userId, table.missionId, table.planId),
+  })
+);
+
+export type MissionTaskPlanSnapshotRow = typeof missionTaskPlanSnapshots.$inferSelect;
+export type InsertMissionTaskPlanSnapshotRow = typeof missionTaskPlanSnapshots.$inferInsert;
+
+// ─── R9-C — immutable dependency edges ───
+// dep1: deterministic identity. Edges are immutable ordering evidence scoped
+// to (user, mission, plan); the evidenceHash binds the core — drift is
+// tampering. MUTUAL_EXCLUSION endpoints are stored in canonical order.
+export const missionDependencyEdges = mysqlTable(
+  "mission_dependency_edges",
+  {
+    id: serial("id").primaryKey(),
+    dependencyId: varchar("dependencyId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    planId: varchar("planId", { length: 128 }).notNull(),
+    predecessorTaskId: varchar("predecessorTaskId", { length: 128 }).notNull(),
+    successorTaskId: varchar("successorTaskId", { length: 128 }).notNull(),
+    dependencyType: varchar("dependencyType", { length: 28 }).notNull(),
+    reason: varchar("reason", { length: 280 }),
+    hardOrSoft: varchar("hardOrSoft", { length: 8 }).notNull(),
+    source: varchar("source", { length: 24 }).notNull(),
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    dependencyIdUnique: uniqueIndex("mde_dependency_id_uidx").on(table.dependencyId),
+    userDependencyUnique: uniqueIndex("mde_user_dependency_uidx").on(table.userId, table.dependencyId),
+    naturalKeyUnique: uniqueIndex("mde_natural_key_uidx").on(
+      table.userId,
+      table.missionId,
+      table.planId,
+      table.predecessorTaskId,
+      table.successorTaskId,
+      table.dependencyType
+    ),
+    userMissionPlanIdx: index("mde_user_mission_plan_idx").on(table.userId, table.missionId, table.planId),
+  })
+);
+
+export type MissionDependencyEdgeRow = typeof missionDependencyEdges.$inferSelect;
+export type InsertMissionDependencyEdgeRow = typeof missionDependencyEdges.$inferInsert;
+
+// ─── R9-C — deterministic schedules ───
+// sch1: content-addressed identity: same authoritative inputs ⇒ same schedule.
+// Lifecycle is CAS-guarded (version); status is denormalised from msl1 facts.
+// No EXECUTING status exists — execution belongs to R9-D under R9-F governance.
+export const missionSchedules = mysqlTable(
+  "mission_schedules",
+  {
+    id: serial("id").primaryKey(),
+    scheduleId: varchar("scheduleId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    planId: varchar("planId", { length: 128 }).notNull(),
+    planFingerprint: varchar("planFingerprint", { length: 64 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull(),
+    orderedTaskIds: json("orderedTaskIds").notNull(),
+    parallelGroups: json("parallelGroups").notNull(),
+    blockingStates: json("blockingStates").notNull(),
+    dependencyRefs: json("dependencyRefs").notNull(),
+    governanceRequirements: json("governanceRequirements").notNull(),
+    riskClass: varchar("riskClass", { length: 16 }).notNull(),
+    requiresApproval: boolean("requiresApproval").notNull().default(false),
+    graphHash: varchar("graphHash", { length: 64 }).notNull(),
+    stateViewHash: varchar("stateViewHash", { length: 64 }).notNull(),
+    readinessHash: varchar("readinessHash", { length: 64 }).notNull(),
+    approvalEvidenceHash: varchar("approvalEvidenceHash", { length: 64 }).notNull(),
+    capabilityEvidenceHash: varchar("capabilityEvidenceHash", { length: 64 }).notNull(),
+    scheduleFingerprint: varchar("scheduleFingerprint", { length: 64 }).notNull(),
+    validFrom: varchar("validFrom", { length: 32 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }).notNull(),
+    supersedesScheduleId: varchar("supersedesScheduleId", { length: 69 }),
+    producedAt: varchar("producedAt", { length: 32 }).notNull(),
+    version: int("version").notNull().default(1),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    scheduleIdUnique: uniqueIndex("msch_schedule_id_uidx").on(table.scheduleId),
+    userScheduleUnique: uniqueIndex("msch_user_schedule_uidx").on(table.userId, table.scheduleId),
+    userMissionPlanIdx: index("msch_user_mission_plan_idx").on(table.userId, table.missionId, table.planId),
+    userStatusIdx: index("msch_user_status_idx").on(table.userId, table.status),
+  })
+);
+
+export type MissionScheduleRow = typeof missionSchedules.$inferSelect;
+export type InsertMissionScheduleRow = typeof missionSchedules.$inferInsert;
+
+// ─── R9-C — immutable schedule lifecycle facts ───
+// One deterministic msl1: row per lifecycle fact (creation / validation /
+// supersession / staleness / invalidation / cancellation). Append-only; the
+// current status is derived, history is never edited.
+export const missionScheduleLifecycleEvents = mysqlTable(
+  "mission_schedule_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    lifecycleEventId: varchar("lifecycleEventId", { length: 70 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    scheduleId: varchar("scheduleId", { length: 69 }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 20 }).notNull(),
+    targetStatus: varchar("targetStatus", { length: 16 }).notNull(),
+    successorScheduleId: varchar("successorScheduleId", { length: 69 }),
+    sourceIdentity: varchar("sourceIdentity", { length: 191 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    lifecycleIdentityUnique: uniqueIndex("msle_lifecycle_identi
