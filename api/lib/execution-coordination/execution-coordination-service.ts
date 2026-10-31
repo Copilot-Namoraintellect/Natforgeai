@@ -17,7 +17,7 @@
 //   execution surfaces, never invokes live providers (sandbox adapters only,
 //   LIVE_EXECUTION=False).
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { createAuditEvent } from "../audit/audit-event";
 import { persistAuditEvent } from "../audit/audit-store";
 import { executionAttempts } from "@db/schema";
@@ -408,6 +408,14 @@ async function runGovernanceGate(input: {
 // ─── Parameter validation (client-authority + secret hygiene) ───
 
 function validateActionMaterial(parameters: unknown): void {
+  // Secret hygiene first: secret-shaped keys are the sharper violation.
+  const secretKey = findSecretKey(parameters);
+  if (secretKey) {
+    throw new ExecutionInputError(
+      "SECRET_MATERIAL_REJECTED",
+      `action material carries secret-shaped key "${secretKey}"; secrets never enter execution payloads.`
+    );
+  }
   if (parameters && typeof parameters === "object" && !Array.isArray(parameters)) {
     const forbidden = findForbiddenField(parameters as Record<string, unknown>);
     if (forbidden) {
@@ -416,13 +424,6 @@ function validateActionMaterial(parameters: unknown): void {
         `action material carries server-authority field "${forbidden}".`
       );
     }
-  }
-  const secretKey = findSecretKey(parameters);
-  if (secretKey) {
-    throw new ExecutionInputError(
-      "SECRET_MATERIAL_REJECTED",
-      `action material carries secret-shaped key "${secretKey}"; secrets never enter execution payloads.`
-    );
   }
 }
 
@@ -490,8 +491,20 @@ export async function prepareExecutionAction(
   });
   const actionParametersHash = deriveActionParametersHash(canonicalParams);
 
-  // D8 — a governed retry may never broaden the original authorization.
+  // D8 — a governed retry may never broaden the original authorization. The
+  // bounded scope (mission/plan/schedule/task/adapter/capability/parameters)
+  // must equal the original action's; the actionType legitimately differs
+  // (RETRY_STEP) so the original hash is recomputed under the original type.
   if (retryOfAction) {
+    const originalCanonical = deriveCanonicalActionParams({
+      scheduleId: retryOfAction.scheduleId,
+      taskId: retryOfAction.taskId,
+      taskType: retryOfAction.taskType,
+      actionType: retryOfAction.actionType,
+      adapterType: retryOfAction.adapterType,
+      capability: retryOfAction.capability,
+      parameters: input.parameters,
+    });
     if (
       retryOfAction.missionId !== gate.mission.missionId ||
       retryOfAction.planId !== gate.planId ||
@@ -499,7 +512,7 @@ export async function prepareExecutionAction(
       retryOfAction.taskId !== gate.task.taskId ||
       retryOfAction.adapterType !== gate.adapterType ||
       retryOfAction.capability !== gate.capability ||
-      retryOfAction.actionParametersHash !== actionParametersHash
+      retryOfAction.actionParametersHash !== deriveActionParametersHash(originalCanonical)
     ) {
       throw new ExecutionIdentityConflictError(
         "RETRY_SCOPE_BROADENED",
@@ -917,8 +930,8 @@ async function recordAttemptResult(
   if (!existing) {
     throw new ExecutionStateConflictError("ATTEMPT_NOT_FOUND", `attempt ${attemptId} not found.`);
   }
-  if (existing.resultStatus !== null) {
-    // Duplicate result delivery converges to the recorded result.
+  if (existing.resultStatus !== null && existing.resultStatus !== "PENDING_EXTERNAL") {
+    // Duplicate result delivery converges to the recorded terminal result.
     return;
   }
   const dbx = resolveExecutionDb(db);
@@ -936,7 +949,7 @@ async function recordAttemptResult(
       and(
         eq(executionAttempts.userId, userId),
         eq(executionAttempts.attemptId, attemptId),
-        isNull(executionAttempts.resultStatus)
+        or(isNull(executionAttempts.resultStatus), eq(executionAttempts.resultStatus, "PENDING_EXTERNAL"))
       )
     );
   const updated = await getExecutionAttemptById(userId, attemptId, db);

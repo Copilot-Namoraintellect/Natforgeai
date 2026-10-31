@@ -161,6 +161,16 @@ export function createSandboxAdapterHarness(): SandboxAdapterHarness {
       },
       async dispatch(input) {
         dispatched.push(input);
+        // Callback polls consult only the queued callback map — a scripted
+        // dispatch outcome must never shadow a delivered callback.
+        if (input.payload["callbackPoll"] === true) {
+          const queued = pending.get(input.externalReference);
+          if (queued) {
+            pending.delete(input.externalReference);
+            return queued;
+          }
+          return { status: "ambiguous" };
+        }
         const capability = input.payload["capability"];
         const scripted = typeof capability === "string" ? scripts.get(capability as ExecutionCapability) : undefined;
         if (scripted) return scripted;
