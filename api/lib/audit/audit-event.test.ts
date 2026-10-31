@@ -139,6 +139,11 @@ describe("audit-event taxonomy", () => {
       // lifecycle fact; ids/closed classes/hashes only).
       "strategic_candidate_derived",
       "strategic_candidate_lifecycle",
+      // R9-B: mission plan durable effects (bounded task-definition
+      // authority — never execution authorization). One canonical event per
+      // inserted plan / lifecycle fact; convergence emits zero.
+      "mission_plan_created",
+      "mission_plan_lifecycle",
     ]);
   });
 
