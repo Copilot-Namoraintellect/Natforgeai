@@ -152,6 +152,12 @@ describe("audit-event taxonomy", () => {
       // inserted plan / lifecycle fact; convergence emits zero.
       "mission_plan_created",
       "mission_plan_lifecycle",
+      // R9-C: mission dependency & scheduling durable effects (immutable
+      // edges, committed schedules + lifecycle facts; ids/closed labels/hashes
+      // only — never task content; convergence/replay paths emit zero).
+      "mission_dependency_recorded",
+      "mission_schedule_committed",
+      "mission_schedule_lifecycle",
     ]);
   });
 
