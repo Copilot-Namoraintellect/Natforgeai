@@ -163,6 +163,11 @@ describe("audit-event taxonomy", () => {
       "execution_action_prepared",
       "execution_attempt_recorded",
       "execution_attempt_lifecycle",
+      // R9-E: mission state / recovery durable effects (derived state record,
+      // advisory candidate, lifecycle fact; ids/closed labels/hashes only).
+      "mission_state_derived",
+      "mission_recovery_candidate_proposed",
+      "mission_recovery_lifecycle",
     ]);
   });
 
