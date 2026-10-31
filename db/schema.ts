@@ -751,6 +751,15 @@ export const approvalRequests = mysqlTable("approval_requests", {
     // see docs/recovery/r8-f-unexecuted-migrations.md; R8-X owns convergence).
     // Advisory authority only — never execution authority.
     "strategic_recommendation",
+    // WBS-R9-F: governed mission-action approvals bound to the exact
+    // governance decision + mission/plan/task refs + action params
+    // fingerprint + risk class + policy version + expiry (provisional
+    // 0037_r9_f_mission_governance_foundation; NOT executed —
+    // see docs/recovery/r9-f-unexecuted-migrations.md; R9-X owns
+    // canonical 0037 convergence). Bounded to the exact bound mission action
+    // only — never a blanket mission authorization, never provider/spend
+    // authority by itself.
+    "mission_action",
   ]).notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   description: text("description"),
@@ -2068,6 +2077,70 @@ export const strategicGovernanceDecisions = mysqlTable(
 export type StrategicGovernanceDecisionRow = typeof strategicGovernanceDecisions.$inferSelect;
 export type InsertStrategicGovernanceDecisionRow =
   typeof strategicGovernanceDecisions.$inferInsert;
+
+// ─── Mission Governance Decisions (WBS-R9-F) ───
+// Immutable mission-governance receipts: deterministic mgd1: identity, exact
+// subject/action coordinates (missionRef/planRef/taskRef), server-derived
+// mission risk, policy version, decision + closed reason codes, approval
+// binding (references + hashes). Raw action params are NEVER stored — only
+// their fingerprint — so a modified action after approval invalidates the
+// binding while authoritative params stay out of the durable store.
+// Provisional migration 0037_r9_f_mission_governance_foundation (stream-local;
+// NOT executed — see docs/recovery/r9-f-unexecuted-migrations.md; R9-X owns
+// canonical sequencing; R8's canonical 0036 is never modified).
+export const missionGovernanceDecisions = mysqlTable(
+  "mission_governance_decisions",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic: mgd1_<sha256(...)[:64]>; unique convergence anchor.
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }).notNull(),
+    contractVersion: varchar("contractVersion", { length: 48 }).notNull(),
+    engineVersion: varchar("engineVersion", { length: 48 }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    missionRef: varchar("missionRef", { length: 128 }).notNull(),
+    planRef: varchar("planRef", { length: 128 }),
+    taskRef: varchar("taskRef", { length: 128 }),
+    subjectClass: varchar("subjectClass", { length: 24 }).notNull(),
+    actionType: varchar("actionType", { length: 32 }).notNull(),
+    // Exact action parameters fingerprint — the only persisted form of params.
+    actionParamsFingerprint: varchar("actionParamsFingerprint", { length: 64 }).notNull(),
+    // Server-derived mission risk class (closed vocabulary).
+    missionRiskClass: varchar("missionRiskClass", { length: 16 }).notNull(),
+    // Snapshot of the effective risk signals used at evaluation time.
+    riskFactors: json("riskFactors").notNull(),
+    policyVersion: varchar("policyVersion", { length: 96 }),
+    // ALLOW | REVIEW_REQUIRED | BLOCK — never EXECUTE.
+    decision: varchar("decision", { length: 24 }).notNull(),
+    reasonCodes: json("reasonCodes").notNull(),
+    approvalRequired: boolean("approvalRequired").default(false).notNull(),
+    // ApprovalBinding JSON for REVIEW_REQUIRED decisions (references + hashes).
+    approvalBinding: json("approvalBinding"),
+    evaluationFingerprint: varchar("evaluationFingerprint", { length: 64 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }),
+    // ISO 8601 stored verbatim (like audit_events.occurredAt).
+    evaluatedAt: varchar("evaluatedAt", { length: 32 }).notNull(),
+    // Bounded snapshot of the thresholds used at evaluation time.
+    thresholds: json("thresholds").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    decisionIdUnique: uniqueIndex("mgd_decision_id_idx").on(table.governanceDecisionId),
+    userDecisionUnique: uniqueIndex("mgd_user_decision_idx").on(
+      table.userId,
+      table.governanceDecisionId
+    ),
+    businessIdx: index("mgd_business_idx").on(table.businessId),
+    userIdx: index("mgd_user_idx").on(table.userId),
+    missionIdx: index("mgd_mission_idx").on(table.missionRef),
+    decisionIdx: index("mgd_decision_idx").on(table.decision),
+    evaluatedAtIdx: index("mgd_evaluated_idx").on(table.evaluatedAt),
+  })
+);
+
+export type MissionGovernanceDecisionRow = typeof missionGovernanceDecisions.$inferSelect;
+export type InsertMissionGovernanceDecisionRow =
+  typeof missionGovernanceDecisions.$inferInsert;
 
 // ─── Engagement Response Contents (WBS-R5-C2) ───
 // Governed, immutable AI response content for an engagement action.

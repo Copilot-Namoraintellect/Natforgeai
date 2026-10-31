@@ -260,6 +260,13 @@
       "when": 1793376033008,
       "tag": "0036_r8_strategic_intelligence_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "5",
+      "when": 1793422837304,
+      "tag": "0037_r9_f_mission_governance_foundation",
+      "breakpoints": true
     }
   ]
 }

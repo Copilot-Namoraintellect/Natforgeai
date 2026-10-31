@@ -143,6 +143,10 @@ describe("audit-event taxonomy", () => {
       // lifecycle fact; ids/closed classes/hashes only — never wording).
       "mission_proposed",
       "mission_lifecycle",
+      // R9-F: mission-governance durable effects (immutable decision receipt;
+      // audit-only operator recovery; ids/closed labels/classes/hashes only).
+      "mission_governance_decision",
+      "mission_governance_recovery",
     ]);
   });
 
