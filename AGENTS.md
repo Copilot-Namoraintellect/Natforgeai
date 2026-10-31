@@ -37,6 +37,7 @@
 28. [Strategic Reasoning (WBS-R8-D)](#28-strategic-reasoning-wbs-r8-d)
 29. [Strategic Opportunity & Risk Intelligence (WBS-R8-E)](#29-strategic-opportunity--risk-intelligence-wbs-r8-e)
 30. [Strategic Intelligence Integration (WBS-R8-X)](#30-strategic-intelligence-integration-wbs-r8-x)
+31. [Mission Authority & Objectives (WBS-R9-A)](#31-mission-authority--objectives-wbs-r9-a)
 
 ---
 
@@ -1393,3 +1394,71 @@ The integrated R8 system (streams A/B/C/D/E/F merged on
   experiments/providers/billing; `candidate != mission`;
   `recommendation != execution authorization`.
 - Real-MySQL concurrency remains the R10 / pre-production gate.
+
+---
+
+## 31. Mission Authority & Objectives (WBS-R9-A)
+
+The authoritative mission-formulation layer: converts eligible governed R8
+strategic recommendations into bounded mission proposals and mission
+objectives. Owns **mission identity and mission-objective authority only** —
+not strategic-intelligence truth (R8), task decomposition/scheduling (R9-B),
+execution coordination (R9-C/D), or mission governance/approval (separate R9
+governance).
+
+**Required principle:** *candidate != mission; recommendation != execution
+authorization.* R8 governance approval authorizes recommendation consumption
+only. R9-A may create a mission proposal; it must never create execution
+authorization. There is no `EXECUTING` status anywhere in this stream.
+
+- Core modules: `api/lib/mission-authority/` (`-contract`, `-identity`,
+  `-formation`, `-lifecycle`, `-candidate-seam`, `-store`, `-projection`,
+  `-service`); router `missionAuthority` (`api/mission-authority-router.ts`):
+  `propose`, `get`, `list`, `revalidate`, `cancel`, `listLifecycle`,
+  `getPlanningHandoff`.
+- Identity: deterministic `missionId = "mis1:" + sha256({tenantUserId,
+  businessId, sourceCandidateId, missionType, scopeKey,
+  constraintSetFingerprint})`; `obj1:` objective identity; exact-once via
+  unique `(userId, missionId)`; conflicting replay fails closed
+  (`MISSION_REPLAY_CONFLICT`); wording is never an identity input.
+- Formation is rule-first: mission type / objective type / scope subject are
+  derived from the source candidate type via the closed §5.3 derivation
+  table; risk/confidence ceilings carried verbatim (never promoted or
+  lowered); derived constraint set (RECOMMENDATION_ONLY, RISK_CEILING,
+  CONFIDENCE_CEILING, SCOPE_BOUND, VALIDITY_WINDOW) is immutable; client
+  additions can only tighten. Model assistance may reword the objective
+  statement ONLY (advisory, bounded, injection-labelled).
+- R8 handoff binding: consumed read-only through the frozen
+  `strategic-intelligence-to-mission-control/v1` 37-key projection; the sole
+  eligibility path is `resolveGovernedCandidate` (row load behind guarded
+  information-schema check → verbatim projection rebuild + frozen validation
+  → approval re-derivation → R8-E `assertCandidateConsumable` gate with
+  RECOMMENDATION_ONLY scope → freshness/status checks). Rejects: unknown /
+  ungoverned / cross-tenant / cross-business / stale / expired / blocked /
+  tampered candidates; governance unavailability fails closed.
+- Lifecycle (closed): PROPOSED, ELIGIBLE_FOR_PLANNING, REVIEW_REQUIRED,
+  BLOCKED, SUPERSEDED, STALE, CANCELLED, INVALIDATED — append-only `misl1:`
+  facts + CAS version; revalidation derives targets deterministically from
+  the re-resolved source; validity window `min(source validUntil, +30d)`.
+- Downstream: frozen 27-key `mission-authority-to-planning/v1` read-only
+  projection (`getPlanningHandoff`); planning-consumable only when
+  ELIGIBLE_FOR_PLANNING + freshness current + RECOMMENDATION_ONLY.
+  Contracts: `docs/contracts/mission-authority-contract.md`,
+  `docs/contracts/mission-authority-to-planning-contract.md`.
+- Security: session `userId` anchors everything; `z.strictObject` + explicit
+  authority-field rejection at the boundary (execution fields ⇒
+  `EXECUTION_AUTHORITY_FORBIDDEN`); no approval write path (no self-approval);
+  no provider/billing/CRM/tool/secret access; Business DNA / strategy never
+  mutated.
+- Non-billable, non-executing: no billing, payments, providers, CRM,
+  campaigns, experiments, scheduling or task creation anywhere in the stream.
+- Schema: `mission_proposals` + `mission_lifecycle_events` — canonical in
+  `db/schema.ts`; stream-local provisional migration
+  `0037_r9_a_mission_authority_foundation` (artefact only, NOT executed,
+  not in the journal; R9-X owns canonical 0037 convergence). Audit: additive
+  `mission_proposed` / `mission_lifecycle` (one per durable effect;
+  convergence emits zero).
+- Acceptance: `api/mission-authority-acceptance.test.ts` (28 connected cases
+  over the REAL R8 stack + real R9-A router), `api/mission-authority-security.test.ts`
+  (14 rogue-agent cases). Report:
+  `docs/recovery/r9-a-mission-authority-acceptance-report.md`.

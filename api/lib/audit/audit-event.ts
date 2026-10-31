@@ -199,6 +199,18 @@ export const AUDIT_EVENT_TYPES = [
   // governance rebind). One canonical event per inserted fact; convergence
   // paths write zero events.
   "strategic_candidate_lifecycle",
+  // R9-A: one durable mission proposal was formulated over a governed R8
+  // candidate (or an idempotent replay converged to it). Exactly one event
+  // per inserted proposal; convergence emits zero. Metadata carries ids and
+  // closed classes/hashes only — never objective wording, criteria text or
+  // PII. A mission proposal is formation authority, never execution
+  // authorization.
+  "mission_proposed",
+  // R9-A: one immutable mission lifecycle fact was durably recorded
+  // (eligibility / review requirement / blockage / staleness / supersession /
+  // cancellation / invalidation). One canonical event per inserted fact;
+  // convergence paths write zero events.
+  "mission_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

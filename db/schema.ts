@@ -4448,3 +4448,110 @@ export type StrategicOpportunityRiskLifecycleEventRow =
   typeof strategicOpportunityRiskLifecycleEvents.$inferSelect;
 export type InsertStrategicOpportunityRiskLifecycleEventRow =
   typeof strategicOpportunityRiskLifecycleEvents.$inferInsert;
+
+// ─── R9-A Mission Authority & Objectives ───
+//
+// Canonical tables for the mission proposal authority (docs/contracts/
+// mission-authority-contract.md). Stream-local provisional migration:
+// 0037_r9_a_mission_authority_foundation (artefact only, NOT executed;
+// R9-X owns canonical 0037 convergence). Mission rows are immutable in their
+// material core; lifecycle status transitions in place under an optimistic
+// version CAS; history is append-only misl1: facts.
+
+export const missionProposals = mysqlTable(
+  "mission_proposals",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic mis1:<sha256> identity; unique convergence anchor.
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    // Deterministic obj1:<sha256> mission objective identity.
+    objectiveId: varchar("objectiveId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    // Bound governed R8-E candidate (reference only; never minted here).
+    sourceCandidateId: varchar("sourceCandidateId", { length: 69 }).notNull(),
+    // JSON: string[] — governing R8-D conclusions carried verbatim.
+    sourceReasoningIds: json("sourceReasoningIds").notNull(),
+    missionType: varchar("missionType", { length: 32 }).notNull(),
+    objectiveType: varchar("objectiveType", { length: 32 }).notNull(),
+    objectiveStatement: text("objectiveStatement").notNull(),
+    objectiveClientStatement: text("objectiveClientStatement").notNull(),
+    // Advisory model wording draft (inert bounded text; nullable).
+    objectiveWordingDraft: text("objectiveWordingDraft"),
+    modelAssistanceFlagged: boolean("modelAssistanceFlagged").notNull().default(false),
+    expectedOutcome: text("expectedOutcome").notNull(),
+    // JSON: [{criterionType, statement, metricRef}] (≤8).
+    successCriteria: json("successCriteria").notNull(),
+    // JSON: [{constraintType, statement, referenceValue, amountMinorUnits, currency}]
+    // — derived set (immutable) + client additions.
+    constraints: json("constraints").notNull(),
+    // JSON: [{statement}] (≤8).
+    assumptions: json("assumptions").notNull(),
+    // JSON: {subjectType, businessScope, channelScope, campaignScope, geography}
+    // — deterministically derived; channel/campaign/geography always null.
+    scope: json("scope").notNull(),
+    scopeKey: varchar("scopeKey", { length: 512 }).notNull(),
+    // Carried verbatim from the source candidate (never promoted).
+    priorityContext: varchar("priorityContext", { length: 20 }).notNull(),
+    // Carried verbatim from the bound R8-F decision (never lowered).
+    strategicRiskClass: varchar("strategicRiskClass", { length: 16 }).notNull(),
+    confidenceClass: varchar("confidenceClass", { length: 16 }).notNull(),
+    governanceDecisionId: varchar("governanceDecisionId", { length: 69 }),
+    governanceDecision: varchar("governanceDecision", { length: 28 }),
+    policyVersion: varchar("policyVersion", { length: 96 }),
+    // JSON: string[] — derived governance obligation labels.
+    governanceRequirements: json("governanceRequirements").notNull(),
+    validFrom: varchar("validFrom", { length: 32 }).notNull(),
+    validUntil: varchar("validUntil", { length: 32 }).notNull(),
+    // JSON: string[] (≤8) — source limitations preserved verbatim.
+    limitations: json("limitations").notNull(),
+    // Binds the verbatim R8 lineage (candidate fingerprint, governance refs).
+    lineageHash: varchar("lineageHash", { length: 64 }).notNull(),
+    missionFingerprint: varchar("missionFingerprint", { length: 64 }).notNull(),
+    objectiveFingerprint: varchar("objectiveFingerprint", { length: 64 }).notNull(),
+    constraintSetFingerprint: varchar("constraintSetFingerprint", { length: 64 }).notNull(),
+    // JSON: verbatim 37-key strategic-intelligence-to-mission-control/v1 projection.
+    sourceProjection: json("sourceProjection").notNull(),
+    sourceVersions: json("sourceVersions").notNull(),
+    supersedesMissionId: varchar("supersedesMissionId", { length: 69 }),
+    status: varchar("status", { length: 28 }).notNull(),
+    // Optimistic version for CAS lifecycle transitions.
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    missionIdentityUnique: uniqueIndex("mp_mission_identity_uidx").on(table.missionId),
+    userMissionUnique: uniqueIndex("mp_user_mission_uidx").on(table.userId, table.missionId),
+    userBusinessIdx: index("mp_user_business_idx").on(table.userId, table.businessId),
+    userStatusIdx: index("mp_user_status_idx").on(table.userId, table.status),
+    sourceCandidateIdx: index("mp_source_candidate_idx").on(table.sourceCandidateId),
+  })
+);
+
+export type MissionProposalRow = typeof missionProposals.$inferSelect;
+export type InsertMissionProposalRow = typeof missionProposals.$inferInsert;
+
+export const missionLifecycleEvents = mysqlTable(
+  "mission_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic misl1:<sha256> lifecycle fact identity.
+    lifecycleEventId: varchar("lifecycleEventId", { length: 70 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    missionId: varchar("missionId", { length: 69 }).notNull(),
+    lifecycleType: varchar("lifecycleType", { length: 24 }).notNull(),
+    targetStatus: varchar("targetStatus", { length: 28 }).notNull(),
+    successorMissionId: varchar("successorMissionId", { length: 69 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    lifecycleIdentityUnique: uniqueIndex("mle_lifecycle_identity_uidx").on(table.lifecycleEventId),
+    userMissionIdx: index("mle_user_mission_idx").on(table.userId, table.missionId),
+  })
+);
+
+export type MissionLifecycleEventRow = typeof missionLifecycleEvents.$inferSelect;
+export type InsertMissionLifecycleEventRow = typeof missionLifecycleEvents.$inferInsert;
