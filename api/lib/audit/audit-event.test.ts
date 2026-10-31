@@ -147,6 +147,11 @@ describe("audit-event taxonomy", () => {
       // audit-only operator recovery; ids/closed labels/classes/hashes only).
       "mission_governance_decision",
       "mission_governance_recovery",
+      // R9-B: mission plan durable effects (bounded task-definition
+      // authority — never execution authorization). One canonical event per
+      // inserted plan / lifecycle fact; convergence emits zero.
+      "mission_plan_created",
+      "mission_plan_lifecycle",
     ]);
   });
 

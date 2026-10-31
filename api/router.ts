@@ -48,6 +48,7 @@ import { strategicReasoningRouter } from "./strategic-reasoning-router";
 import { strategicOpportunityRiskRouter } from "./strategic-opportunity-risk-router";
 import { missionAuthorityRouter } from "./mission-authority-router";
 import { missionGovernanceRouter } from "./mission-governance-router";
+import { missionPlanningRouter } from "./mission-planning-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -121,6 +122,7 @@ export const appRouter = createRouter({
   strategicOpportunityRisk: strategicOpportunityRiskRouter,
   missionAuthority: missionAuthorityRouter,
   missionGovernance: missionGovernanceRouter,
+  missionPlanning: missionPlanningRouter,
 });
 
 export type AppRouter = typeof appRouter;
