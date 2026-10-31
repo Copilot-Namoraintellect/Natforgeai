@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-10 (R8-X: §30 Strategic Intelligence Integration — STRATEGIC_INTELLIGENCE_V1_READY)
+> **Last updated:** 2026-11-10 (R9-D: §31 Execution Coordination — EXECUTION_COORDINATION_READY)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -1393,3 +1393,70 @@ The integrated R8 system (streams A/B/C/D/E/F merged on
   experiments/providers/billing; `candidate != mission`;
   `recommendation != execution authorization`.
 - Real-MySQL concurrency remains the R10 / pre-production gate.
+---
+
+## 31. Execution Coordination (WBS-R9-D)
+
+The execution coordination authority: coordinates execution of governed
+mission actions without inventing authority, widening scope, bypassing
+governance or creating uncontrolled side effects. Owns the execution action
+envelope, execution-attempt identity, dispatch intent, governed execution
+consumption, the adapter dispatch boundary, idempotency, attempt lifecycle,
+result classification, external reference binding, exact action/result audit
+and the read-only downstream execution-state projection. Never owns mission
+objectives (R9-A), planning (R9-B), scheduling (R9-C), governance/approvals
+(R9-F), retry governance, recovery policy (R9-E), provider credentials,
+budget authority, Business DNA or strategy mutation.
+
+**Core authority rules (verbatim on every surface):**
+
+```
+schedule != execution authorization
+task definition != execution authorization
+mission approval != task execution authorization
+dispatch != success
+uncertainty != success
+retry != new authority
+```
+
+- Core modules: `api/lib/execution-coordination/` (`-contract`,
+  `-identity`, `-upstream-seams`, `-governance-seam`, `-adapter-registry`,
+  `-result-classification`, `-store`, `-service`, `-recovery-projection`);
+  router `api/execution-coordination-router.ts` (tRPC `execution`).
+- Identity: deterministic `exa1:` execution action (tenant + business +
+  mission + plan + schedule + task + action type + exact parameters +
+  governance authorization fingerprint), `idem1:` deterministic idempotency
+  key, `exr1:` attempts, `ext1:` server-issued external references, `exl1:`
+  append-only lifecycle facts. Insert-first durable unique anchors give
+  structural exact-once; conflicting replay fails closed.
+- Consumption: R9-A/B/C revalidated through guarded information-schema
+  seams (frozen branches, read-only; absent authority fails closed) and the
+  exact R9-F consumption gate re-run immediately before the side-effect
+  boundary — a faithful port of `assertMissionActionConsumable`
+  (`mission-governance-to-execution/v1`). Failure at any seam ⇒ NO DISPATCH.
+- Adapters: closed registry (CAMPAIGN/CONTENT/SOCIAL/CRM/NOTIFICATION/
+  ANALYTICS/INTERNAL_WORKFLOW); server-controlled capability-driven
+  selection; clients/models can never name modules, URLs, shell, SQL, tools
+  or credentials. Results classified conservatively (SUCCEEDED /
+  FAILED_RETRYABLE / FAILED_FINAL / PENDING_EXTERNAL / UNCERTAIN); timeout,
+  connection loss and ambiguous callbacks are never success.
+- Retries: never self-authorized — a retry needs fresh, exact R9-F
+  authority and can never broaden scope (parameters/provider/adapter/spend);
+  failed/uncertain/pending results emit read-only retry candidates for R9-E.
+- R9-E handoff: frozen 23-key `mission-execution-to-state-recovery/v1`
+  read-only projection (no secrets, no parameters, no approval state).
+- **Development mode:** sandbox fake/in-memory adapters only —
+  `LIVE_EXECUTION=False`. No live provider/CRM/payment/billing calls.
+- Contracts: `docs/contracts/mission-execution-coordination-contract.md` (canonical),
+  `docs/contracts/mission-execution-to-state-recovery-contract.md` (R9-E handoff).
+  Inventory/acceptance: `docs/recovery/r9-d-execution-coordination-inventory.md`,
+  `docs/recovery/r9-d-execution-coordination-acceptance-report.md` (verdict
+  `EXECUTION_COORDINATION_READY`). Acceptance suites:
+  `api/execution-coordination-acceptance.test.ts` (54 cases) +
+  `api/execution-coordination-security.test.ts` (19 rogue-agent cases).
+- Schema: `execution_actions` / `execution_attempts` /
+  `execution_lifecycle_events` — provisional migration
+  `0037_r9_d_execution_coordination_foundation` (artefact only, NOT executed;
+  R9-X owns canonical 0037 convergence; R8 canonical 0036 untouched).
+- Audit: additive `execution_action_prepared` / `execution_attempt_recorded`
+  / `execution_attempt_lifecycle` (one per durable effect; convergence zero).
