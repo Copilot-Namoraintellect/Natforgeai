@@ -18,7 +18,11 @@ import {
   type MissionBlockerClass,
   type MissionRecoveryClass,
 } from "./mission-blocker-taxonomy";
-import { MISSION_PHASE_BY_SUBJECT_CLASS } from "./mission-governance-contract";
+import {
+  MISSION_PHASE_BY_SUBJECT_CLASS,
+  isMissionGovernanceReasonCode,
+  type MissionGovernanceReasonCode,
+} from "./mission-governance-contract";
 import type { MissionGovernanceDecisionRow } from "./mission-governance-store";
 
 export type MissionDecisionOperationalStatus =
@@ -78,9 +82,11 @@ export interface MissionApprovalStatusView {
   readonly status: "pending" | "approved" | "rejected";
 }
 
-function parseStringArray(raw: unknown): readonly string[] {
+function parseStringArray(raw: unknown): readonly MissionGovernanceReasonCode[] {
   if (!Array.isArray(raw)) return [];
-  return raw.filter((c): c is string => typeof c === "string");
+  return raw.filter(
+    (c): c is MissionGovernanceReasonCode => typeof c === "string" && isMissionGovernanceReasonCode(c)
+  );
 }
 
 function deriveOperationalStatus(

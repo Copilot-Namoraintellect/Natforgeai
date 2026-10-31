@@ -280,9 +280,12 @@ export function deriveActionParamsFingerprint(actionParams: unknown): string {
 /**
  * Deterministic governance decision identity (the immutable receipt anchor,
  * F5): one set of authoritative coordinates + one policy version + one exact
- * action fingerprint -> one stable governanceDecisionId. Retries and
- * concurrent evaluations converge through the durable store's unique insert
- * anchor.
+ * action fingerprint + the proposal material (summary, declared risk,
+ * retry context) -> one stable governanceDecisionId. Retries and concurrent
+ * evaluations of the SAME material converge through the durable store's
+ * unique insert anchor; any material change mints a new receipt (history is
+ * never rewritten). `retryContext` binds retryOf/declaredIdempotent and the
+ * prior-params fingerprint so distinct retry attempts never collide.
  */
 export function deriveMissionGovernanceDecisionId(input: {
   userId: number;
@@ -294,6 +297,9 @@ export function deriveMissionGovernanceDecisionId(input: {
   actionType: string;
   policyVersion: string;
   actionParamsFingerprint: string;
+  summary: string;
+  declaredRisk: unknown;
+  retryContext: unknown;
 }): string {
   return `${MISSION_DECISION_ID_PREFIX}${sha256Hex(
     canonicalJson({
@@ -307,6 +313,9 @@ export function deriveMissionGovernanceDecisionId(input: {
       actionType: input.actionType,
       policyVersion: input.policyVersion,
       actionParamsFingerprint: input.actionParamsFingerprint,
+      summary: input.summary,
+      declaredRisk: input.declaredRisk,
+      retryContext: input.retryContext,
     })
   )}`;
 }
@@ -362,6 +371,7 @@ export type MissionGovernanceErrorCode =
   | "UNKNOWN_ACTION_TYPE"
   | "UNKNOWN_POLICY_VERSION"
   | "POLICY_VERSION_CONFLICT"
+  | "STALE_POLICY_VERSION"
   | "POLICY_MISSING"
   | "OWNERSHIP_MISMATCH"
   | "CROSS_TENANT_MISSION"

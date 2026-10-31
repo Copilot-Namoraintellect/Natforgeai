@@ -16,8 +16,6 @@ import {
   DEFAULT_PROHIBITED_ACTION_TYPES,
   isMissionActionType,
   isMissionPhase,
-  MISSION_ACTION_TYPES,
-  MISSION_PHASES,
   MISSION_RISK_CLASSES,
   MissionGovernanceInputError,
   MissionGovernanceStateConflictError,

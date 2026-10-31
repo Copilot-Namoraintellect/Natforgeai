@@ -237,6 +237,9 @@ export function deriveMissionRisk(input: {
   if (effective.customerImpact) risk = raise(risk, "MEDIUM");
   if (effective.regulatoryImplication) risk = raise(risk, "MEDIUM");
   if (effective.budgetConsumption) risk = raise(risk, "MEDIUM");
+  if (effective.dataMutation) risk = raise(risk, "MEDIUM");
+  if (effective.providerCalls) risk = raise(risk, "MEDIUM");
+  if (effective.campaignActivation) risk = raise(risk, "MEDIUM");
   if (effective.irreversibleEffects) risk = raise(risk, "MEDIUM");
   if (effective.scopeBreadth === "MULTI_BUSINESS") risk = raise(risk, "MEDIUM");
   if (effective.scopeBreadth === "PORTFOLIO") risk = raise(risk, "HIGH");

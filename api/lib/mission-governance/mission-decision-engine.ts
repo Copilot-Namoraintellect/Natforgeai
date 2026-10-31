@@ -359,7 +359,7 @@ export interface MissionGovernanceEvaluationInput {
 // never widens authority — it only raises risk and annotates the receipt.
 
 const INJECTION_PATTERNS: readonly RegExp[] = [
-  /ignore (all |previous |the )?instructions/i,
+  /ignore\s+(all\s+|previous\s+|the\s+)*instructions/i,
   /system prompt/i,
   /you are now/i,
   /approved\s*[:=]\s*true/i,
@@ -369,7 +369,10 @@ const INJECTION_PATTERNS: readonly RegExp[] = [
   /jailbreak/i,
   /bypass (policy|governance|approval)/i,
   // Self-risk marking: "risk: LOW", "mark this action as low risk"...
-  /risk\s*(class|level)?\s*[:=]\s*(low|minimal|none|safe)/i,
+  /risk\s*(class|level)?\s*[:=]+\s*(low|minimal|none|safe)/i,
+  // Self-trust marking: "trust: VERIFIED", "mark this source as trusted"...
+  /trust\s*(class|level)?\s*[:=]+\s*(verified|authoritative|high)/i,
+  /mark (this|itself|me|the source|the action|the mission).*trust/i,
   /mark (this|itself|me|the action|the mission).*risk/i,
   /lower (the )?risk/i,
   // Tool/shell/SQL invocation attempts inside content.
@@ -454,6 +457,16 @@ export function evaluateMissionGovernance(
     actionType: proposal.actionType,
     policyVersion: policyVersion ?? "NO_POLICY",
     actionParamsFingerprint,
+    summary: proposal.summary,
+    declaredRisk: proposal.declaredRisk,
+    retryContext:
+      proposal.retryContext === null
+        ? null
+        : {
+            retryOf: proposal.retryContext.retryOf,
+            declaredIdempotent: proposal.retryContext.declaredIdempotent,
+            priorActionParamsFingerprint: proposal.retryContext.priorActionParamsFingerprint,
+          },
   };
 
   const finalize = (args: {
@@ -598,6 +611,15 @@ export function evaluateMissionGovernance(
     infoReasons.push("PROMPT_INJECTION_SUSPECTED");
   }
 
+  // Effective risk starts server-derived; retry violations can only RAISE it
+  // (contract §7) — a failed execution can never broaden authority cheaply.
+  let missionRiskClass = derivedRisk.riskClass;
+  const raiseRiskOne = (): void => {
+    if (missionRiskClass === "LOW") missionRiskClass = "MEDIUM";
+    else if (missionRiskClass === "MEDIUM") missionRiskClass = "HIGH";
+    else missionRiskClass = "CRITICAL";
+  };
+
   if (subjectClass === "RETRY") {
     const retry = proposal.retryContext;
     if (retry === null) {
@@ -606,11 +628,13 @@ export function evaluateMissionGovernance(
     if (!retry.declaredIdempotent) {
       // A non-idempotent retry is a new side effect, not a replay.
       reviewReasons.push("RETRY_NEW_SIDE_EFFECT_REVIEW");
+      raiseRiskOne();
     }
     if (retry.priorActionParamsFingerprint !== proposal.actionParamsFingerprint) {
       // A retry whose parameters differ from the failed attempt has silently
       // broadened authority — never ALLOW (charter F7).
       reviewReasons.push("RETRY_SCOPE_BROADENED");
+      raiseRiskOne();
     }
   }
   if (subjectClass === "RECOVERY_ACTION") {
@@ -620,16 +644,17 @@ export function evaluateMissionGovernance(
 
   // --- Compose disposition: start from risk mapping, then narrow -------------
   let decision: GovernanceDecisionOutcome =
-    input.policy.riskDispositions[derivedRisk.riskClass];
+    input.policy.riskDispositions[missionRiskClass];
 
   // F2 phase separation: subjects outside the policy's autonomous phases can
-  // never be ALLOW — planning approval never becomes execution authority.
+  // never be ALLOW — planning approval never becomes execution authority. The
+  // phase reason is recorded whenever the floor binds (even when risk already
+  // required review), so the receipt always names the binding constraint.
   const phase = phaseOfMissionSubjectClass(subjectClass);
-  if (
-    decision === "ALLOW" &&
-    !input.policy.autonomousPhases.includes(phase)
-  ) {
-    decision = "REVIEW_REQUIRED";
+  if (!input.policy.autonomousPhases.includes(phase) && decision !== "BLOCK") {
+    if (decision === "ALLOW") {
+      decision = "REVIEW_REQUIRED";
+    }
     if (phase === "EXECUTION") {
       reviewReasons.push("EXECUTION_REQUIRES_REVIEW");
     } else if (phase === "LIFECYCLE") {
@@ -649,22 +674,22 @@ export function evaluateMissionGovernance(
   } else if (decision === "REVIEW_REQUIRED") {
     const pureRiskReview =
       reviewReasons.length === 0 &&
-      input.policy.riskDispositions[derivedRisk.riskClass] === "REVIEW_REQUIRED";
+      input.policy.riskDispositions[missionRiskClass] === "REVIEW_REQUIRED";
     if (pureRiskReview) {
       reasonCodes.push("APPROVAL_REQUIRED_BY_RISK");
     }
-    if (derivedRisk.riskClass === "HIGH") reasonCodes.push("HIGH_RISK_REVIEW_REQUIRED");
+    if (missionRiskClass === "HIGH") reasonCodes.push("HIGH_RISK_REVIEW_REQUIRED");
     reasonCodes.push(...reviewReasons);
   } else {
     reasonCodes.push("MISSION_BLOCKED_BY_POLICY");
-    if (derivedRisk.riskClass === "CRITICAL") reasonCodes.push("CRITICAL_RISK_BLOCKED");
+    if (missionRiskClass === "CRITICAL") reasonCodes.push("CRITICAL_RISK_BLOCKED");
   }
   reasonCodes.push(...infoReasons);
 
   return finalize({
     decision,
     reasonCodes,
-    missionRiskClass: derivedRisk.riskClass,
+    missionRiskClass,
     riskFactors: derivedRisk.factors,
   });
 }

@@ -205,7 +205,7 @@ Every evaluation persists one immutable, insert-only receipt row
 
 | Field | Notes |
 |---|---|
-| `governanceDecisionId` | `mgd1:<sha256>` deterministic over `{v, userId, businessId, missionRef, planRef, taskRef, subjectClass, actionType, policyVersion, actionParamsFingerprint}` |
+| `governanceDecisionId` | `mgd1:<sha256>` deterministic over `{v, userId, businessId, missionRef, planRef, taskRef, subjectClass, actionType, policyVersion, actionParamsFingerprint, summary, declaredRisk, retryContext}` |
 | `contractVersion` / `engineVersion` | `mission-governance/v1` / `mission-governance-engine/v1` |
 | `userId` / `businessId` | Tenant-anchored; ownership re-verified from the durable businesses row every call |
 | `missionRef` / `planRef` / `taskRef` | Opaque pattern-checked references; raw action params are **never** stored — only their fingerprint |
