@@ -139,6 +139,12 @@ describe("audit-event taxonomy", () => {
       // lifecycle fact; ids/closed classes/hashes only).
       "strategic_candidate_derived",
       "strategic_candidate_lifecycle",
+      // R9-C: mission dependency & scheduling durable effects (immutable
+      // edges, committed schedules + lifecycle facts; ids/closed labels/hashes
+      // only — never task content; convergence/replay paths emit zero).
+      "mission_dependency_recorded",
+      "mission_schedule_committed",
+      "mission_schedule_lifecycle",
     ]);
   });
 
