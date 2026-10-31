@@ -199,6 +199,15 @@ export const AUDIT_EVENT_TYPES = [
   // governance rebind). One canonical event per inserted fact; convergence
   // paths write zero events.
   "strategic_candidate_lifecycle",
+  // R9-F: a governed mission-governance decision (immutable receipt) was
+  // durably recorded. Identity references + decision + closed reason codes +
+  // bounded risk/policy labels in metadata only — never action params,
+  // never mission content, no model reasoning.
+  "mission_governance_decision",
+  // R9-F: a narrow, closed-vocabulary operator recovery action was recorded
+  // against an existing mission governance decision. Audit-only: the
+  // immutable receipt is never mutated by recovery.
+  "mission_governance_recovery",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

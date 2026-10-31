@@ -46,6 +46,7 @@ import { businessChangeRouter } from "./business-change-router";
 import { marketSignalRouter } from "./market-signal-router";
 import { strategicReasoningRouter } from "./strategic-reasoning-router";
 import { strategicOpportunityRiskRouter } from "./strategic-opportunity-risk-router";
+import { missionGovernanceRouter } from "./mission-governance-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -117,6 +118,7 @@ export const appRouter = createRouter({
   marketSignal: marketSignalRouter,
   strategicReasoning: strategicReasoningRouter,
   strategicOpportunityRisk: strategicOpportunityRiskRouter,
+  missionGovernance: missionGovernanceRouter,
 });
 
 export type AppRouter = typeof appRouter;
