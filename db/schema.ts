@@ -4598,4 +4598,10 @@ export const missionScheduleLifecycleEvents = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => ({
-    lifecycleIdentityUnique: uniqueIndex("msle_lifecycle_identi
+    lifecycleIdentityUnique: uniqueIndex("msle_lifecycle_identity_uidx").on(table.lifecycleEventId),
+    userScheduleIdx: index("msle_user_schedule_idx").on(table.userId, table.scheduleId),
+  })
+);
+
+export type MissionScheduleLifecycleEventRow = typeof missionScheduleLifecycleEvents.$inferSelect;
+export type InsertMissionScheduleLifecycleEventRow = typeof missionScheduleLifecycleEvents.$inferInsert;
