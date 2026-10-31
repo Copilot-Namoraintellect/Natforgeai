@@ -139,6 +139,11 @@ describe("audit-event taxonomy", () => {
       // lifecycle fact; ids/closed classes/hashes only).
       "strategic_candidate_derived",
       "strategic_candidate_lifecycle",
+      // R9-D: execution coordination durable effects (dispatch intents,
+      // attempts, lifecycle facts).
+      "execution_action_prepared",
+      "execution_attempt_recorded",
+      "execution_attempt_lifecycle",
     ]);
   });
 
