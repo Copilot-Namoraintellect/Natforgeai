@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-10 (R8-X: §30 Strategic Intelligence Integration — STRATEGIC_INTELLIGENCE_V1_READY)
+> **Last updated:** 2026-11-10 (R9-F: §31 Mission Governance & Approval — MISSION_GOVERNANCE_READY)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -37,6 +37,7 @@
 28. [Strategic Reasoning (WBS-R8-D)](#28-strategic-reasoning-wbs-r8-d)
 29. [Strategic Opportunity & Risk Intelligence (WBS-R8-E)](#29-strategic-opportunity--risk-intelligence-wbs-r8-e)
 30. [Strategic Intelligence Integration (WBS-R8-X)](#30-strategic-intelligence-integration-wbs-r8-x)
+31. [Mission Governance & Approval (WBS-R9-F)](#31-mission-governance--approval-wbs-r9-f)
 
 ---
 
@@ -1393,3 +1394,69 @@ The integrated R8 system (streams A/B/C/D/E/F merged on
   experiments/providers/billing; `candidate != mission`;
   `recommendation != execution authorization`.
 - Real-MySQL concurrency remains the R10 / pre-production gate.
+
+---
+
+## 31. Mission Governance & Approval (WBS-R9-F)
+
+The mission-governance authority for Mission Control (branch
+`feature/r9-f-mission-governance`, base `4fc43c3b`). Decides whether a
+governed mission subject may proceed — `ALLOW` / `REVIEW_REQUIRED` / `BLOCK`
+(**no EXECUTE anywhere**). Core principle: planning authority ≠ execution
+authority; mission approval ≠ task approval; task approval ≠ provider
+authorization; retry authority ≠ new-action authority; recovery authority ≠
+policy override; **no agent may approve itself**.
+
+- Core modules: `api/lib/mission-governance/` (`-contract`, `-decision-engine`,
+  `-policy`, `-risk-classification`, `-approval`, `-store`, `-service`,
+  `-bridge`, `-operations-projection`, `-blocker-taxonomy`,
+  `-review-authority`); router `missionGovernance`
+  (`api/mission-governance-router.ts`) — authed-only (`evaluate`, `get`,
+  `listDecisions`, `getOperationsProjection`, `revalidate`,
+  `requestApprovalChallenge`, `resolveApprovalChallenge`, `recordRecovery`,
+  `getPolicy`). Clients reference ids and propose material only;
+  `z.strictObject` + engine-level field rejection; raw action params are
+  NEVER persisted (only their fingerprint).
+- Subject classes (closed, 9): `MISSION_PROPOSAL`, `MISSION_PLAN`,
+  `MISSION_SCHEDULE`, `TASK`, `EXECUTION_STEP`, `RETRY`, `RECOVERY_ACTION`,
+  `CANCELLATION`, `ESCALATION` over phases FORMULATION/PLANNING/SCHEDULING/
+  EXECUTION/LIFECYCLE. Policy `autonomousPhases` default = formulation/
+  planning/scheduling only — execution/lifecycle subjects floor at
+  REVIEW_REQUIRED (default: **no phase escalation**).
+- Risk (server-derived, raise-only): declared dimensions + action semantic
+  floors (`INVOKE_PROVIDER` ⇒ providerCalls, `MUTATE_DATA`/`RECOVER_STATE` ⇒
+  dataMutation, `ACTIVATE_CAMPAIGN` ⇒ campaignActivation,
+  `CONSUME_BUDGET`/`INVOKE_BILLING` ⇒ budgetConsumption) + ordered raise
+  rules + injection raise; clients/models can never set or lower risk.
+  Retry governance: non-idempotent retries and retries whose params differ
+  from the failed attempt (`RETRY_SCOPE_BROADENED`) raise risk one level and
+  floor at REVIEW_REQUIRED; recovery actions require fresh review
+  (`RECOVERY_REQUIRES_FRESH_REVIEW`).
+- Receipts: deterministic `mgd1:` identity over coordinates + policy +
+  actionParamsFingerprint + summary + declaredRisk + retryContext; insert-
+  only immutable rows; unique `(userId, governanceDecisionId)` convergence
+  anchor; one `mission_governance_decision` audit event per inserted receipt.
+- Approvals: reuse `approval_requests` (`approvalType "mission_action"`,
+  provisional enum extension) + the governed OTP primitive (purpose
+  `review_authorization`); binding hash binds decision + policy + params
+  fingerprint + risk class + expiry. Human rejection permanently blocks the
+  decision identity. `assertMissionActionConsumable`
+  (`mission-approval.ts`) is the single execution consumption gate
+  (F6/F9) — verdict `authorityScope: "MISSION_ACTION"`, exact-action only.
+- Never owns/never does: mission objectives, task planning, dependencies,
+  scheduling, execution engine, provider adapters, state recovery,
+  strategic intelligence, Business DNA, budget authority. No billing,
+  payments, providers, CRM, campaign or workflow imports anywhere in the
+  stream (static blast-radius asserted in acceptance).
+- Contracts: `docs/contracts/mission-governance-contract.md` (canonical),
+  `docs/contracts/mission-governance-to-execution-contract.md`
+  (mission-governance-to-execution/v1 downstream gate semantics).
+- Schema: `mission_governance_decisions` + the enum extension — canonical
+  `@db/schema` imports; provisional migration
+  `0037_r9_f_mission_governance_foundation` (artefact only, NOT executed;
+  `docs/recovery/r9-f-unexecuted-migrations.md`; R9-X owns canonical 0037
+  convergence; R8's 0036 untouched).
+- Acceptance: `api/lib/mission-governance/r9-f-acceptance.test.ts` (32
+  connected cases incl. all 25 programme cases) +
+  `api/lib/mission-governance/r9-f-security.test.ts` (18 rogue-agent cases).
+  Report: `docs/recovery/r9-f-mission-governance-acceptance-report.md`.
