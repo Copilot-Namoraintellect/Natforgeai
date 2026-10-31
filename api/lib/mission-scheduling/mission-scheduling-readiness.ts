@@ -44,14 +44,16 @@ export interface ReadinessContext {
 }
 
 function taskWindow(task: MissionTaskSpec): { notBefore: string | null; notAfter: string | null } {
-  let notBefore: string | null = null;
-  let notAfter: string | null = null;
+  const notBefores: string[] = [];
+  const notAfters: string[] = [];
   for (const constraint of task.constraints) {
     if (constraint.constraintType === "TIME_WINDOW") {
-      if (constraint.notBefore) notBefore = notBefore === null || constraint.notBefore < notBefore ? constraint.notBefore : notBefore;
-      if (constraint.notAfter) notAfter = notAfter === null || constraint.notAfter > notAfter ? constraint.notAfter : notAfter;
+      if (constraint.notBefore) notBefores.push(constraint.notBefore);
+      if (constraint.notAfter) notAfters.push(constraint.notAfter);
     }
   }
+  const notBefore = notBefores.length > 0 ? [...notBefores].sort()[0] : null;
+  const notAfter = notAfters.length > 0 ? [...notAfters].sort().slice(-1)[0] : null;
   return { notBefore, notAfter };
 }
 
@@ -74,8 +76,11 @@ export function deriveTaskReadiness(ctx: ReadinessContext): Map<string, TaskRead
   const taskById = new Map(ctx.tasks.map((task) => [task.taskId, task]));
   const reports = new Map<string, TaskReadinessReport>();
 
-  // Hard ordering requirements per successor.
+  // Hard ordering requirements per successor. REQUIRES_CAPABILITY edges are
+  // evaluated at the capability precedence level (they never masquerade as
+  // dependency blocks).
   const unmetBySuccessor = new Map<string, string[]>();
+  const capabilityMissBySuccessor = new Map<string, string[]>();
   const approvalGateBySuccessor = new Map<string, string[]>();
   for (const edge of ctx.graph.edges) {
     if (edge.hardOrSoft !== "HARD") continue;
@@ -84,6 +89,14 @@ export function deriveTaskReadiness(ctx: ReadinessContext): Map<string, TaskRead
       const list = approvalGateBySuccessor.get(edge.successorTaskId) ?? [];
       list.push(edge.predecessorTaskId);
       approvalGateBySuccessor.set(edge.successorTaskId, list);
+      continue;
+    }
+    if (edge.dependencyType === "REQUIRES_CAPABILITY") {
+      const succ = taskById.get(edge.successorTaskId);
+      const missing = (succ?.requiredCapabilities ?? []).filter((cap) => !ctx.supportedCapabilities.has(cap));
+      if (missing.length > 0) {
+        capabilityMissBySuccessor.set(edge.successorTaskId, missing);
+      }
       continue;
     }
     let satisfied: boolean;
@@ -95,11 +108,6 @@ export function deriveTaskReadiness(ctx: ReadinessContext): Map<string, TaskRead
       const pred = taskById.get(edge.predecessorTaskId);
       satisfied =
         ctx.succeededTaskIds.has(edge.predecessorTaskId) && (pred?.postconditions.length ?? 0) > 0;
-    } else if (edge.dependencyType === "REQUIRES_CAPABILITY") {
-      const succ = taskById.get(edge.successorTaskId);
-      satisfied = (succ?.requiredCapabilities ?? []).every((cap) =>
-        ctx.supportedCapabilities.has(cap)
-      );
     } else if (edge.dependencyType === "REQUIRES_TIME_WINDOW") {
       const succ = taskById.get(edge.successorTaskId);
       const { notAfter } = succ ? taskWindow(succ) : { notAfter: null };
@@ -129,9 +137,12 @@ export function deriveTaskReadiness(ctx: ReadinessContext): Map<string, TaskRead
       const unmet = (unmetBySuccessor.get(taskId) ?? []).slice().sort();
       const approvalGates = (approvalGateBySuccessor.get(taskId) ?? []).slice().sort();
       const unmetApprovals = approvalGates.filter((pred) => ctx.approvalEvidence.get(pred) !== true);
-      const missingCapabilities = task.requiredCapabilities.filter(
-        (cap) => !ctx.supportedCapabilities.has(cap)
-      );
+      const missingCapabilities = [
+        ...new Set([
+          ...task.requiredCapabilities.filter((cap) => !ctx.supportedCapabilities.has(cap)),
+          ...(capabilityMissBySuccessor.get(taskId) ?? []),
+        ]),
+      ].sort();
       const { notBefore, notAfter } = taskWindow(task);
       const windowFuture = notBefore !== null && nowMs < Date.parse(notBefore);
       const windowExpired = notAfter !== null && nowMs > Date.parse(notAfter);

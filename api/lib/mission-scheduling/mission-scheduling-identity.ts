@@ -210,14 +210,19 @@ export function deriveScheduleId(input: ScheduleIdentityInput): string {
   );
 }
 
-/** Immutable-core schedule fingerprint (replay-conflict + tamper anchor). */
-export function deriveScheduleFingerprint(input: ScheduleIdentityInput & { producedAt: string }): string {
+/**
+ * Immutable-core schedule fingerprint (replay-conflict + tamper anchor).
+ * Deterministic given the same authoritative inputs: the injected clock is
+ * not part of the core (it is excluded from identity by design), so an
+ * identical replay reproduces the same fingerprint and converges — drifted
+ * material under the same scheduleId fails closed as conflicting replay.
+ */
+export function deriveScheduleFingerprint(input: ScheduleIdentityInput): string {
   return sha256Hex(
     canonicalJson({
       v: 1,
       core: "mission_schedule",
       scheduleId: deriveScheduleId(input),
-      producedAt: input.producedAt,
     })
   );
 }

@@ -38,6 +38,7 @@ import {
   MissionSchedulingValidationError,
   listMissionDependenciesSchema,
   listMissionSchedulesSchema,
+  cancelMissionScheduleSchema,
   missionTaskPlanPortSchema,
   produceMissionScheduleSchema,
   recordMissionDependencySchema,

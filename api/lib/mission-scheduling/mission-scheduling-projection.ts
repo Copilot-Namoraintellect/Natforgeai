@@ -17,9 +17,10 @@ import type {
 } from "@db/schema";
 
 export const MISSION_SCHEDULING_DISCLAIMER =
-  "A mission schedule is deterministic ordering evidence only: it records which tasks may be sequenced, " +
-  "which may run in parallel, and which are blocked. Scheduling consumed mission and governance authority " +
-  "read-only; it never mutates mission objective, task definition, governance state or capability.";
+  "A mission schedule is deterministic ordering evidence only — never execution authorization. It records " +
+  "which tasks may be sequenced, which may run in parallel, and which are blocked. Scheduling consumed " +
+  "mission and governance authority read-only; it never mutates mission objective, task definition, " +
+  "governance state or capability.";
 
 export const MISSION_EXECUTION_DISCLAIMER =
   "schedule != execution authorization. No task, provider, campaign, budget, approval or billing state may " +

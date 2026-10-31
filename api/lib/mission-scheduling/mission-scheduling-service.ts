@@ -24,6 +24,7 @@ import { persistAuditEvent } from "../audit/audit-store";
 import {
   MISSION_SCHEDULING_STATE_PORT_VERSION,
   MissionSchedulingError,
+  MissionSchedulingIdentityConflictError,
   MissionSchedulingInputError,
   MissionSchedulingOwnershipError,
   MissionSchedulingValidationError,
@@ -566,12 +567,19 @@ export async function produceMissionSchedule(
     validUntil: core.validUntil,
   };
   const scheduleId = deriveScheduleId(identityInput);
-  const scheduleFingerprint = deriveScheduleFingerprint({ ...identityInput, producedAt: nowIso });
+  const scheduleFingerprint = deriveScheduleFingerprint(identityInput);
 
   const existing = await getScheduleByScheduleId(ctx.userId, scheduleId, db);
   if (existing) {
-    // Idempotent replay: same authoritative inputs ⇒ same sch1: — zero new
-    // durable effects, zero lifecycle facts, zero audit events.
+    // Same scheduleId replayed: identical material converges (idempotent
+    // replay, zero new effects). Drifted material under the same identity is
+    // conflicting replay and fails closed.
+    if (existing.scheduleFingerprint !== scheduleFingerprint) {
+      throw new MissionSchedulingIdentityConflictError(
+        "SCHEDULING_REPLAY_CONFLICT",
+        `schedule ${scheduleId} exists with a conflicting fingerprint; replay drift fails closed.`
+      );
+    }
     const lifecycle = await listScheduleLifecycleEvents(ctx.userId, scheduleId, db);
     return {
       schedule: existing,
