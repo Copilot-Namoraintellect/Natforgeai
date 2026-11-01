@@ -296,9 +296,15 @@ export function isIsoUtc(value: unknown): value is string {
 
 // ─── Client-authority field rejection (contract §10/§13) ───
 
+// R9-X convergence: `planId`/`taskId` are identity REFERENCES consumed by
+// B's own lifecycle/read procedures (markReadyForScheduling, revise, cancel,
+// get, listLifecycle, getSchedulingHandoff) — not client authority material.
+// Listing them here made every lifecycle procedure self-rejecting (latent on
+// the frozen branch; B's stream tests exercised the service layer only).
+// z.strictObject already rejects unknown keys at every boundary, so removing
+// them loses no validation: status/fingerprints/risk/governance authority
+// fields below remain rejected.
 const CLIENT_AUTHORITY_FIELDS = new Set([
-  "planId",
-  "taskId",
   "planVersion",
   "taskIds",
   "planFingerprint",

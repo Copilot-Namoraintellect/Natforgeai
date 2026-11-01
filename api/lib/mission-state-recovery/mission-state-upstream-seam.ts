@@ -113,6 +113,14 @@ export interface MissionStateUpstreamAuthority {
   resolveTasksForPlan(userId: number, planId: string): Promise<TaskAuthorityView[]>;
   resolveSchedule(userId: number, scheduleId: string): Promise<ScheduleAuthorityView | null>;
   resolveScheduleGlobal(scheduleId: string): Promise<ScopeView | null>;
+  /**
+   * The current registered scheduling snapshot fingerprint for the plan
+   * (R9-C authority). R9-X convergence: a schedule binds the snapshot it was
+   * produced from; drift detection compares against THIS value, never against
+   * R9-B's plan fingerprint (a different scheme — C's snapshot is the
+   * schedule's direct authority).
+   */
+  resolvePlanSnapshotFingerprint?(userId: number, planId: string): Promise<string | null>;
 }
 
 // ─── Shared row shapers (identical semantics in production + in-memory) ───
@@ -380,6 +388,15 @@ export function createMissionStateUpstreamAuthority(executor?: SqlExecutor): Mis
       `);
       return row ? { userId: Number(row.userId), businessId: Number(row.businessId) } : null;
     },
+    async resolvePlanSnapshotFingerprint(userId, planId) {
+      await guarded("mission_task_plan_snapshots");
+      const row = await rawOne(sql`
+        SELECT planFingerprint FROM mission_task_plan_snapshots
+        WHERE userId = ${userId} AND planId = ${planId}
+        ORDER BY id DESC LIMIT 1
+      `);
+      return row ? String(row.planFingerprint ?? "") : null;
+    },
   };
 }
 
@@ -435,6 +452,13 @@ export function createInMemoryMissionStateUpstreamAuthority(
       if (!SCHEDULE_ID_PATTERN.test(scheduleId)) return null;
       const hit = ofTable("mission_schedules").find((r) => r.scheduleId === scheduleId);
       return hit ? { userId: Number(hit.userId), businessId: Number(hit.businessId) } : null;
+    },
+    async resolvePlanSnapshotFingerprint(userId, planId) {
+      const hits = ofTable("mission_task_plan_snapshots")
+        .filter((r) => Number(r.userId) === userId && r.planId === planId)
+        .sort((a, b) => Number(b.id ?? 0) - Number(a.id ?? 0));
+      const hit = hits[0];
+      return hit ? String(hit.planFingerprint ?? "") : null;
     },
   };
 }

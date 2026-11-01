@@ -25,6 +25,10 @@ import {
   TASK_ID_PATTERN,
   isIsoUtc,
 } from "./execution-coordination-contract";
+import {
+  translateEnvironmentCapabilities,
+  translateRequiredCapabilities,
+} from "./execution-capability-vocabulary";
 
 export class ExecutionAuthorityUnavailable extends ExecutionUpstreamError {
   constructor(detail: string) {
@@ -210,7 +214,17 @@ function shapeTaskRow(row: Record<string, unknown>): TaskAuthorityView {
   if (!MISSION_ID_PATTERN.test(missionId)) {
     throw new ExecutionUpstreamError("EXECUTION_INPUT_MALFORMED", `task ${taskId} has malformed missionId.`);
   }
-  const requiredCapabilities = parseJsonArray(row.requiredCapabilities).map(String);
+  // R9-X: B's planning capabilities are translated into D's closed execution
+  // vocabulary at this read-only consumption boundary. Any requirement that
+  // cannot translate (unknown or unsupported capability) fails closed —
+  // adapter selection can never be widened.
+  const requiredCapabilities = translateRequiredCapabilities(parseJsonArray(row.requiredCapabilities).map(String));
+  if (!requiredCapabilities) {
+    throw new ExecutionUpstreamError(
+      "CAPABILITY_INVALID",
+      `task ${taskId} declares a required capability outside the executable vocabulary; no adapter can be resolved.`
+    );
+  }
   const constraints = parseJsonArray(row.constraints);
   const status = String(row.status ?? "");
   if (status.length === 0 || status.length > 28) {
@@ -412,7 +426,7 @@ export function createExecutionUpstreamAuthority(
         ORDER BY id DESC LIMIT 1
       `);
       if (!row) return null;
-      return { supportedCapabilities: parseJsonArray(row.supportedCapabilities).map(String) };
+      return { supportedCapabilities: translateEnvironmentCapabilities(parseJsonArray(row.supportedCapabilities).map(String)) };
     },
   };
 }
@@ -484,7 +498,7 @@ export function createInMemoryExecutionUpstreamAuthority(
         .sort((a, b) => Number(b.id ?? 0) - Number(a.id ?? 0));
       const row = hits[0];
       if (!row) return null;
-      return { supportedCapabilities: parseJsonArray(row.supportedCapabilities).map(String) };
+      return { supportedCapabilities: translateEnvironmentCapabilities(parseJsonArray(row.supportedCapabilities).map(String)) };
     },
   };
 }

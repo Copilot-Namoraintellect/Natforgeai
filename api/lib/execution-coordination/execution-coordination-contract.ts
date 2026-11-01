@@ -172,15 +172,21 @@ export const EXECUTABLE_MISSION_STATUSES = [
   "REVIEW_REQUIRED",
 ] as const;
 
-/** R9-B plan/task statuses under which execution may consume plan authority. */
-export const EXECUTABLE_PLAN_STATUSES = ["ACTIVE", "COMPLETE", "PLANNED", "ELIGIBLE"] as const;
-export const EXECUTABLE_TASK_STATUSES = [
-  "PLANNED",
-  "READY",
-  "ACTIVE",
-  "ELIGIBLE_FOR_EXECUTION",
-  "SCHEDULED",
-] as const;
+/**
+ * R9-B plan statuses under which execution may consume plan authority.
+ * R9-X convergence: aligned to B's frozen vocabulary — READY_FOR_SCHEDULING is
+ * the single planning-consumable state (DRAFT/VALIDATED are not yet
+ * scheduling-ready; REVIEW_REQUIRED is a governance hold; BLOCKED/SUPERSEDED/
+ * STALE/CANCELLED/INVALIDATED are negative/terminal).
+ */
+export const EXECUTABLE_PLAN_STATUSES = ["READY_FOR_SCHEDULING"] as const;
+/**
+ * R9-B task statuses under which execution may consume task authority.
+ * R9-X convergence: aligned to B's frozen TASK_STATUSES — READY_FOR_SCHEDULING
+ * is the executable state (DEFINED/VALIDATED not yet ready;
+ * GOVERNANCE_REVIEW_REQUIRED/BLOCKED/SUPERSEDED/UNRESOLVED negative).
+ */
+export const EXECUTABLE_TASK_STATUSES = ["READY_FOR_SCHEDULING"] as const;
 
 /** Only a READY, current schedule is executable (R9-C closed lifecycle). */
 export const EXECUTABLE_SCHEDULE_STATUSES = ["READY"] as const;

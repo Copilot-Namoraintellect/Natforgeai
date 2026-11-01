@@ -1040,13 +1040,16 @@ describe("R9-E acceptance — observability & execution boundary (E12.43–E12.5
     expect(states.find((t) => t.taskId === TA)?.status).toBe("FAILED_RETRYABLE");
   });
 
-  it("E12.50 no production mutation: migration is an unexecuted artefact", () => {
+  it("E12.50 no production mutation: canonical migration is an unexecuted artefact", () => {
     const root = process.cwd();
-    const migration = readFileSync(join(root, "db", "migrations", "0037_r9_e_mission_state_recovery_foundation.sql"), "utf8");
+    // R9-X converged the six provisional 0037 migrations into one canonical
+    // migration (0037_r9_mission_control_foundation); it remains NOT EXECUTED.
+    const migration = readFileSync(join(root, "db", "migrations", "0037_r9_mission_control_foundation.sql"), "utf8");
     expect(migration).toContain("NOT EXECUTED");
     const journal = JSON.parse(readFileSync(join(root, "db", "migrations", "meta", "_journal.json"), "utf8")) as {
       entries: { tag: string }[];
     };
+    expect(journal.entries.some((e) => e.tag === "0037_r9_mission_control_foundation")).toBe(true);
     expect(journal.entries.some((e) => e.tag.includes("0037_r9_e"))).toBe(false);
   });
 });

@@ -52,8 +52,41 @@ function extractRef(sql: any): { col: string | null; path: string | null } {
   return { col, path };
 }
 
+function toComparable(value: unknown): number | string | null {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    const ms = Date.parse(value);
+    if (!Number.isNaN(ms)) return ms;
+  }
+  if (typeof value === "number") return value;
+  if (typeof value === "string") return value;
+  return null;
+}
+
+function matchesWithOp(actual: unknown, expected: unknown, op: string | null): boolean {
+  if (op === null) return matches(actual, expected);
+  const a = toComparable(actual);
+  const b = toComparable(expected);
+  if (a === null || b === null) return false;
+  if (typeof a === "number" && typeof b === "number") {
+    if (op === ">") return a > b;
+    if (op === "<") return a < b;
+    if (op === ">=") return a >= b;
+    if (op === "<=") return a <= b;
+  }
+  if (op === ">") return a > b;
+  if (op === "<") return a < b;
+  if (op === ">=") return a >= b;
+  return a <= b;
+}
+
 function matches(actual: unknown, expected: unknown): boolean {
   if (Array.isArray(expected)) return expected.includes(actual);
+  if (actual instanceof Date || expected instanceof Date) {
+    const a = toComparable(actual);
+    const b = toComparable(expected);
+    if (typeof a === "number" && typeof b === "number") return a === b;
+  }
   return actual === expected;
 }
 
@@ -68,10 +101,21 @@ function evalCond(cond: any, row: any): boolean {
   let ok = true;
   let col: string | null = null;
   let path: string | null = null;
+  let op: string | null = null;
+  const results: boolean[] = [];
+  const joiners: string[] = [];
   for (const chunk of chunks) {
     if (chunk === null || chunk === undefined) continue;
     if (Array.isArray(chunk?.queryChunks)) {
-      if (!evalCond(chunk, row)) ok = false;
+      // A nested condition group (and()/or()): evaluate it and fold with the
+      // recorded joiner. A leading position implies AND with the accumulator.
+      const nested = evalCond(chunk, row);
+      if (results.length === 0) {
+        results.push(nested);
+      } else {
+        results.push(nested);
+        joiners.push("and");
+      }
       const ref = extractRef(chunk);
       if (ref.col) col = ref.col;
       if (ref.path) path = ref.path;
@@ -83,23 +127,42 @@ function evalCond(cond: any, row: any): boolean {
         continue;
       }
       if (chunk instanceof StringChunk) {
-        if (/is\s+null/i.test(chunk.value.join(""))) {
-          if (getPathValue(row[col ?? ""], path) != null) ok = false;
+        const text = chunk.value.join("");
+        if (/is\s+null/i.test(text)) {
+          const condResult = getPathValue(row[col ?? ""], path) == null;
+          results.push(condResult);
+          if (results.length > 1) joiners.push("and");
           col = null;
           path = null;
+          continue;
+        }
+        const joiner = text.match(/\b(or|and)\b/i);
+        if (joiner) {
+          joiners.push(joiner[1].toLowerCase());
+          continue;
+        }
+        const opMatch = text.match(/^\s*(>=|<=|>|<)\s*$/);
+        if (opMatch) {
+          op = opMatch[1];
+          continue;
         }
         continue;
       }
       if (chunk instanceof Param) {
-        if (!matches(getPathValue(row[col ?? ""], path), chunk.value)) ok = false;
+        const condResult = matchesWithOp(getPathValue(row[col ?? ""], path), chunk.value, op);
+        results.push(condResult);
+        if (results.length > 1 && joiners.length < results.length - 1) joiners.push("and");
         col = null;
         path = null;
+        op = null;
         continue;
       }
       if (Array.isArray(chunk)) {
         // inArray(column, values) embeds an array of Param-wrapped values.
         const values = chunk.map((v) => (v instanceof Param ? v.value : v));
-        if (!values.includes(getPathValue(row[col ?? ""], path))) ok = false;
+        const condResult = values.includes(getPathValue(row[col ?? ""], path));
+        results.push(condResult);
+        if (results.length > 1 && joiners.length < results.length - 1) joiners.push("and");
         col = null;
         path = null;
         continue;
@@ -107,11 +170,19 @@ function evalCond(cond: any, row: any): boolean {
       continue;
     }
     // Raw primitive comparison value (eq(sql`` fragment, value) shape).
-    if (!matches(getPathValue(row[col ?? ""], path), chunk)) ok = false;
+    const condResult = matchesWithOp(getPathValue(row[col ?? ""], path), chunk, op);
+    results.push(condResult);
+    if (results.length > 1 && joiners.length < results.length - 1) joiners.push("and");
     col = null;
     path = null;
+    op = null;
   }
-  return ok;
+  if (results.length === 0) return ok;
+  let acc = results[0];
+  for (let i = 0; i < joiners.length && i + 1 < results.length; i++) {
+    acc = joiners[i] === "or" ? acc || results[i + 1] : acc && results[i + 1];
+  }
+  return acc;
 }
 
 export interface FakeDbOptions {

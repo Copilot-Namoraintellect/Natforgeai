@@ -405,8 +405,8 @@ function makeSecHarness(seedFn?: (u: FakeUpstreamRow[], g: FakeGovernanceRow[]) 
   const decisionId = seedFn ? seedFn(upstreamRows, govRows) : (() => {
     upstreamRows.push(
       { table: "mission_proposals", row: { missionId: MISSION_ID, userId: 7001, businessId: 501, status: "ELIGIBLE_FOR_PLANNING", validFrom: VALID_FROM, validUntil: VALID_UNTIL } },
-      { table: "mission_plans", row: { planId: PLAN_ID, planVersion: 1, userId: 7001, businessId: 501, missionId: MISSION_ID, status: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL, planFingerprint: H("e") } },
-      { table: "mission_plan_tasks", row: { taskId: TASK, planId: PLAN_ID, planVersion: 1, userId: 7001, businessId: 501, missionId: MISSION_ID, taskType: "PUBLISH_CONTENT", status: "PLANNED", requiredCapabilities: ["social.publish"], constraints: [], taskFingerprint: H("f") } },
+      { table: "mission_plans", row: { planId: PLAN_ID, planVersion: 1, userId: 7001, businessId: 501, missionId: MISSION_ID, status: "READY_FOR_SCHEDULING", validFrom: VALID_FROM, validUntil: VALID_UNTIL, planFingerprint: H("e") } },
+      { table: "mission_plan_tasks", row: { taskId: TASK, planId: PLAN_ID, planVersion: 1, userId: 7001, businessId: 501, missionId: MISSION_ID, taskType: "PUBLISH_CONTENT", status: "READY_FOR_SCHEDULING", requiredCapabilities: ["social.publish"], constraints: [], taskFingerprint: H("f") } },
       { table: "mission_schedules", row: { scheduleId: SCHEDULE_ID, userId: 7001, businessId: 501, missionId: MISSION_ID, planId: PLAN_ID, planFingerprint: H("e"), status: "READY", orderedTaskIds: [TASK], blockingStates: [], dependencyRefs: [], constraints: [], validFrom: VALID_FROM, validUntil: VALID_UNTIL, scheduleFingerprint: H("6") } },
       { table: "mission_task_plan_snapshots", row: { id: 1, userId: 7001, businessId: 501, missionId: MISSION_ID, planId: PLAN_ID, planDocument: {}, supportedCapabilities: ["social.publish"], taskIds: [TASK], planFingerprint: H("e"), planHash: H("7") } }
     );
@@ -490,8 +490,8 @@ describe("R9-D security — rogue execution agent", () => {
       const id = `mgd1:${H("c")}`;
       u.push(
         { table: "mission_proposals", row: { missionId: MISSION_ID, userId: 7001, businessId: 501, status: "ELIGIBLE_FOR_PLANNING", validFrom: VALID_FROM, validUntil: VALID_UNTIL } },
-        { table: "mission_plans", row: { planId: PLAN_ID, planVersion: 1, userId: 7001, businessId: 501, missionId: MISSION_ID, status: "ACTIVE", validFrom: VALID_FROM, validUntil: VALID_UNTIL, planFingerprint: H("e") } },
-        { table: "mission_plan_tasks", row: { taskId: TASK, planId: PLAN_ID, planVersion: 1, userId: 7001, businessId: 501, missionId: MISSION_ID, taskType: "PUBLISH_CONTENT", status: "PLANNED", requiredCapabilities: ["social.publish"], constraints: [], taskFingerprint: H("f") } },
+        { table: "mission_plans", row: { planId: PLAN_ID, planVersion: 1, userId: 7001, businessId: 501, missionId: MISSION_ID, status: "READY_FOR_SCHEDULING", validFrom: VALID_FROM, validUntil: VALID_UNTIL, planFingerprint: H("e") } },
+        { table: "mission_plan_tasks", row: { taskId: TASK, planId: PLAN_ID, planVersion: 1, userId: 7001, businessId: 501, missionId: MISSION_ID, taskType: "PUBLISH_CONTENT", status: "READY_FOR_SCHEDULING", requiredCapabilities: ["social.publish"], constraints: [], taskFingerprint: H("f") } },
         { table: "mission_schedules", row: { scheduleId: SCHEDULE_ID, userId: 7001, businessId: 501, missionId: MISSION_ID, planId: PLAN_ID, planFingerprint: H("e"), status: "READY", orderedTaskIds: [TASK], blockingStates: [{ taskId: TASK, readiness: "BLOCKED_DEPENDENCY", reasons: ["X"] }], dependencyRefs: [], constraints: [], validFrom: VALID_FROM, validUntil: VALID_UNTIL, scheduleFingerprint: H("6") } }
       );
       const params = deriveCanonicalActionParams({ scheduleId: SCHEDULE_ID, taskId: TASK, taskType: "PUBLISH_CONTENT", actionType: "EXECUTE_TASK", adapterType: "SOCIAL", capability: "social.publish", parameters: PARAMS });
@@ -575,9 +575,13 @@ describe("R9-D security — rogue execution agent", () => {
     const actionId = String(prepared.executionAction["executionActionId"]);
     const dispatch = () =>
       dispatchExecutionAction(h.fakeDb as never, h.deps, { userId: 7001 }, { executionActionId: actionId, parameters: PARAMS });
-    await dispatch();
-    await expect(dispatch()).rejects.toMatchObject({ code: "INVALID_DISPATCH_STATE" });
-    await expect(dispatch()).rejects.toMatchObject({ code: "INVALID_DISPATCH_STATE" });
+    const first = await dispatch();
+    // R9-X convergence (X7.28): replays converge to the one recorded attempt;
+    // the side effect can never be duplicated.
+    const second = await dispatch();
+    const third = await dispatch();
+    expect(second.attempt["attemptId"]).toBe(first.attempt["attemptId"]);
+    expect(third.attempt["attemptId"]).toBe(first.attempt["attemptId"]);
     expect(h.sandbox.adapters.SOCIAL.dispatched).toHaveLength(1);
   });
 

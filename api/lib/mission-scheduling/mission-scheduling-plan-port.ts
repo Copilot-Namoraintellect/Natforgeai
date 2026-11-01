@@ -57,16 +57,19 @@ import { CAPABILITY_REGISTRY } from "../mission-planning/mission-planning-templa
 /**
  * The closed set of capabilities the platform environment supports: R9-B's
  * closed planning capability registry (CAPABILITY_REGISTRY keys — the
- * vocabulary B's task requirements are minted from). Deterministic,
- * code-level, never client/model-supplied. R9-D's execution capability
- * vocabulary is a different namespace (dotted names that intentionally do
- * not satisfy this port's CAPABILITY_PATTERN) and is deliberately not
- * merged here — the port contract is verified exact, not weakened.
- * Capabilities outside this set keep a task unready/unresolved (readiness
- * never fabricates support).
+ * vocabulary B's task requirements are minted from), EXCLUDING entries B
+ * marks UNSUPPORTED (whatsapp/sms per R6-X provider truth — an unsupported
+ * capability keeps a task unready/unresolved; readiness never fabricates
+ * support). Deterministic, code-level, never client/model-supplied. R9-D's
+ * execution capability vocabulary is a different namespace (dotted names
+ * that intentionally do not satisfy this port's CAPABILITY_PATTERN) and is
+ * deliberately not merged here — the port contract is verified exact, not
+ * weakened.
  */
 export const MISSION_ENVIRONMENT_CAPABILITIES: readonly string[] = Object.freeze(
-  Object.keys(CAPABILITY_REGISTRY).sort()
+  Object.keys(CAPABILITY_REGISTRY)
+    .filter((key) => CAPABILITY_REGISTRY[key].status !== "UNSUPPORTED")
+    .sort()
 );
 
 // ─── Deterministic B→C vocabulary mapping ───

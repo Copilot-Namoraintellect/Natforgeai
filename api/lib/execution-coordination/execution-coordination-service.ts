@@ -717,6 +717,40 @@ export async function dispatchExecutionAction(
     );
   }
 
+  // Exact replay convergence (X7.28): an action already in a terminal
+  // dispatch state has exactly one authoritative outcome. A duplicate
+  // dispatch with identical material converges to the recorded attempt —
+  // zero new effects, zero new lifecycle facts — and never re-enters the
+  // governance gate (the immutable receipt is the authority).
+  if (action.dispatchState === "SUCCEEDED" || action.dispatchState === "FAILED") {
+    const latest = await getLatestExecutionAttemptForAction(ctx.userId, action.executionActionId, db);
+    if (!latest || latest.resultStatus === null || latest.resultHash === null) {
+      throw new ExecutionStateConflictError(
+        "INVALID_DISPATCH_STATE",
+        `terminal action ${action.executionActionId} has no recorded attempt; refusing to fabricate one.`
+      );
+    }
+    const replayClassification: ClassifiedExecutionResult = {
+      resultStatus: latest.resultStatus as ClassifiedExecutionResult["resultStatus"],
+      failureClass: latest.failureClass as ClassifiedExecutionResult["failureClass"],
+      uncertaintyClass: latest.uncertaintyClass as ClassifiedExecutionResult["uncertaintyClass"],
+      externalReference: latest.externalReference,
+      classifiedResult: { replayConvergence: true },
+    };
+    return {
+      executionAction: envelopeView(action),
+      attempt: attemptView(latest, {
+        resultStatus: latest.resultStatus,
+        resultHash: latest.resultHash,
+        failureClass: latest.failureClass,
+        uncertaintyClass: latest.uncertaintyClass,
+        externalReference: latest.externalReference,
+        completedAt: latest.completedAt,
+      }),
+      classification: replayClassification,
+    };
+  }
+
   // Fresh R9-F consumption revalidation (fingerprint path — raw params never persist).
   const verdict = await runGovernanceGate({
     deps,

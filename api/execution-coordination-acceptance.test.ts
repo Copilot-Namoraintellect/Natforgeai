@@ -344,7 +344,7 @@ function plantPlan(rows: FakeUpstreamRow[], overrides: Record<string, unknown> =
       userId: USER1,
       businessId: BUSINESS1,
       missionId: MISSION_ID,
-      status: "ACTIVE",
+      status: "READY_FOR_SCHEDULING",
       validFrom: VALID_FROM,
       validUntil: VALID_UNTIL,
       planFingerprint: H("e"),
@@ -364,7 +364,7 @@ function plantTask(rows: FakeUpstreamRow[], overrides: Record<string, unknown> =
       businessId: BUSINESS1,
       missionId: MISSION_ID,
       taskType: "PUBLISH_CONTENT",
-      status: "PLANNED",
+      status: "READY_FOR_SCHEDULING",
       requiredCapabilities: ["social.publish"],
       constraints: [],
       taskFingerprint: H("f"),
@@ -943,7 +943,10 @@ describe("R9-D acceptance — identity / idempotency / boundary (D2/D4/D5)", () 
       });
     const first = await dispatch();
     expect(first.classification.resultStatus).toBe("SUCCEEDED");
-    await expect(dispatch()).rejects.toMatchObject({ code: "INVALID_DISPATCH_STATE" });
+    // R9-X convergence (X7.28): the duplicate dispatch converges to the
+    // recorded attempt — zero new effects, no second adapter call.
+    const second = await dispatch();
+    expect(second.attempt["attemptId"]).toBe(first.attempt["attemptId"]);
     expect(h.harness.totalDispatches()).toBe(1);
     expect(h.harness.adapters.SOCIAL.dispatched).toHaveLength(1);
   });

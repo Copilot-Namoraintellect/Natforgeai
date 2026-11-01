@@ -224,8 +224,17 @@ async function loadWorld(
     throw new MissionStateOwnershipError(CROSS_BUSINESS_MISSION, "plan scope does not match mission scope.");
   }
 
-  if (schedule && schedule.planFingerprint && plan.planFingerprint && schedule.planFingerprint !== plan.planFingerprint) {
-    // Schedule built over a different plan revision — drift, not authority.
+  // R9-X convergence: the schedule binds the R9-C snapshot it was produced
+  // from (schedule.planFingerprint is C's snapshot fingerprint — B's plan
+  // fingerprint is a different scheme and never equal by construction). When
+  // the snapshot authority is reachable, drift means "schedule built over a
+  // superseded plan registration". Without a snapshot row (pre-integration
+  // fixtures), the identity checks above (planId/mission/scope) remain the
+  // only binding and no fingerprint comparison is possible.
+  const snapshotFingerprint = upstream.resolvePlanSnapshotFingerprint
+    ? await upstream.resolvePlanSnapshotFingerprint(userId, plan.planId)
+    : null;
+  if (snapshotFingerprint !== null && schedule && schedule.planFingerprint && snapshotFingerprint !== schedule.planFingerprint) {
     throw new MissionStateConflictError(MISSION_STATE_CONFLICT, "schedule plan fingerprint does not match the current plan.");
   }
 

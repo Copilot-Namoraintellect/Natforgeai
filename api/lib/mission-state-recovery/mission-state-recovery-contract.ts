@@ -413,9 +413,14 @@ export class MissionStateTamperError extends MissionStateRecoveryError {
 }
 
 // ─── Client-authority smuggling rejection ───
+//
+// R9-X convergence: `recoveryCandidateId` and `status` are closed reference
+// inputs of E's own read/governance procedures (like planId/taskId elsewhere)
+// — not client authority material. Listing them made get/bind/consume/cancel
+// and listRecoveryCandidates self-rejecting (latent on the frozen branch;
+// z.strictObject already rejects unknown keys at every boundary).
 
 const FORBIDDEN_CLIENT_AUTHORITY_FIELDS = [
-  "status",
   "missionStatus",
   "healthClass",
   "health",
@@ -425,7 +430,6 @@ const FORBIDDEN_CLIENT_AUTHORITY_FIELDS = [
   "recoveryCandidateIds",
   "missionStateId",
   "taskStateId",
-  "recoveryCandidateId",
   "recoveryLifecycleId",
   "timelineEventId",
   "stateId",
@@ -442,7 +446,6 @@ const FORBIDDEN_CLIENT_AUTHORITY_FIELDS = [
   "retryEligibility",
   "recoveryRequired",
   "recoveryStatus",
-  "recoveryType",
   "governanceDecision",
   "policyVersion",
   "actionParamsFingerprint",
