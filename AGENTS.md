@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-10 (R9-X integration: §31 R9-A Mission Authority, §32 R9-F Mission Governance — R9-D Execution Coordination merging)
+> **Last updated:** 2026-11-10 (R10-E: §35 Observability, Operations & Incident Control — OBSERVABILITY_OPERATIONS_READY)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -41,6 +41,7 @@
 32. [Mission Governance & Approval (WBS-R9-F)](#32-mission-governance--approval-wbs-r9-f)
 33. [Execution Coordination (WBS-R9-D)](#33-execution-coordination-wbs-r9-d)
 34. [Mission State, Recovery & Observability (WBS-R9-E)](#34-mission-state-recovery--observability-wbs-r9-e)
+35. [Observability, Operations & Incident Control (WBS-R10-E)](#35-observability-operations--incident-control-wbs-r10-e)
 
 ---
 
@@ -1659,3 +1660,73 @@ derived — never set by client or model; no inferred success anywhere.
   no live execution anywhere in the stream; upstream tables are read-only
   behind guarded information-schema seams that fail closed when absent.
 - Real-MySQL concurrency remains the R10 / pre-production gate.
+
+
+---
+
+## 35. Observability, Operations & Incident Control (WBS-R10-E)
+
+The production-observability and operational-control capability: makes the
+autonomous platform understandable, diagnosable and controllable by human
+operators without becoming execution authority. Repository-level only — the
+OneGrid server is not ready: no OneGrid access, no production deployment, no
+production telemetry claims, no live provider calls, no production monitoring
+installation.
+
+**Required principle:** *observability != authority. Monitoring observes,
+classifies, alerts, correlates and recommends operator attention — it never
+authorizes execution, approves recovery, changes autonomy/policy/mission
+scope/provider/credentials, rewrites history, hides uncertainty or suppresses
+audit.*
+
+- Core modules: `api/lib/observability/` (`-contract`, `-identity`,
+  `telemetry-event`, `health-model`, `incident-model`, `alert-model`,
+  `slo-measurement`, `-store`, `-service`, `-bridge`); router
+  `observability` (`api/observability-router.ts`).
+- Telemetry (`production-observability/v1`): typed/versioned envelope,
+  deterministic `evt1:` identity, append-only exact-once `operational_events`
+  (21 closed event types, 12 closed services, 9 closed providers, 48 closed
+  diagnostic codes; safeMetadata = audit-envelope hygiene; no secrets, no
+  chain-of-thought, no request/response bodies).
+- Health (E2/E15): HEALTHY/DEGRADED/AT_RISK/UNAVAILABLE/UNKNOWN over 12
+  dimensions; evidence-derived only — absence of telemetry ⇒ UNKNOWN, never
+  HEALTHY. Provider health is its own five-class vocabulary (E9) and never
+  authorizes switching provider/account.
+- Incidents (E3): deterministic `inc1:` identity; audited append-only `icl1:`
+  lifecycle OPEN→INVESTIGATING→MITIGATING→MONITORING→RESOLVED→CLOSED;
+  SUPPRESSED only via explicit operator/policy authority reference, critical
+  never suppressible; agents can never hide an incident.
+- Alerts (E4/E5): 19 closed deterministic rules; `alt1:` dedup identity folds
+  storms into occurrence counts while every underlying event stays preserved —
+  dedup never deletes evidence; resolution re-arms the identity.
+- Mission-control operational health (E10): read-only aggregate over the
+  canonical R9 tables behind a guarded information-schema seam (absent ⇒
+  UNKNOWN) — blocked missions, uncertain/failed/pending-external actions,
+  governance blocks, approval backlog, recovery backlog, stale
+  schedules/recoveries. R9-E keeps mission-state authority.
+- Security observability (E11): 10 closed security signal types; secret-shaped
+  payload rejection; prompt-injection content inert. Backup/DR signals (E12)
+  are R10-G-compatible observation only — no backup authority.
+- SLO foundation (E16): 12 measurement indicators with explicit no_evidence
+  basis — no contractual SLA claimed.
+- Operator surface (E13/E14): read-only tRPC namespace; incident/alert
+  lifecycle commands are admin-gated + audited; control commands (suspend
+  execution, disable provider, safe mode, kill switch) are DEFINED + REJECTED
+  for the future R10-H/R10-X governed command boundary.
+- Schema: `operational_events`, `operational_incidents`,
+  `operational_incident_lifecycle_events`, `operational_alerts`,
+  `service_health_observations` — provisional migration
+  `0038_r10_e_observability_operations` (artefact only, NOT executed; R10-X
+  owns canonical R10 sequencing; canonical R9 0037 untouched). Audit:
+  additive `operational_event_recorded`, `operational_incident_opened`,
+  `operational_incident_lifecycle`, `operational_alert_raised`,
+  `operational_alert_deduplicated`, `operational_alert_lifecycle`.
+- Contracts: `docs/contracts/production-observability-contract.md`,
+  `docs/contracts/observability-to-production-platform-contract.md` (E18
+  handoff: defined, not implemented). Inventory:
+  `docs/recovery/r10-e-observability-inventory.md`.
+- Acceptance: `api/lib/observability/observability-acceptance.test.ts` (41
+  connected cases covering all 38 programme criteria),
+  `api/lib/observability/observability-security.test.ts` (22 rogue-agent
+  cases). Report:
+  `docs/recovery/r10-e-observability-operations-acceptance-report.md`.
