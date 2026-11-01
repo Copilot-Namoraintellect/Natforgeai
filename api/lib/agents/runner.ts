@@ -20,6 +20,7 @@ import {
   emitAgentProviderAlert,
 } from "./provider-error";
 import { withProviderTimeout } from "../reliability/provider-timeout";
+import { assertSecretFreeModelPayload } from "../production-security";
 
 export function isTestMode(): boolean {
   return (
@@ -91,6 +92,14 @@ export async function runAgent<TOutput>({
   billingIdempotencyKey,
 }: AgentRunOptions<TOutput>): Promise<AgentRunResult<TOutput>> {
   const db = getDb();
+
+  // R10-F prompt/context exclusion: fail closed BEFORE billing, run-record
+  // creation, or any model call when the composed prompt/system carries
+  // secret-shaped material. The typed error names paths only, never values.
+  assertSecretFreeModelPayload(
+    { system: system ?? null, prompt },
+    "agent-input"
+  );
 
   // In test mode, never charge a live wallet unless explicitly requested.
   const shouldSkipBilling = skipBilling ?? isTestMode();
@@ -184,6 +193,13 @@ export async function runAgent<TOutput>({
     );
 
     const object = result.object;
+
+    // R10-F output screening: model output is untrusted data. A model that
+    // has been prompt-injected into echoing secret-shaped material must not
+    // reach persistence or downstream callers; existing failure accounting
+    // (credit release) applies inside this try.
+    assertSecretFreeModelPayload(object, "agent-output");
+
     const usage = (result as any).usage;
 
     const promptTokens = usage?.promptTokens ?? 0;
