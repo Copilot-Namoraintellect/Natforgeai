@@ -22,7 +22,7 @@
  * adapters only. No server, no migration, no deployment. All secret material
  * here is synthetic and fake-valued (canaries).
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { TRPCError } from "@trpc/server";
@@ -60,6 +60,23 @@ const CANARY = vi.hoisted(() => {
 vi.mock("ai", () => ({
   generateObject: vi.fn(),
 }));
+
+// R10-F must not pollute the shared worker environment: several modules gate
+// live behaviour on process.env at CALL time (e.g. the content-safety check
+// short-circuits only when OPENAI_API_KEY is unset). Canaries are deleted in
+// afterAll so later test files scheduled into the same worker process keep
+// the default offline/test behaviour. Assertions use the hoisted snapshot
+// strings, not live env, so cleanup cannot weaken them.
+const CANARY_ENV_KEYS = [
+  "APP_SECRET",
+  "DATABASE_URL",
+  "REDIS_URL",
+  "OPENAI_API_KEY",
+  "STRIPE_SECRET_KEY",
+  "SMTP_PASS",
+  "BACKUP_ENCRYPTION_KEY",
+  "FIREBASE_SERVICE_ACCOUNT",
+] as const;
 
 import { generateObject } from "ai";
 import { getDb } from "./queries/connection";
@@ -100,7 +117,11 @@ function makeMemoryRow(opts: { id: number; userId: number; businessId: number; m
     observedAt: "2026-01-01T00:00:00.000Z",
     supersedesMemoryId: null,
     contradictsMemoryIds: [] as string[],
-    contextScope: "BUSINESS" as const,
+    contextScope: {
+      scopeType: "BUSINESS" as const,
+      campaignId: null,
+      businessDnaSnapshotId: null,
+    },
   };
   return {
     id: opts.id,
@@ -156,6 +177,12 @@ async function expectTrpcCode(promise: Promise<unknown>, code: string): Promise<
 describe("F10 rogue-agent security", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterAll(() => {
+    for (const key of CANARY_ENV_KEYS) {
+      delete process.env[key];
+    }
   });
 
   describe("procedure surface: no secret/env/shell path exists", () => {
