@@ -8,8 +8,8 @@
 
 ```
 branch=feature/r10-e-observability-operations
-head=995fe62 (E2-E17 core) + 8342c58 (audit taxonomy expectation)
-remote_head=(set on first push — none before R10-E)
+head=dd6504b (E19 + report)
+remote_head=dd6504be7f0515cb861884ccecb005233be59d35
 working_tree=clean
 ```
 
@@ -86,8 +86,14 @@ targeted=63/63 PASS (41 acceptance + 22 security) over the in-memory fake db
 r9_compatibility=224/224 PASS after additive taxonomy expectation update
   (R9-E acceptance+security, R9-D acceptance+security, R9-F acceptance+security,
    audit event/store, health router)
-affected_regressions=full suite re-run captured (see full_suite)
-full_suite=(below — second run with complete capture)
+affected_regressions=R9-E/R9-D/R9-F acceptance+security, audit event/store, health router: 224/224 PASS
+full_suite=7711 passed / 0 failed (457 files: 455 passed, 1 skipped; second complete
+  capture run). Two environment-only file-level issues, both proven unrelated and
+  reproducible in isolation at this checkout:
+  (1) src/pages/Campaigns.test.tsx — module-load FirebaseError (auth/invalid-api-key):
+      VITE_FIREBASE_API_KEY is empty in .env.example/unset here; the file imports
+      only frontend code and fails identically alone; R10-E diff touches 0 src/ files;
+  (2) r4-x6-full-autonomy-e2e hook timeout under 4-worker load — 21/21 PASS in isolation.
 typescript=tsc -b PASS (clean)
 build=backend esbuild bundle PASS (boot.js 18.6mb / worker.js 7.2mb, exit 0).
   `vite build` frontend step fails at the base commit's pre-existing
