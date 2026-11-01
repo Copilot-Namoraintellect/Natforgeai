@@ -179,7 +179,12 @@ export async function transitionMissionStatus(
         eq(missionProposals.version, input.expectedVersion)
       )
     );
-  const affected = Array.isArray(result) ? result.length : Number((result as { affectedRows?: number })?.affectedRows ?? 0);
+  // drizzle-orm/mysql2 resolves mutations to a [ResultSetHeader, ...] tuple;
+  // normalize either that or a bare header before reading the CAS verdict.
+  const header = (Array.isArray(result) ? result[0] : result) as
+    | { affectedRows?: number; rowsAffected?: number }
+    | undefined;
+  const affected = Number(header?.affectedRows ?? header?.rowsAffected ?? 0);
   if (affected === 0) {
     fail("MISSION_LIFECYCLE_CONFLICT", `mission ${input.missionId} CAS transition lost — concurrent lifecycle change`);
   }
