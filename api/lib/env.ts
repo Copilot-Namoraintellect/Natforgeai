@@ -29,6 +29,18 @@ export const env = {
   appId: process.env.APP_ID ?? "",
   appSecret: required("APP_SECRET"),
   isProduction: process.env.NODE_ENV === "production",
+  // R10-E operational telemetry attribution. Unknown release identity stays
+  // null — it is never invented (E15). Environment is closed to
+  // development/staging/production.
+  environmentName:
+    ((): "development" | "staging" | "production" => {
+      const raw = (
+        process.env.ENVIRONMENT_NAME ??
+        (process.env.NODE_ENV === "production" ? "production" : "development")
+      ).toLowerCase();
+      return raw === "production" || raw === "staging" ? raw : "development";
+    })(),
+  releaseVersion: process.env.RELEASE_VERSION ?? process.env.GIT_SHA ?? null,
   databaseUrl: required("DATABASE_URL"),
   firebaseServiceAccount: required("FIREBASE_SERVICE_ACCOUNT"),
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",

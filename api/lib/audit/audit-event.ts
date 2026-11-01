@@ -263,6 +263,29 @@ export const AUDIT_EVENT_TYPES = [
   // invalidation / cancellation / resolution). One per inserted fact;
   // convergence paths write zero events.
   "mission_recovery_lifecycle",
+  // R10-E: one durable operational telemetry event was accepted by the
+  // observability store (exactly one per inserted event; replay converges
+  // with zero). Metadata carries ids/closed labels/hashes only — never
+  // payloads, secrets or model reasoning.
+  "operational_event_recorded",
+  // R10-E: one durable operational incident was opened over converging
+  // failure evidence (exactly one per inserted incident; re-detection folds
+  // with zero). Bounded labels/hashes only.
+  "operational_incident_opened",
+  // R10-E: one immutable incident lifecycle fact was durably recorded
+  // (investigating / mitigating / monitoring / resolution / closure /
+  // authority-bearing suppression). One per inserted fact; convergence zero.
+  "operational_incident_lifecycle",
+  // R10-E: one deduplicated operational alert was raised (exactly one per
+  // inserted alert presentation; folds converge with zero). Bounded labels
+  // only — dedup never deletes underlying event evidence.
+  "operational_alert_raised",
+  // R10-E: a matching occurrence folded into an existing open alert
+  // (presentation compression only; the event store preserved the event).
+  "operational_alert_deduplicated",
+  // R10-E: an explicit operator alert presentation transition
+  // (acknowledge / resolve). One per inserted fact; convergence zero.
+  "operational_alert_lifecycle",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

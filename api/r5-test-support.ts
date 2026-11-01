@@ -9,8 +9,13 @@
  *   JSON_EXTRACT(workflowContext, '$.nextCycle...') CAS guards the next-cycle
  *   authorities issue);
  * - insert().values() with insertId and an ER_DUP_ENTRY simulation on the
- *   queue_replay_requests.replayKey and audit_events.eventFingerprint unique
- *   authorities, plus a throwable toggle for audit_events inserts
+ *   queue_replay_requests.replayKey, audit_events.eventFingerprint,
+ *   lead_privacy_states.leadId, R7/R9 decision anchors, R7-D experiment
+ *   anchors and the R10-E observability anchors (operational_events.eventId,
+ *   operational_incidents.incidentId, operational_incident_lifecycle_events.
+ *   lifecycleEventId, operational_alerts(environment,dedupKey),
+ *   service_health_observations.observationId) unique authorities, plus a
+ *   throwable toggle for audit_events inserts
  *   (audit-fail-closed tests);
  * - transaction(cb) with snapshot/rollback so mutation+audit atomicity is
  *   testable (R6-F lead governance).
@@ -312,6 +317,36 @@ export function createFakeDb(
             )
           ) {
             throw duplicateKeyError("Duplicate entry 'userId-governanceDecisionId'");
+          }
+        }
+        if (name === "operational_events") {
+          // R10-E durable convergence anchor: unique eventId.
+          if (rows.some((r) => r.eventId === row.eventId)) {
+            throw duplicateKeyError("Duplicate entry 'eventId'");
+          }
+        }
+        if (name === "operational_incidents") {
+          // R10-E durable convergence anchor: unique incidentId.
+          if (rows.some((r) => r.incidentId === row.incidentId)) {
+            throw duplicateKeyError("Duplicate entry 'incidentId'");
+          }
+        }
+        if (name === "operational_incident_lifecycle_events") {
+          // R10-E durable fact anchor: unique lifecycleEventId.
+          if (rows.some((r) => r.lifecycleEventId === row.lifecycleEventId)) {
+            throw duplicateKeyError("Duplicate entry 'lifecycleEventId'");
+          }
+        }
+        if (name === "operational_alerts") {
+          // R10-E dedup anchor: unique (environment, dedupKey).
+          if (rows.some((r) => r.environment === row.environment && r.dedupKey === row.dedupKey)) {
+            throw duplicateKeyError("Duplicate entry 'environment-dedupKey'");
+          }
+        }
+        if (name === "service_health_observations") {
+          // R10-E observation anchor: unique observationId.
+          if (rows.some((r) => r.observationId === row.observationId)) {
+            throw duplicateKeyError("Duplicate entry 'observationId'");
           }
         }
         if (name === "experiment_outcome_evidence") {
