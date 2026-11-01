@@ -46,7 +46,7 @@ Legend: `[ ]` pending · verify each line with the noted command or artefact.
 
 ## 5. Scheduling
 
-- [ ] 2.1-style cron/systemd timer entry: nightly 02:00 local, as `backup-op`:
+- [ ] 5.1 cron/systemd timer entry: nightly 02:00 local, as `backup-op`:
   `BACKUP_CONFIG=/etc/natforge/backup.env scripts/backup/run-backup.sh`
 - [ ] 5.2 Timer unit files committed to ops repo (auditable config change, G3 I3)
 - [ ] 5.3 Random-offset/backup-window note: expected set duration `____` (must finish before 04:00 for the monitoring silence-alert)

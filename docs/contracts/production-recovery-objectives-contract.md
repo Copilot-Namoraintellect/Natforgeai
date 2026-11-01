@@ -3,7 +3,7 @@
 > **Status:** PROPOSED — design-time objectives, pending OneGrid infrastructure
 > **Branch:** `feature/r10-g-backup-dr`
 > **Base:** `799f6b4cb351ebe969f97da606324605fdf2a07b`
-> **Date:** 2026-11-14
+> **Date:** 2026-11-01
 > **Audience:** R10-E (monitoring), R10-X (production restore rehearsal), OneGrid implementation, operations
 > **Binding rule:** these are *targets to be demonstrated*, not contractual SLAs.
 > An objective becomes **COMMITTED** only when the R10-X restore drill measures

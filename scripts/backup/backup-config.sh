@@ -26,14 +26,7 @@ if [[ -n "${APP_ENV_FILE:-}" ]]; then
     echo "[backup-config] ERROR: APP_ENV_FILE not readable: $APP_ENV_FILE" >&2
     exit 1
   fi
-  npx tsx -e "
-    import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-    import { redactEnv } from '${SCRIPT_DIR//\'/}/lib/redact-env';
-    const inv = redactEnv(readFileSync(process.env.APP_ENV_FILE, 'utf8'));
-    mkdirSync('$OUT', { recursive: true });
-    writeFileSync('$OUT/env-inventory.redacted.json', JSON.stringify(inv, null, 2));
-    console.log('[backup-config] env inventory: ' + inv.entryCount + ' keys, redacted=' + inv.entries.filter(e => e.redacted).length);
-  "
+  npx tsx "$SCRIPT_DIR/lib/redact-env-cli.ts" --env-file "$APP_ENV_FILE" --out "$OUT/env-inventory.redacted.json"
 else
   echo "[backup-config] NOTE: APP_ENV_FILE not set — skipping env inventory" >&2
 fi

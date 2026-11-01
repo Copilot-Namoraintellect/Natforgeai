@@ -3,7 +3,7 @@
 > **Status:** PROPOSED — requirements for the R10-E monitoring stream
 > **Producer:** R10-G (`feature/r10-g-backup-dr`)
 > **Consumer:** R10-E (monitoring & observability), operations
-> **Date:** 2026-11-14
+> **Date:** 2026-11-01
 > **Rule:** the backup pipeline emits facts; R10-E owns alerting, dashboards
 > and escalation. Backup alerting must not live inside the application
 > runtime (G4 — runtime agents cannot suppress backup alerts).
