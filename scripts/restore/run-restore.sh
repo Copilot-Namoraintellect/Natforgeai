@@ -68,19 +68,21 @@ if [[ -f "$RESTORE_WORKDIR/integrity-report.json" ]]; then
 fi
 
 # 4. Restore-run record (append-only audit).
-node -e "
-  const fs = require('fs');
+node -e '
+  const fs = require("fs");
+  const path = require("path");
+  const [ts, role, applyDb, verdict, setId, log, workdir] = process.argv.slice(1);
   const rec = {
     schemaVersion: 1,
-    at: '$TS',
-    sourceSetId: require('path').basename('$BACKUP_SET'),
-    targetRole: '$ROLE',
-    dbApplied: $APPLY_DB,
-    integrityVerdict: '$VERDICT',
+    at: ts,
+    sourceSetId: setId,
+    targetRole: role,
+    dbApplied: applyDb === "yes",
+    integrityVerdict: verdict,
   };
-  fs.appendFileSync('$LOG', JSON.stringify(rec) + '\n');
-  fs.writeFileSync('$RESTORE_WORKDIR/restore-run.json', JSON.stringify(rec, null, 2));
-"
+  fs.appendFileSync(log, JSON.stringify(rec) + "\n");
+  fs.writeFileSync(path.join(workdir, "restore-run.json"), JSON.stringify(rec, null, 2));
+' "$TS" "$ROLE" "$APPLY_DB" "$VERDICT" "$(basename "$BACKUP_SET")" "$LOG" "$RESTORE_WORKDIR"
 
 cat <<'NEXT'
 
