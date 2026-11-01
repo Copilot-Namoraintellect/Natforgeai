@@ -7,7 +7,7 @@
 > with the harnesses in `scripts/backup` and `scripts/restore`.
 
 Every scenario ends with the same two gates: (1) the recovery integrity
-verifier (`scripts/restore/verify-recovery-integrity.mjs`) passes, and (2) the
+verifier (`scripts/restore/restore.ts gather` + `verify`) passes, and (2) the
 Mission Control connected acceptance subset (`r10-g-recovery-rehearsal-plan.md`
 §4) is green. A recovery is not complete until both gates pass.
 
@@ -18,7 +18,7 @@ Mission Control connected acceptance subset (`r10-g-recovery-rehearsal-plan.md`
 - **Detect:** health endpoint down + PM2/service failure + provider alert; R10-E alert `app_down`.
 - **Contain:** confirm DB intact (separate volume/process); freeze deploys; snapshot surviving volumes read-only if possible for forensics.
 - **Recover:** provision replacement host → restore latest verified backup set (`scripts/restore/run-restore.sh`) → rebuild app at the release manifest's pinned SHA → re-bind config from secret store → start service.
-- **Validate:** `verify-recovery-integrity.mjs` green; smoke checks (login, tRPC ping, dashboard); schema/migration identity match.
+- **Validate:** `restore.ts verify` green (INTEGRITY_PASS); smoke checks (login, tRPC ping, dashboard); schema/migration identity match.
 - **Resume:** re-enable traffic; workers start after verification (never before); post-incident note in R10-X log.
 
 ## S2 — Database corruption (MySQL data-dir damage, failed migration, torn writes)

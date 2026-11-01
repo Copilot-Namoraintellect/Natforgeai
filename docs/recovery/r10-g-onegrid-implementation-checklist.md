@@ -82,7 +82,7 @@ Legend: `[ ]` pending · verify each line with the noted command or artefact.
 - [ ] 10.1 `./scripts/backup/verify-backup.sh --set <setId> --full` → manifestOk + decryptRoundTripOk + dumpSanityOk
 - [ ] 10.2 Table count vs `information_schema` on source: equal
 - [ ] 10.3 Offsite listing shows set + `backup-run.json`, versioning marker present
-- [ ] 10.4 `scripts/restore/verify-recovery-integrity.mjs` against a scratch restore → `INTEGRITY_PASS`
+- [ ] 10.4 `scripts/restore/restore.ts gather --db-url <scratch>` + `verify --facts …` → `INTEGRITY_PASS`
 - [ ] 10.5 Mission Control acceptance subset on the scratch restore → green (R10-X gate input)
 
 ## 11. Sign-off

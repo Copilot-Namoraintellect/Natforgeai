@@ -105,7 +105,7 @@ RPO drives loss window (see `production-recovery-objectives-contract.md`).
 ### 3.1 Criticality rules
 
 1. Tier A tables are restored **first and verified** — the recovery
-   integrity verifier (`scripts/restore/verify-recovery-integrity.mjs`)
+   integrity verifier (`scripts/restore/restore.ts gather` + `verify`)
    fails the restore on any Tier A mismatch.
 2. Tier B shares the same dump; no separate handling beyond the same
    hash/manifest discipline.

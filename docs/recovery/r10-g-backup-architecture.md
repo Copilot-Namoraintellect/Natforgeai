@@ -151,7 +151,7 @@ scripts/backup/
   lib/backup-set.ts             set assembly orchestration (Node)
 scripts/restore/
   run-restore.sh                disposable-environment restore sequence
-  verify-recovery-integrity.mjs post-restore authority/audit integrity checks
+  verify-recovery-integrity    `restore.ts gather/verify` — post-restore authority/audit integrity checks
 ```
 
 All scripts refuse to run if pointed at a database host other than the one
