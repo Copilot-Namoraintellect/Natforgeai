@@ -26,6 +26,9 @@ dist-ssr
 .env
 .env.local
 .env.*.local
+# Filled environment files must never be committed — placeholders only (.env.example)
+.env.production
+.env.backup-*
 # Database
 *.db
 *.sqlite
