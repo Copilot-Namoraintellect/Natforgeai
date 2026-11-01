@@ -168,6 +168,12 @@ describe("audit-event taxonomy", () => {
       "mission_state_derived",
       "mission_recovery_candidate_proposed",
       "mission_recovery_lifecycle",
+      "operational_event_recorded",
+      "operational_incident_opened",
+      "operational_incident_lifecycle",
+      "operational_alert_raised",
+      "operational_alert_deduplicated",
+      "operational_alert_lifecycle",
     ]);
   });
 
