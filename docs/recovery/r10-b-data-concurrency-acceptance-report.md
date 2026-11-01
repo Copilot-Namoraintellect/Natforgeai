@@ -10,7 +10,7 @@
 
 ```
 branch=feature/r10-b-data-concurrency
-head=799f6b4cb351ebe969f97da606324605fdf2a07b (frozen R9 base; R10-B slice committed on top as this branch's initial commit)
+head=b232d5d (R10-B initial commit; frozen base 799f6b4cb351ebe969f97da606324605fdf2a07b)
 remote_head=b4373ea0f317ca2ac029963fead1bd2213b72c59 (origin/HEAD — diverged marketing-app lineage; R9/R10 programme branches carry the autonomy work)
 working_tree=clean (all R10-B artefacts committed; verified via git status)
 ```
