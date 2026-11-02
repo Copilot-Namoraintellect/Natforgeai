@@ -450,13 +450,8 @@ export async function bindContentRecoveryClaim(
       and(
         eq(queueReplayRequests.id, replayRequestId),
         eq(queueReplayRequests.status, "claimed"),
-        or(
-          isNull(queueReplayRequests.contentRecoveryClaimId),
-          and(
-            eq(queueReplayRequests.contentRecoveryClaimId, binding.claimId),
-            eq(queueReplayRequests.contentRecoveryOwnerTokenHash, binding.ownerTokenHash)
-          )
-        )
+        // Bind once; identical replay must not refresh its timestamp.
+        isNull(queueReplayRequests.contentRecoveryClaimId)
       )
     );
 
