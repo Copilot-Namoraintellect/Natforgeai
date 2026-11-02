@@ -5208,3 +5208,184 @@ export const missionOperationalTimelineEvents = mysqlTable(
 export type MissionOperationalTimelineEventRow = typeof missionOperationalTimelineEvents.$inferSelect;
 export type InsertMissionOperationalTimelineEventRow =
   typeof missionOperationalTimelineEvents.$inferInsert;
+
+// ─── R10-C Runtime, Workers & Autonomous Execution Resilience ───
+// Stream-local runtime tables (runtime-resilience/v1). Provisional migration
+// 0038_r10_c_runtime_resilience — ARTEFACT ONLY, NOT executed; R10-X owns
+// canonical R10 migration convergence. Canonical R9 0037 is never modified by
+// these definitions. A lease here NEVER grants execution authority — it only
+// fences runtime access to a job whose authorityRef was validated upstream.
+
+export const runtimeWorkers = mysqlTable(
+  "runtime_workers",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic wrk1:<sha256> instance identity; unique anchor.
+    workerInstanceId: varchar("workerInstanceId", { length: 69 }).notNull(),
+    // Logical worker role (e.g. "mission-execution-worker"); not unique.
+    workerId: varchar("workerId", { length: 64 }).notNull(),
+    service: varchar("service", { length: 64 }).notNull(),
+    capabilities: json("capabilities").notNull(),
+    // Runtime contract version this process implements (version gate, C11).
+    runtimeVersion: varchar("runtimeVersion", { length: 64 }).notNull(),
+    releaseVersion: varchar("releaseVersion", { length: 64 }).notNull(),
+    // STARTING | READY | BUSY | DRAINING | DEGRADED | STOPPING | STOPPED | FAILED
+    runtimeState: varchar("runtimeState", { length: 16 }).notNull(),
+    startedAt: varchar("startedAt", { length: 32 }).notNull(),
+    heartbeatAt: varchar("heartbeatAt", { length: 32 }).notNull(),
+    stoppedAt: varchar("stoppedAt", { length: 32 }),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    workerIdentityUnique: uniqueIndex("rtw_instance_uidx").on(table.workerInstanceId),
+    workerRoleIdx: index("rtw_worker_role_idx").on(table.workerId),
+    workerStateIdx: index("rtw_worker_state_idx").on(table.runtimeState),
+  })
+);
+
+export type RuntimeWorkerRow = typeof runtimeWorkers.$inferSelect;
+export type InsertRuntimeWorkerRow = typeof runtimeWorkers.$inferInsert;
+
+export const runtimeJobs = mysqlTable(
+  "runtime_jobs",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic job1:<sha256> work-queue identity; unique anchor.
+    jobId: varchar("jobId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    jobType: varchar("jobType", { length: 32 }).notNull(),
+    // exa1:/sch1:/mgd1: — the upstream authority this job may resume under.
+    authorityRef: varchar("authorityRef", { length: 69 }).notNull(),
+    missionId: varchar("missionId", { length: 69 }),
+    planId: varchar("planId", { length: 128 }),
+    scheduleId: varchar("scheduleId", { length: 69 }),
+    taskId: varchar("taskId", { length: 128 }),
+    attemptRef: varchar("attemptRef", { length: 69 }),
+    // sha256 over the bounded parameters — raw parameters never persist.
+    parametersFingerprint: varchar("parametersFingerprint", { length: 64 }).notNull(),
+    // Immutable job-core hash; drift fails closed (JOB_TAMPER).
+    jobFingerprint: varchar("jobFingerprint", { length: 64 }).notNull(),
+    // Contract version the job was created under (version gate, C11).
+    runtimeVersion: varchar("runtimeVersion", { length: 64 }).notNull(),
+    releaseVersion: varchar("releaseVersion", { length: 64 }).notNull(),
+    notBefore: varchar("notBefore", { length: 32 }).notNull(),
+    // PENDING | LEASED | COMPLETED | DEAD_LETTERED | CANCELLED
+    state: varchar("state", { length: 16 }).notNull(),
+    // Fencing: the lease identity + epoch a LEASED row is bound to.
+    leaseId: varchar("leaseId", { length: 69 }),
+    leaseOwnerInstanceId: varchar("leaseOwnerInstanceId", { length: 69 }),
+    leaseEpoch: int("leaseEpoch"),
+    leaseExpiresAt: varchar("leaseExpiresAt", { length: 32 }),
+    // DISPATCHING is an irreversible pre-dispatch barrier; completed classifications never default to SUCCESS.
+    resultStatus: varchar("resultStatus", { length: 20 }),
+    failureClass: varchar("failureClass", { length: 24 }).notNull(),
+    uncertaintyClass: varchar("uncertaintyClass", { length: 28 }).notNull(),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    jobIdentityUnique: uniqueIndex("rtj_job_uidx").on(table.jobId),
+    userJobUnique: uniqueIndex("rtj_user_job_uidx").on(table.userId, table.jobId),
+    userStateIdx: index("rtj_user_state_idx").on(table.userId, table.state),
+    userAuthorityIdx: index("rtj_user_authority_idx").on(table.userId, table.authorityRef),
+  })
+);
+
+export type RuntimeJobRow = typeof runtimeJobs.$inferSelect;
+export type InsertRuntimeJobRow = typeof runtimeJobs.$inferInsert;
+
+export const runtimeLeases = mysqlTable(
+  "runtime_leases",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic lea1:<sha256> lease identity; unique anchor.
+    leaseId: varchar("leaseId", { length: 69 }).notNull(),
+    jobId: varchar("jobId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    workerInstanceId: varchar("workerInstanceId", { length: 69 }).notNull(),
+    authorityRef: varchar("authorityRef", { length: 69 }).notNull(),
+    attemptRef: varchar("attemptRef", { length: 69 }),
+    // ACTIVE | EXPIRED | RELEASED | REVOKED
+    leaseState: varchar("leaseState", { length: 12 }).notNull(),
+    leaseEpoch: int("leaseEpoch").notNull(),
+    acquiredAt: varchar("acquiredAt", { length: 32 }).notNull(),
+    heartbeatAt: varchar("heartbeatAt", { length: 32 }).notNull(),
+    leaseExpiresAt: varchar("leaseExpiresAt", { length: 32 }).notNull(),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    leaseIdentityUnique: uniqueIndex("rtl_lease_uidx").on(table.leaseId),
+    jobLeaseIdx: index("rtl_job_idx").on(table.jobId),
+    workerLeaseIdx: index("rtl_worker_idx").on(table.workerInstanceId),
+  })
+);
+
+export type RuntimeLeaseRow = typeof runtimeLeases.$inferSelect;
+export type InsertRuntimeLeaseRow = typeof runtimeLeases.$inferInsert;
+
+export const runtimeDeadLetters = mysqlTable(
+  "runtime_dead_letters",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic dlq1:<sha256> dead-letter identity; unique anchor.
+    deadLetterId: varchar("deadLetterId", { length: 69 }).notNull(),
+    jobId: varchar("jobId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    jobType: varchar("jobType", { length: 32 }).notNull(),
+    authorityRef: varchar("authorityRef", { length: 69 }).notNull(),
+    attemptRef: varchar("attemptRef", { length: 69 }),
+    reason: varchar("reason", { length: 32 }).notNull(),
+    failureClass: varchar("failureClass", { length: 24 }).notNull(),
+    uncertaintyClass: varchar("uncertaintyClass", { length: 28 }).notNull(),
+    // Bounded, JSON-safe, secret-free diagnostic material only.
+    diagnostic: json("diagnostic").notNull(),
+    // Immutable evidence-core hash; drift fails closed.
+    deadLetterFingerprint: varchar("deadLetterFingerprint", { length: 64 }).notNull(),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    deadLetterIdentityUnique: uniqueIndex("rtdl_identity_uidx").on(table.deadLetterId),
+    userJobIdx: index("rtdl_user_job_idx").on(table.userId, table.jobId),
+  })
+);
+
+export type RuntimeDeadLetterRow = typeof runtimeDeadLetters.$inferSelect;
+export type InsertRuntimeDeadLetterRow = typeof runtimeDeadLetters.$inferInsert;
+
+export const runtimeLifecycleEvents = mysqlTable(
+  "runtime_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic rlf1:<sha256> lifecycle fact identity; unique anchor.
+    lifecycleEventId: varchar("lifecycleEventId", { length: 70 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }),
+    jobId: varchar("jobId", { length: 69 }),
+    workerInstanceId: varchar("workerInstanceId", { length: 69 }),
+    leaseId: varchar("leaseId", { length: 69 }),
+    lifecycleType: varchar("lifecycleType", { length: 28 }).notNull(),
+    fromState: varchar("fromState", { length: 20 }),
+    toState: varchar("toState", { length: 20 }).notNull(),
+    reasonCode: varchar("reasonCode", { length: 64 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    // Immutable core hash; drift fails closed.
+    eventHash: varchar("eventHash", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    lifecycleIdentityUnique: uniqueIndex("rtlf_identity_uidx").on(table.lifecycleEventId),
+    jobLifecycleIdx: index("rtlf_job_idx").on(table.jobId),
+    workerLifecycleIdx: index("rtlf_worker_idx").on(table.workerInstanceId),
+  })
+);
+
+export type RuntimeLifecycleEventRow = typeof runtimeLifecycleEvents.$inferSelect;
+export type InsertRuntimeLifecycleEventRow = typeof runtimeLifecycleEvents.$inferInsert;
