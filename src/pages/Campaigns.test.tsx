@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { getCreateReadinessToast } from "./Campaigns";
+
+// These pure helper tests never use auth. Isolate the transitive useAuth import
+// from Firebase client initialization without supplying credentials or a user.
+vi.mock("@/lib/firebase", () => ({ auth: null }));
 
 describe("getCreateReadinessToast", () => {
   it("returns null when no readiness block is present", () => {

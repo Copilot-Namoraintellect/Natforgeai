@@ -64,6 +64,7 @@ import {
 } from "./execution-governance-seam";
 import {
   resolveAdapterForCapabilities,
+  isSandboxExecutionRegistry,
   type ExecutionAdapterRegistry,
 } from "./execution-adapter-registry";
 import {
@@ -91,6 +92,10 @@ import {
 import type { ExecutionActionRow, ExecutionAttemptRow } from "@db/schema";
 
 export interface ExecutionCoordinationServiceDeps {
+  /** Additional R10-H boundary. Server composed, never client supplied.
+   * Omission is reserved for the existing R9 sandbox test harness only.
+   * Application router binds a fail-closed gate until R10-X convergence. */
+  readonly autonomyGate?: (action: Readonly<ExecutionActionRow>) => Promise<void>;
   readonly upstream: ExecutionUpstreamAuthority;
   readonly governance: MissionGovernanceConsumptionAuthority;
   readonly adapters: ExecutionAdapterRegistry;
@@ -100,6 +105,13 @@ export interface ExecutionCoordinationServiceDeps {
 
 export interface ExecutionAuthContext {
   readonly userId: number;
+}
+
+async function assertAutonomyBoundary(deps: ExecutionCoordinationServiceDeps, action: ExecutionActionRow): Promise<void> {
+  if (deps.autonomyGate) return deps.autonomyGate(Object.freeze({ ...action }));
+  if (!isSandboxExecutionRegistry(deps.adapters)) {
+    throw new ExecutionCoordinationError("ADAPTER_UNAVAILABLE", "AUTONOMY_NOT_BOUND: non-sandbox dispatch requires a bound autonomy gate");
+  }
 }
 
 function defaultNow(): string {
@@ -776,6 +788,8 @@ export async function dispatchExecutionAction(
     throw new ExecutionStateConflictError("DISPATCH_WINDOW_EXPIRED", "execution action consumption window has closed.");
   }
 
+  await assertAutonomyBoundary(deps, action);
+
   // CAS into DISPATCHED — duplicate dispatchers converge/fail closed.
   const dispatched = await transitionDispatchState({
     userId: ctx.userId,
@@ -855,6 +869,8 @@ export async function dispatchExecutionAction(
   if (!adapter) {
     throw new ExecutionUpstreamError("ADAPTER_UNAVAILABLE", `no adapter bound for class ${action.adapterType}.`);
   }
+  // Recheck safety after asynchronous intent/audit writes, at transport boundary.
+  await assertAutonomyBoundary(deps, action);
   const rawOutcome = await adapter.dispatch({
     payload: {
       capability: action.capability,

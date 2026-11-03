@@ -26,6 +26,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { getTableName } from "drizzle-orm";
 
+// Explicit sandbox release authority for historical R9 compatibility only.
+// R10-H acceptance exercises the unmocked default deny and escalation boundary.
+vi.mock("./lib/autonomy/autonomy-service", async importOriginal => ({
+  ...await importOriginal<typeof import("./lib/autonomy/autonomy-service")>(),
+  unconfiguredAutonomyGate: async () => undefined,
+}));
+
 vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
 }));

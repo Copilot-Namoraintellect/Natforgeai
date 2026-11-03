@@ -51,6 +51,7 @@ import {
 import { createExecutionUpstreamAuthority } from "./lib/execution-coordination/execution-upstream-seams";
 import { createMissionGovernanceConsumptionAuthority } from "./lib/execution-coordination/execution-governance-seam";
 import { createSandboxAdapterHarness } from "./lib/execution-coordination/execution-adapter-registry";
+import { unconfiguredAutonomyGate } from "./lib/autonomy/autonomy-service";
 import type { ExecutionCoordinationServiceDeps } from "./lib/execution-coordination/execution-coordination-service";
 
 function withCode(err: unknown): string {
@@ -91,6 +92,7 @@ export function createExecutionCoordinationDeps(): ExecutionCoordinationServiceD
     upstream: createExecutionUpstreamAuthority(),
     governance: createMissionGovernanceConsumptionAuthority(),
     adapters: createSandboxAdapterHarness().registry,
+    autonomyGate: unconfiguredAutonomyGate,
   };
 }
 

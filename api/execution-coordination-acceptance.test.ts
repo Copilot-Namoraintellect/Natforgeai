@@ -1444,6 +1444,42 @@ describe("R9-D acceptance — router boundary", () => {
 });
 
 // Keep TS honest about intentionally unused identifiers in helpers.
+describe("R10-H connected R9-D autonomy boundary", () => {
+  it("denied autonomy prevents an otherwise R9-authorized adapter dispatch", async () => {
+    const h = makeHarness({ seed: (rows, gov) => { fullSeed(rows, gov); } });
+    const prepared = await prepareHappy(h);
+    const deps = { ...h.deps, autonomyGate: async () => { throw new Error("AUTONOMY_SAFE_MODE"); } };
+    await expect(dispatchExecutionAction(h.fakeDb as never, deps, { userId: USER1 }, {
+      executionActionId: prepared.executionAction.executionActionId, parameters: PARAMS,
+    })).rejects.toThrow("AUTONOMY_SAFE_MODE");
+    expect(h.harness.totalDispatches()).toBe(0);
+    expect(h.fakeDb._tables.execution_attempts ?? []).toHaveLength(0);
+  });
+
+  it("safety change between reservation and transport prevents dispatch and preserves attempt evidence", async () => {
+    const h = makeHarness({ seed: (rows, gov) => { fullSeed(rows, gov); } });
+    const prepared = await prepareHappy(h);
+    let checked = 0;
+    const deps = { ...h.deps, autonomyGate: async () => { if (++checked === 2) throw new Error("AUTONOMY_KILL_SWITCH"); } };
+    await expect(dispatchExecutionAction(h.fakeDb as never, deps, { userId: USER1 }, {
+      executionActionId: prepared.executionAction.executionActionId, parameters: PARAMS,
+    })).rejects.toThrow("AUTONOMY_KILL_SWITCH");
+    expect(checked).toBe(2);
+    expect(h.harness.totalDispatches()).toBe(0);
+    expect(h.fakeDb._tables.execution_attempts).toHaveLength(1);
+  });
+
+  it("an arbitrary registry cannot omit the autonomy gate", async () => {
+    const h = makeHarness({ seed: (rows, gov) => { fullSeed(rows, gov); } });
+    const prepared = await prepareHappy(h);
+    const deps = { ...h.deps, adapters: { resolve: h.deps.adapters.resolve, list: h.deps.adapters.list } };
+    await expect(dispatchExecutionAction(h.fakeDb as never, deps, { userId: USER1 }, {
+      executionActionId: prepared.executionAction.executionActionId, parameters: PARAMS,
+    })).rejects.toThrow("non-sandbox dispatch requires a bound autonomy gate");
+    expect(h.harness.totalDispatches()).toBe(0);
+  });
+});
+
 void deriveExecutionActionId;
 void deriveAttemptId;
 void deriveDispatchFingerprint;

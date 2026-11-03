@@ -26,6 +26,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { getTableName } from "drizzle-orm";
 
+// Historical R9 compatibility runs only sandbox fakes. R10-H tests the real
+// closed application gate independently; this fixture supplies explicit release authority.
+vi.mock("./lib/autonomy/autonomy-service", async importOriginal => ({
+  ...await importOriginal<typeof import("./lib/autonomy/autonomy-service")>(),
+  unconfiguredAutonomyGate: async () => undefined,
+}));
+
 vi.mock("./queries/connection", () => ({
   getDb: vi.fn(),
 }));
