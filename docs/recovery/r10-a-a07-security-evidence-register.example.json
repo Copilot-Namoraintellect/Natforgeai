@@ -1,0 +1,674 @@
+{
+  "schemaVersion": 1,
+  "stage": "A07",
+  "purpose": "PROPOSED_NON_SECRET_TEMPLATE_NOT_OPERATIONAL_EVIDENCE",
+  "baseline": "a0bea50a7bac480e7655ff1915532157b8360540",
+  "productionPackagingApproved": false,
+  "productionDeploymentApproved": false,
+  "allowedControlStatuses": [
+    "UNKNOWN",
+    "NOT_PERFORMED",
+    "PENDING_VERIFICATION",
+    "VERIFIED",
+    "NOT_APPLICABLE_WITH_APPROVAL"
+  ],
+  "rules": [
+    "Expand groups into one row per credential instance and issuer scope under approved custody",
+    "Do not store secret values, value hashes, account/key identifiers, secret paths or issuer output",
+    "VERIFIED requires dated restricted verification reference and named verifier",
+    "NOT_APPLICABLE_WITH_APPROVAL requires approved rationale and cannot waive affected historical authority revocation",
+    "Any unknown, pending, unassigned or missing evidence blocks affected gate",
+    "Public/configuration and reserved-class template rows do not assert credential existence or exposure"
+  ],
+  "rows": [
+    {
+      "id": "TEMPLATE-01",
+      "credentialClass": "APPLICATION_SECRET",
+      "logicalNames": [
+        "APP_SECRET"
+      ],
+      "scope": "MANDATORY_EXPOSURE_REMEDIATION",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A coordinates exposed-credential rotation and platform evidence; actual issuer/account custodian UNASSIGNED",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    },
+    {
+      "id": "TEMPLATE-02",
+      "credentialClass": "APPLICATION_SECRET",
+      "logicalNames": [
+        "TOKEN_ENCRYPTION_KEY",
+        "FACEBOOK_WEBHOOK_VERIFY_TOKEN"
+      ],
+      "scope": "ASSESS_EXPOSURE_AND_MIGRATION",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A coordinates exposed-credential rotation and platform evidence; actual issuer/account custodian UNASSIGNED",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    },
+    {
+      "id": "TEMPLATE-03",
+      "credentialClass": "APPLICATION_SECRET",
+      "logicalNames": [
+        "OWNER_UNION_ID"
+      ],
+      "scope": "CONFIDENTIAL_IDENTIFIER_REVIEW",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A coordinates exposed-credential rotation and platform evidence; actual issuer/account custodian UNASSIGNED",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    },
+    {
+      "id": "TEMPLATE-04",
+      "credentialClass": "DATABASE_SECRET",
+      "logicalNames": [
+        "DATABASE_URL",
+        "MYSQL_URL",
+        "DB_URL",
+        "READ_ONLY_DATABASE_URL"
+      ],
+      "scope": "MANDATORY_DATABASE_URL_OTHER_VARIANTS_ASSESS",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A coordinates exposed-credential rotation and platform evidence; actual issuer/account custodian UNASSIGNED",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    },
+    {
+      "id": "TEMPLATE-05",
+      "credentialClass": "PROVIDER_SECRET",
+      "logicalNames": [
+        "FIREBASE_SERVICE_ACCOUNT"
+      ],
+      "scope": "MANDATORY_EXPOSURE_REMEDIATION",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A coordinates exposed-credential rotation and platform evidence; actual issuer/account custodian UNASSIGNED",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    },
+    {
+      "id": "TEMPLATE-06",
+      "credentialClass": "PROVIDER_SECRET",
+      "logicalNames": [
+        "OPENAI_API_KEY",
+        "CREATIFY_*",
+        "HEYGEN_API_KEY",
+        "RUNWAY_API_KEY",
+        "BANNERBEAR_*",
+        "TEMPLATED_IO_*",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "SMTP_PASS",
+        "SENDGRID_API_KEY",
+        "META_APP_SECRET",
+        "LINKEDIN_CLIENT_SECRET",
+        "TIKTOK_CLIENT_SECRET",
+        "TWITTER_CLIENT_SECRET",
+        "FACEBOOK_APP_SECRET"
+      ],
+      "scope": "ASSESS_EACH_CONFIGURED_PROVIDER",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A coordinates exposed-credential rotation and platform evidence; actual issuer/account custodian UNASSIGNED",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    },
+    {
+      "id": "TEMPLATE-07",
+      "credentialClass": "INFRASTRUCTURE_SECRET",
+      "logicalNames": [
+        "REDIS_URL"
+      ],
+      "scope": "ASSESS_EXPOSURE",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A coordinates exposed-credential rotation and platform evidence; actual issuer/account custodian UNASSIGNED",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    },
+    {
+      "id": "TEMPLATE-08",
+      "credentialClass": "DEPLOYMENT_SECRET",
+      "logicalNames": [
+        "DEPLOYMENT_CREDENTIAL",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_*"
+      ],
+      "scope": "ASSESS_EXPOSURE_AND_CLASSIFICATION",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A coordinates exposed-credential rotation and platform evidence; actual issuer/account custodian UNASSIGNED",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    },
+    {
+      "id": "TEMPLATE-09",
+      "credentialClass": "BACKUP_SECRET",
+      "logicalNames": [
+        "BACKUP_ENCRYPTION_KEY",
+        "BACKUP_STORAGE_CREDENTIAL"
+      ],
+      "scope": "NO_KNOWN_EXPOSURE_CLAIM_ASSESS",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A coordinates exposed-credential rotation and platform evidence; actual issuer/account custodian UNASSIGNED",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    },
+    {
+      "id": "TEMPLATE-10",
+      "credentialClass": "BREAK_GLASS_SECRET",
+      "logicalNames": [
+        "BREAK_GLASS_*"
+      ],
+      "scope": "NO_KNOWN_EXISTENCE_OR_EXPOSURE_CLAIM_ASSESS",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A coordinates exposed-credential rotation and platform evidence; actual issuer/account custodian UNASSIGNED",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    },
+    {
+      "id": "TEMPLATE-11",
+      "credentialClass": "PUBLIC_CONFIGURATION",
+      "logicalNames": [
+        "VITE_FIREBASE_*",
+        "VITE_KIMI_*",
+        "PUBLIC_APP_URL"
+      ],
+      "scope": "F_REVIEW_PUBLIC_CLASSIFICATION_BEFORE_BUILD",
+      "credentialInstanceId": null,
+      "custodian": "UNASSIGNED",
+      "deliveryResponsibility": "R10-A build-boundary review; F classification",
+      "exposureAssessment": {
+        "status": "UNKNOWN",
+        "completedUtc": null,
+        "verificationReference": null
+      },
+      "repositoryCleanup": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "rotation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementBinding": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "revocation": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "oldAuthorityRejection": {
+        "status": "NOT_PERFORMED",
+        "completedUtc": null,
+        "verificationReference": null,
+        "verifier": "UNASSIGNED"
+      },
+      "replacementVersionReference": null,
+      "approvingAuthority": "UNASSIGNED",
+      "approval": {
+        "status": "NOT_PERFORMED",
+        "approvedUtc": null,
+        "verificationReference": null
+      },
+      "releaseScope": null,
+      "closure": "BLOCKED"
+    }
+  ],
+  "functionalOwnershipDecision": {
+    "id": "Q01",
+    "decisionReference": "r10-a-a01-decisions.md",
+    "authority": "Explicit user Q01 functional-ownership decision; no operational appointments",
+    "status": "FUNCTIONAL_FRAMEWORK_APPROVED",
+    "operationalAssignments": "OPEN",
+    "functionalOwners": {
+      "rotationCoordinationAndPlatformEvidence": "R10-A",
+      "existingHardeningAndRepositoryCleanupImplementationScope": "R10-F",
+      "crossStreamIntegrationAndIntegratedVerificationCoordination": "R10-X"
+    },
+    "actualRotationCustodian": "UNASSIGNED",
+    "independentRevocationVerifier": "UNASSIGNED",
+    "productionDeploymentApprover": "UNASSIGNED",
+    "deploymentApproverDesignation": "OPEN_PENDING_AUTHORIZED_SYSTEM_OWNER",
+    "operationalIdentities": "OPEN",
+    "rotation": "OPEN",
+    "revocation": "OPEN",
+    "fIntegration": "OPEN",
+    "productionChecks": "OPEN"
+  }
+}
