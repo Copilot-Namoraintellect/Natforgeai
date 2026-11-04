@@ -1,0 +1,271 @@
+{
+    "schemaVersion":  1,
+    "stage":  "A04",
+    "missionSource":  "M4: user A04 identity/permissions mission; verified host/account/inherited ACL facts operator-supplied, no server connection",
+    "baseline":  "799f6b4cb351ebe969f97da606324605fdf2a07b",
+    "branch":  "feature/r10-a-production-platform",
+    "priorInputs":  [
+                        {
+                            "path":  "docs/recovery/r10-a-a01-acceptance-report.md",
+                            "sha256BeforeA04":  "306b604e01704e4146088fa0ae327a0bc6f9102f51191a3f8a5163904b2c56a6"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a01-decisions.md",
+                            "sha256BeforeA04":  "90dfac243f9017baade3872b2f167062db0360dce7b9b8c27a6f7b0b8fdd54b9"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a01-platform-baseline.md",
+                            "sha256BeforeA04":  "554611a95615a401ddd065305e9ba3b8a9bec0a4092d2c7bc90881dfe9e6c363"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a01-requirements.md",
+                            "sha256BeforeA04":  "41b1e94bf73b625743bd562bc87e73e1a20e62a28e16b281b29ef71da1bf54f6"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a01-sources.json",
+                            "sha256BeforeA04":  "1cd348decfe9890ed1d0c62205f0a54f0d03ed2b68d01ac7d62bdc24bc2db5a0"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a02-implementation-report.md",
+                            "sha256BeforeA04":  "249d0db50e8e73a0f262e318924a1bc1d5e15f3af1e13cc3636802227136fb03"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a02-platform-architecture.md",
+                            "sha256BeforeA04":  "48c6c4bb5e9cef4e546f48a2d865712f54cffeef4d56af2d459afa86d8b235cc"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a02-sources.json",
+                            "sha256BeforeA04":  "c12cca7f54f4beae5ba90a2d31a9674a335e016fc6cea3b80aa929f943e6b4c9"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a03-ownership-report.md",
+                            "sha256BeforeA04":  "af6adc1feebde439de620870e45d304502ae0cea3005a94ff686f3f11dd879d9"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a03-process-ownership.md",
+                            "sha256BeforeA04":  "d9076653a9fb5f6bd2f398e61d16deabe0e9c745985ddcdcd7f10f0f351de43d"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a03-sources.json",
+                            "sha256BeforeA04":  "f29151c607a21a464a6498acd0d5806121d2a6405a2da05f29bbae14d4f78c2d"
+                        }
+                    ],
+    "localSources":  [
+                         {
+                             "id":  "R9-HANDOFF",
+                             "worktree":  "NatForgeAI-R10-A",
+                             "path":  "docs/contracts/mission-control-to-production-resilience-contract.md",
+                             "sha256":  "2fb572aa07e221c3e75a9c9418db4aeb4ba3142260f2edc8f9e72461857a2e23"
+                         },
+                         {
+                             "id":  "R9-AUTONOMY",
+                             "worktree":  "NatForgeAI-R10-A",
+                             "path":  "docs/contracts/mission-control-autonomy-boundary-contract.md",
+                             "sha256":  "d3f6cc200ecddd0c6e8af4f46f9dc21412ce61b4d5d6bc397a127cf2ce854f15"
+                         },
+                         {
+                             "id":  "R9-REPORT",
+                             "worktree":  "NatForgeAI-R10-A",
+                             "path":  "docs/recovery/r9-x-mission-control-final-acceptance-report.md",
+                             "sha256":  "c9baf453080f013c0dc1a8acf91b9a6438dc88d781d7508ea56a983782925d81"
+                         },
+                         {
+                             "id":  "B-REPORT",
+                             "worktree":  "NatForgeAI-R10-B",
+                             "path":  "docs/recovery/r10-b-data-concurrency-acceptance-report.md",
+                             "sha256":  "08a69459180b2ef4dc1f4696fa1b54fff8b1e419228e530de50b265c74860ac8"
+                         },
+                         {
+                             "id":  "B-INTEGRITY",
+                             "worktree":  "NatForgeAI-R10-B",
+                             "path":  "docs/recovery/r10-b-exactly-once-and-db-security.md",
+                             "sha256":  "8b8a1bb7cb783a949c937f8cfb90fbc11c728bdb82d44c14549ad05fa90d9cc2"
+                         },
+                         {
+                             "id":  "C-CONTRACT",
+                             "worktree":  "NatForgeAI-R10-C",
+                             "path":  "docs/contracts/autonomous-runtime-resilience-contract.md",
+                             "sha256":  "96993008de44433110ebe5a2b96af851a3eb9103698bf89d973fa7c8e0eef199"
+                         },
+                         {
+                             "id":  "C-OBSERVABILITY",
+                             "worktree":  "NatForgeAI-R10-C",
+                             "path":  "docs/contracts/runtime-to-observability-contract.md",
+                             "sha256":  "5e08a7c2d4cfffa5261b7aac1757fec7c5011b6703a69d31e7461a2e83180b7c"
+                         },
+                         {
+                             "id":  "C-REPORT",
+                             "worktree":  "NatForgeAI-R10-C",
+                             "path":  "docs/recovery/r10-c-runtime-resilience-acceptance-report.md",
+                             "sha256":  "802792d177ec3ab6c4975b2318651943c8f6fecc698ccc9fdd121a2149fc1951"
+                         },
+                         {
+                             "id":  "D-CONTRACT",
+                             "worktree":  "NatForgeAI-R10-D",
+                             "path":  "docs/contracts/production-provider-adapter-contract.md",
+                             "sha256":  "410cebabd887a9a4b15a0184333e582f312d302f0190457f36d4878292ee9b17"
+                         },
+                         {
+                             "id":  "D-REPORT",
+                             "worktree":  "NatForgeAI-R10-D",
+                             "path":  "docs/recovery/r10-d-provider-resilience-acceptance-report.md",
+                             "sha256":  "f57e27c70979fcd5eccd320223b1ecf7d43444d3017723dbc17512375e063825"
+                         },
+                         {
+                             "id":  "E-PLATFORM",
+                             "worktree":  "NatForgeAI-R10-E",
+                             "path":  "docs/contracts/observability-to-production-platform-contract.md",
+                             "sha256":  "a7ab463c863664b498ca58b4b046f397c9724510bd74238309671a8fc302806f"
+                         },
+                         {
+                             "id":  "E-CONTRACT",
+                             "worktree":  "NatForgeAI-R10-E",
+                             "path":  "docs/contracts/production-observability-contract.md",
+                             "sha256":  "206dbaedc7d5c6baedb1ea38b06b6a86e38c7991bdea1ec1d4781ca9e3a7f0f5"
+                         },
+                         {
+                             "id":  "E-REPORT",
+                             "worktree":  "NatForgeAI-R10-E",
+                             "path":  "docs/recovery/r10-e-observability-operations-acceptance-report.md",
+                             "sha256":  "ef5bd72d19cfc39419664ca2e13f9f91acda347eb005da8d46f7e31e876a12e2"
+                         },
+                         {
+                             "id":  "F-CONTRACT",
+                             "worktree":  "NatForgeAI-R10-F",
+                             "path":  "docs/contracts/production-security-configuration-contract.md",
+                             "sha256":  "a8cda44ab74ef97b80a8e6e00618713bd5d82e6bd3e444292d0e6b6a93ea34e0"
+                         },
+                         {
+                             "id":  "F-REPORT",
+                             "worktree":  "NatForgeAI-R10-F",
+                             "path":  "docs/recovery/r10-f-production-security-acceptance-report.md",
+                             "sha256":  "66c40de5d552415677cd66fa100178087b632007066f8d8caf80562f75ffa119"
+                         },
+                         {
+                             "id":  "G-OBJECTIVES",
+                             "worktree":  "NatForgeAI-R10-G",
+                             "path":  "docs/contracts/production-recovery-objectives-contract.md",
+                             "sha256":  "2f3c19824cecf742f3ac66f41bec5554849aaae6c441b51a71d2e5a063ba66ff"
+                         },
+                         {
+                             "id":  "G-MONITORING",
+                             "worktree":  "NatForgeAI-R10-G",
+                             "path":  "docs/contracts/backup-monitoring-contract.md",
+                             "sha256":  "9fe39fe6a5be67aed660dbf24997baba6d82b6edbee9d8ffd44e1b756a7b1aca"
+                         },
+                         {
+                             "id":  "G-CHECKLIST",
+                             "worktree":  "NatForgeAI-R10-G",
+                             "path":  "docs/recovery/r10-g-onegrid-implementation-checklist.md",
+                             "sha256":  "d02157f8149657727659681c353981ee73ba3adcae2572025413d8e490ffb579"
+                         },
+                         {
+                             "id":  "G-REPORT",
+                             "worktree":  "NatForgeAI-R10-G",
+                             "path":  "docs/recovery/r10-g-backup-dr-acceptance-report.md",
+                             "sha256":  "f1cd838426e89315684984d0145c8e83d834e3c7b8714dce3e1d410db1f6a877"
+                         },
+                         {
+                             "id":  "H-CONTRACT",
+                             "worktree":  "NatForgeAI-R10-H",
+                             "path":  "docs/contracts/controlled-autonomy-contract.md",
+                             "sha256":  "6beddfe976a30e8d46febb163111f917c70719fba1dec1f97e7de902a2534050"
+                         },
+                         {
+                             "id":  "H-OBSERVABILITY",
+                             "worktree":  "NatForgeAI-R10-H",
+                             "path":  "docs/contracts/autonomy-activation-to-observability-contract.md",
+                             "sha256":  "38384904863288f0667b0b895a6ecc87a8e60501ff4faf49c92eff41f773c649"
+                         },
+                         {
+                             "id":  "H-REPORT",
+                             "worktree":  "NatForgeAI-R10-H",
+                             "path":  "docs/recovery/r10-h-autonomy-activation-acceptance-report.md",
+                             "sha256":  "227357ef8b991511ce9598db036924e18fa7a8b9b552777a7b0b68e156a997e5"
+                         },
+                         {
+                             "id":  "H-LEDGER",
+                             "worktree":  "NatForgeAI-R10-H",
+                             "path":  "docs/recovery/r10-h19-verification-ledger.md",
+                             "sha256":  "aadff02c2b5842088288eb6576c4dab15576768d7a5604bf81fbbd676e3fbbaa"
+                         },
+                         {
+                             "id":  "G-ARCHITECTURE",
+                             "worktree":  "NatForgeAI-R10-G",
+                             "path":  "docs/recovery/r10-g-backup-architecture.md",
+                             "sha256":  "d7b7bd2674a0dfbd692f47529423e24505c61446cafe7ac17a739f221e3cf72c"
+                         },
+                         {
+                             "id":  "F-SECRET-CLASSIFICATION",
+                             "worktree":  "NatForgeAI-R10-F",
+                             "path":  "api/lib/production-security/secret-classification.ts",
+                             "sha256":  "0ffc00ca6b61aa382a1cf9ca11df1f1dc51918e423b507f2a05db3481e8e338a"
+                         },
+                         {
+                             "id":  "F-SECRET-BROKER",
+                             "worktree":  "NatForgeAI-R10-F",
+                             "path":  "api/lib/production-security/secret-broker.ts",
+                             "sha256":  "a6bf15f8ecb7974bf2a84179cdca3b32b33d567f1d1ca63bc8dadc06d182e964"
+                         }
+                     ],
+    "repositorySources":  [
+                              {
+                                  "path":  "api/queries/connection.ts",
+                                  "sha256":  "ba9f1bb60bfe0b1f11a6c97d6a99e9064d3e2a254e760e97548a76429fd66946"
+                              },
+                              {
+                                  "path":  "api/lib/env.ts",
+                                  "sha256":  "1956e5b6746e0ddcf2b940691b31c5574b0c9d0fa32f9975efdb592975761408"
+                              },
+                              {
+                                  "path":  "api/boot.ts",
+                                  "sha256":  "acd960999a8d7a33cb48d45d4af40e753561ff72f6939136c35a1e2d6c0ca4e6"
+                              },
+                              {
+                                  "path":  "api/worker.ts",
+                                  "sha256":  "9e78dd1f65df491e76e4f73d46bbf32f0c9c407596b62a2d417c685a1544c599"
+                              },
+                              {
+                                  "path":  "api/health-router.ts",
+                                  "sha256":  "06fedd8ba9a5d8253aee71b7badc75bf9a2006ccaa07f1e5e35e48da9d854140"
+                              },
+                              {
+                                  "path":  "scripts/deployment/start-runtime.ps1",
+                                  "sha256":  "c9f311401fd7ff06e8eef78f09276459151014d359d9e6460e54bad1abfc4edf"
+                              },
+                              {
+                                  "path":  "scripts/deployment/rollback.ps1",
+                                  "sha256":  "390f3c548e0d7d231d2cf06ecc8f4d3b463703b9f46a8fccaba332b0ea8c9aca"
+                              }
+                          ],
+    "externalReferences":  [
+                               {
+                                   "id":  "MS-POOL",
+                                   "url":  "https://learn.microsoft.com/en-us/iis/manage/configuring-security/application-pool-identities",
+                                   "evidence":  "Official Microsoft reference accessed read-only using web tool; no local content snapshot or page hash; platform semantics only"
+                               },
+                               {
+                                   "id":  "MS-FILE",
+                                   "url":  "https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights",
+                                   "evidence":  "Official Microsoft reference accessed read-only using web tool; no local content snapshot or page hash; platform semantics only"
+                               },
+                               {
+                                   "id":  "MS-ACL",
+                                   "url":  "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/icacls",
+                                   "evidence":  "Official Microsoft reference accessed read-only using web tool; no local content snapshot or page hash; platform semantics only"
+                               },
+                               {
+                                   "id":  "MS-SERVICE",
+                                   "url":  "https://learn.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights",
+                                   "evidence":  "Official Microsoft reference accessed read-only using web tool; no local content snapshot or page hash; platform semantics only"
+                               },
+                               {
+                                   "id":  "MS-DELETE",
+                                   "url":  "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-deletefilew",
+                                   "evidence":  "Official Microsoft reference accessed read-only; deletion/parent rights semantics, directory behavior remains a live verification dependency; no page hash"
+                               }
+                           ],
+    "scope":  "Documentation only; role and ACL matrix are semantic proposals, not provisioned accounts or executable ACEs",
+    "validationTests":  "O01-O12 and L01-L12 specified, NOT RUN",
+    "unresolved":  "Supervisor, account policy, credential injection, parent effective rights, constrained deployment, backup secret classification, H/DB separation and A/X application implementers"
+}
