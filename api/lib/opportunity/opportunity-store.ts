@@ -361,8 +361,12 @@ export async function updateCandidateState(
     );
   // MySQL2 update resolves a ResultSetHeader-like object with affectedRows;
   // some drivers expose rowsAffected. Read either, fail closed on absence.
-  const header = result as unknown as Record<string, unknown>;
-  const affected = Number(header.affectedRows ?? header.rowsAffected ?? 0);
+  // drizzle-orm/mysql2 resolves mutations to a [ResultSetHeader, ...] tuple;
+  // normalize either that or a bare header before reading the CAS verdict.
+  const header = (Array.isArray(result) ? result[0] : result) as
+    | { affectedRows?: number; rowsAffected?: number }
+    | undefined;
+  const affected = Number(header?.affectedRows ?? header?.rowsAffected ?? 0);
   if (affected === 0) {
     const current = await findCandidateById(userId, id, executor);
     if (!current) {

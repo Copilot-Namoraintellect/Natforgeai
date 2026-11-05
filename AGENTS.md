@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-10 (R9-X integration: §31 R9-A Mission Authority, §32 R9-F Mission Governance — R9-D Execution Coordination merging)
+> **Last updated:** 2026-11-11 (R10-B data integrity & concurrency: CAS-0 fix, structural concurrency harness, migration rehearsal — DATA_CONCURRENCY_READY, real-MySQL env-blocked)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -41,6 +41,7 @@
 32. [Mission Governance & Approval (WBS-R9-F)](#32-mission-governance--approval-wbs-r9-f)
 33. [Execution Coordination (WBS-R9-D)](#33-execution-coordination-wbs-r9-d)
 34. [Mission State, Recovery & Observability (WBS-R9-E)](#34-mission-state-recovery--observability-wbs-r9-e)
+35. [Data Integrity, Real MySQL & Concurrency (WBS-R10-B)](#35-data-integrity-real-mysql--concurrency-wbs-r10-b)
 
 ---
 
@@ -1659,3 +1660,39 @@ derived — never set by client or model; no inferred success anywhere.
   no live execution anywhere in the stream; upstream tables are read-only
   behind guarded information-schema seams that fail closed when absent.
 - Real-MySQL concurrency remains the R10 / pre-production gate.
+
+---
+
+## 35. Data Integrity, Real MySQL & Concurrency (WBS-R10-B)
+
+The production-grade data-integrity / real-MySQL concurrency stream (branch
+`feature/r10-b-data-concurrency`, base `799f6b4cb351ebe969f97da606324605fdf2a07b`).
+Owns DB concurrency acceptance, transaction/locking analysis, CAS behaviour,
+idempotency under contention, unique-anchor enforcement, migration rehearsal
+tooling, pool behaviour, deadlock handling, rollback/failure semantics. Does
+NOT own mission/planning/scheduling/governance/execution authority,
+production configuration, credentials or deployment.
+
+- **Verdict:** `DATA_CONCURRENCY_READY` — capability + harness + structural
+  acceptance ready; `REAL_MYSQL_CONCURRENCY_EXECUTED=False`,
+  `REAL_MYSQL_CONCURRENCY_ENVIRONMENT=BLOCKED` (no safe disposable MySQL on
+  the worktree host; nothing fabricated). R10-X must not claim production
+  concurrency acceptance until real-MySQL evidence passes.
+- **Finding CAS-0 (fixed):** `drizzle-orm@0.45.1`+`mysql2` resolves mutations
+  to a `[ResultSetHeader, ...]` tuple; nine stores read a bare header
+  (always-fail-closed or never-detecting CAS loss in production). All nine
+  normalized to read `result[0]`. No schema change. Details:
+  `docs/recovery/r10-b-data-concurrency-inventory.md` + acceptance report.
+- **Harnesses:** structural offline twin `api/r10-b-structural-concurrency.test.ts`
+  (27/27 — 20 required races + rollback sweep over a statement-atomic shared
+  fake with tx/crash/deadlock/disconnect injection); env-gated live twin
+  `api/r10-b-real-mysql-concurrency.test.ts` (`R10_B_MYSQL_URL`, localhost +
+  `r10b_concurrency_` prefix guards, fresh DB + full migration chain per run);
+  migration rehearsal `scripts/r10-b/migration-rehearsal.mjs` (`--static`
+  chain verification EXECUTED; `--live` env-blocked, fail-closed URL guards).
+- **Docs:** inventory + threat model
+  `docs/recovery/r10-b-data-concurrency-inventory.md`; exactly-once semantics +
+  DB security boundary `docs/recovery/r10-b-exactly-once-and-db-security.md`;
+  final report `docs/recovery/r10-b-data-concurrency-acceptance-report.md`.
+- Canonical `0037_r9_mission_control_foundation` remains unexecuted against
+  production. No OneGrid access, no production credentials, no deployment.

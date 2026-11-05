@@ -178,7 +178,9 @@ function isDuplicateKeyError(err: unknown): boolean {
 }
 
 function affectedRowsOf(result: unknown): number {
-  const header = result as Record<string, unknown> | null;
+  // drizzle-orm/mysql2 resolves mutations to a [ResultSetHeader, ...] tuple;
+  // normalize either that or a bare header before reading the CAS verdict.
+  const header = (Array.isArray(result) ? result[0] : result) as Record<string, unknown> | null;
   if (!header || typeof header !== "object") return 0;
   return Number(header.affectedRows ?? header.rowsAffected ?? 0);
 }

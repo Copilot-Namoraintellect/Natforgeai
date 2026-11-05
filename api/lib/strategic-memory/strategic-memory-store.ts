@@ -205,8 +205,12 @@ export async function transitionMemoryStatus(
         eq(strategicMemoryRecords.version, expectedVersion)
       )
     );
-  const header = result as unknown as Record<string, unknown>;
-  const affected = Number(header.affectedRows ?? header.rowsAffected ?? 0);
+  // drizzle-orm/mysql2 resolves mutations to a [ResultSetHeader, ...] tuple;
+  // normalize either that or a bare header before reading the CAS verdict.
+  const header = (Array.isArray(result) ? result[0] : result) as
+    | { affectedRows?: number; rowsAffected?: number }
+    | undefined;
+  const affected = Number(header?.affectedRows ?? header?.rowsAffected ?? 0);
   if (affected === 0) {
     const current = await getMemoryByMemoryId(userId, memoryId, executor);
     if (!current) {
