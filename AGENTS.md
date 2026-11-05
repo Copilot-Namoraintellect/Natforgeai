@@ -1,6 +1,6 @@
 # NatForge AI — Complete Feature Documentation
 
-> **Last updated:** 2026-11-11 (R10-B data integrity & concurrency: CAS-0 fix, structural concurrency harness, migration rehearsal — DATA_CONCURRENCY_READY, real-MySQL env-blocked)
+> **Last updated:** 2026-11-11 (R10-B data integrity and concurrency; R10-F production security ? production acceptance outstanding)
 > **Stack:** React 19 + Vite + TypeScript + tRPC + Hono + Drizzle ORM + MySQL + Tailwind CSS + shadcn/ui + Firebase Auth
 
 ---
@@ -42,6 +42,7 @@
 33. [Execution Coordination (WBS-R9-D)](#33-execution-coordination-wbs-r9-d)
 34. [Mission State, Recovery & Observability (WBS-R9-E)](#34-mission-state-recovery--observability-wbs-r9-e)
 35. [Data Integrity, Real MySQL & Concurrency (WBS-R10-B)](#35-data-integrity-real-mysql--concurrency-wbs-r10-b)
+36. [Production Security, Secrets & Trust Boundary (WBS-R10-F)](#36-production-security-secrets--trust-boundary-wbs-r10-f)
 
 ---
 
@@ -1696,3 +1697,47 @@ production configuration, credentials or deployment.
   final report `docs/recovery/r10-b-data-concurrency-acceptance-report.md`.
 - Canonical `0037_r9_mission_control_foundation` remains unexecuted against
   production. No OneGrid access, no production credentials, no deployment.
+
+---
+
+## 36. Production Security, Secrets & Trust Boundary (WBS-R10-F)
+
+The production security architecture for the autonomous Mission Control
+runtime: distinct least-privilege trust boundaries for agents, services,
+human administrators and external providers. Owns security architecture,
+classification, redaction and the broker mechanism — not deployment (R10-A),
+not R11 product capabilities. Branch `feature/r10-f-production-security`,
+base `799f6b4c`. No OneGrid access, no real production secrets, no
+deployment in this stream.
+
+- **Inventory:** `docs/recovery/r10-f-production-security-inventory.md` —
+  full secret population, credential-loading code, logs/audit/prompt/worker
+  surfaces, access-control paths, attack-surface map. No secret values
+  reproduced.
+- **Contract:** `docs/contracts/production-security-configuration-contract.md`
+  — trust model (9 distinct identities, no implicit equivalence), F2 secret
+  classification (8 closed classes with permitted readers), agent trust
+  boundary, service least privilege, production configuration by category,
+  OneGrid-ready network requirements (requirements only — R10-A verifies),
+  break-glass model, attack-surface review, R11 forward-compatibility.
+- **Mechanisms (`api/lib/production-security/`):** closed-vocabulary
+  secret-shape detection; F2 classification + readers as code
+  (`secret-classification.ts`); cross-surface deep redaction for logs /
+  errors / callbacks / diagnostics (`redact.ts`); model-payload guard
+  (`payload-guard.ts` — fails closed on secret-shaped prompt or output,
+  paths only, never values); least-privilege secret broker
+  (`secret-broker.ts` — deny-by-default, `agent-runtime` refused at mint,
+  break-glass unreadable by any runtime identity). `logger.ts` sanitization
+  delegates to the shared redaction; `runAgent` screens prompt/system before
+  billing/DB and screens model output before return.
+- **Repo hygiene:** filled `.env.production` / `.env.backup-*` untracked from
+  VCS (`.gitignore` extended); `scripts/secret-scan.mjs`
+  (`npm run security:secret-scan`) scans tracked files with hash-only
+  findings. **Credential rotation for the previously tracked values remains
+  mandatory for R10-A** (history exposure).
+- **Verification:** `api/lib/production-security/production-security.test.ts`
+  (unit) + `api/r10-f-security.test.ts` (21 rogue-agent scenarios over the
+  real appRouter/runAgent: secret retrieval, env dump, tenant/business
+  switch, privilege escalation, authority smuggling, provider injection,
+  shell/SQL, audit-disable — all fail closed, synthetic canaries only).
+- **Verdict:** see `docs/recovery/r10-f-production-security-acceptance-report.md`.

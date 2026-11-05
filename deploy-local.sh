@@ -58,8 +58,7 @@ cp package-lock.json deploy/ 2>/dev/null || true
 cp .env.production deploy/.env
 cp drizzle.config.ts deploy/
 cp postcss.config.js deploy/ 2>/dev/null || true
-cp tailwind.config.js deploy/ 2>/dev/null || true
-cp tailwind.config.ts deploy/ 2>/dev/null || true
+cp tailwind.config.cjs deploy/
 cp vite.config.ts deploy/
 cp tsconfig.json deploy/
 cp tsconfig.app.json deploy/ 2>/dev/null || true
