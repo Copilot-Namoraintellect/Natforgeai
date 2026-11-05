@@ -45,7 +45,7 @@ cp package.json deploy/
 cp package-lock.json deploy/
 cp drizzle.config.ts deploy/
 cp postcss.config.js deploy/
-cp tailwind.config.js deploy/
+cp tailwind.config.cjs deploy/
 cp vite.config.ts deploy/
 cp tsconfig.json deploy/
 cp tsconfig.app.json deploy/
