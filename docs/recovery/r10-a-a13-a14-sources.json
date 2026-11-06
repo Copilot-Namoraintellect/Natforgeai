@@ -1,0 +1,603 @@
+{
+  "schemaVersion": 1,
+  "stages": [
+    "A13",
+    "A14"
+  ],
+  "branch": "feature/r10-a-production-platform",
+  "workingHead": "a0bea50a7bac480e7655ff1915532157b8360540",
+  "frozenR9XBaseline": "799f6b4cb351ebe969f97da606324605fdf2a07b",
+  "recordedDate": "2026-11-04",
+  "scope": "Documentation and static source review; no credentials, builds, executable script invocation, host access or actual packages/backups",
+  "priorA11A12HashesVerified": 44,
+  "sourceCount": 57,
+  "sourceReferences": [
+    {
+      "id": "A-r10-a-a01-acceptance-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-acceptance-report.md",
+      "sha256": "306b604e01704e4146088fa0ae327a0bc6f9102f51191a3f8a5163904b2c56a6"
+    },
+    {
+      "id": "A-r10-a-a01-decisions.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "sha256": "b31d9d30e13438ee5c47b23d8fe8a82a3d7c333d6bc1b7d27279d4aa6834ce69",
+      "preMissionSha256": "c2fc11093e333665292b6779fad62dc14b96c09917eaa2374834a8374c93649e",
+      "change": "Authorized append-only A13-A14 requirement/decision note"
+    },
+    {
+      "id": "A-r10-a-a01-platform-baseline.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-platform-baseline.md",
+      "sha256": "554611a95615a401ddd065305e9ba3b8a9bec0a4092d2c7bc90881dfe9e6c363"
+    },
+    {
+      "id": "A-r10-a-a01-requirements.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "sha256": "38f5c41348eb0c2fb0e0312f4cb8d4020c1f20b90d378c9b4c1e29cdafb8c19f",
+      "preMissionSha256": "31bea6c194af554e282e24ac07f71017fbb8e7bf556af043192e7e33d8c56825",
+      "change": "Authorized append-only A13-A14 requirement/decision note"
+    },
+    {
+      "id": "A-r10-a-a01-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-sources.json",
+      "sha256": "1cd348decfe9890ed1d0c62205f0a54f0d03ed2b68d01ac7d62bdc24bc2db5a0"
+    },
+    {
+      "id": "A-r10-a-a02-implementation-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-implementation-report.md",
+      "sha256": "249d0db50e8e73a0f262e318924a1bc1d5e15f3af1e13cc3636802227136fb03"
+    },
+    {
+      "id": "A-r10-a-a02-platform-architecture.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-platform-architecture.md",
+      "sha256": "48c6c4bb5e9cef4e546f48a2d865712f54cffeef4d56af2d459afa86d8b235cc"
+    },
+    {
+      "id": "A-r10-a-a02-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-sources.json",
+      "sha256": "c12cca7f54f4beae5ba90a2d31a9674a335e016fc6cea3b80aa929f943e6b4c9"
+    },
+    {
+      "id": "A-r10-a-a03-ownership-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a03-ownership-report.md",
+      "sha256": "af6adc1feebde439de620870e45d304502ae0cea3005a94ff686f3f11dd879d9"
+    },
+    {
+      "id": "A-r10-a-a03-process-ownership.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a03-process-ownership.md",
+      "sha256": "d9076653a9fb5f6bd2f398e61d16deabe0e9c745985ddcdcd7f10f0f351de43d"
+    },
+    {
+      "id": "A-r10-a-a03-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a03-sources.json",
+      "sha256": "f29151c607a21a464a6498acd0d5806121d2a6405a2da05f29bbae14d4f78c2d"
+    },
+    {
+      "id": "A-r10-a-a04-identity-permissions.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a04-identity-permissions.md",
+      "sha256": "0310af2d8a4545d10bff008c32b3e86b5929b3598f40a87726ac6598fb2aed3e"
+    },
+    {
+      "id": "A-r10-a-a04-identity-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a04-identity-report.md",
+      "sha256": "26021bd9a599190c1c907ec6d594e559e543e9a2f6b18c2d2de3bbe5d1882b5d"
+    },
+    {
+      "id": "A-r10-a-a04-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a04-sources.json",
+      "sha256": "a2eae8748cd15a36b7fbfbb1ad209a269403a8011621888cbd02873bf3cb1b2b"
+    },
+    {
+      "id": "A-r10-a-a05-secrets-management.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a05-secrets-management.md",
+      "sha256": "b2905f7d7ba1f7c9dc2041c2dabfa04e8c9fa879f4b641b1e17ff81d27ad6b47"
+    },
+    {
+      "id": "A-r10-a-a05-secrets-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a05-secrets-report.md",
+      "sha256": "3bf3ecd5b795230f4a2082754a190a5039496b25d59a6b918a34de500d503e9c"
+    },
+    {
+      "id": "A-r10-a-a05-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a05-sources.json",
+      "sha256": "26566479d732cd6bc45eb2259604b9374be5b8d65c7a8c9c6685ff24f08d0651"
+    },
+    {
+      "id": "A-r10-a-a06-network-security-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a06-network-security-report.md",
+      "sha256": "dd957cc45bb909343577cf8064cec0c3a6bef26589c23c2d047bb28ea590cd9c"
+    },
+    {
+      "id": "A-r10-a-a06-network-security.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a06-network-security.md",
+      "sha256": "fb25aa358a6709ce566f1f9852ac9cb3b208ab0de2478f47c422538227e87d13"
+    },
+    {
+      "id": "A-r10-a-a06-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a06-sources.json",
+      "sha256": "4667b4b137ee6a20d94820151caeccc3a8bda02e15232c1772422fc8a6d31e30"
+    },
+    {
+      "id": "A-r10-a-a07-deployment-packaging.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-deployment-packaging.md",
+      "sha256": "d8796aee0f2bf2a1a21bf7bd8cd72d9b47619e5ad75628710feac87f6c0dc6b3"
+    },
+    {
+      "id": "A-r10-a-a07-package-manifest.schema.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-package-manifest.schema.json",
+      "sha256": "e036ffaac5f5978f8b0f95279188e4450c64bad3369b7d0c087b7e3d42fc421c"
+    },
+    {
+      "id": "A-r10-a-a07-packaging-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-packaging-report.md",
+      "sha256": "9a7314173c0579b7855a5a7bff342b46e57446334cc934f35d706cc5c8644101"
+    },
+    {
+      "id": "A-r10-a-a07-q01-decision-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-q01-decision-report.md",
+      "sha256": "0ec6c9f5e7bcc9a0d832b966d56f29ce5e6a2565b630ac37247cbae80052c3f5"
+    },
+    {
+      "id": "A-r10-a-a07-security-closure-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-security-closure-report.md",
+      "sha256": "d191d91adbe9efb90697be912fcfa944b6bb2e919c2e18064d63617086af01b5"
+    },
+    {
+      "id": "A-r10-a-a07-security-evidence-register.example.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-security-evidence-register.example.json",
+      "sha256": "75719c3584bb995efa553f4b9c8eab06a82010aabea6d8325a5ac2bf1e9f008e"
+    },
+    {
+      "id": "A-r10-a-a07-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-sources.json",
+      "sha256": "e1ccb1564d9f80b587eb5f238680b3eeb20175e7def4f949f5bf278cdfd2c17a"
+    },
+    {
+      "id": "A-r10-a-a08-a10-consolidated-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a08-a10-consolidated-report.md",
+      "sha256": "251e85dfad52eb5658b458c5bf72d4ffed122404057b0931d59dcb3ba36d736b"
+    },
+    {
+      "id": "A-r10-a-a08-a10-monitoring-telemetry-security.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a08-a10-monitoring-telemetry-security.md",
+      "sha256": "b5f18b173efc09e9833bd84b2c6da2597c80e4b90ba72ef921ee3d8686e9f1b7"
+    },
+    {
+      "id": "A-r10-a-a08-a10-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a08-a10-sources.json",
+      "sha256": "aa3c4e1afb33f79551daaf5591cc0d3d7ea63545cf8d6e9fc2d01ea6ca1a37fe"
+    },
+    {
+      "id": "A-r10-a-a11-a12-consolidated-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a11-a12-consolidated-report.md",
+      "sha256": "63212388612da5eb6c11e1d1bdc3511024f5eea7832aa6f991ebbeb5d2a386ae"
+    },
+    {
+      "id": "A-r10-a-a11-a12-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a11-a12-sources.json",
+      "sha256": "7dd1a31103166577ee7225c60077de966abcb8de63bf6629a9cd28d9d4bcb23a"
+    },
+    {
+      "id": "A-r10-a-a11-a12-stop-lifecycle.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a11-a12-stop-lifecycle.md",
+      "sha256": "f9e7efd3a206daceba83d5a073ac90491e65bb7ed4e986a5ee6a51e2eb28a379"
+    },
+    {
+      "id": "NatForgeAI-R10-A-rollback.ps1",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "scripts/deployment/rollback.ps1",
+      "sha256": "390f3c548e0d7d231d2cf06ecc8f4d3b463703b9f46a8fccaba332b0ea8c9aca"
+    },
+    {
+      "id": "NatForgeAI-R10-A-start-runtime.ps1",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "scripts/deployment/start-runtime.ps1",
+      "sha256": "c9f311401fd7ff06e8eef78f09276459151014d359d9e6460e54bad1abfc4edf"
+    },
+    {
+      "id": "NatForgeAI-R10-A-verify-release.ps1",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "scripts/deployment/verify-release.ps1",
+      "sha256": "5e7231457b2b66052dc26a15c7d0190e55bdeb0fe3bbe5a77c4e80bb620443e8"
+    },
+    {
+      "id": "NatForgeAI-R10-A-package-for-upload.sh",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "package-for-upload.sh",
+      "sha256": "78455909ecbba8ca2bab2c5f9b7394076b27bb7d7f346329d9481049ca70a8f3"
+    },
+    {
+      "id": "NatForgeAI-R10-A-deploy-local.sh",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "deploy-local.sh",
+      "sha256": "37ba305263aaebe45c0d90cd9362b3954a1e5d8ea05eaecad72e3a86c7a11321"
+    },
+    {
+      "id": "NatForgeAI-R10-A-deploy.sh",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "deploy.sh",
+      "sha256": "831f2c941a26af3b87f4926b37059e3a72f8dff6e6c1128e10d5636ff9cc441a"
+    },
+    {
+      "id": "NatForgeAI-R10-A-deploy-vps.sh",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "deploy-vps.sh",
+      "sha256": "f1d3ed971f4bb406a21839fdff2223f5c839492faf734acac9f835d42ca1f4a9"
+    },
+    {
+      "id": "NatForgeAI-R10-A-package.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "package.json",
+      "sha256": "47f15164a0f35e3a3fcc536e9574c676644589f4125c3e77e589ba3b7f255aa8"
+    },
+    {
+      "id": "NatForgeAI-R10-A-package-lock.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "package-lock.json",
+      "sha256": "eb6990b0a0a498cfe8042d781bebcd608849faed27c86d1c8e209a2c39eb6b02"
+    },
+    {
+      "id": "NatForgeAI-R10-A-vite.ts",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/vite.ts",
+      "sha256": "7bbef0a5aaa3b700f7bff29aec1adebd98e0e7bc5b8aa41722c47f59ca2cbdf1"
+    },
+    {
+      "id": "NatForgeAI-R10-A-renderer.ts",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/video/renderer.ts",
+      "sha256": "69bc0bb8d66b91a573579f3b21fa3f7e831dfbdfe96281ada39a037958a4ef17"
+    },
+    {
+      "id": "NatForgeAI-R10-C-autonomous-runtime-resilience-contract.md",
+      "worktree": "NatForgeAI-R10-C",
+      "path": "docs/contracts/autonomous-runtime-resilience-contract.md",
+      "sha256": "96993008de44433110ebe5a2b96af851a3eb9103698bf89d973fa7c8e0eef199"
+    },
+    {
+      "id": "NatForgeAI-R10-H-controlled-autonomy-contract.md",
+      "worktree": "NatForgeAI-R10-H",
+      "path": "docs/contracts/controlled-autonomy-contract.md",
+      "sha256": "6beddfe976a30e8d46febb163111f917c70719fba1dec1f97e7de902a2534050"
+    },
+    {
+      "id": "NatForgeAI-R10-E-observability-to-production-platform-contract.md",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "docs/contracts/observability-to-production-platform-contract.md",
+      "sha256": "a7ab463c863664b498ca58b4b046f397c9724510bd74238309671a8fc302806f"
+    },
+    {
+      "id": "NatForgeAI-R10-F-production-security-configuration-contract.md",
+      "worktree": "NatForgeAI-R10-F",
+      "path": "docs/contracts/production-security-configuration-contract.md",
+      "sha256": "a8cda44ab74ef97b80a8e6e00618713bd5d82e6bd3e444292d0e6b6a93ea34e0"
+    },
+    {
+      "id": "NatForgeAI-R10-G-production-recovery-objectives-contract.md",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/contracts/production-recovery-objectives-contract.md",
+      "sha256": "2f3c19824cecf742f3ac66f41bec5554849aaae6c441b51a71d2e5a063ba66ff"
+    },
+    {
+      "id": "NatForgeAI-R10-G-backup-monitoring-contract.md",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/contracts/backup-monitoring-contract.md",
+      "sha256": "9fe39fe6a5be67aed660dbf24997baba6d82b6edbee9d8ffd44e1b756a7b1aca"
+    },
+    {
+      "id": "NatForgeAI-R10-G-r10-g-backup-architecture.md",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/recovery/r10-g-backup-architecture.md",
+      "sha256": "d7b7bd2674a0dfbd692f47529423e24505c61446cafe7ac17a739f221e3cf72c"
+    },
+    {
+      "id": "NatForgeAI-R10-G-r10-g-recovery-asset-inventory.md",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/recovery/r10-g-recovery-asset-inventory.md",
+      "sha256": "988409fff619c1dd93988ad9136a2edb57ceab637222be15ee507f2327660b96"
+    },
+    {
+      "id": "NatForgeAI-R10-G-r10-g-recovery-rehearsal-plan.md",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/recovery/r10-g-recovery-rehearsal-plan.md",
+      "sha256": "61d638c95c90bfe6becdb842f8154bcc38714619179d86b79285228fecd46258"
+    },
+    {
+      "id": "NatForgeAI-R10-G-r10-g-onegrid-implementation-checklist.md",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/recovery/r10-g-onegrid-implementation-checklist.md",
+      "sha256": "d02157f8149657727659681c353981ee73ba3adcae2572025413d8e490ffb579"
+    },
+    {
+      "id": "NatForgeAI-R10-G-r10-g-backup-dr-acceptance-report.md",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/recovery/r10-g-backup-dr-acceptance-report.md",
+      "sha256": "f1cd838426e89315684984d0145c8e83d834e3c7b8714dce3e1d410db1f6a877"
+    },
+    {
+      "id": "NatForgeAI-R10-G-backup-database.sh",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "scripts/backup/backup-database.sh",
+      "sha256": "7d557a96a186443dd2f8bfb916ae5e1144c6ed658acf6e4ec27e3065702847d0"
+    },
+    {
+      "id": "NatForgeAI-R10-G-README.md",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "scripts/backup/README.md",
+      "sha256": "59bb637cd55895e5b058bebb8b9d17d244b37314798b4852bfc3320630e9e096"
+    }
+  ],
+  "numbering": "Mission A13 release/rollback primarily local A04/A15; mission A14 backup/recovery primarily local A13; original local A14 independent stop retained",
+  "preservation": "All prior local artifacts preserved except authorized append-only A01 requirements/decision notes; prior catalogs remain historical",
+  "limitations": [
+    "Sibling working-file hashes do not establish integration, clean trees, current remotes or measured recovery",
+    "G recovery targets and host assumptions PROVISIONAL, not provider facts or SLA",
+    "No sensitive environment/backup configuration or credential file content/hash accessed"
+  ],
+  "stageAcceptance": [
+    {
+      "stage": "A13",
+      "scope": "Release management and rollback",
+      "documentation": "PASS",
+      "integratedAcceptance": "BLOCKED",
+      "syntheticExecution": "NOT_RUN",
+      "liveExecution": "NOT_RUN",
+      "tests": [
+        {
+          "id": "RL01",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "RL02",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "RL03",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "RL04",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "RL05",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "RL06",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "RL07",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "RL08",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "RL09",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "RL10",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        }
+      ]
+    },
+    {
+      "stage": "A14",
+      "scope": "Backup and recovery handoff",
+      "documentation": "PASS",
+      "integratedAcceptance": "BLOCKED",
+      "syntheticExecution": "NOT_RUN",
+      "liveExecution": "NOT_RUN",
+      "tests": [
+        {
+          "id": "BK01",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK02",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK03",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK04",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK05",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK06",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK07",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK08",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK09",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK10",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK11",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "BK12",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        }
+      ]
+    }
+  ],
+  "openDecisions": [
+    {
+      "id": "RG01",
+      "state": "OPEN",
+      "implementationOwner": "UNASSIGNED",
+      "approvingAuthority": "UNASSIGNED"
+    },
+    {
+      "id": "RG02",
+      "state": "OPEN",
+      "implementationOwner": "UNASSIGNED",
+      "approvingAuthority": "UNASSIGNED"
+    },
+    {
+      "id": "RG03",
+      "state": "OPEN",
+      "implementationOwner": "UNASSIGNED",
+      "approvingAuthority": "UNASSIGNED"
+    },
+    {
+      "id": "RG04",
+      "state": "OPEN",
+      "implementationOwner": "UNASSIGNED",
+      "approvingAuthority": "UNASSIGNED"
+    },
+    {
+      "id": "RG05",
+      "state": "OPEN",
+      "implementationOwner": "UNASSIGNED",
+      "approvingAuthority": "UNASSIGNED"
+    },
+    {
+      "id": "RG06",
+      "state": "OPEN",
+      "implementationOwner": "UNASSIGNED",
+      "approvingAuthority": "UNASSIGNED"
+    },
+    {
+      "id": "RG07",
+      "state": "OPEN",
+      "implementationOwner": "UNASSIGNED",
+      "approvingAuthority": "UNASSIGNED"
+    },
+    {
+      "id": "RG08",
+      "state": "OPEN",
+      "implementationOwner": "UNASSIGNED",
+      "approvingAuthority": "UNASSIGNED"
+    }
+  ],
+  "recoveryObjectives": [
+    {
+      "class": "DB_RECOVERY",
+      "rpo": "<=24h standard; <=1h stretch only with proven PITR",
+      "rto": "<=4h",
+      "status": "PROVISIONAL",
+      "measured": false,
+      "approvedOneGridGuarantee": false
+    },
+    {
+      "class": "APP_SERVICE_RECOVERY",
+      "rpo": "0 for stateless code only",
+      "rto": "<=1h",
+      "status": "PROVISIONAL",
+      "measured": false,
+      "approvedOneGridGuarantee": false
+    },
+    {
+      "class": "WORKER_RECOVERY",
+      "rpo": "<=5min in-flight; no uncertain replay permitted",
+      "rto": "<=30min",
+      "status": "PROVISIONAL",
+      "measured": false,
+      "approvedOneGridGuarantee": false
+    },
+    {
+      "class": "FULL_PLATFORM_RECOVERY",
+      "rpo": "<=24h Tier A/B",
+      "rto": "<=8h target; <=24h cold worst case",
+      "status": "PROVISIONAL",
+      "measured": false,
+      "approvedOneGridGuarantee": false
+    }
+  ],
+  "securityConflicts": {
+    "backupDatabaseReader": "OPEN_F_BACKUP_ONLY_VS_G_DATABASE_URL_APP_ENV",
+    "offsiteWriterRestoreAdminGrants": "OPEN",
+    "backupKeyFileDelivery": "OPEN",
+    "encryptedDatabaseScanPolicy": "OPEN",
+    "productionDeploymentApprover": "UNASSIGNED",
+    "recoveryOperator": "UNASSIGNED",
+    "keyCustodian": "UNASSIGNED",
+    "providerExecutionAuthorized": false,
+    "autonomyActivationAuthorized": false
+  },
+  "preservedLocalArtifacts": 31,
+  "artifactHashes": [
+    {
+      "path": "docs/recovery/r10-a-a13-a14-release-recovery.md",
+      "sha256": "79e6bafc58276686adbe92c0adb4becc06aa9644ceb475f8841d32a54f8d2382"
+    }
+  ]
+}

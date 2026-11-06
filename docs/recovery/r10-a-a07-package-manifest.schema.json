@@ -1,0 +1,432 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:natforgeai:r10-a:a07:offline-package-manifest:1",
+  "title": "A07 nonexecuting offline candidate manifest",
+  "description": "Candidate evidence only. Semantic path, signature, closure and security validation is mandatory outside JSON Schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "releaseId",
+    "source",
+    "toolchain",
+    "provenance",
+    "packages",
+    "nativeResources",
+    "files",
+    "externalMutableRoots",
+    "security",
+    "checks",
+    "productionApproved"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "status": {
+      "const": "OFFLINE_CANDIDATE_NOT_APPROVED"
+    },
+    "releaseId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "tree",
+        "branch",
+        "clean",
+        "packageSha256",
+        "lockSha256",
+        "buildConfigSha256"
+      ],
+      "properties": {
+        "commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "tree": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clean": {
+          "const": true
+        },
+        "packageSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "lockSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "buildConfigSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "osBuild",
+        "arch",
+        "node",
+        "npm",
+        "nodeBinarySha256",
+        "nodeAbi",
+        "napi"
+      ],
+      "properties": {
+        "os": {
+          "const": "Windows Server 2022"
+        },
+        "osBuild": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arch": {
+          "const": "x64"
+        },
+        "node": {
+          "const": "26.13.0"
+        },
+        "npm": {
+          "const": "11.20.0"
+        },
+        "nodeBinarySha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "nodeAbi": {
+          "type": "string",
+          "minLength": 1
+        },
+        "napi": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "builderId",
+        "startedUtc",
+        "finishedUtc",
+        "recordPath",
+        "recordSha256",
+        "sbomPath",
+        "sbomSha256",
+        "licenseInventoryPath",
+        "licenseInventorySha256",
+        "publicConfigSha256"
+      ],
+      "properties": {
+        "builderId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "startedUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finishedUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "recordPath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[:\\\\]).+$"
+        },
+        "recordSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sbomPath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[:\\\\]).+$"
+        },
+        "sbomSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "licenseInventoryPath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[:\\\\]).+$"
+        },
+        "licenseInventorySha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "publicConfigSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "packages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "version",
+          "lockPath",
+          "integrity",
+          "role",
+          "closureEvidenceSha256"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+].+)?$"
+          },
+          "lockPath": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[:\\\\]).+$"
+          },
+          "integrity": {
+            "type": "string",
+            "pattern": "^sha(256|384|512)-[A-Za-z0-9+/=]+$"
+          },
+          "role": {
+            "enum": [
+              "runtime-external",
+              "bundled",
+              "native-resource"
+            ]
+          },
+          "closureEvidenceSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "nativeResources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "versionOrRevision",
+          "platform",
+          "path",
+          "sha256",
+          "acquisitionSource",
+          "licenseEvidenceSha256",
+          "compatibilityEvidenceSha256"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "versionOrRevision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "platform": {
+            "const": "win32-x64"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[:\\\\]).+$"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "acquisitionSource": {
+            "type": "string",
+            "minLength": 1
+          },
+          "licenseEvidenceSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "compatibilityEvidenceSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "size",
+          "sha256",
+          "class",
+          "runtimeWritable"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[:\\\\]).+$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "class": {
+            "enum": [
+              "server-bundle",
+              "static",
+              "dependency",
+              "browser",
+              "license"
+            ]
+          },
+          "runtimeWritable": {
+            "const": false
+          }
+        }
+      }
+    },
+    "externalMutableRoots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "purpose",
+          "configurationReference",
+          "aclEvidenceSha256",
+          "includedInPayload"
+        ],
+        "properties": {
+          "purpose": {
+            "enum": [
+              "media",
+              "scratch",
+              "logs",
+              "temp",
+              "browser-profile",
+              "secrets",
+              "backup",
+              "stop-state"
+            ]
+          },
+          "configurationReference": {
+            "type": "string",
+            "minLength": 1
+          },
+          "aclEvidenceSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "includedInPayload": {
+            "const": false
+          }
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cleanupEvidenceSha256",
+        "rotationRevocationEvidenceSha256",
+        "pathScanEvidenceSha256",
+        "contentScanEvidenceSha256",
+        "advisorySnapshotSha256",
+        "securityDispositionSha256"
+      ],
+      "properties": {
+        "cleanupEvidenceSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "rotationRevocationEvidenceSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "pathScanEvidenceSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "contentScanEvidenceSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "advisorySnapshotSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "securityDispositionSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "result",
+          "evidenceSha256"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^P(0[1-9]|1[0-2])$"
+          },
+          "result": {
+            "enum": [
+              "PASS",
+              "FAIL",
+              "NOT_RUN"
+            ]
+          },
+          "evidenceSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "productionApproved": {
+      "const": false
+    }
+  }
+}

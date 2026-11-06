@@ -1,0 +1,605 @@
+{
+  "schemaVersion": 1,
+  "mission": "Engineering transition and first implementation selection",
+  "branch": "feature/r10-a-production-platform",
+  "workingHead": "a0bea50a7bac480e7655ff1915532157b8360540",
+  "recordedDate": "2026-11-04",
+  "authority": "Explicit user functional D12/Q01 planning decision; implementation not authorized",
+  "priorCurrentHashesVerified": 88,
+  "priorArtifacts": [
+    {
+      "path": "docs/recovery/r10-a-a01-acceptance-report.md",
+      "sha256": "306b604e01704e4146088fa0ae327a0bc6f9102f51191a3f8a5163904b2c56a6"
+    },
+    {
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "sha256": "83ee586ee3c3eed93bf66f310ad821822892675057f499f93a0b1324ace8cb10"
+    },
+    {
+      "path": "docs/recovery/r10-a-a01-platform-baseline.md",
+      "sha256": "554611a95615a401ddd065305e9ba3b8a9bec0a4092d2c7bc90881dfe9e6c363"
+    },
+    {
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "sha256": "d7bcc37b71afc09472fefeb5191935f8fe70d4f85fc28a034b7939dec6e2a8a0"
+    },
+    {
+      "path": "docs/recovery/r10-a-a01-sources.json",
+      "sha256": "1cd348decfe9890ed1d0c62205f0a54f0d03ed2b68d01ac7d62bdc24bc2db5a0"
+    },
+    {
+      "path": "docs/recovery/r10-a-a02-implementation-report.md",
+      "sha256": "249d0db50e8e73a0f262e318924a1bc1d5e15f3af1e13cc3636802227136fb03"
+    },
+    {
+      "path": "docs/recovery/r10-a-a02-platform-architecture.md",
+      "sha256": "48c6c4bb5e9cef4e546f48a2d865712f54cffeef4d56af2d459afa86d8b235cc"
+    },
+    {
+      "path": "docs/recovery/r10-a-a02-sources.json",
+      "sha256": "c12cca7f54f4beae5ba90a2d31a9674a335e016fc6cea3b80aa929f943e6b4c9"
+    },
+    {
+      "path": "docs/recovery/r10-a-a03-ownership-report.md",
+      "sha256": "af6adc1feebde439de620870e45d304502ae0cea3005a94ff686f3f11dd879d9"
+    },
+    {
+      "path": "docs/recovery/r10-a-a03-process-ownership.md",
+      "sha256": "d9076653a9fb5f6bd2f398e61d16deabe0e9c745985ddcdcd7f10f0f351de43d"
+    },
+    {
+      "path": "docs/recovery/r10-a-a03-sources.json",
+      "sha256": "f29151c607a21a464a6498acd0d5806121d2a6405a2da05f29bbae14d4f78c2d"
+    },
+    {
+      "path": "docs/recovery/r10-a-a04-identity-permissions.md",
+      "sha256": "0310af2d8a4545d10bff008c32b3e86b5929b3598f40a87726ac6598fb2aed3e"
+    },
+    {
+      "path": "docs/recovery/r10-a-a04-identity-report.md",
+      "sha256": "26021bd9a599190c1c907ec6d594e559e543e9a2f6b18c2d2de3bbe5d1882b5d"
+    },
+    {
+      "path": "docs/recovery/r10-a-a04-sources.json",
+      "sha256": "a2eae8748cd15a36b7fbfbb1ad209a269403a8011621888cbd02873bf3cb1b2b"
+    },
+    {
+      "path": "docs/recovery/r10-a-a05-secrets-management.md",
+      "sha256": "b2905f7d7ba1f7c9dc2041c2dabfa04e8c9fa879f4b641b1e17ff81d27ad6b47"
+    },
+    {
+      "path": "docs/recovery/r10-a-a05-secrets-report.md",
+      "sha256": "3bf3ecd5b795230f4a2082754a190a5039496b25d59a6b918a34de500d503e9c"
+    },
+    {
+      "path": "docs/recovery/r10-a-a05-sources.json",
+      "sha256": "26566479d732cd6bc45eb2259604b9374be5b8d65c7a8c9c6685ff24f08d0651"
+    },
+    {
+      "path": "docs/recovery/r10-a-a06-network-security-report.md",
+      "sha256": "dd957cc45bb909343577cf8064cec0c3a6bef26589c23c2d047bb28ea590cd9c"
+    },
+    {
+      "path": "docs/recovery/r10-a-a06-network-security.md",
+      "sha256": "fb25aa358a6709ce566f1f9852ac9cb3b208ab0de2478f47c422538227e87d13"
+    },
+    {
+      "path": "docs/recovery/r10-a-a06-sources.json",
+      "sha256": "4667b4b137ee6a20d94820151caeccc3a8bda02e15232c1772422fc8a6d31e30"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-deployment-packaging.md",
+      "sha256": "d8796aee0f2bf2a1a21bf7bd8cd72d9b47619e5ad75628710feac87f6c0dc6b3"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-package-manifest.schema.json",
+      "sha256": "e036ffaac5f5978f8b0f95279188e4450c64bad3369b7d0c087b7e3d42fc421c"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-packaging-report.md",
+      "sha256": "9a7314173c0579b7855a5a7bff342b46e57446334cc934f35d706cc5c8644101"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-q01-decision-report.md",
+      "sha256": "0ec6c9f5e7bcc9a0d832b966d56f29ce5e6a2565b630ac37247cbae80052c3f5"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-security-closure-report.md",
+      "sha256": "d191d91adbe9efb90697be912fcfa944b6bb2e919c2e18064d63617086af01b5"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-security-evidence-register.example.json",
+      "sha256": "75719c3584bb995efa553f4b9c8eab06a82010aabea6d8325a5ac2bf1e9f008e"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-sources.json",
+      "sha256": "e1ccb1564d9f80b587eb5f238680b3eeb20175e7def4f949f5bf278cdfd2c17a"
+    },
+    {
+      "path": "docs/recovery/r10-a-a08-a10-consolidated-report.md",
+      "sha256": "251e85dfad52eb5658b458c5bf72d4ffed122404057b0931d59dcb3ba36d736b"
+    },
+    {
+      "path": "docs/recovery/r10-a-a08-a10-monitoring-telemetry-security.md",
+      "sha256": "b5f18b173efc09e9833bd84b2c6da2597c80e4b90ba72ef921ee3d8686e9f1b7"
+    },
+    {
+      "path": "docs/recovery/r10-a-a08-a10-sources.json",
+      "sha256": "aa3c4e1afb33f79551daaf5591cc0d3d7ea63545cf8d6e9fc2d01ea6ca1a37fe"
+    },
+    {
+      "path": "docs/recovery/r10-a-a11-a12-consolidated-report.md",
+      "sha256": "63212388612da5eb6c11e1d1bdc3511024f5eea7832aa6f991ebbeb5d2a386ae"
+    },
+    {
+      "path": "docs/recovery/r10-a-a11-a12-sources.json",
+      "sha256": "7dd1a31103166577ee7225c60077de966abcb8de63bf6629a9cd28d9d4bcb23a"
+    },
+    {
+      "path": "docs/recovery/r10-a-a11-a12-stop-lifecycle.md",
+      "sha256": "f9e7efd3a206daceba83d5a073ac90491e65bb7ed4e986a5ee6a51e2eb28a379"
+    },
+    {
+      "path": "docs/recovery/r10-a-a13-a14-consolidated-report.md",
+      "sha256": "f0d85d9c7f1cff24a39bf9c535955afda3e61259947cb99ed6c97048a3986580"
+    },
+    {
+      "path": "docs/recovery/r10-a-a13-a14-release-recovery.md",
+      "sha256": "79e6bafc58276686adbe92c0adb4becc06aa9644ceb475f8841d32a54f8d2382"
+    },
+    {
+      "path": "docs/recovery/r10-a-a13-a14-sources.json",
+      "sha256": "034e3428ffc2cb9cb081fd9e27802b20f1fed8090e18aadc7f3b0bc841ddb025"
+    },
+    {
+      "path": "docs/recovery/r10-a-a15-a16-sources.json",
+      "sha256": "a289fc55155ed7b5999c7a2575b7c71351a4c87647204e07e6a341f51f9926c2"
+    },
+    {
+      "path": "docs/recovery/r10-a-a15-hash-audit.json",
+      "sha256": "3805fdc6396f284b1576634cbe6e68c1c3fb471f2c5d6db3ef115b5322cb401e"
+    },
+    {
+      "path": "docs/recovery/r10-a-a15-verification-evidence.json",
+      "sha256": "5a534c2d24113422ae8031ea4682c3088c65b61935c564e66ea6207d87769305"
+    },
+    {
+      "path": "docs/recovery/r10-a-a15-verification-report.md",
+      "sha256": "e86737a637a41b290ff27009f040aa9c3ec14fe1cc0849e29fecd9630d9d3b65"
+    },
+    {
+      "path": "docs/recovery/r10-a-a16-final-handover.md",
+      "sha256": "1bd5db091dd2f3c7f69a5222d23a95c6e2f37876272dbdcf6e8cbb9f10af58ef"
+    }
+  ],
+  "historicalReconciliation": {
+    "references": 7,
+    "uniqueExpectedDigests": 6,
+    "uniqueDocuments": 3,
+    "method": "Exact current bytes, LF/CRLF variants, line-boundary prefixes and every available git log --all revision for these three non-secret documents only; no reconstructed edits or broad secret/history scan",
+    "results": [
+      {
+        "catalog": "r10-a-a02-sources.json",
+        "location": "$.a01Inputs.3",
+        "key": "sha256BeforeA02",
+        "path": "docs/recovery/r10-a-a01-requirements.md",
+        "expectedHistoricalSha256": "79ac2a77ea531279440a2b4be39706b5b642965cee4ddbfe2387c0d208a08040",
+        "currentSha256": "d7bcc37b71afc09472fefeb5191935f8fe70d4f85fc28a034b7939dec6e2a8a0",
+        "availableCommittedRevisions": [
+          "a0bea50a7bac480e7655ff1915532157b8360540"
+        ],
+        "status": "HISTORICAL_BYTES_UNREPRODUCED",
+        "disposition": "OPEN_NO_WAIVER_OR_HASH_REPLACEMENT"
+      },
+      {
+        "catalog": "r10-a-a03-sources.json",
+        "location": "$.priorInputs.3",
+        "key": "sha256BeforeA03",
+        "path": "docs/recovery/r10-a-a01-requirements.md",
+        "expectedHistoricalSha256": "5c2bc4791b736ad9dccca9d16c26193108dea87fb97e1a3637544b93cb30d870",
+        "currentSha256": "d7bcc37b71afc09472fefeb5191935f8fe70d4f85fc28a034b7939dec6e2a8a0",
+        "availableCommittedRevisions": [
+          "a0bea50a7bac480e7655ff1915532157b8360540"
+        ],
+        "status": "HISTORICAL_BYTES_UNREPRODUCED",
+        "disposition": "OPEN_NO_WAIVER_OR_HASH_REPLACEMENT"
+      },
+      {
+        "catalog": "r10-a-a03-sources.json",
+        "location": "$.priorInputs.5",
+        "key": "sha256BeforeA03",
+        "path": "docs/recovery/r10-a-a02-implementation-report.md",
+        "expectedHistoricalSha256": "6f9b6c612ff14857232a5ca89926bb08dde3e3cd9da5e0621a5859738abc3aff",
+        "currentSha256": "249d0db50e8e73a0f262e318924a1bc1d5e15f3af1e13cc3636802227136fb03",
+        "availableCommittedRevisions": [
+          "a0bea50a7bac480e7655ff1915532157b8360540"
+        ],
+        "status": "HISTORICAL_BYTES_UNREPRODUCED",
+        "disposition": "OPEN_NO_WAIVER_OR_HASH_REPLACEMENT"
+      },
+      {
+        "catalog": "r10-a-a03-sources.json",
+        "location": "$.priorInputs.6",
+        "key": "sha256BeforeA03",
+        "path": "docs/recovery/r10-a-a02-platform-architecture.md",
+        "expectedHistoricalSha256": "11409f7f6d769d7a4cf2013f2f2f459cda3be292235916d48784a549827a80b9",
+        "currentSha256": "48c6c4bb5e9cef4e546f48a2d865712f54cffeef4d56af2d459afa86d8b235cc",
+        "availableCommittedRevisions": [
+          "a0bea50a7bac480e7655ff1915532157b8360540"
+        ],
+        "status": "HISTORICAL_BYTES_UNREPRODUCED",
+        "disposition": "OPEN_NO_WAIVER_OR_HASH_REPLACEMENT"
+      },
+      {
+        "catalog": "r10-a-a04-sources.json",
+        "location": "$.priorInputs.3",
+        "key": "sha256BeforeA04",
+        "path": "docs/recovery/r10-a-a01-requirements.md",
+        "expectedHistoricalSha256": "41b1e94bf73b625743bd562bc87e73e1a20e62a28e16b281b29ef71da1bf54f6",
+        "currentSha256": "d7bcc37b71afc09472fefeb5191935f8fe70d4f85fc28a034b7939dec6e2a8a0",
+        "availableCommittedRevisions": [
+          "a0bea50a7bac480e7655ff1915532157b8360540"
+        ],
+        "status": "HISTORICAL_BYTES_UNREPRODUCED",
+        "disposition": "OPEN_NO_WAIVER_OR_HASH_REPLACEMENT"
+      },
+      {
+        "catalog": "r10-a-a05-sources.json",
+        "location": "$.sourceReferences.39",
+        "key": "sha256",
+        "path": "docs/recovery/r10-a-a01-requirements.md",
+        "expectedHistoricalSha256": "3dbda4fa8497eaf15c962a4217a9d96cdfbeab6621dd5b8e6d794f3a6a5cf828",
+        "currentSha256": "d7bcc37b71afc09472fefeb5191935f8fe70d4f85fc28a034b7939dec6e2a8a0",
+        "availableCommittedRevisions": [
+          "a0bea50a7bac480e7655ff1915532157b8360540"
+        ],
+        "status": "HISTORICAL_BYTES_UNREPRODUCED",
+        "disposition": "OPEN_NO_WAIVER_OR_HASH_REPLACEMENT"
+      },
+      {
+        "catalog": "r10-a-a06-sources.json",
+        "location": "$.historicalInputs.0",
+        "key": "sha256",
+        "path": "docs/recovery/r10-a-a01-requirements.md",
+        "expectedHistoricalSha256": "3dbda4fa8497eaf15c962a4217a9d96cdfbeab6621dd5b8e6d794f3a6a5cf828",
+        "currentSha256": "d7bcc37b71afc09472fefeb5191935f8fe70d4f85fc28a034b7939dec6e2a8a0",
+        "availableCommittedRevisions": [
+          "a0bea50a7bac480e7655ff1915532157b8360540"
+        ],
+        "status": "HISTORICAL_BYTES_UNREPRODUCED",
+        "disposition": "OPEN_NO_WAIVER_OR_HASH_REPLACEMENT"
+      }
+    ],
+    "assessedBeforeTransitionAppendices": true,
+    "waiverGranted": false
+  },
+  "implementationStarted": false,
+  "operationalAuthorization": false,
+  "classification": "PARTIAL",
+  "productionAcceptance": "BLOCKED",
+  "sourceReferences": [
+    {
+      "path": "docs/recovery/r10-a-a01-acceptance-report.md",
+      "sha256": "306b604e01704e4146088fa0ae327a0bc6f9102f51191a3f8a5163904b2c56a6"
+    },
+    {
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "sha256": "869f24b63da04f59ec72b3b79f5dac03148726ab75aa41200dd56251a8cabcb1",
+      "preTransitionSha256": "83ee586ee3c3eed93bf66f310ad821822892675057f499f93a0b1324ace8cb10",
+      "change": "Authorized append-only planning decision/traceability"
+    },
+    {
+      "path": "docs/recovery/r10-a-a01-platform-baseline.md",
+      "sha256": "554611a95615a401ddd065305e9ba3b8a9bec0a4092d2c7bc90881dfe9e6c363"
+    },
+    {
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "sha256": "26c596af2129be59ed48c83359049432d056b6c0de777c11a596172cb12c336a",
+      "preTransitionSha256": "d7bcc37b71afc09472fefeb5191935f8fe70d4f85fc28a034b7939dec6e2a8a0",
+      "change": "Authorized append-only planning decision/traceability"
+    },
+    {
+      "path": "docs/recovery/r10-a-a01-sources.json",
+      "sha256": "1cd348decfe9890ed1d0c62205f0a54f0d03ed2b68d01ac7d62bdc24bc2db5a0"
+    },
+    {
+      "path": "docs/recovery/r10-a-a02-implementation-report.md",
+      "sha256": "249d0db50e8e73a0f262e318924a1bc1d5e15f3af1e13cc3636802227136fb03"
+    },
+    {
+      "path": "docs/recovery/r10-a-a02-platform-architecture.md",
+      "sha256": "48c6c4bb5e9cef4e546f48a2d865712f54cffeef4d56af2d459afa86d8b235cc"
+    },
+    {
+      "path": "docs/recovery/r10-a-a02-sources.json",
+      "sha256": "c12cca7f54f4beae5ba90a2d31a9674a335e016fc6cea3b80aa929f943e6b4c9"
+    },
+    {
+      "path": "docs/recovery/r10-a-a03-ownership-report.md",
+      "sha256": "af6adc1feebde439de620870e45d304502ae0cea3005a94ff686f3f11dd879d9"
+    },
+    {
+      "path": "docs/recovery/r10-a-a03-process-ownership.md",
+      "sha256": "d9076653a9fb5f6bd2f398e61d16deabe0e9c745985ddcdcd7f10f0f351de43d"
+    },
+    {
+      "path": "docs/recovery/r10-a-a03-sources.json",
+      "sha256": "f29151c607a21a464a6498acd0d5806121d2a6405a2da05f29bbae14d4f78c2d"
+    },
+    {
+      "path": "docs/recovery/r10-a-a04-identity-permissions.md",
+      "sha256": "0310af2d8a4545d10bff008c32b3e86b5929b3598f40a87726ac6598fb2aed3e"
+    },
+    {
+      "path": "docs/recovery/r10-a-a04-identity-report.md",
+      "sha256": "26021bd9a599190c1c907ec6d594e559e543e9a2f6b18c2d2de3bbe5d1882b5d"
+    },
+    {
+      "path": "docs/recovery/r10-a-a04-sources.json",
+      "sha256": "a2eae8748cd15a36b7fbfbb1ad209a269403a8011621888cbd02873bf3cb1b2b"
+    },
+    {
+      "path": "docs/recovery/r10-a-a05-secrets-management.md",
+      "sha256": "b2905f7d7ba1f7c9dc2041c2dabfa04e8c9fa879f4b641b1e17ff81d27ad6b47"
+    },
+    {
+      "path": "docs/recovery/r10-a-a05-secrets-report.md",
+      "sha256": "3bf3ecd5b795230f4a2082754a190a5039496b25d59a6b918a34de500d503e9c"
+    },
+    {
+      "path": "docs/recovery/r10-a-a05-sources.json",
+      "sha256": "26566479d732cd6bc45eb2259604b9374be5b8d65c7a8c9c6685ff24f08d0651"
+    },
+    {
+      "path": "docs/recovery/r10-a-a06-network-security-report.md",
+      "sha256": "dd957cc45bb909343577cf8064cec0c3a6bef26589c23c2d047bb28ea590cd9c"
+    },
+    {
+      "path": "docs/recovery/r10-a-a06-network-security.md",
+      "sha256": "fb25aa358a6709ce566f1f9852ac9cb3b208ab0de2478f47c422538227e87d13"
+    },
+    {
+      "path": "docs/recovery/r10-a-a06-sources.json",
+      "sha256": "4667b4b137ee6a20d94820151caeccc3a8bda02e15232c1772422fc8a6d31e30"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-deployment-packaging.md",
+      "sha256": "d8796aee0f2bf2a1a21bf7bd8cd72d9b47619e5ad75628710feac87f6c0dc6b3"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-package-manifest.schema.json",
+      "sha256": "e036ffaac5f5978f8b0f95279188e4450c64bad3369b7d0c087b7e3d42fc421c"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-packaging-report.md",
+      "sha256": "9a7314173c0579b7855a5a7bff342b46e57446334cc934f35d706cc5c8644101"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-q01-decision-report.md",
+      "sha256": "0ec6c9f5e7bcc9a0d832b966d56f29ce5e6a2565b630ac37247cbae80052c3f5"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-security-closure-report.md",
+      "sha256": "d191d91adbe9efb90697be912fcfa944b6bb2e919c2e18064d63617086af01b5"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-security-evidence-register.example.json",
+      "sha256": "75719c3584bb995efa553f4b9c8eab06a82010aabea6d8325a5ac2bf1e9f008e"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-sources.json",
+      "sha256": "e1ccb1564d9f80b587eb5f238680b3eeb20175e7def4f949f5bf278cdfd2c17a"
+    },
+    {
+      "path": "docs/recovery/r10-a-a08-a10-consolidated-report.md",
+      "sha256": "251e85dfad52eb5658b458c5bf72d4ffed122404057b0931d59dcb3ba36d736b"
+    },
+    {
+      "path": "docs/recovery/r10-a-a08-a10-monitoring-telemetry-security.md",
+      "sha256": "b5f18b173efc09e9833bd84b2c6da2597c80e4b90ba72ef921ee3d8686e9f1b7"
+    },
+    {
+      "path": "docs/recovery/r10-a-a08-a10-sources.json",
+      "sha256": "aa3c4e1afb33f79551daaf5591cc0d3d7ea63545cf8d6e9fc2d01ea6ca1a37fe"
+    },
+    {
+      "path": "docs/recovery/r10-a-a11-a12-consolidated-report.md",
+      "sha256": "63212388612da5eb6c11e1d1bdc3511024f5eea7832aa6f991ebbeb5d2a386ae"
+    },
+    {
+      "path": "docs/recovery/r10-a-a11-a12-sources.json",
+      "sha256": "7dd1a31103166577ee7225c60077de966abcb8de63bf6629a9cd28d9d4bcb23a"
+    },
+    {
+      "path": "docs/recovery/r10-a-a11-a12-stop-lifecycle.md",
+      "sha256": "f9e7efd3a206daceba83d5a073ac90491e65bb7ed4e986a5ee6a51e2eb28a379"
+    },
+    {
+      "path": "docs/recovery/r10-a-a13-a14-consolidated-report.md",
+      "sha256": "f0d85d9c7f1cff24a39bf9c535955afda3e61259947cb99ed6c97048a3986580"
+    },
+    {
+      "path": "docs/recovery/r10-a-a13-a14-release-recovery.md",
+      "sha256": "79e6bafc58276686adbe92c0adb4becc06aa9644ceb475f8841d32a54f8d2382"
+    },
+    {
+      "path": "docs/recovery/r10-a-a13-a14-sources.json",
+      "sha256": "034e3428ffc2cb9cb081fd9e27802b20f1fed8090e18aadc7f3b0bc841ddb025"
+    },
+    {
+      "path": "docs/recovery/r10-a-a15-a16-sources.json",
+      "sha256": "a289fc55155ed7b5999c7a2575b7c71351a4c87647204e07e6a341f51f9926c2"
+    },
+    {
+      "path": "docs/recovery/r10-a-a15-hash-audit.json",
+      "sha256": "3805fdc6396f284b1576634cbe6e68c1c3fb471f2c5d6db3ef115b5322cb401e"
+    },
+    {
+      "path": "docs/recovery/r10-a-a15-verification-evidence.json",
+      "sha256": "5a534c2d24113422ae8031ea4682c3088c65b61935c564e66ea6207d87769305"
+    },
+    {
+      "path": "docs/recovery/r10-a-a15-verification-report.md",
+      "sha256": "e86737a637a41b290ff27009f040aa9c3ec14fe1cc0849e29fecd9630d9d3b65"
+    },
+    {
+      "path": "docs/recovery/r10-a-a16-final-handover.md",
+      "sha256": "1bd5db091dd2f3c7f69a5222d23a95c6e2f37876272dbdcf6e8cbb9f10af58ef"
+    }
+  ],
+  "artifactHashes": [
+    {
+      "path": "docs/recovery/r10-a-engineering-transition-report.md",
+      "sha256": "b1f47a559d3bec87a4740d60e4882ee0a1898e5c0e6ae38fa0cc05d004a7bcab"
+    }
+  ],
+  "functionalDecision": {
+    "reference": "docs/recovery/r10-a-a01-decisions.md",
+    "status": "FUNCTIONAL_PLANNING_BOUNDARIES_APPROVED",
+    "A": "Platform preparation, deployment packaging, release configuration and non-executing infrastructure tooling",
+    "F": "Security implementation and repository hygiene",
+    "E": "Observability implementation",
+    "G": "Backup/recovery implementation",
+    "X": "Cross-stream integration and integrated acceptance",
+    "applicationImplementers": "UNASSIGNED_WITHOUT_EXPRESS_APPROVAL",
+    "operationalApprovers": "UNASSIGNED",
+    "credentialCustodians": "UNASSIGNED",
+    "implementationAuthorized": false
+  },
+  "firstTask": {
+    "id": "ET01",
+    "name": "Pure package-inventory path and metadata rejection policy",
+    "owner": "A_FUNCTIONAL_PLANNING",
+    "status": "SELECTED_NOT_IMPLEMENTED",
+    "implementationAuthorized": false,
+    "files": [
+      "scripts/deployment/package-inventory-policy.mjs",
+      "scripts/deployment/package-inventory-policy.test.mjs",
+      "docs/recovery/r10-a-package-inventory-policy-acceptance.md"
+    ],
+    "tests": {
+      "runner": "Node built-in node:test",
+      "dependencyInstallRequired": false,
+      "commands": [
+        "node --check scripts/deployment/package-inventory-policy.mjs",
+        "node --check scripts/deployment/package-inventory-policy.test.mjs",
+        "node --test scripts/deployment/package-inventory-policy.test.mjs",
+        "git diff --check"
+      ],
+      "execution": "NOT_RUN",
+      "groups": [
+        {
+          "id": "ET01-T01",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T02",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T03",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T04",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T05",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T06",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T07",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T08",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T09",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T10",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T11",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T12",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T13",
+          "status": "PROPOSED_NOT_RUN"
+        },
+        {
+          "id": "ET01-T14",
+          "status": "PROPOSED_NOT_RUN"
+        }
+      ]
+    },
+    "scope": "Pure in-memory synthetic descriptor validation, no filesystem/content/credential/runtime/network/process actions",
+    "productionApproval": false
+  },
+  "validation": {
+    "status": "PASS_DOCUMENTATION_ONLY",
+    "currentHashes": 42,
+    "priorArtifactsUnchanged": 39,
+    "appendOnlyA01Prefixes": 2,
+    "jsonParsed": 16,
+    "localLinks": 177,
+    "originalDecisionRows": 12,
+    "historicalReferencesStillUnreproduced": 7,
+    "proposedTestsNotRun": 14,
+    "selectedImplementationFilesAbsent": 3,
+    "gitStatus": [
+      " M docs/recovery/r10-a-a01-decisions.md",
+      " M docs/recovery/r10-a-a01-requirements.md",
+      "?? docs/recovery/r10-a-a07-deployment-packaging.md",
+      "?? docs/recovery/r10-a-a07-package-manifest.schema.json",
+      "?? docs/recovery/r10-a-a07-packaging-report.md",
+      "?? docs/recovery/r10-a-a07-q01-decision-report.md",
+      "?? docs/recovery/r10-a-a07-security-closure-report.md",
+      "?? docs/recovery/r10-a-a07-security-evidence-register.example.json",
+      "?? docs/recovery/r10-a-a07-sources.json",
+      "?? docs/recovery/r10-a-a08-a10-consolidated-report.md",
+      "?? docs/recovery/r10-a-a08-a10-monitoring-telemetry-security.md",
+      "?? docs/recovery/r10-a-a08-a10-sources.json",
+      "?? docs/recovery/r10-a-a11-a12-consolidated-report.md",
+      "?? docs/recovery/r10-a-a11-a12-sources.json",
+      "?? docs/recovery/r10-a-a11-a12-stop-lifecycle.md",
+      "?? docs/recovery/r10-a-a13-a14-consolidated-report.md",
+      "?? docs/recovery/r10-a-a13-a14-release-recovery.md",
+      "?? docs/recovery/r10-a-a13-a14-sources.json",
+      "?? docs/recovery/r10-a-a15-a16-sources.json",
+      "?? docs/recovery/r10-a-a15-hash-audit.json",
+      "?? docs/recovery/r10-a-a15-verification-evidence.json",
+      "?? docs/recovery/r10-a-a15-verification-report.md",
+      "?? docs/recovery/r10-a-a16-final-handover.md",
+      "?? docs/recovery/r10-a-engineering-transition-report.md",
+      "?? docs/recovery/r10-a-engineering-transition-sources.json"
+    ],
+    "head": "a0bea50a7bac480e7655ff1915532157b8360540",
+    "branch": "feature/r10-a-production-platform",
+    "commandFamily": "Node stdin documentary hash/JSON/link/preservation/status assertions; no task code/test execution",
+    "exitCode": 0,
+    "diffCheck": {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    "deliveryScope": {
+      "trackedModified": 2,
+      "untrackedDocumentationFiles": 23,
+      "totalChangedFiles": 25
+    }
+  }
+}

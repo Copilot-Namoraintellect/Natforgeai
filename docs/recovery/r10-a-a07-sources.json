@@ -1,0 +1,1754 @@
+{
+  "schemaVersion": 1,
+  "stage": "A07",
+  "baseline": "a0bea50a7bac480e7655ff1915532157b8360540",
+  "branch": "feature/r10-a-production-platform",
+  "recordedDate": "2026-11-04",
+  "scope": "Static repository evidence only; sensitive files enumerated by path without reads or hashes; no vendor compatibility claim",
+  "numbering": "Mission stage A07 retains local A01-A16 and D01-D12",
+  "sourceCount": 73,
+  "priorSourceHashesVerified": 51,
+  "sourceReferences": [
+    {
+      "id": "R9-HANDOFF",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/contracts/mission-control-to-production-resilience-contract.md",
+      "sha256": "2fb572aa07e221c3e75a9c9418db4aeb4ba3142260f2edc8f9e72461857a2e23",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "R9-AUTONOMY",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/contracts/mission-control-autonomy-boundary-contract.md",
+      "sha256": "d3f6cc200ecddd0c6e8af4f46f9dc21412ce61b4d5d6bc397a127cf2ce854f15",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "R9-REPORT",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r9-x-mission-control-final-acceptance-report.md",
+      "sha256": "c9baf453080f013c0dc1a8acf91b9a6438dc88d781d7508ea56a983782925d81",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "B-REPORT",
+      "worktree": "NatForgeAI-R10-B",
+      "path": "docs/recovery/r10-b-data-concurrency-acceptance-report.md",
+      "sha256": "08a69459180b2ef4dc1f4696fa1b54fff8b1e419228e530de50b265c74860ac8",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "B-INTEGRITY",
+      "worktree": "NatForgeAI-R10-B",
+      "path": "docs/recovery/r10-b-exactly-once-and-db-security.md",
+      "sha256": "8b8a1bb7cb783a949c937f8cfb90fbc11c728bdb82d44c14549ad05fa90d9cc2",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "C-CONTRACT",
+      "worktree": "NatForgeAI-R10-C",
+      "path": "docs/contracts/autonomous-runtime-resilience-contract.md",
+      "sha256": "96993008de44433110ebe5a2b96af851a3eb9103698bf89d973fa7c8e0eef199",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "C-OBSERVABILITY",
+      "worktree": "NatForgeAI-R10-C",
+      "path": "docs/contracts/runtime-to-observability-contract.md",
+      "sha256": "5e08a7c2d4cfffa5261b7aac1757fec7c5011b6703a69d31e7461a2e83180b7c",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "C-REPORT",
+      "worktree": "NatForgeAI-R10-C",
+      "path": "docs/recovery/r10-c-runtime-resilience-acceptance-report.md",
+      "sha256": "802792d177ec3ab6c4975b2318651943c8f6fecc698ccc9fdd121a2149fc1951",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "D-CONTRACT",
+      "worktree": "NatForgeAI-R10-D",
+      "path": "docs/contracts/production-provider-adapter-contract.md",
+      "sha256": "410cebabd887a9a4b15a0184333e582f312d302f0190457f36d4878292ee9b17",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "D-REPORT",
+      "worktree": "NatForgeAI-R10-D",
+      "path": "docs/recovery/r10-d-provider-resilience-acceptance-report.md",
+      "sha256": "f57e27c70979fcd5eccd320223b1ecf7d43444d3017723dbc17512375e063825",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "E-PLATFORM",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "docs/contracts/observability-to-production-platform-contract.md",
+      "sha256": "a7ab463c863664b498ca58b4b046f397c9724510bd74238309671a8fc302806f",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "E-CONTRACT",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "docs/contracts/production-observability-contract.md",
+      "sha256": "206dbaedc7d5c6baedb1ea38b06b6a86e38c7991bdea1ec1d4781ca9e3a7f0f5",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "E-REPORT",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "docs/recovery/r10-e-observability-operations-acceptance-report.md",
+      "sha256": "ef5bd72d19cfc39419664ca2e13f9f91acda347eb005da8d46f7e31e876a12e2",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "F-CONTRACT",
+      "worktree": "NatForgeAI-R10-F",
+      "path": "docs/contracts/production-security-configuration-contract.md",
+      "sha256": "a8cda44ab74ef97b80a8e6e00618713bd5d82e6bd3e444292d0e6b6a93ea34e0",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "F-REPORT",
+      "worktree": "NatForgeAI-R10-F",
+      "path": "docs/recovery/r10-f-production-security-acceptance-report.md",
+      "sha256": "66c40de5d552415677cd66fa100178087b632007066f8d8caf80562f75ffa119",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "G-OBJECTIVES",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/contracts/production-recovery-objectives-contract.md",
+      "sha256": "2f3c19824cecf742f3ac66f41bec5554849aaae6c441b51a71d2e5a063ba66ff",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "G-MONITORING",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/contracts/backup-monitoring-contract.md",
+      "sha256": "9fe39fe6a5be67aed660dbf24997baba6d82b6edbee9d8ffd44e1b756a7b1aca",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "G-CHECKLIST",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/recovery/r10-g-onegrid-implementation-checklist.md",
+      "sha256": "d02157f8149657727659681c353981ee73ba3adcae2572025413d8e490ffb579",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "G-REPORT",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/recovery/r10-g-backup-dr-acceptance-report.md",
+      "sha256": "f1cd838426e89315684984d0145c8e83d834e3c7b8714dce3e1d410db1f6a877",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "H-CONTRACT",
+      "worktree": "NatForgeAI-R10-H",
+      "path": "docs/contracts/controlled-autonomy-contract.md",
+      "sha256": "6beddfe976a30e8d46febb163111f917c70719fba1dec1f97e7de902a2534050",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "H-OBSERVABILITY",
+      "worktree": "NatForgeAI-R10-H",
+      "path": "docs/contracts/autonomy-activation-to-observability-contract.md",
+      "sha256": "38384904863288f0667b0b895a6ecc87a8e60501ff4faf49c92eff41f773c649",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "H-REPORT",
+      "worktree": "NatForgeAI-R10-H",
+      "path": "docs/recovery/r10-h-autonomy-activation-acceptance-report.md",
+      "sha256": "227357ef8b991511ce9598db036924e18fa7a8b9b552777a7b0b68e156a997e5",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "H-LEDGER",
+      "worktree": "NatForgeAI-R10-H",
+      "path": "docs/recovery/r10-h19-verification-ledger.md",
+      "sha256": "aadff02c2b5842088288eb6576c4dab15576768d7a5604bf81fbbd676e3fbbaa",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-A04-G-ARCHITECTURE",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/recovery/r10-g-backup-architecture.md",
+      "sha256": "d7b7bd2674a0dfbd692f47529423e24505c61446cafe7ac17a739f221e3cf72c",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-A04-F-SECRET-CLASSIFICATION",
+      "worktree": "NatForgeAI-R10-F",
+      "path": "api/lib/production-security/secret-classification.ts",
+      "sha256": "0ffc00ca6b61aa382a1cf9ca11df1f1dc51918e423b507f2a05db3481e8e338a",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-A04-F-SECRET-BROKER",
+      "worktree": "NatForgeAI-R10-F",
+      "path": "api/lib/production-security/secret-broker.ts",
+      "sha256": "a6bf15f8ecb7974bf2a84179cdca3b32b33d567f1d1ca63bc8dadc06d182e964",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-A04-IDENTITY",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a04-identity-permissions.md",
+      "sha256": "0310af2d8a4545d10bff008c32b3e86b5929b3598f40a87726ac6598fb2aed3e",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-A04-REPORT",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a04-identity-report.md",
+      "sha256": "26021bd9a599190c1c907ec6d594e559e543e9a2f6b18c2d2de3bbe5d1882b5d",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-F-SECRET-SCAN",
+      "worktree": "NatForgeAI-R10-F",
+      "path": "scripts/secret-scan.mjs",
+      "sha256": "85837d696d06a29c8af313ce3c8d43762c079539d8b32592cc247ea5a88fb35a",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-BASE-ENV",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/env.ts",
+      "sha256": "1956e5b6746e0ddcf2b940691b31c5574b0c9d0fa32f9975efdb592975761408",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-BASE-FIREBASE",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/firebase-admin.ts",
+      "sha256": "7d34ea3b39933fc33e048e8aaf65fa33b9545510e82f53770a3db4208c3e40c2",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-BASE-CRYPTO",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/crypto.ts",
+      "sha256": "7f13a71374eee02fdac4a6cf849d0501fbbaa51fc6fdd5a7fdcfa84b555ed578",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-BASE-GCP-HELPER",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/secrets.ts",
+      "sha256": "046ffc5c3fcb2a09548c1b410ff8e8542e65d6dfd786587ecbd61739026985c6",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-BASE-BOOT",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/boot.ts",
+      "sha256": "acd960999a8d7a33cb48d45d4af40e753561ff72f6939136c35a1e2d6c0ca4e6",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-BASE-WORKER",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/worker.ts",
+      "sha256": "9e78dd1f65df491e76e4f73d46bbf32f0c9c407596b62a2d417c685a1544c599",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-BASE-DEPLOY-START",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "scripts/deployment/start-runtime.ps1",
+      "sha256": "c9f311401fd7ff06e8eef78f09276459151014d359d9e6460e54bad1abfc4edf",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-BASE-DEPLOY-VERIFY",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "scripts/deployment/verify-release.ps1",
+      "sha256": "5e7231457b2b66052dc26a15c7d0190e55bdeb0fe3bbe5a77c4e80bb620443e8",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-BASE-DEPLOY-ROLLBACK",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "scripts/deployment/rollback.ps1",
+      "sha256": "390f3c548e0d7d231d2cf06ecc8f4d3b463703b9f46a8fccaba332b0ea8c9aca",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-BASE-LOGGER",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/logger.ts",
+      "sha256": "994bc709d2c8b2cb66b83c27d8ccdfa8bed4de905611e7382a9fc823c9cbbcfc",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-A01-REQUIREMENTS-UPDATED",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "sha256": "bdf5111e8dc143706645db57653071654ade3d2f2ea31afbdd5197956c02297f",
+      "matchesPriorCatalog": false,
+      "baselineSha256": "d90584bff56fc9e9db180d3dabfb913fbb9871269024c7d5470a68cc632b3ffc",
+      "changeReason": "Authorized Q01 functional decision documentation; operational gates remain OPEN",
+      "priorRevisions": [
+        {
+          "sha256": "af233a7e81461963eaf3449cc0b46a2c0600d274b6189c0b2041692e51b25c0a",
+          "reason": "Verified before A07 security reconciliation documentation update"
+        },
+        {
+          "sha256": "334fb760e0d9e8a681dd959bb61e347805f3c3ad9f4a653dcc6b0b586cfb8764",
+          "reason": "Verified before Q01 functional-only decision documentation"
+        }
+      ]
+    },
+    {
+      "id": "A01-DECISIONS",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "sha256": "19bfcd883e9d141b0cb9f432c4b8c6c8dad0f56f637d958ebdf0d3946b01ff32",
+      "matchesPriorCatalog": false,
+      "priorRevisions": [
+        {
+          "sha256": "90dfac243f9017baade3872b2f167062db0360dce7b9b8c27a6f7b0b8fdd54b9",
+          "reason": "Verified before Q01 functional-only decision documentation"
+        }
+      ],
+      "changeReason": "Authorized Q01 functional decision documentation; operational gates remain OPEN"
+    },
+    {
+      "id": "A01-BASELINE",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-platform-baseline.md",
+      "sha256": "554611a95615a401ddd065305e9ba3b8a9bec0a4092d2c7bc90881dfe9e6c363",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A02-ARCH",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-platform-architecture.md",
+      "sha256": "48c6c4bb5e9cef4e546f48a2d865712f54cffeef4d56af2d459afa86d8b235cc",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A03-PROCESS",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a03-process-ownership.md",
+      "sha256": "d9076653a9fb5f6bd2f398e61d16deabe0e9c745985ddcdcd7f10f0f351de43d",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-SECRETS",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a05-secrets-management.md",
+      "sha256": "b2905f7d7ba1f7c9dc2041c2dabfa04e8c9fa879f4b641b1e17ff81d27ad6b47",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A05-REPORT",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a05-secrets-report.md",
+      "sha256": "3bf3ecd5b795230f4a2082754a190a5039496b25d59a6b918a34de500d503e9c",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A06-SPEC",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a06-network-security.md",
+      "sha256": "fb25aa358a6709ce566f1f9852ac9cb3b208ab0de2478f47c422538227e87d13",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A06-REPORT",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a06-network-security-report.md",
+      "sha256": "dd957cc45bb909343577cf8064cec0c3a6bef26589c23c2d047bb28ea590cd9c",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "BASE-WEBCONFIG",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "public/web.config",
+      "sha256": "914e1e97a7c9ecb2968ff2fd2855cedd9cf0bfe6e4d5cb5c66cde939907b7e84",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "BASE-VITE",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/vite.ts",
+      "sha256": "7bbef0a5aaa3b700f7bff29aec1adebd98e0e7bc5b8aa41722c47f59ca2cbdf1",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "BASE-PACKAGE",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "package.json",
+      "sha256": "47f15164a0f35e3a3fcc536e9574c676644589f4125c3e77e589ba3b7f255aa8",
+      "matchesPriorCatalog": true
+    },
+    {
+      "id": "A07-51",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-acceptance-report.md",
+      "sha256": "306b604e01704e4146088fa0ae327a0bc6f9102f51191a3f8a5163904b2c56a6"
+    },
+    {
+      "id": "A07-52",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-sources.json",
+      "sha256": "1cd348decfe9890ed1d0c62205f0a54f0d03ed2b68d01ac7d62bdc24bc2db5a0"
+    },
+    {
+      "id": "A07-53",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-implementation-report.md",
+      "sha256": "249d0db50e8e73a0f262e318924a1bc1d5e15f3af1e13cc3636802227136fb03"
+    },
+    {
+      "id": "A07-54",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-sources.json",
+      "sha256": "c12cca7f54f4beae5ba90a2d31a9674a335e016fc6cea3b80aa929f943e6b4c9"
+    },
+    {
+      "id": "A07-55",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a03-ownership-report.md",
+      "sha256": "af6adc1feebde439de620870e45d304502ae0cea3005a94ff686f3f11dd879d9"
+    },
+    {
+      "id": "A07-56",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a03-sources.json",
+      "sha256": "f29151c607a21a464a6498acd0d5806121d2a6405a2da05f29bbae14d4f78c2d"
+    },
+    {
+      "id": "A07-57",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a04-sources.json",
+      "sha256": "a2eae8748cd15a36b7fbfbb1ad209a269403a8011621888cbd02873bf3cb1b2b"
+    },
+    {
+      "id": "A07-58",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a05-sources.json",
+      "sha256": "26566479d732cd6bc45eb2259604b9374be5b8d65c7a8c9c6685ff24f08d0651"
+    },
+    {
+      "id": "A07-59",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a06-sources.json",
+      "sha256": "4667b4b137ee6a20d94820151caeccc3a8bda02e15232c1772422fc8a6d31e30"
+    },
+    {
+      "id": "A07-60",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "AGENTS.md",
+      "sha256": "48f3054e280646f5f8712b13c62b539afca9734503485562ae260b1d13ac2da8"
+    },
+    {
+      "id": "A07-61",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "package-lock.json",
+      "sha256": "eb6990b0a0a498cfe8042d781bebcd608849faed27c86d1c8e209a2c39eb6b02"
+    },
+    {
+      "id": "A07-62",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "vite.config.ts",
+      "sha256": "50a987ea8aca33a219b93be80bae545519464a609dd09803cb24dd4cc81a166c"
+    },
+    {
+      "id": "A07-63",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/video/renderer.ts",
+      "sha256": "69bc0bb8d66b91a573579f3b21fa3f7e831dfbdfe96281ada39a037958a4ef17"
+    },
+    {
+      "id": "A07-64",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/creative/premium-v2/html-renderer.ts",
+      "sha256": "65d7871597690280c73ed8d3530a2a34ff59c0f3190f951a60dbf91831e002a0"
+    },
+    {
+      "id": "A07-65",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "api/lib/creative/composition.ts",
+      "sha256": "47cd7a8f305ab7a2dfcb9dd577e53037acb8e983c3815c8493b3879dccd7d955"
+    },
+    {
+      "id": "A07-66",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "scripts/verify-deployment.mjs",
+      "sha256": "252397e73f69a900712993df7308c5fa31b2e2a7d26663989509c30a3812c0ee"
+    },
+    {
+      "id": "A07-67",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "scripts/verify-deployment.ps1",
+      "sha256": "7c2bf773ba174410d548f0cb3c52a8397e5770f2155f4b7e2c0fd7ed36ee9b02"
+    },
+    {
+      "id": "A07-68",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "package-for-upload.sh",
+      "sha256": "78455909ecbba8ca2bab2c5f9b7394076b27bb7d7f346329d9481049ca70a8f3"
+    },
+    {
+      "id": "A07-69",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "deploy-local.sh",
+      "sha256": "37ba305263aaebe45c0d90cd9362b3954a1e5d8ea05eaecad72e3a86c7a11321"
+    },
+    {
+      "id": "A07-70",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "deploy.sh",
+      "sha256": "831f2c941a26af3b87f4926b37059e3a72f8dff6e6c1128e10d5636ff9cc441a"
+    },
+    {
+      "id": "A07-71",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "deploy-vps.sh",
+      "sha256": "f1d3ed971f4bb406a21839fdff2223f5c839492faf734acac9f835d42ca1f4a9"
+    },
+    {
+      "id": "F-INVENTORY",
+      "worktree": "NatForgeAI-R10-F",
+      "path": "docs/recovery/r10-f-production-security-inventory.md",
+      "sha256": "f3dbb3f1d4937d7327ed3de5b019b871ac243e31a5a12fadb19babcadb9de53c"
+    }
+  ],
+  "lockfileVersion": 3,
+  "exactDependencyAuthority": "package-lock.json hash authenticates all transitive entries; directDependencies resolves every direct declaration",
+  "directDependencies": [
+    {
+      "name": "@ai-sdk/openai",
+      "declared": "^3.0.64",
+      "version": "3.0.64",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/@ai-sdk/openai/-/openai-3.0.64.tgz",
+      "integrity": "sha512-epO4iS6QwktaY2PF6uBcPnDTJ3BxPOfsGS7/OEtBe3GtNj7C8h8gMDVtIe5K8W16HNDbn0tbR4dcQfpfs+XVFg==",
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "name": "@aws-sdk/client-s3",
+      "declared": "^3.965.0",
+      "version": "3.1050.0",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/@aws-sdk/client-s3/-/client-s3-3.1050.0.tgz",
+      "integrity": "sha512-9kgtv+bXZQrOIJT2INPPBCezrJu1FlgGrzEat/ut4A4V53IT00LynsBZgp12eFKbjJuNCeTo7iPSKjPsX8ub+A==",
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    {
+      "name": "@aws-sdk/s3-request-presigner",
+      "declared": "^3.965.0",
+      "version": "3.1050.0",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/@aws-sdk/s3-request-presigner/-/s3-request-presigner-3.1050.0.tgz",
+      "integrity": "sha512-tTQ+MYyQehtA5SMXnLumFpOMrVBcn88f1k6oyzs4sOQ1Upq72T/BYkKZ+Yn7ejncSsCp3exIVcYwZHFEGKAugQ==",
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    {
+      "name": "@google-cloud/secret-manager",
+      "declared": "^6.2.0",
+      "version": "6.2.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@google-cloud/secret-manager/-/secret-manager-6.2.0.tgz",
+      "integrity": "sha512-KjusvEON/HLeS7VelJ1aoY4zUOcNnEYCQ69Vnncf3Fnk5OLl6Dl0QKimgw4ajW3CgR7pCUkNPneiK5HgWSGQOw==",
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "name": "@hono/node-server",
+      "declared": "^1.14.3",
+      "version": "1.19.14",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/@hono/node-server/-/node-server-1.19.14.tgz",
+      "integrity": "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw==",
+      "engines": {
+        "node": ">=18.14.1"
+      }
+    },
+    {
+      "name": "@hookform/resolvers",
+      "declared": "^5.2.2",
+      "version": "5.2.2",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@hookform/resolvers/-/resolvers-5.2.2.tgz",
+      "integrity": "sha512-A/IxlMLShx3KjV/HeTcTfaMxdwy690+L/ZADoeaTltLx+CVuzkeVIPuybK3jrRfw7YZnmdKsVVHAlEPIAEUNlA==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-accordion",
+      "declared": "^1.2.12",
+      "version": "1.2.12",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-accordion/-/react-accordion-1.2.12.tgz",
+      "integrity": "sha512-T4nygeh9YE9dLRPhAHSeOZi7HBXo+0kYIPJXayZfvWOWA0+n3dESrZbjfDPUABkUNym6Hd+f2IR113To8D2GPA==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-alert-dialog",
+      "declared": "^1.1.15",
+      "version": "1.1.15",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-alert-dialog/-/react-alert-dialog-1.1.15.tgz",
+      "integrity": "sha512-oTVLkEw5GpdRe29BqJ0LSDFWI3qu0vR1M0mUkOQWDIUnY/QIkLpgDMWuKxP94c2NAC2LGcgVhG1ImF3jkZ5wXw==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-aspect-ratio",
+      "declared": "^1.1.8",
+      "version": "1.1.8",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-aspect-ratio/-/react-aspect-ratio-1.1.8.tgz",
+      "integrity": "sha512-5nZrJTF7gH+e0nZS7/QxFz6tJV4VimhQb1avEgtsJxvvIp5JilL+c58HICsKzPxghdwaDt48hEfPM1au4zGy+w==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-avatar",
+      "declared": "^1.1.11",
+      "version": "1.1.11",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-avatar/-/react-avatar-1.1.11.tgz",
+      "integrity": "sha512-0Qk603AHGV28BOBO34p7IgD5m+V5Sg/YovfayABkoDDBM5d3NCx0Mp4gGrjzLGes1jV5eNOE1r3itqOR33VC6Q==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-checkbox",
+      "declared": "^1.3.3",
+      "version": "1.3.3",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-checkbox/-/react-checkbox-1.3.3.tgz",
+      "integrity": "sha512-wBbpv+NQftHDdG86Qc0pIyXk5IR3tM8Vd0nWLKDcX8nNn4nXFOFwsKuqw2okA/1D/mpaAkmuyndrPJTYDNZtFw==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-collapsible",
+      "declared": "^1.1.12",
+      "version": "1.1.12",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-collapsible/-/react-collapsible-1.1.12.tgz",
+      "integrity": "sha512-Uu+mSh4agx2ib1uIGPP4/CKNULyajb3p92LsVXmH2EHVMTfZWpll88XJ0j4W0z3f8NK1eYl1+Mf/szHPmcHzyA==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-context-menu",
+      "declared": "^2.2.16",
+      "version": "2.2.16",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-context-menu/-/react-context-menu-2.2.16.tgz",
+      "integrity": "sha512-O8morBEW+HsVG28gYDZPTrT9UUovQUlJue5YO836tiTJhuIWBm/zQHc7j388sHWtdH/xUZurK9olD2+pcqx5ww==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-dialog",
+      "declared": "^1.1.15",
+      "version": "1.1.15",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-dialog/-/react-dialog-1.1.15.tgz",
+      "integrity": "sha512-TCglVRtzlffRNxRMEyR36DGBLJpeusFcgMVD9PZEzAKnUs1lKCgX5u9BmC2Yg+LL9MgZDugFFs1Vl+Jp4t/PGw==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-dropdown-menu",
+      "declared": "^2.1.16",
+      "version": "2.1.16",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-dropdown-menu/-/react-dropdown-menu-2.1.16.tgz",
+      "integrity": "sha512-1PLGQEynI/3OX/ftV54COn+3Sud/Mn8vALg2rWnBLnRaGtJDduNW/22XjlGgPdpcIbiQxjKtb7BkcjP00nqfJw==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-hover-card",
+      "declared": "^1.1.15",
+      "version": "1.1.15",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-hover-card/-/react-hover-card-1.1.15.tgz",
+      "integrity": "sha512-qgTkjNT1CfKMoP0rcasmlH2r1DAiYicWsDsufxl940sT2wHNEWWv6FMWIQXWhVdmC1d/HYfbhQx60KYyAtKxjg==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-label",
+      "declared": "^2.1.8",
+      "version": "2.1.8",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-label/-/react-label-2.1.8.tgz",
+      "integrity": "sha512-FmXs37I6hSBVDlO4y764TNz1rLgKwjJMQ0EGte6F3Cb3f4bIuHB/iLa/8I9VKkmOy+gNHq8rql3j686ACVV21A==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-menubar",
+      "declared": "^1.1.16",
+      "version": "1.1.16",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-menubar/-/react-menubar-1.1.16.tgz",
+      "integrity": "sha512-EB1FktTz5xRRi2Er974AUQZWg2yVBb1yjip38/lgwtCVRd3a+maUoGHN/xs9Yv8SY8QwbSEb+YrxGadVWbEutA==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-navigation-menu",
+      "declared": "^1.2.14",
+      "version": "1.2.14",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-navigation-menu/-/react-navigation-menu-1.2.14.tgz",
+      "integrity": "sha512-YB9mTFQvCOAQMHU+C/jVl96WmuWeltyUEpRJJky51huhds5W2FQr1J8D/16sQlf0ozxkPK8uF3niQMdUwZPv5w==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-popover",
+      "declared": "^1.1.15",
+      "version": "1.1.15",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-popover/-/react-popover-1.1.15.tgz",
+      "integrity": "sha512-kr0X2+6Yy/vJzLYJUPCZEc8SfQcf+1COFoAqauJm74umQhta9M7lNJHP7QQS3vkvcGLQUbWpMzwrXYwrYztHKA==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-progress",
+      "declared": "^1.1.8",
+      "version": "1.1.8",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-progress/-/react-progress-1.1.8.tgz",
+      "integrity": "sha512-+gISHcSPUJ7ktBy9RnTqbdKW78bcGke3t6taawyZ71pio1JewwGSJizycs7rLhGTvMJYCQB1DBK4KQsxs7U8dA==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-radio-group",
+      "declared": "^1.3.8",
+      "version": "1.3.8",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-radio-group/-/react-radio-group-1.3.8.tgz",
+      "integrity": "sha512-VBKYIYImA5zsxACdisNQ3BjCBfmbGH3kQlnFVqlWU4tXwjy7cGX8ta80BcrO+WJXIn5iBylEH3K6ZTlee//lgQ==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-scroll-area",
+      "declared": "^1.2.10",
+      "version": "1.2.10",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-scroll-area/-/react-scroll-area-1.2.10.tgz",
+      "integrity": "sha512-tAXIa1g3sM5CGpVT0uIbUx/U3Gs5N8T52IICuCtObaos1S8fzsrPXG5WObkQN3S6NVl6wKgPhAIiBGbWnvc97A==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-select",
+      "declared": "^2.2.6",
+      "version": "2.2.6",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-select/-/react-select-2.2.6.tgz",
+      "integrity": "sha512-I30RydO+bnn2PQztvo25tswPH+wFBjehVGtmagkU78yMdwTwVf12wnAOF+AeP8S2N8xD+5UPbGhkUfPyvT+mwQ==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-separator",
+      "declared": "^1.1.8",
+      "version": "1.1.8",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-separator/-/react-separator-1.1.8.tgz",
+      "integrity": "sha512-sDvqVY4itsKwwSMEe0jtKgfTh+72Sy3gPmQpjqcQneqQ4PFmr/1I0YA+2/puilhggCe2gJcx5EBAYFkWkdpa5g==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-slider",
+      "declared": "^1.3.6",
+      "version": "1.3.6",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-slider/-/react-slider-1.3.6.tgz",
+      "integrity": "sha512-JPYb1GuM1bxfjMRlNLE+BcmBC8onfCi60Blk7OBqi2MLTFdS+8401U4uFjnwkOr49BLmXxLC6JHkvAsx5OJvHw==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-slot",
+      "declared": "^1.2.4",
+      "version": "1.2.4",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-slot/-/react-slot-1.2.4.tgz",
+      "integrity": "sha512-Jl+bCv8HxKnlTLVrcDE8zTMJ09R9/ukw4qBs/oZClOfoQk/cOTbDn+NceXfV7j09YPVQUryJPHurafcSg6EVKA==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-switch",
+      "declared": "^1.2.6",
+      "version": "1.2.6",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-switch/-/react-switch-1.2.6.tgz",
+      "integrity": "sha512-bByzr1+ep1zk4VubeEVViV592vu2lHE2BZY5OnzehZqOOgogN80+mNtCqPkhn2gklJqOpxWgPoYTSnhBCqpOXQ==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-tabs",
+      "declared": "^1.1.13",
+      "version": "1.1.13",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-tabs/-/react-tabs-1.1.13.tgz",
+      "integrity": "sha512-7xdcatg7/U+7+Udyoj2zodtI9H/IIopqo+YOIcZOq1nJwXWBZ9p8xiu5llXlekDbZkca79a/fozEYQXIA4sW6A==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-toggle",
+      "declared": "^1.1.10",
+      "version": "1.1.10",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-toggle/-/react-toggle-1.1.10.tgz",
+      "integrity": "sha512-lS1odchhFTeZv3xwHH31YPObmJn8gOg7Lq12inrr0+BH/l3Tsq32VfjqH1oh80ARM3mlkfMic15n0kg4sD1poQ==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-toggle-group",
+      "declared": "^1.1.11",
+      "version": "1.1.11",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-toggle-group/-/react-toggle-group-1.1.11.tgz",
+      "integrity": "sha512-5umnS0T8JQzQT6HbPyO7Hh9dgd82NmS36DQr+X/YJ9ctFNCiiQd6IJAYYZ33LUwm8M+taCz5t2ui29fHZc4Y6Q==",
+      "engines": {}
+    },
+    {
+      "name": "@radix-ui/react-tooltip",
+      "declared": "^1.2.8",
+      "version": "1.2.8",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@radix-ui/react-tooltip/-/react-tooltip-1.2.8.tgz",
+      "integrity": "sha512-tY7sVt1yL9ozIxvmbtN5qtmH2krXcBCfjEiCgKGLqunJHvgvZG2Pcl2oQ3kbcZARb1BGEHdkLzcYGO8ynVlieg==",
+      "engines": {}
+    },
+    {
+      "name": "@tanstack/react-query",
+      "declared": "^5.90.16",
+      "version": "5.100.11",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/@tanstack/react-query/-/react-query-5.100.11.tgz",
+      "integrity": "sha512-J0f9s5x3LE1450nNNfYx+e/n0DMa0uOBdFJUy5r0RvmsXd4nB/n0rbHtHI1vYXhikNFan+wf51p6Tmp4c8ucrg==",
+      "engines": {}
+    },
+    {
+      "name": "@trpc/client",
+      "declared": "^11.8.1",
+      "version": "11.17.0",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/@trpc/client/-/client-11.17.0.tgz",
+      "integrity": "sha512-KpJBFrbKTDeVCFv/3ckL1XBBH5Yssn8hethI/rUy7GIpTj+VzjtPjykDqJpzobuVOz+d26cXCSu1t4I6MYI5Zg==",
+      "engines": {}
+    },
+    {
+      "name": "@trpc/react-query",
+      "declared": "^11.8.1",
+      "version": "11.17.0",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/@trpc/react-query/-/react-query-11.17.0.tgz",
+      "integrity": "sha512-AGcl5YAF8NnhBmyJ6PqJqKb1M5VTGSoNRNqJ3orct4o4epdcg0GWhW+qT9q6gPzs/2ImIwYCdfFpgNGdZ9yLHA==",
+      "engines": {}
+    },
+    {
+      "name": "@trpc/server",
+      "declared": "^11.8.1",
+      "version": "11.17.0",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/@trpc/server/-/server-11.17.0.tgz",
+      "integrity": "sha512-jbAOUe0PpUTCYqziyu+8vYXZdDXPudZgnEhWCQ2NjKnVEjfE93RqHTt1oycZJv/HNf51YlRXfEEwSIAbb161rw==",
+      "engines": {}
+    },
+    {
+      "name": "ai",
+      "declared": "^6.0.185",
+      "version": "6.0.185",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/ai/-/ai-6.0.185.tgz",
+      "integrity": "sha512-oGsqscREaTlo75KHZLtwZxRyI+ZBwHV2wRX9B8smHjgOs13WwoCvUyr5aPUWpIBRz406wmIKy1RzoUEq0/WKJw==",
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "name": "bcryptjs",
+      "declared": "^3.0.3",
+      "version": "3.0.3",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/bcryptjs/-/bcryptjs-3.0.3.tgz",
+      "integrity": "sha512-GlF5wPWnSa/X5LKM1o0wz0suXIINz1iHRLvTS+sLyi7XPbe5ycmYI3DlZqVGZZtDgl4DmasFg7gOB3JYbphV5g==",
+      "engines": {}
+    },
+    {
+      "name": "bullmq",
+      "declared": "^5.78.0",
+      "version": "5.78.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/bullmq/-/bullmq-5.78.0.tgz",
+      "integrity": "sha512-tT9jJmbobk9ueEfFc22egLmgwCcMGgOjZ5Y1cvgczBPv1JUmC7iHQVbQtqku2YBE5dE9uzdVpxIrBvL/YAjGwA==",
+      "engines": {
+        "node": ">=12.22.0"
+      }
+    },
+    {
+      "name": "class-variance-authority",
+      "declared": "^0.7.1",
+      "version": "0.7.1",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/class-variance-authority/-/class-variance-authority-0.7.1.tgz",
+      "integrity": "sha512-Ka+9Trutv7G8M6WT6SeiRWz792K5qEqIGEGzXKhAE6xOWAY6pPH8U+9IY3oCMv6kqTmLsv7Xh/2w2RigkePMsg==",
+      "engines": {}
+    },
+    {
+      "name": "clsx",
+      "declared": "^2.1.1",
+      "version": "2.1.1",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/clsx/-/clsx-2.1.1.tgz",
+      "integrity": "sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==",
+      "engines": {
+        "node": ">=6"
+      }
+    },
+    {
+      "name": "cmdk",
+      "declared": "^1.1.1",
+      "version": "1.1.1",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/cmdk/-/cmdk-1.1.1.tgz",
+      "integrity": "sha512-Vsv7kFaXm+ptHDMZ7izaRsP70GgrW9NBNGswt9OZaVBLlE0SNpDq8eu/VGXyF9r7M0azK3Wy7OlYXsuyYLFzHg==",
+      "engines": {}
+    },
+    {
+      "name": "cookie",
+      "declared": "^1.1.1",
+      "version": "1.1.1",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/cookie/-/cookie-1.1.1.tgz",
+      "integrity": "sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==",
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "name": "date-fns",
+      "declared": "^4.1.0",
+      "version": "4.1.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/date-fns/-/date-fns-4.1.0.tgz",
+      "integrity": "sha512-Ukq0owbQXxa/U3EGtsdVBkR1w7KOQ5gIBqdH2hkvknzZPYvBxb/aa6E8L7tmjFtkwZBu3UXBbjIgPo/Ez4xaNg==",
+      "engines": {}
+    },
+    {
+      "name": "dotenv",
+      "declared": "^17.2.3",
+      "version": "17.4.2",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/dotenv/-/dotenv-17.4.2.tgz",
+      "integrity": "sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==",
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    {
+      "name": "drizzle-orm",
+      "declared": "^0.45.1",
+      "version": "0.45.2",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/drizzle-orm/-/drizzle-orm-0.45.2.tgz",
+      "integrity": "sha512-kY0BSaTNYWnoDMVoyY8uxmyHjpJW1geOmBMdSSicKo9CIIWkSxMIj2rkeSR51b8KAPB7m+qysjuHme5nKP+E5Q==",
+      "engines": {}
+    },
+    {
+      "name": "embla-carousel-react",
+      "declared": "^8.6.0",
+      "version": "8.6.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/embla-carousel-react/-/embla-carousel-react-8.6.0.tgz",
+      "integrity": "sha512-0/PjqU7geVmo6F734pmPqpyHqiM99olvyecY7zdweCw+6tKEXnrE90pBiBbMMU8s5tICemzpQ3hi5EpxzGW+JA==",
+      "engines": {}
+    },
+    {
+      "name": "execa",
+      "declared": "^9.6.1",
+      "version": "9.6.1",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/execa/-/execa-9.6.1.tgz",
+      "integrity": "sha512-9Be3ZoN4LmYR90tUoVu2te2BsbzHfhJyfEiAVfz7N5/zv+jduIfLrV2xdQXOHbaD6KgpGdO9PRPM1Y4Q9QkPkA==",
+      "engines": {
+        "node": "^18.19.0 || >=20.5.0"
+      }
+    },
+    {
+      "name": "ffmpeg-static",
+      "declared": "^5.3.0",
+      "version": "5.3.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/ffmpeg-static/-/ffmpeg-static-5.3.0.tgz",
+      "integrity": "sha512-H+K6sW6TiIX6VGend0KQwthe+kaceeH/luE8dIZyOP35ik7ahYojDuqlTV1bOrtEwl01sy2HFNGQfi5IDJvotg==",
+      "engines": {
+        "node": ">=16"
+      }
+    },
+    {
+      "name": "firebase",
+      "declared": "^12.13.0",
+      "version": "12.13.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/firebase/-/firebase-12.13.0.tgz",
+      "integrity": "sha512-iutR8ejvAqk6qUClnsPz3U3VIjTWp243AX4cD3iifak5t56to1J29xUIQgSDDzaAqKvhshZerzSahwMQj2TlvA==",
+      "engines": {}
+    },
+    {
+      "name": "firebase-admin",
+      "declared": "^13.10.0",
+      "version": "13.10.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/firebase-admin/-/firebase-admin-13.10.0.tgz",
+      "integrity": "sha512-rbuCrJvYRwqBqvbccMS8fj/x2zsaMisdf5RQbRzQzr14Rbq9r2UlpuBHqWAwrO6c9dIRF56xF/xoepXsD5yDuQ==",
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "name": "hono",
+      "declared": "^4.8.3",
+      "version": "4.12.21",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/hono/-/hono-4.12.21.tgz",
+      "integrity": "sha512-uV63apnb0kyPtAUwoWgaGh9HyIFcv8lgmzPZSiTBQAFOFGIzka5EZ1dZocmGnn0XdX0+XTqJ6Tqv7selMuGLRQ==",
+      "engines": {
+        "node": ">=16.9.0"
+      }
+    },
+    {
+      "name": "input-otp",
+      "declared": "^1.4.2",
+      "version": "1.4.2",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/input-otp/-/input-otp-1.4.2.tgz",
+      "integrity": "sha512-l3jWwYNvrEa6NTCt7BECfCm48GvwuZzkoeG3gBL2w4CHeOXW3eKFmf9UNYkNfYc3mxMrthMnxjIE07MT0zLBQA==",
+      "engines": {}
+    },
+    {
+      "name": "ioredis",
+      "declared": "^5.11.0",
+      "version": "5.11.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/ioredis/-/ioredis-5.11.0.tgz",
+      "integrity": "sha512-EZBErytyVovD8f6pDfG3Kb37N6Y3lmDA9NNj+4+IP13CzzHGeX+OyeRM2Um13khRzoBSzzL+5lVnCX8V2RLeMg==",
+      "engines": {
+        "node": ">=12.22.0"
+      }
+    },
+    {
+      "name": "jose",
+      "declared": "6.1.3",
+      "version": "6.1.3",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/jose/-/jose-6.1.3.tgz",
+      "integrity": "sha512-0TpaTfihd4QMNwrz/ob2Bp7X04yuxJkjRGi4aKmOqwhov54i6u79oCv7T+C7lo70MKH6BesI3vscD1yb/yzKXQ==",
+      "engines": {}
+    },
+    {
+      "name": "lucide-react",
+      "declared": "^0.562.0",
+      "version": "0.562.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/lucide-react/-/lucide-react-0.562.0.tgz",
+      "integrity": "sha512-82hOAu7y0dbVuFfmO4bYF1XEwYk/mEbM5E+b1jgci/udUBEE/R7LF5Ip0CCEmXe8AybRM8L+04eP+LGZeDvkiw==",
+      "engines": {}
+    },
+    {
+      "name": "mysql2",
+      "declared": "^3.14.1",
+      "version": "3.22.3",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/mysql2/-/mysql2-3.22.3.tgz",
+      "integrity": "sha512-uWWxvZSRvRhtBdh2CdcuK83YcOfPdmEeEYB069bAmPnV93QApDGVPuvCQOLjlh7tYHEWdgQPrn6kosDxHBVLkA==",
+      "engines": {
+        "node": ">= 8.0"
+      }
+    },
+    {
+      "name": "nanoid",
+      "declared": "^5.1.6",
+      "version": "5.1.11",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/nanoid/-/nanoid-5.1.11.tgz",
+      "integrity": "sha512-v+KEsUv2ps74PaSKv0gHTxTCgMXOIfBEbaqa6w6ISIGC7ZsvHN4N9oJ8d4cmf0n5oTzQz2SLmThbQWhjd/8eKg==",
+      "engines": {
+        "node": "^18 || >=20"
+      }
+    },
+    {
+      "name": "next-themes",
+      "declared": "^0.4.6",
+      "version": "0.4.6",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/next-themes/-/next-themes-0.4.6.tgz",
+      "integrity": "sha512-pZvgD5L0IEvX5/9GWyHMf3m8BKiVQwsCMHfoFosXtXBMnaS0ZnIJ9ST4b4NqLVKDEm8QBxoNNGNaBv2JNF6XNA==",
+      "engines": {}
+    },
+    {
+      "name": "nodemailer",
+      "declared": "^8.0.10",
+      "version": "8.0.10",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/nodemailer/-/nodemailer-8.0.10.tgz",
+      "integrity": "sha512-BLFuSth7QtHOkBzyqTehWWyub0NTRDuK2Q2SQfnGLsrJnzyU+Yeh4WpV1eZGuARFj1xQJHIdnTuJZLP+b9R1GQ==",
+      "engines": {
+        "node": ">=6.0.0"
+      }
+    },
+    {
+      "name": "react",
+      "declared": "^19.2.0",
+      "version": "19.2.3",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/react/-/react-19.2.3.tgz",
+      "integrity": "sha512-Ku/hhYbVjOQnXDZFv2+RibmLFGwFdeeKHFcOTlrt7xplBnya5OGn/hIRDsqDiSUcfORsDC7MPxwork8jBwsIWA==",
+      "engines": {
+        "node": ">=0.10.0"
+      }
+    },
+    {
+      "name": "react-day-picker",
+      "declared": "^9.13.0",
+      "version": "9.13.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/react-day-picker/-/react-day-picker-9.13.0.tgz",
+      "integrity": "sha512-euzj5Hlq+lOHqI53NiuNhCP8HWgsPf/bBAVijR50hNaY1XwjKjShAnIe8jm8RD2W9IJUvihDIZ+KrmqfFzNhFQ==",
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "name": "react-dom",
+      "declared": "^19.2.0",
+      "version": "19.2.3",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-19.2.3.tgz",
+      "integrity": "sha512-yELu4WmLPw5Mr/lmeEpox5rw3RETacE++JgHqQzd2dg+YbJuat3jH4ingc+WPZhxaoFzdv9y33G+F7Nl5O0GBg==",
+      "engines": {}
+    },
+    {
+      "name": "react-hook-form",
+      "declared": "^7.70.0",
+      "version": "7.70.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/react-hook-form/-/react-hook-form-7.70.0.tgz",
+      "integrity": "sha512-COOMajS4FI3Wuwrs3GPpi/Jeef/5W1DRR84Yl5/ShlT3dKVFUfoGiEZ/QE6Uw8P4T2/CLJdcTVYKvWBMQTEpvw==",
+      "engines": {
+        "node": ">=18.0.0"
+      }
+    },
+    {
+      "name": "react-resizable-panels",
+      "declared": "^4.2.2",
+      "version": "4.2.2",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/react-resizable-panels/-/react-resizable-panels-4.2.2.tgz",
+      "integrity": "sha512-BxDTFHxDCyCRPK54X5hpnhoLZbBslUrTTelQDRHo4107FXODjPSTqEWOPlFxE/ho0Vw4JrsRgaWdx6GIK073XA==",
+      "engines": {}
+    },
+    {
+      "name": "react-router",
+      "declared": "^7.6.1",
+      "version": "7.15.1",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/react-router/-/react-router-7.15.1.tgz",
+      "integrity": "sha512-R8rl9HhgikFYoPJymnUtPXWbnDb3oget6lQnfIoupbt61aT9aOhRkDsY2XRhZRyX1Z/8a5sL74fXmFNm3NRK5A==",
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    {
+      "name": "recharts",
+      "declared": "^2.15.4",
+      "version": "2.15.4",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/recharts/-/recharts-2.15.4.tgz",
+      "integrity": "sha512-UT/q6fwS3c1dHbXv2uFgYJ9BMFHu3fwnd7AYZaEQhXuYQ4hgsxLvsUXzGdKeZrW5xopzDCvuA2N41WJ88I7zIw==",
+      "engines": {
+        "node": ">=14"
+      }
+    },
+    {
+      "name": "redis",
+      "declared": "^6.0.0",
+      "version": "6.0.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/redis/-/redis-6.0.0.tgz",
+      "integrity": "sha512-n9Thfc39OXleEoPT2k5gwKsqY+HfCww3YS71ofcr9KKbkn89bpjU9dToIlD+JRdM3/GYQkwMtVgTxLyed+LptQ==",
+      "engines": {
+        "node": ">= 20.0.0"
+      }
+    },
+    {
+      "name": "sharp",
+      "declared": "^0.34.5",
+      "version": "0.34.5",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz",
+      "integrity": "sha512-Ou9I5Ft9WNcCbXrU9cMgPBcCK8LiwLqcbywW3t4oDV37n1pzpuNLsYiAV8eODnjbtQlSDwZ2cUEeQz4E54Hltg==",
+      "engines": {
+        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
+      }
+    },
+    {
+      "name": "sonner",
+      "declared": "^2.0.7",
+      "version": "2.0.7",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/sonner/-/sonner-2.0.7.tgz",
+      "integrity": "sha512-W6ZN4p58k8aDKA4XPcx2hpIQXBRAgyiWVkYhT7CvK6D3iAu7xjvVyhQHg2/iaKJZ1XVJ4r7XuwGL+WGEK37i9w==",
+      "engines": {}
+    },
+    {
+      "name": "superjson",
+      "declared": "^2.2.6",
+      "version": "2.2.6",
+      "dev": false,
+      "resolved": "https://registry.npmmirror.com/superjson/-/superjson-2.2.6.tgz",
+      "integrity": "sha512-H+ue8Zo4vJmV2nRjpx86P35lzwDT3nItnIsocgumgr0hHMQ+ZGq5vrERg9kJBo5AWGmxZDhzDo+WVIJqkB0cGA==",
+      "engines": {
+        "node": ">=16"
+      }
+    },
+    {
+      "name": "tailwind-merge",
+      "declared": "^3.4.0",
+      "version": "3.4.0",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/tailwind-merge/-/tailwind-merge-3.4.0.tgz",
+      "integrity": "sha512-uSaO4gnW+b3Y2aWoWfFpX62vn2sR3skfhbjsEnaBI81WD1wBLlHZe5sWf0AqjksNdYTbGBEd0UasQMT3SNV15g==",
+      "engines": {}
+    },
+    {
+      "name": "vaul",
+      "declared": "^1.1.2",
+      "version": "1.1.2",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/vaul/-/vaul-1.1.2.tgz",
+      "integrity": "sha512-ZFkClGpWyI2WUQjdLJ/BaGuV6AVQiJ3uELGk3OYtP+B6yCO7Cmn9vPFXVJkRaGkOJu3m8bQMgtyzNHixULceQA==",
+      "engines": {}
+    },
+    {
+      "name": "zod",
+      "declared": "^4.3.5",
+      "version": "4.3.5",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/zod/-/zod-4.3.5.tgz",
+      "integrity": "sha512-k7Nwx6vuWx1IJ9Bjuf4Zt1PEllcwe7cls3VNzm4CQ1/hgtFUK2bRNG3rvnpPUhFjmqJKAKtjV576KnUkHocg/g==",
+      "engines": {}
+    },
+    {
+      "name": "@eslint/js",
+      "declared": "^9.39.1",
+      "version": "9.39.2",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/@eslint/js/-/js-9.39.2.tgz",
+      "integrity": "sha512-q1mjIoW1VX4IvSocvM/vbTiveKC4k9eLrajNEuSsmjymSDEbpGddtpfOoN7YGAqBK3NG+uqo8ia4PDTt8buCYA==",
+      "engines": {
+        "node": "^18.18.0 || ^20.9.0 || >=21.1.0"
+      }
+    },
+    {
+      "name": "@hono/vite-dev-server",
+      "declared": "^0.19.0",
+      "version": "0.19.1",
+      "dev": true,
+      "resolved": "https://registry.npmmirror.com/@hono/vite-dev-server/-/vite-dev-server-0.19.1.tgz",
+      "integrity": "sha512-hh+0u3IxHErEyj4YwHk/U+2f+qAHEQZ9EIQtadG9jeHfxEXH6r/ZecjnpyEkQbDK7JtgEEoVAq/JGOkd3Dvqww==",
+      "engines": {
+        "node": ">=18.14.1"
+      }
+    },
+    {
+      "name": "@types/bcryptjs",
+      "declared": "^2.4.6",
+      "version": "2.4.6",
+      "dev": true,
+      "resolved": "https://registry.npmmirror.com/@types/bcryptjs/-/bcryptjs-2.4.6.tgz",
+      "integrity": "sha512-9xlo6R2qDs5uixm0bcIqCeMCE6HiQsIyel9KQySStiyqNl2tnj2mP3DX1Nf56MD6KMenNNlBBsy3LJ7gUEQPXQ==",
+      "engines": {}
+    },
+    {
+      "name": "@types/node",
+      "declared": "^24.10.1",
+      "version": "24.10.4",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.10.4.tgz",
+      "integrity": "sha512-vnDVpYPMzs4wunl27jHrfmwojOGKya0xyM3sH+UE5iv5uPS6vX7UIoh6m+vQc5LGBq52HBKPIn/zcSZVzeDEZg==",
+      "engines": {}
+    },
+    {
+      "name": "@types/nodemailer",
+      "declared": "^8.0.0",
+      "version": "8.0.0",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/@types/nodemailer/-/nodemailer-8.0.0.tgz",
+      "integrity": "sha512-fyf8jWULsCo0d0BuoQ75i6IeoHs47qcqxWc7yUdUcV0pOZGjUTTOvwdG1PRXUDqN/8A64yQdQdnA2pZgcdi+cA==",
+      "engines": {}
+    },
+    {
+      "name": "@types/react",
+      "declared": "^19.2.5",
+      "version": "19.2.7",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@types/react/-/react-19.2.7.tgz",
+      "integrity": "sha512-MWtvHrGZLFttgeEj28VXHxpmwYbor/ATPYbBfSFZEIRK0ecCFLl2Qo55z52Hss+UV9CRN7trSeq1zbgx7YDWWg==",
+      "engines": {}
+    },
+    {
+      "name": "@types/react-dom",
+      "declared": "^19.2.3",
+      "version": "19.2.3",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/@types/react-dom/-/react-dom-19.2.3.tgz",
+      "integrity": "sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ==",
+      "engines": {}
+    },
+    {
+      "name": "@types/sharp",
+      "declared": "^0.31.1",
+      "version": "0.31.1",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/@types/sharp/-/sharp-0.31.1.tgz",
+      "integrity": "sha512-5nWwamN9ZFHXaYEincMSuza8nNfOof8nmO+mcI+Agx1uMUk4/pQnNIcix+9rLPXzKrm1pS34+6WRDbDV0Jn7ag==",
+      "engines": {}
+    },
+    {
+      "name": "@vitejs/plugin-react",
+      "declared": "^5.1.1",
+      "version": "5.1.2",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/@vitejs/plugin-react/-/plugin-react-5.1.2.tgz",
+      "integrity": "sha512-EcA07pHJouywpzsoTUqNh5NwGayl2PPVEJKUSinGGSxFGYn+shYbqMGBg6FXDqgXum9Ou/ecb+411ssw8HImJQ==",
+      "engines": {
+        "node": "^20.19.0 || >=22.12.0"
+      }
+    },
+    {
+      "name": "autoprefixer",
+      "declared": "^10.4.23",
+      "version": "10.4.23",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/autoprefixer/-/autoprefixer-10.4.23.tgz",
+      "integrity": "sha512-YYTXSFulfwytnjAPlw8QHncHJmlvFKtczb8InXaAx9Q0LbfDnfEYDE55omerIJKihhmU61Ft+cAOSzQVaBUmeA==",
+      "engines": {
+        "node": "^10 || ^12 || >=14"
+      }
+    },
+    {
+      "name": "cross-env",
+      "declared": "^10.1.0",
+      "version": "10.1.0",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/cross-env/-/cross-env-10.1.0.tgz",
+      "integrity": "sha512-GsYosgnACZTADcmEyJctkJIoqAhHjttw7RsFrVoJNXbsWWqaq6Ym+7kZjq6mS45O0jij6vtiReppKQEtqWy6Dw==",
+      "engines": {
+        "node": ">=20"
+      }
+    },
+    {
+      "name": "drizzle-kit",
+      "declared": "^0.31.8",
+      "version": "0.31.10",
+      "dev": true,
+      "resolved": "https://registry.npmmirror.com/drizzle-kit/-/drizzle-kit-0.31.10.tgz",
+      "integrity": "sha512-7OZcmQUrdGI+DUNNsKBn1aW8qSoKuTH7d0mYgSP8bAzdFzKoovxEFnoGQp2dVs82EOJeYycqRtciopszwUf8bw==",
+      "engines": {}
+    },
+    {
+      "name": "esbuild",
+      "declared": "^0.27.2",
+      "version": "0.27.2",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.27.2.tgz",
+      "integrity": "sha512-HyNQImnsOC7X9PMNaCIeAm4ISCQXs5a5YasTXVliKv4uuBo1dKrG0A+uQS8M5eXjVMnLg3WgXaKvprHlFJQffw==",
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "name": "eslint",
+      "declared": "^9.39.1",
+      "version": "9.39.2",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/eslint/-/eslint-9.39.2.tgz",
+      "integrity": "sha512-LEyamqS7W5HB3ujJyvi0HQK/dtVINZvd5mAAp9eT5S/ujByGjiZLCzPcHVzuXbpJDJF/cxwHlfceVUDZ2lnSTw==",
+      "engines": {
+        "node": "^18.18.0 || ^20.9.0 || >=21.1.0"
+      }
+    },
+    {
+      "name": "eslint-plugin-react-hooks",
+      "declared": "^7.0.1",
+      "version": "7.0.1",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/eslint-plugin-react-hooks/-/eslint-plugin-react-hooks-7.0.1.tgz",
+      "integrity": "sha512-O0d0m04evaNzEPoSW+59Mezf8Qt0InfgGIBJnpC0h3NH/WjUAR7BIKUfysC6todmtiZ/A0oUVS8Gce0WhBrHsA==",
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "name": "eslint-plugin-react-refresh",
+      "declared": "^0.4.24",
+      "version": "0.4.26",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/eslint-plugin-react-refresh/-/eslint-plugin-react-refresh-0.4.26.tgz",
+      "integrity": "sha512-1RETEylht2O6FM/MvgnyvT+8K21wLqDNg4qD51Zj3guhjt433XbnnkVttHMyaVyAFD03QSV4LPS5iE3VQmO7XQ==",
+      "engines": {}
+    },
+    {
+      "name": "globals",
+      "declared": "^16.5.0",
+      "version": "16.5.0",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/globals/-/globals-16.5.0.tgz",
+      "integrity": "sha512-c/c15i26VrJ4IRt5Z89DnIzCGDn9EcebibhAOjw5ibqEHsE1wLUgkPn9RDmNcUKyU87GeaL633nyJ+pplFR2ZQ==",
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "name": "kimi-plugin-inspect-react",
+      "declared": "^1.0.3",
+      "version": "1.0.3",
+      "dev": true,
+      "resolved": "https://registry.npmmirror.com/kimi-plugin-inspect-react/-/kimi-plugin-inspect-react-1.0.3.tgz",
+      "integrity": "sha512-dU0dYaFYvczJZWwsyAVQ2No2NTaycd93zk3zrbLj9IPwdZaLBK4d0cESz88lVju3rQuFiwRXYNDaCnbPxn4JcQ==",
+      "engines": {}
+    },
+    {
+      "name": "playwright",
+      "declared": "^1.61.1",
+      "version": "1.61.1",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.61.1.tgz",
+      "integrity": "sha512-DWnY5o3YbLWK4GovuAVwpqL+1VwGNdUGrRr++8j8PtQQzvAVZUIMjKQ90fY689sEJZJBbZVw1rXaOKSTitkzPQ==",
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "name": "postcss",
+      "declared": "^8.5.6",
+      "version": "8.5.6",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.6.tgz",
+      "integrity": "sha512-3Ybi1tAuwAP9s0r1UQ2J4n5Y0G05bJkpUIO0/bI9MhwmD70S5aTWbXGBwxHrelT+XM1k6dM0pk+SwNkpTRN7Pg==",
+      "engines": {
+        "node": "^10 || ^12 || >=14"
+      }
+    },
+    {
+      "name": "prettier",
+      "declared": "^3.7.4",
+      "version": "3.8.3",
+      "dev": true,
+      "resolved": "https://registry.npmmirror.com/prettier/-/prettier-3.8.3.tgz",
+      "integrity": "sha512-7igPTM53cGHMW8xWuVTydi2KO233VFiTNyF5hLJqpilHfmn8C8gPf+PS7dUT64YcXFbiMGZxS9pCSxL/Dxm/Jw==",
+      "engines": {
+        "node": ">=14"
+      }
+    },
+    {
+      "name": "tailwindcss",
+      "declared": "^3.4.19",
+      "version": "3.4.19",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/tailwindcss/-/tailwindcss-3.4.19.tgz",
+      "integrity": "sha512-3ofp+LL8E+pK/JuPLPggVAIaEuhvIz4qNcf3nA1Xn2o/7fb7s/TYpHhwGDv1ZU3PkBluUVaF8PyCHcm48cKLWQ==",
+      "engines": {
+        "node": ">=14.0.0"
+      }
+    },
+    {
+      "name": "tailwindcss-animate",
+      "declared": "^1.0.7",
+      "version": "1.0.7",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/tailwindcss-animate/-/tailwindcss-animate-1.0.7.tgz",
+      "integrity": "sha512-bl6mpH3T7I3UFxuvDEXLxy/VuFxBk5bbzplh7tXI68mwMokNYd1t9qPBHlnyTwfa4JGC4zP516I1hYYtQ/vspA==",
+      "engines": {}
+    },
+    {
+      "name": "tw-animate-css",
+      "declared": "^1.4.0",
+      "version": "1.4.0",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/tw-animate-css/-/tw-animate-css-1.4.0.tgz",
+      "integrity": "sha512-7bziOlRqH0hJx80h/3mbicLW7o8qLsH5+RaLR2t+OHM3D0JlWGODQKQ4cxbK7WlvmUxpcj6Kgu6EKqjrGFe3QQ==",
+      "engines": {}
+    },
+    {
+      "name": "typescript",
+      "declared": "~5.9.3",
+      "version": "5.9.3",
+      "dev": false,
+      "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+      "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==",
+      "engines": {
+        "node": ">=14.17"
+      }
+    },
+    {
+      "name": "typescript-eslint",
+      "declared": "^8.46.4",
+      "version": "8.52.0",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/typescript-eslint/-/typescript-eslint-8.52.0.tgz",
+      "integrity": "sha512-atlQQJ2YkO4pfTVQmQ+wvYQwexPDOIgo+RaVcD7gHgzy/IQA+XTyuxNM9M9TVXvttkF7koBHmcwisKdOAf2EcA==",
+      "engines": {
+        "node": "^18.18.0 || ^20.9.0 || >=21.1.0"
+      }
+    },
+    {
+      "name": "vite",
+      "declared": "^7.2.4",
+      "version": "7.3.0",
+      "dev": true,
+      "resolved": "https://registry.npmjs.org/vite/-/vite-7.3.0.tgz",
+      "integrity": "sha512-dZwN5L1VlUBewiP6H9s2+B3e3Jg96D0vzN+Ry73sOefebhYr9f94wwkMNN/9ouoU8pV1BqA1d1zGk8928cx0rg==",
+      "engines": {
+        "node": "^20.19.0 || >=22.12.0"
+      }
+    },
+    {
+      "name": "vitest",
+      "declared": "^4.0.16",
+      "version": "4.1.7",
+      "dev": true,
+      "resolved": "https://registry.npmmirror.com/vitest/-/vitest-4.1.7.tgz",
+      "integrity": "sha512-flYyaFd2CgoCoU+0UKt3pxksgC+S02iTDN0n3LtqaMeXsI9SBcdNujc2k0DeFLzUn/0k538yNjOSdwgCqcrwJA==",
+      "engines": {
+        "node": "^20.0.0 || ^22.0.0 || >=24.0.0"
+      }
+    }
+  ],
+  "nativeDependencyRecords": [
+    {
+      "path": "node_modules/playwright",
+      "version": "1.61.1",
+      "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.61.1.tgz",
+      "integrity": "sha512-DWnY5o3YbLWK4GovuAVwpqL+1VwGNdUGrRr++8j8PtQQzvAVZUIMjKQ90fY689sEJZJBbZVw1rXaOKSTitkzPQ==",
+      "dev": true,
+      "license": "Apache-2.0",
+      "dependencies": {
+        "playwright-core": "1.61.1"
+      },
+      "bin": {
+        "playwright": "cli.js"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "optionalDependencies": {
+        "fsevents": "2.3.2"
+      }
+    },
+    {
+      "path": "node_modules/playwright-core",
+      "version": "1.61.1",
+      "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.61.1.tgz",
+      "integrity": "sha512-h7Qlt6m4REp25qvIdvbDtVmD4LqVXfpRxhORv9L0jzETM05p4fuPJ3dKyuSXQxDSbXnmS79HAgi9589lGSpLkg==",
+      "dev": true,
+      "license": "Apache-2.0",
+      "bin": {
+        "playwright-core": "cli.js"
+      },
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    {
+      "path": "node_modules/sharp",
+      "version": "0.34.5",
+      "resolved": "https://registry.npmjs.org/sharp/-/sharp-0.34.5.tgz",
+      "integrity": "sha512-Ou9I5Ft9WNcCbXrU9cMgPBcCK8LiwLqcbywW3t4oDV37n1pzpuNLsYiAV8eODnjbtQlSDwZ2cUEeQz4E54Hltg==",
+      "hasInstallScript": true,
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@img/colour": "^1.0.0",
+        "detect-libc": "^2.1.2",
+        "semver": "^7.7.3"
+      },
+      "engines": {
+        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
+      },
+      "funding": {
+        "url": "https://opencollective.com/libvips"
+      },
+      "optionalDependencies": {
+        "@img/sharp-darwin-arm64": "0.34.5",
+        "@img/sharp-darwin-x64": "0.34.5",
+        "@img/sharp-libvips-darwin-arm64": "1.2.4",
+        "@img/sharp-libvips-darwin-x64": "1.2.4",
+        "@img/sharp-libvips-linux-arm": "1.2.4",
+        "@img/sharp-libvips-linux-arm64": "1.2.4",
+        "@img/sharp-libvips-linux-ppc64": "1.2.4",
+        "@img/sharp-libvips-linux-riscv64": "1.2.4",
+        "@img/sharp-libvips-linux-s390x": "1.2.4",
+        "@img/sharp-libvips-linux-x64": "1.2.4",
+        "@img/sharp-libvips-linuxmusl-arm64": "1.2.4",
+        "@img/sharp-libvips-linuxmusl-x64": "1.2.4",
+        "@img/sharp-linux-arm": "0.34.5",
+        "@img/sharp-linux-arm64": "0.34.5",
+        "@img/sharp-linux-ppc64": "0.34.5",
+        "@img/sharp-linux-riscv64": "0.34.5",
+        "@img/sharp-linux-s390x": "0.34.5",
+        "@img/sharp-linux-x64": "0.34.5",
+        "@img/sharp-linuxmusl-arm64": "0.34.5",
+        "@img/sharp-linuxmusl-x64": "0.34.5",
+        "@img/sharp-wasm32": "0.34.5",
+        "@img/sharp-win32-arm64": "0.34.5",
+        "@img/sharp-win32-ia32": "0.34.5",
+        "@img/sharp-win32-x64": "0.34.5"
+      }
+    },
+    {
+      "path": "node_modules/@img/sharp-win32-x64",
+      "version": "0.34.5",
+      "resolved": "https://registry.npmjs.org/@img/sharp-win32-x64/-/sharp-win32-x64-0.34.5.tgz",
+      "integrity": "sha512-+29YMsqY2/9eFEiW93eqWnuLcWcufowXewwSNIT6UwZdUUCrM3oFjMWH/Z6/TMmb4hlFenmfAVbpWeup2jryCw==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "Apache-2.0 AND LGPL-3.0-or-later",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
+      },
+      "funding": {
+        "url": "https://opencollective.com/libvips"
+      }
+    },
+    {
+      "path": "node_modules/ffmpeg-static",
+      "version": "5.3.0",
+      "resolved": "https://registry.npmjs.org/ffmpeg-static/-/ffmpeg-static-5.3.0.tgz",
+      "integrity": "sha512-H+K6sW6TiIX6VGend0KQwthe+kaceeH/luE8dIZyOP35ik7ahYojDuqlTV1bOrtEwl01sy2HFNGQfi5IDJvotg==",
+      "hasInstallScript": true,
+      "license": "GPL-3.0-or-later",
+      "dependencies": {
+        "@derhuerst/http-basic": "^8.2.0",
+        "env-paths": "^2.2.0",
+        "https-proxy-agent": "^5.0.0",
+        "progress": "^2.0.3"
+      },
+      "engines": {
+        "node": ">=16"
+      }
+    },
+    {
+      "path": "node_modules/execa",
+      "version": "9.6.1",
+      "resolved": "https://registry.npmjs.org/execa/-/execa-9.6.1.tgz",
+      "integrity": "sha512-9Be3ZoN4LmYR90tUoVu2te2BsbzHfhJyfEiAVfz7N5/zv+jduIfLrV2xdQXOHbaD6KgpGdO9PRPM1Y4Q9QkPkA==",
+      "license": "MIT",
+      "dependencies": {
+        "@sindresorhus/merge-streams": "^4.0.0",
+        "cross-spawn": "^7.0.6",
+        "figures": "^6.1.0",
+        "get-stream": "^9.0.0",
+        "human-signals": "^8.0.1",
+        "is-plain-obj": "^4.1.0",
+        "is-stream": "^4.0.1",
+        "npm-run-path": "^6.0.0",
+        "pretty-ms": "^9.2.0",
+        "signal-exit": "^4.1.0",
+        "strip-final-newline": "^4.0.0",
+        "yoctocolors": "^2.1.1"
+      },
+      "engines": {
+        "node": "^18.19.0 || >=20.5.0"
+      },
+      "funding": {
+        "url": "https://github.com/sindresorhus/execa?sponsor=1"
+      }
+    }
+  ],
+  "trackedSensitivePathsOnly": [
+    ".env.production",
+    ".env.backup-20260623-181231",
+    "public/web.config.bak"
+  ],
+  "uninspectedTemplate": ".env.example",
+  "firebaseCredentialPathResult": "No tracked credential JSON path found by names-only enumeration; untracked/history absence not proven",
+  "artifactHashes": [
+    {
+      "path": "docs/recovery/r10-a-a07-deployment-packaging.md",
+      "sha256": "d8796aee0f2bf2a1a21bf7bd8cd72d9b47619e5ad75628710feac87f6c0dc6b3",
+      "priorRevisions": [
+        {
+          "sha256": "1d056fd791e5c7766e50289d846d7beb66d678e0312755bb42bfcdcea50ff7ed",
+          "reason": "Verified original A07 artifact before security reconciliation"
+        }
+      ]
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-package-manifest.schema.json",
+      "sha256": "e036ffaac5f5978f8b0f95279188e4450c64bad3369b7d0c087b7e3d42fc421c"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-packaging-report.md",
+      "sha256": "9a7314173c0579b7855a5a7bff342b46e57446334cc934f35d706cc5c8644101"
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-security-closure-report.md",
+      "sha256": "d191d91adbe9efb90697be912fcfa944b6bb2e919c2e18064d63617086af01b5",
+      "priorRevisions": [
+        {
+          "sha256": "d13010c8d5da6e6da4187592eaca2db6f7215fb9840a68cb6aa49b4a3781dbae",
+          "reason": "Verified before Q01 functional-only decision documentation"
+        }
+      ]
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-security-evidence-register.example.json",
+      "sha256": "75719c3584bb995efa553f4b9c8eab06a82010aabea6d8325a5ac2bf1e9f008e",
+      "priorRevisions": [
+        {
+          "sha256": "573f24996ae80de8fd10f92c488108dbb7a54857975309cccd5479c1631880a3",
+          "reason": "Verified before Q01 functional-only decision documentation"
+        }
+      ]
+    },
+    {
+      "path": "docs/recovery/r10-a-a07-q01-decision-report.md",
+      "sha256": "0ec6c9f5e7bcc9a0d832b966d56f29ce5e6a2565b630ac37247cbae80052c3f5"
+    }
+  ],
+  "securityReconciliation": {
+    "status": "DOCUMENTATION_ONLY_SECURITY_CLOSURE_BLOCKED",
+    "priorHashesVerified": 74,
+    "observedFHead": "d02187cc72a30a1ae7790617dc692a75a752089b",
+    "fReportDeclaredHead": "9caf2645563c19a4792ae19bcc50a3c85f916c71",
+    "fReportDate": "2026-11-10",
+    "sessionDate": "2026-11-04",
+    "limitations": [
+      "Sibling HEAD read using command-scoped safe.directory; no persistent Git config changed",
+      "Sibling cleanliness, ancestry, current remote and report-date chronology not verified",
+      "No independent delivery-named report found under sibling docs; acceptance report contains delivery declarations",
+      "No sensitive-file contents or hashes collected; no operational security control executed"
+    ],
+    "inputs": "A05/A07 and A01 source hashes plus F contract/inventory/acceptance report",
+    "ownership": "F explicitly assigns rotation to A and broker composition delivery to A; code implementer and issuer custodians/approvers UNASSIGNED pending approval"
+  },
+  "q01Decision": {
+    "authority": "User mission R10-A ? A07 Q01 SECURITY OWNERSHIP DECISION RECORD",
+    "reference": "docs/recovery/r10-a-a01-decisions.md",
+    "status": "FUNCTIONAL_FRAMEWORK_APPROVED",
+    "operationalAssignments": "OPEN",
+    "priorHashesVerified": 78,
+    "actualRotationCustodian": "UNASSIGNED",
+    "independentRevocationVerifier": "UNASSIGNED",
+    "productionDeploymentApprover": "UNASSIGNED",
+    "fIntegration": "OPEN",
+    "productionChecks": "OPEN",
+    "executionAuthorized": false
+  }
+}

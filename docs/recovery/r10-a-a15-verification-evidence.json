@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "stage": "A15",
+  "classification": "PARTIAL",
+  "productionAcceptance": "BLOCKED",
+  "baseline": "a0bea50a7bac480e7655ff1915532157b8360540",
+  "environment": {
+    "node": "26.13.0",
+    "npm": "11.20.0",
+    "nodeModulesPresent": false,
+    "localTscPresent": false,
+    "localVitestPresent": false,
+    "globalTscOrVitestDiscovered": false
+  },
+  "checks": [
+    {
+      "command": "node --version",
+      "exitCode": 0,
+      "result": "v26.13.0"
+    },
+    {
+      "command": "npm.cmd --version",
+      "exitCode": 0,
+      "result": "11.20.0"
+    },
+    {
+      "command": "node --check scripts/verify-deployment.mjs",
+      "exitCode": 0,
+      "result": "SYNTAX_ONLY_PASS_NO_EXECUTION"
+    },
+    {
+      "command": "Get-Command tsc,vitest -ErrorAction SilentlyContinue | Select-Object Name,Source; $LASTEXITCODE = 0; $scriptPaths = @('scripts/deployment/verify-release.ps1','scripts/deployment/start-runtime.ps1','scripts/deployment/rollback.ps1'); foreach ($scriptPath in $scriptPaths) { $parseTokens = $null; $parseErrors = $null; [System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-Location) $scriptPath), [ref]$parseTokens, [ref]$parseErrors) | Out-Null; if ($parseErrors.Count -gt 0) { Write-Output ($scriptPath + ': PARSE_FAIL count=' + $parseErrors.Count); exit 1 }; Write-Output ($scriptPath + ': PARSE_PASS') }; exit 0",
+      "exitCode": 0,
+      "result": "THREE_PARSE_PASS_NO_EXECUTION"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "PRELIMINARY_PASS_FINAL_RECHECK_REQUIRED"
+    },
+    {
+      "command": "node -e \"const fs=require('fs'),cp=require('child_process');const e=JSON.parse(fs.readFileSync('docs/recovery/r10-a-a15-verification-evidence.json','utf8'));const r=cp.spawnSync(process.execPath,['-'],{input:e.validationRecipe,encoding:'utf8'});process.stdout.write(r.stdout||'');process.stderr.write(r.stderr||'');process.exit(r.status===null?1:r.status);\"",
+      "exitCode": 0,
+      "result": "PASS_STATIC_WITH_HISTORICAL_LIMITATIONS"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "FINAL_PASS",
+      "output": "warning: in the working copy of 'docs/recovery/r10-a-a01-decisions.md', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'docs/recovery/r10-a-a01-requirements.md', LF will be replaced by CRLF the next time Git touches it\n"
+    }
+  ],
+  "skipped": [
+    {
+      "command": "npm.cmd run check",
+      "exitCode": null,
+      "status": "NOT_RUN",
+      "reason": "No local/global compiler or installed dependencies; no install permitted"
+    },
+    {
+      "command": "npm.cmd test",
+      "exitCode": null,
+      "status": "NOT_RUN",
+      "reason": "No Vitest runner/dependencies; no install or external effects permitted"
+    },
+    {
+      "command": "npm.cmd run build",
+      "exitCode": null,
+      "status": "NOT_RUN",
+      "reason": "No dependencies; no build/package/entrypoint execution in assessment"
+    },
+    {
+      "command": "All proposed platform M/T/S/ES/LC/RL/BK and package tests",
+      "exitCode": null,
+      "status": "NOT_RUN",
+      "reason": "Specifications only; no approved implemented local harness"
+    }
+  ],
+  "historicalHashAudit": {
+    "path": "docs/recovery/r10-a-a15-hash-audit.json",
+    "totalReferences": 506,
+    "currentMatches": 488,
+    "historicalBytesVerified": 11,
+    "historicalBytesUnreproduced": 7,
+    "scope": "Snapshot before A15 appendices, not all current-file hashes after final A01 updates"
+  },
+  "documentaryValidationCommand": "node -e \"const fs=require('fs'),cp=require('child_process');const e=JSON.parse(fs.readFileSync('docs/recovery/r10-a-a15-verification-evidence.json','utf8'));const r=cp.spawnSync(process.execPath,['-'],{input:e.validationRecipe,encoding:'utf8'});process.stdout.write(r.stdout||'');process.stderr.write(r.stderr||'');process.exit(r.status===null?1:r.status);\"",
+  "validationRecipe": "const fs=require('fs'),p=require('path'),cp=require('child_process'),c=require('crypto');\nconst d='docs/recovery/',sha=b=>c.createHash('sha256').update(b).digest('hex'),cat=JSON.parse(fs.readFileSync(d+'r10-a-a15-a16-sources.json'));let hashes=0,preserved=0;\nif(cp.execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()!==cat.branch||cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()!==cat.expectedCommittedBaseline)throw Error('Branch/HEAD drift');\nfor(const r of [...cat.sourceReferences,...cat.artifactHashes]){const file=r.worktree?p.resolve('..',r.worktree,r.path):r.path;if(/(^|\\/)\\.env|\\.(pem|pfx|p12|key)$|service.?account.*\\.json$/i.test(file))throw Error('Forbidden sensitive hash target');if(sha(fs.readFileSync(file))!==r.sha256)throw Error('Current hash mismatch '+r.path);hashes++;}\nif(sha(fs.readFileSync(cat.historicalHashAudit.path))!==cat.historicalHashAudit.sha256)throw Error('Audit integrity');\nfor(const r of cat.priorArtifacts){const b=fs.readFileSync(r.path);if(r.path.endsWith('r10-a-a01-requirements.md')||r.path.endsWith('r10-a-a01-decisions.md')){const s=b.toString('utf8'),marker=r.path.endsWith('requirements.md')?'\\nA15-A16 final assessment continuation':'\\n## A15-A16 final offline evidence and handover disposition',i=s.indexOf(marker);if(i<0||sha(s.slice(0,i))!==r.sha256)throw Error('Prior A01 content changed');}else{if(sha(b)!==r.sha256)throw Error('Prior artifact changed '+r.path);preserved++;}}\nlet links=0,external=0,json=0,markdown=0;const docs=fs.readdirSync(d).filter(n=>/^r10-a-.*\\.(md|json)$/.test(n));for(const n of docs){const s=fs.readFileSync(d+n,'utf8');if(/[ \\t]+$/m.test(s))throw Error('Trailing whitespace '+n);if(n.endsWith('.json')){JSON.parse(s);json++;continue;}markdown++;for(const m of s.matchAll(/\\]\\(([^)]+)\\)/g)){const dest=m[1].split('#')[0];if(/^https?:/.test(dest)){new URL(dest);external++;continue;}if(dest&&!fs.existsSync(p.resolve(d,dest)))throw Error('Broken link '+n+' '+dest);links++;}}\nconst reg=JSON.parse(fs.readFileSync(d+'r10-a-a07-security-evidence-register.example.json'));if(reg.productionPackagingApproved||reg.productionDeploymentApproved||reg.functionalOwnershipDecision.status!=='FUNCTIONAL_FRAMEWORK_APPROVED'||reg.rows.some(r=>r.custodian!=='UNASSIGNED'||r.approvingAuthority!=='UNASSIGNED'||r.closure!=='BLOCKED'))throw Error('Security approval promotion');\nconst schema=JSON.parse(fs.readFileSync(d+'r10-a-a07-package-manifest.schema.json'));function schemaCheck(v){if(!v||typeof v!=='object')return;if(v.type==='object'){if(v.additionalProperties!==false)throw Error('Open schema object');for(const k of v.required||[])if(!v.properties[k])throw Error('Invalid required');}if(v.pattern)new RegExp(v.pattern);Object.values(v).forEach(schemaCheck);}schemaCheck(schema);\nconst original=cp.execFileSync('git',['show','HEAD:docs/recovery/r10-a-a01-decisions.md'],{encoding:'utf8'}),dec=fs.readFileSync(d+'r10-a-a01-decisions.md','utf8'),rows=original.split(/\\r?\\n/).filter(s=>/^\\| D\\d\\d \\|/.test(s));if(rows.length!==12||rows.some(s=>!dec.includes(s)))throw Error('Prior decisions altered');\nconst handover=fs.readFileSync(d+'r10-a-a16-final-handover.md','utf8');for(let i=1;i<=16;i++)if(!handover.includes('| A'+String(i).padStart(2,'0')+' '))throw Error('Missing acceptance row');for(let i=1;i<=13;i++)if(!handover.includes('ENG'+String(i).padStart(2,'0')))throw Error('Missing A backlog');for(let i=1;i<=7;i++)if(!handover.includes('ENTRY'+String(i).padStart(2,'0')))throw Error('Missing entry gate');\nconst monitoring=JSON.parse(fs.readFileSync(d+'r10-a-a08-a10-sources.json'));if(monitoring.platformSurfaces.length!==17||monitoring.stageAcceptance.flatMap(s=>s.tests).length!==28)throw Error('Monitoring crosswalk');for(const s of monitoring.stageAcceptance)if(s.tests.some(t=>t.result!=='NOT_RUN'))throw Error('Test status');for(const n of ['r10-a-a11-a12-sources.json','r10-a-a13-a14-sources.json']){const x=JSON.parse(fs.readFileSync(d+n));if(x.stageAcceptance.flatMap(s=>s.tests).length!==22||x.stageAcceptance.some(s=>s.integratedAcceptance!=='BLOCKED'||s.tests.some(t=>t.result!=='NOT_RUN')))throw Error('Acceptance promotion');}const recovery=JSON.parse(fs.readFileSync(d+'r10-a-a13-a14-sources.json'));if(recovery.recoveryObjectives.some(o=>o.status!=='PROVISIONAL'||o.measured))throw Error('Objective promotion');\nfor(const n of ['r10-a-a07-deployment-packaging.md','r10-a-a08-a10-monitoring-telemetry-security.md','r10-a-a11-a12-stop-lifecycle.md','r10-a-a13-a14-release-recovery.md']){const s=fs.readFileSync(d+n,'utf8');for(const [prefix,count]of [['A',16],['D',12]])for(let i=1;i<=count;i++)if(!s.includes('| '+prefix+String(i).padStart(2,'0')+' |'))throw Error('Planning crosswalk '+n);}\nconst audit=JSON.parse(fs.readFileSync(d+'r10-a-a15-hash-audit.json'));if(audit.findings.filter(r=>r.classification==='HISTORICAL_BYTES_UNREPRODUCED').length!==7||cat.classification!=='PARTIAL')throw Error('Historical limitation hidden');\nconst status=cp.execFileSync('git',['status','--porcelain=v1','--untracked-files=all'],{encoding:'utf8'}).trimEnd().split(/\\r?\\n/);for(const line of status){const file=line.slice(3).replaceAll('\\\\','/');if(!/^docs\\/recovery\\/r10-a-.*\\.(md|json)$/.test(file))throw Error('Unexpected scope '+file);}\nconsole.log(JSON.stringify({result:'PASS_STATIC_WITH_HISTORICAL_LIMITATIONS',currentSourceArtifactHashes:hashes,priorArtifactsUnchanged:preserved,appendOnlyA01Prefixes:2,localLinks:links,externalUrlsFormatOnly:external,jsonParsed:json,markdownFiles:markdown,acceptanceRows:16,priorDecisionsUnchanged:12,planningCrosswalksPerSpec:28,monitoringSurfaces:17,scenarioTestsRetainedNotRun:72,historicalUnreproduced:7,gitStatus:status}));",
+  "validationRecipePurpose": "Reproducible static documentary audit stored as non-application evidence; no application modules/credentials imported",
+  "finalValidation": {
+    "exitCode": 0,
+    "result": {
+      "result": "PASS_STATIC_WITH_HISTORICAL_LIMITATIONS",
+      "currentSourceArtifactHashes": 88,
+      "priorArtifactsUnchanged": 34,
+      "appendOnlyA01Prefixes": 2,
+      "localLinks": 165,
+      "externalUrlsFormatOnly": 13,
+      "jsonParsed": 15,
+      "markdownFiles": 26,
+      "acceptanceRows": 16,
+      "priorDecisionsUnchanged": 12,
+      "planningCrosswalksPerSpec": 28,
+      "monitoringSurfaces": 17,
+      "scenarioTestsRetainedNotRun": 72,
+      "historicalUnreproduced": 7,
+      "gitStatus": [
+        " M docs/recovery/r10-a-a01-decisions.md",
+        " M docs/recovery/r10-a-a01-requirements.md",
+        "?? docs/recovery/r10-a-a07-deployment-packaging.md",
+        "?? docs/recovery/r10-a-a07-package-manifest.schema.json",
+        "?? docs/recovery/r10-a-a07-packaging-report.md",
+        "?? docs/recovery/r10-a-a07-q01-decision-report.md",
+        "?? docs/recovery/r10-a-a07-security-closure-report.md",
+        "?? docs/recovery/r10-a-a07-security-evidence-register.example.json",
+        "?? docs/recovery/r10-a-a07-sources.json",
+        "?? docs/recovery/r10-a-a08-a10-consolidated-report.md",
+        "?? docs/recovery/r10-a-a08-a10-monitoring-telemetry-security.md",
+        "?? docs/recovery/r10-a-a08-a10-sources.json",
+        "?? docs/recovery/r10-a-a11-a12-consolidated-report.md",
+        "?? docs/recovery/r10-a-a11-a12-sources.json",
+        "?? docs/recovery/r10-a-a11-a12-stop-lifecycle.md",
+        "?? docs/recovery/r10-a-a13-a14-consolidated-report.md",
+        "?? docs/recovery/r10-a-a13-a14-release-recovery.md",
+        "?? docs/recovery/r10-a-a13-a14-sources.json",
+        "?? docs/recovery/r10-a-a15-a16-sources.json",
+        "?? docs/recovery/r10-a-a15-hash-audit.json",
+        "?? docs/recovery/r10-a-a15-verification-evidence.json",
+        "?? docs/recovery/r10-a-a15-verification-report.md",
+        "?? docs/recovery/r10-a-a16-final-handover.md"
+      ]
+    }
+  },
+  "completeGitStatus": [
+    " M docs/recovery/r10-a-a01-decisions.md",
+    " M docs/recovery/r10-a-a01-requirements.md",
+    "?? docs/recovery/r10-a-a07-deployment-packaging.md",
+    "?? docs/recovery/r10-a-a07-package-manifest.schema.json",
+    "?? docs/recovery/r10-a-a07-packaging-report.md",
+    "?? docs/recovery/r10-a-a07-q01-decision-report.md",
+    "?? docs/recovery/r10-a-a07-security-closure-report.md",
+    "?? docs/recovery/r10-a-a07-security-evidence-register.example.json",
+    "?? docs/recovery/r10-a-a07-sources.json",
+    "?? docs/recovery/r10-a-a08-a10-consolidated-report.md",
+    "?? docs/recovery/r10-a-a08-a10-monitoring-telemetry-security.md",
+    "?? docs/recovery/r10-a-a08-a10-sources.json",
+    "?? docs/recovery/r10-a-a11-a12-consolidated-report.md",
+    "?? docs/recovery/r10-a-a11-a12-sources.json",
+    "?? docs/recovery/r10-a-a11-a12-stop-lifecycle.md",
+    "?? docs/recovery/r10-a-a13-a14-consolidated-report.md",
+    "?? docs/recovery/r10-a-a13-a14-release-recovery.md",
+    "?? docs/recovery/r10-a-a13-a14-sources.json",
+    "?? docs/recovery/r10-a-a15-a16-sources.json",
+    "?? docs/recovery/r10-a-a15-hash-audit.json",
+    "?? docs/recovery/r10-a-a15-verification-evidence.json",
+    "?? docs/recovery/r10-a-a15-verification-report.md",
+    "?? docs/recovery/r10-a-a16-final-handover.md"
+  ],
+  "gitCapture": {
+    "command": "git status --porcelain=v1 --untracked-files=all; git rev-parse HEAD; git diff --stat",
+    "exitCode": 0,
+    "output": " M docs/recovery/r10-a-a01-decisions.md\n M docs/recovery/r10-a-a01-requirements.md\n?? docs/recovery/r10-a-a07-deployment-packaging.md\n?? docs/recovery/r10-a-a07-package-manifest.schema.json\n?? docs/recovery/r10-a-a07-packaging-report.md\n?? docs/recovery/r10-a-a07-q01-decision-report.md\n?? docs/recovery/r10-a-a07-security-closure-report.md\n?? docs/recovery/r10-a-a07-security-evidence-register.example.json\n?? docs/recovery/r10-a-a07-sources.json\n?? docs/recovery/r10-a-a08-a10-consolidated-report.md\n?? docs/recovery/r10-a-a08-a10-monitoring-telemetry-security.md\n?? docs/recovery/r10-a-a08-a10-sources.json\n?? docs/recovery/r10-a-a11-a12-consolidated-report.md\n?? docs/recovery/r10-a-a11-a12-sources.json\n?? docs/recovery/r10-a-a11-a12-stop-lifecycle.md\n?? docs/recovery/r10-a-a13-a14-consolidated-report.md\n?? docs/recovery/r10-a-a13-a14-release-recovery.md\n?? docs/recovery/r10-a-a13-a14-sources.json\n?? docs/recovery/r10-a-a15-a16-sources.json\n?? docs/recovery/r10-a-a15-hash-audit.json\n?? docs/recovery/r10-a-a15-verification-evidence.json\n?? docs/recovery/r10-a-a15-verification-report.md\n?? docs/recovery/r10-a-a16-final-handover.md\na0bea50a7bac480e7655ff1915532157b8360540\nwarning: in the working copy of 'docs/recovery/r10-a-a01-decisions.md', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'docs/recovery/r10-a-a01-requirements.md', LF will be replaced by CRLF the next time Git touches it\n docs/recovery/r10-a-a01-decisions.md    | 88 +++++++++++++++++++++++++++++++++\n docs/recovery/r10-a-a01-requirements.md | 16 +++++-\n 2 files changed, 103 insertions(+), 1 deletion(-)\n"
+  },
+  "finalDeliveryScope": {
+    "trackedModified": 2,
+    "newDocumentationJsonFiles": 21,
+    "totalChangedFiles": 23,
+    "commitsCreated": 0,
+    "pushesPerformed": 0
+  }
+}

@@ -1,0 +1,252 @@
+{
+    "schemaVersion":  1,
+    "recordedDate":  "2026-11-04",
+    "scope":  "Read-only local evidence; no remote or production verification",
+    "missionSource":  "M: user R10-A A01 mission, supplied in this session; operator-verified facts, no host access",
+    "baseline":  "799f6b4cb351ebe969f97da606324605fdf2a07b",
+    "numberingStatus":  "A01-A16 and D01-D12 retained as local planning identifiers under final reconciliation mission R; not historical contract IDs. A01 is also the stage name supplied by M.",
+    "worktrees":  {
+                      "E":  {
+                                "head":  "ea4f1f890ecd59079b4b13f7a67a6c96c617e11c",
+                                "branch":  "feature/r10-e-observability-operations",
+                                "initialStatus":  "UNVERIFIED: direct Git reads rejected by ownership protection; no safe.directory change made"
+                            },
+                      "D":  {
+                                "head":  "d9492c6c2be4389d046948fc5aefd00b350b2d7d",
+                                "branch":  "feature/r10-d-provider-resilience",
+                                "initialStatus":  "UNVERIFIED: direct Git reads rejected by ownership protection; no safe.directory change made"
+                            },
+                      "G":  {
+                                "head":  "e4c5e56fc31001f66167be3f0d1bba686bc39d63",
+                                "branch":  "feature/r10-g-backup-dr",
+                                "initialStatus":  "UNVERIFIED: direct Git reads rejected by ownership protection; no safe.directory change made"
+                            },
+                      "F":  {
+                                "head":  "d02187cc72a30a1ae7790617dc692a75a752089b",
+                                "branch":  "feature/r10-f-production-security",
+                                "initialStatus":  "UNVERIFIED: direct Git reads rejected by ownership protection; no safe.directory change made"
+                            },
+                      "B":  {
+                                "head":  "5d20c418c8efc6a44abaa053e43c4691af2a5bb1",
+                                "branch":  "feature/r10-b-data-concurrency",
+                                "initialStatus":  "UNVERIFIED: direct Git reads rejected by ownership protection; no safe.directory change made"
+                            },
+                      "H":  {
+                                "head":  "aa553925d0146cd2b763adadedbf15d419ec81e2",
+                                "branch":  "feature/r10-h-autonomy-activation",
+                                "initialStatus":  "UNVERIFIED: direct Git reads rejected by ownership protection; no safe.directory change made"
+                            },
+                      "C":  {
+                                "head":  "cc5712d0a16dfd7dcfc5f0f2991b0d354f853a06",
+                                "branch":  "feature/r10-c-runtime-resilience",
+                                "initialStatus":  "UNVERIFIED: direct Git reads rejected by ownership protection; no safe.directory change made"
+                            },
+                      "A":  {
+                                "head":  "799f6b4cb351ebe969f97da606324605fdf2a07b",
+                                "branch":  "feature/r10-a-production-platform",
+                                "initialStatus":  "CLEAN before A01 artifacts (initial git status --short empty)"
+                            }
+                  },
+    "sources":  [
+                    {
+                        "id":  "R9-HANDOFF",
+                        "worktree":  "NatForgeAI-R10-A",
+                        "path":  "docs/contracts/mission-control-to-production-resilience-contract.md",
+                        "observedHead":  "799f6b4cb351ebe969f97da606324605fdf2a07b",
+                        "sha256":  "2fb572aa07e221c3e75a9c9418db4aeb4ba3142260f2edc8f9e72461857a2e23",
+                        "lines":  107
+                    },
+                    {
+                        "id":  "R9-AUTONOMY",
+                        "worktree":  "NatForgeAI-R10-A",
+                        "path":  "docs/contracts/mission-control-autonomy-boundary-contract.md",
+                        "observedHead":  "799f6b4cb351ebe969f97da606324605fdf2a07b",
+                        "sha256":  "d3f6cc200ecddd0c6e8af4f46f9dc21412ce61b4d5d6bc397a127cf2ce854f15",
+                        "lines":  183
+                    },
+                    {
+                        "id":  "R9-REPORT",
+                        "worktree":  "NatForgeAI-R10-A",
+                        "path":  "docs/recovery/r9-x-mission-control-final-acceptance-report.md",
+                        "observedHead":  "799f6b4cb351ebe969f97da606324605fdf2a07b",
+                        "sha256":  "c9baf453080f013c0dc1a8acf91b9a6438dc88d781d7508ea56a983782925d81",
+                        "lines":  164
+                    },
+                    {
+                        "id":  "B-REPORT",
+                        "worktree":  "NatForgeAI-R10-B",
+                        "path":  "docs/recovery/r10-b-data-concurrency-acceptance-report.md",
+                        "observedHead":  "5d20c418c8efc6a44abaa053e43c4691af2a5bb1",
+                        "sha256":  "08a69459180b2ef4dc1f4696fa1b54fff8b1e419228e530de50b265c74860ac8",
+                        "lines":  178
+                    },
+                    {
+                        "id":  "B-INTEGRITY",
+                        "worktree":  "NatForgeAI-R10-B",
+                        "path":  "docs/recovery/r10-b-exactly-once-and-db-security.md",
+                        "observedHead":  "5d20c418c8efc6a44abaa053e43c4691af2a5bb1",
+                        "sha256":  "8b8a1bb7cb783a949c937f8cfb90fbc11c728bdb82d44c14549ad05fa90d9cc2",
+                        "lines":  122
+                    },
+                    {
+                        "id":  "C-CONTRACT",
+                        "worktree":  "NatForgeAI-R10-C",
+                        "path":  "docs/contracts/autonomous-runtime-resilience-contract.md",
+                        "observedHead":  "cc5712d0a16dfd7dcfc5f0f2991b0d354f853a06",
+                        "sha256":  "96993008de44433110ebe5a2b96af851a3eb9103698bf89d973fa7c8e0eef199",
+                        "lines":  120
+                    },
+                    {
+                        "id":  "C-OBSERVABILITY",
+                        "worktree":  "NatForgeAI-R10-C",
+                        "path":  "docs/contracts/runtime-to-observability-contract.md",
+                        "observedHead":  "cc5712d0a16dfd7dcfc5f0f2991b0d354f853a06",
+                        "sha256":  "5e08a7c2d4cfffa5261b7aac1757fec7c5011b6703a69d31e7461a2e83180b7c",
+                        "lines":  49
+                    },
+                    {
+                        "id":  "C-REPORT",
+                        "worktree":  "NatForgeAI-R10-C",
+                        "path":  "docs/recovery/r10-c-runtime-resilience-acceptance-report.md",
+                        "observedHead":  "cc5712d0a16dfd7dcfc5f0f2991b0d354f853a06",
+                        "sha256":  "802792d177ec3ab6c4975b2318651943c8f6fecc698ccc9fdd121a2149fc1951",
+                        "lines":  164
+                    },
+                    {
+                        "id":  "D-CONTRACT",
+                        "worktree":  "NatForgeAI-R10-D",
+                        "path":  "docs/contracts/production-provider-adapter-contract.md",
+                        "observedHead":  "d9492c6c2be4389d046948fc5aefd00b350b2d7d",
+                        "sha256":  "410cebabd887a9a4b15a0184333e582f312d302f0190457f36d4878292ee9b17",
+                        "lines":  148
+                    },
+                    {
+                        "id":  "D-REPORT",
+                        "worktree":  "NatForgeAI-R10-D",
+                        "path":  "docs/recovery/r10-d-provider-resilience-acceptance-report.md",
+                        "observedHead":  "d9492c6c2be4389d046948fc5aefd00b350b2d7d",
+                        "sha256":  "f57e27c70979fcd5eccd320223b1ecf7d43444d3017723dbc17512375e063825",
+                        "lines":  169
+                    },
+                    {
+                        "id":  "E-PLATFORM",
+                        "worktree":  "NatForgeAI-R10-E",
+                        "path":  "docs/contracts/observability-to-production-platform-contract.md",
+                        "observedHead":  "ea4f1f890ecd59079b4b13f7a67a6c96c617e11c",
+                        "sha256":  "a7ab463c863664b498ca58b4b046f397c9724510bd74238309671a8fc302806f",
+                        "lines":  93
+                    },
+                    {
+                        "id":  "E-CONTRACT",
+                        "worktree":  "NatForgeAI-R10-E",
+                        "path":  "docs/contracts/production-observability-contract.md",
+                        "observedHead":  "ea4f1f890ecd59079b4b13f7a67a6c96c617e11c",
+                        "sha256":  "206dbaedc7d5c6baedb1ea38b06b6a86e38c7991bdea1ec1d4781ca9e3a7f0f5",
+                        "lines":  307
+                    },
+                    {
+                        "id":  "E-REPORT",
+                        "worktree":  "NatForgeAI-R10-E",
+                        "path":  "docs/recovery/r10-e-observability-operations-acceptance-report.md",
+                        "observedHead":  "ea4f1f890ecd59079b4b13f7a67a6c96c617e11c",
+                        "sha256":  "ef5bd72d19cfc39419664ca2e13f9f91acda347eb005da8d46f7e31e876a12e2",
+                        "lines":  136
+                    },
+                    {
+                        "id":  "F-CONTRACT",
+                        "worktree":  "NatForgeAI-R10-F",
+                        "path":  "docs/contracts/production-security-configuration-contract.md",
+                        "observedHead":  "d02187cc72a30a1ae7790617dc692a75a752089b",
+                        "sha256":  "a8cda44ab74ef97b80a8e6e00618713bd5d82e6bd3e444292d0e6b6a93ea34e0",
+                        "lines":  280
+                    },
+                    {
+                        "id":  "F-REPORT",
+                        "worktree":  "NatForgeAI-R10-F",
+                        "path":  "docs/recovery/r10-f-production-security-acceptance-report.md",
+                        "observedHead":  "d02187cc72a30a1ae7790617dc692a75a752089b",
+                        "sha256":  "66c40de5d552415677cd66fa100178087b632007066f8d8caf80562f75ffa119",
+                        "lines":  132
+                    },
+                    {
+                        "id":  "G-OBJECTIVES",
+                        "worktree":  "NatForgeAI-R10-G",
+                        "path":  "docs/contracts/production-recovery-objectives-contract.md",
+                        "observedHead":  "e4c5e56fc31001f66167be3f0d1bba686bc39d63",
+                        "sha256":  "2f3c19824cecf742f3ac66f41bec5554849aaae6c441b51a71d2e5a063ba66ff",
+                        "lines":  85
+                    },
+                    {
+                        "id":  "G-MONITORING",
+                        "worktree":  "NatForgeAI-R10-G",
+                        "path":  "docs/contracts/backup-monitoring-contract.md",
+                        "observedHead":  "e4c5e56fc31001f66167be3f0d1bba686bc39d63",
+                        "sha256":  "9fe39fe6a5be67aed660dbf24997baba6d82b6edbee9d8ffd44e1b756a7b1aca",
+                        "lines":  97
+                    },
+                    {
+                        "id":  "G-CHECKLIST",
+                        "worktree":  "NatForgeAI-R10-G",
+                        "path":  "docs/recovery/r10-g-onegrid-implementation-checklist.md",
+                        "observedHead":  "e4c5e56fc31001f66167be3f0d1bba686bc39d63",
+                        "sha256":  "d02157f8149657727659681c353981ee73ba3adcae2572025413d8e490ffb579",
+                        "lines":  94
+                    },
+                    {
+                        "id":  "G-REPORT",
+                        "worktree":  "NatForgeAI-R10-G",
+                        "path":  "docs/recovery/r10-g-backup-dr-acceptance-report.md",
+                        "observedHead":  "e4c5e56fc31001f66167be3f0d1bba686bc39d63",
+                        "sha256":  "f1cd838426e89315684984d0145c8e83d834e3c7b8714dce3e1d410db1f6a877",
+                        "lines":  170
+                    },
+                    {
+                        "id":  "H-CONTRACT",
+                        "worktree":  "NatForgeAI-R10-H",
+                        "path":  "docs/contracts/controlled-autonomy-contract.md",
+                        "observedHead":  "aa553925d0146cd2b763adadedbf15d419ec81e2",
+                        "sha256":  "6beddfe976a30e8d46febb163111f917c70719fba1dec1f97e7de902a2534050",
+                        "lines":  170
+                    },
+                    {
+                        "id":  "H-OBSERVABILITY",
+                        "worktree":  "NatForgeAI-R10-H",
+                        "path":  "docs/contracts/autonomy-activation-to-observability-contract.md",
+                        "observedHead":  "aa553925d0146cd2b763adadedbf15d419ec81e2",
+                        "sha256":  "38384904863288f0667b0b895a6ecc87a8e60501ff4faf49c92eff41f773c649",
+                        "lines":  35
+                    },
+                    {
+                        "id":  "H-REPORT",
+                        "worktree":  "NatForgeAI-R10-H",
+                        "path":  "docs/recovery/r10-h-autonomy-activation-acceptance-report.md",
+                        "observedHead":  "aa553925d0146cd2b763adadedbf15d419ec81e2",
+                        "sha256":  "227357ef8b991511ce9598db036924e18fa7a8b9b552777a7b0b68e156a997e5",
+                        "lines":  290
+                    },
+                    {
+                        "id":  "H-LEDGER",
+                        "worktree":  "NatForgeAI-R10-H",
+                        "path":  "docs/recovery/r10-h19-verification-ledger.md",
+                        "observedHead":  "aa553925d0146cd2b763adadedbf15d419ec81e2",
+                        "sha256":  "aadff02c2b5842088288eb6576c4dab15576768d7a5604bf81fbbd676e3fbbaa",
+                        "lines":  302
+                    }
+                ],
+    "headEvidence":  "Heads/branches from root git worktree list --porcelain; file hashes describe working files, not necessarily committed blobs. Sibling status unverified due Git ownership protection.",
+    "reconciliationSource":  "R: user A01 final governance reconciliation mission in this session; retain local IDs and keep media resolver, video renderer, metadata and runtime-route implementation unassigned via X.",
+    "charterEvidence":  "M supplies approved provisional planning direction. No standalone approved provisional R10-A charter supplied or located by filename search across R10-A through R10-H. Additional charter comparison unverified; no content invented.",
+    "referenceAliases":  {
+                             "F":  "F-CONTRACT",
+                             "C":  "C-CONTRACT",
+                             "D contract":  "D-CONTRACT",
+                             "E contract":  "E-CONTRACT",
+                             "H":  "H-CONTRACT",
+                             "G objectives":  "G-OBJECTIVES",
+                             "G monitoring":  "G-MONITORING",
+                             "G checklist":  "G-CHECKLIST",
+                             "B-H reports":  "B-REPORT,C-REPORT,D-REPORT,E-REPORT,F-REPORT,G-REPORT,H-REPORT",
+                             "frozen storage sources":  "api/lib/creative/storage.ts and api/lib/vite.ts at baseline",
+                             "boot/web.config":  "api/boot.ts and public/web.config at baseline"
+                         }
+}

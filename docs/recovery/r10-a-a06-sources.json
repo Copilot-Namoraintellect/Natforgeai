@@ -1,0 +1,406 @@
+{
+    "schemaVersion":  1,
+    "stage":  "A06",
+    "baseline":  "799f6b4cb351ebe969f97da606324605fdf2a07b",
+    "branch":  "feature/r10-a-production-platform",
+    "recordedDate":  "2026-11-04",
+    "scope":  "Read-only repository and operator-supplied platform evidence; no server or DNS access",
+    "numbering":  "A06 is the mission stage label; traceability uses local A01-A16 and D01-D12 planning identifiers",
+    "sourceCount":  51,
+    "sourceReferences":  [
+                             {
+                                 "id":  "R9-HANDOFF",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/contracts/mission-control-to-production-resilience-contract.md",
+                                 "sha256":  "2fb572aa07e221c3e75a9c9418db4aeb4ba3142260f2edc8f9e72461857a2e23",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "R9-AUTONOMY",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/contracts/mission-control-autonomy-boundary-contract.md",
+                                 "sha256":  "d3f6cc200ecddd0c6e8af4f46f9dc21412ce61b4d5d6bc397a127cf2ce854f15",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "R9-REPORT",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r9-x-mission-control-final-acceptance-report.md",
+                                 "sha256":  "c9baf453080f013c0dc1a8acf91b9a6438dc88d781d7508ea56a983782925d81",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "B-REPORT",
+                                 "worktree":  "NatForgeAI-R10-B",
+                                 "path":  "docs/recovery/r10-b-data-concurrency-acceptance-report.md",
+                                 "sha256":  "08a69459180b2ef4dc1f4696fa1b54fff8b1e419228e530de50b265c74860ac8",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "B-INTEGRITY",
+                                 "worktree":  "NatForgeAI-R10-B",
+                                 "path":  "docs/recovery/r10-b-exactly-once-and-db-security.md",
+                                 "sha256":  "8b8a1bb7cb783a949c937f8cfb90fbc11c728bdb82d44c14549ad05fa90d9cc2",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "C-CONTRACT",
+                                 "worktree":  "NatForgeAI-R10-C",
+                                 "path":  "docs/contracts/autonomous-runtime-resilience-contract.md",
+                                 "sha256":  "96993008de44433110ebe5a2b96af851a3eb9103698bf89d973fa7c8e0eef199",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "C-OBSERVABILITY",
+                                 "worktree":  "NatForgeAI-R10-C",
+                                 "path":  "docs/contracts/runtime-to-observability-contract.md",
+                                 "sha256":  "5e08a7c2d4cfffa5261b7aac1757fec7c5011b6703a69d31e7461a2e83180b7c",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "C-REPORT",
+                                 "worktree":  "NatForgeAI-R10-C",
+                                 "path":  "docs/recovery/r10-c-runtime-resilience-acceptance-report.md",
+                                 "sha256":  "802792d177ec3ab6c4975b2318651943c8f6fecc698ccc9fdd121a2149fc1951",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "D-CONTRACT",
+                                 "worktree":  "NatForgeAI-R10-D",
+                                 "path":  "docs/contracts/production-provider-adapter-contract.md",
+                                 "sha256":  "410cebabd887a9a4b15a0184333e582f312d302f0190457f36d4878292ee9b17",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "D-REPORT",
+                                 "worktree":  "NatForgeAI-R10-D",
+                                 "path":  "docs/recovery/r10-d-provider-resilience-acceptance-report.md",
+                                 "sha256":  "f57e27c70979fcd5eccd320223b1ecf7d43444d3017723dbc17512375e063825",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "E-PLATFORM",
+                                 "worktree":  "NatForgeAI-R10-E",
+                                 "path":  "docs/contracts/observability-to-production-platform-contract.md",
+                                 "sha256":  "a7ab463c863664b498ca58b4b046f397c9724510bd74238309671a8fc302806f",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "E-CONTRACT",
+                                 "worktree":  "NatForgeAI-R10-E",
+                                 "path":  "docs/contracts/production-observability-contract.md",
+                                 "sha256":  "206dbaedc7d5c6baedb1ea38b06b6a86e38c7991bdea1ec1d4781ca9e3a7f0f5",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "E-REPORT",
+                                 "worktree":  "NatForgeAI-R10-E",
+                                 "path":  "docs/recovery/r10-e-observability-operations-acceptance-report.md",
+                                 "sha256":  "ef5bd72d19cfc39419664ca2e13f9f91acda347eb005da8d46f7e31e876a12e2",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "F-CONTRACT",
+                                 "worktree":  "NatForgeAI-R10-F",
+                                 "path":  "docs/contracts/production-security-configuration-contract.md",
+                                 "sha256":  "a8cda44ab74ef97b80a8e6e00618713bd5d82e6bd3e444292d0e6b6a93ea34e0",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "F-REPORT",
+                                 "worktree":  "NatForgeAI-R10-F",
+                                 "path":  "docs/recovery/r10-f-production-security-acceptance-report.md",
+                                 "sha256":  "66c40de5d552415677cd66fa100178087b632007066f8d8caf80562f75ffa119",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "G-OBJECTIVES",
+                                 "worktree":  "NatForgeAI-R10-G",
+                                 "path":  "docs/contracts/production-recovery-objectives-contract.md",
+                                 "sha256":  "2f3c19824cecf742f3ac66f41bec5554849aaae6c441b51a71d2e5a063ba66ff",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "G-MONITORING",
+                                 "worktree":  "NatForgeAI-R10-G",
+                                 "path":  "docs/contracts/backup-monitoring-contract.md",
+                                 "sha256":  "9fe39fe6a5be67aed660dbf24997baba6d82b6edbee9d8ffd44e1b756a7b1aca",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "G-CHECKLIST",
+                                 "worktree":  "NatForgeAI-R10-G",
+                                 "path":  "docs/recovery/r10-g-onegrid-implementation-checklist.md",
+                                 "sha256":  "d02157f8149657727659681c353981ee73ba3adcae2572025413d8e490ffb579",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "G-REPORT",
+                                 "worktree":  "NatForgeAI-R10-G",
+                                 "path":  "docs/recovery/r10-g-backup-dr-acceptance-report.md",
+                                 "sha256":  "f1cd838426e89315684984d0145c8e83d834e3c7b8714dce3e1d410db1f6a877",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "H-CONTRACT",
+                                 "worktree":  "NatForgeAI-R10-H",
+                                 "path":  "docs/contracts/controlled-autonomy-contract.md",
+                                 "sha256":  "6beddfe976a30e8d46febb163111f917c70719fba1dec1f97e7de902a2534050",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "H-OBSERVABILITY",
+                                 "worktree":  "NatForgeAI-R10-H",
+                                 "path":  "docs/contracts/autonomy-activation-to-observability-contract.md",
+                                 "sha256":  "38384904863288f0667b0b895a6ecc87a8e60501ff4faf49c92eff41f773c649",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "H-REPORT",
+                                 "worktree":  "NatForgeAI-R10-H",
+                                 "path":  "docs/recovery/r10-h-autonomy-activation-acceptance-report.md",
+                                 "sha256":  "227357ef8b991511ce9598db036924e18fa7a8b9b552777a7b0b68e156a997e5",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "H-LEDGER",
+                                 "worktree":  "NatForgeAI-R10-H",
+                                 "path":  "docs/recovery/r10-h19-verification-ledger.md",
+                                 "sha256":  "aadff02c2b5842088288eb6576c4dab15576768d7a5604bf81fbbd676e3fbbaa",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-A04-G-ARCHITECTURE",
+                                 "worktree":  "NatForgeAI-R10-G",
+                                 "path":  "docs/recovery/r10-g-backup-architecture.md",
+                                 "sha256":  "d7b7bd2674a0dfbd692f47529423e24505c61446cafe7ac17a739f221e3cf72c",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-A04-F-SECRET-CLASSIFICATION",
+                                 "worktree":  "NatForgeAI-R10-F",
+                                 "path":  "api/lib/production-security/secret-classification.ts",
+                                 "sha256":  "0ffc00ca6b61aa382a1cf9ca11df1f1dc51918e423b507f2a05db3481e8e338a",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-A04-F-SECRET-BROKER",
+                                 "worktree":  "NatForgeAI-R10-F",
+                                 "path":  "api/lib/production-security/secret-broker.ts",
+                                 "sha256":  "a6bf15f8ecb7974bf2a84179cdca3b32b33d567f1d1ca63bc8dadc06d182e964",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-A04-IDENTITY",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a04-identity-permissions.md",
+                                 "sha256":  "0310af2d8a4545d10bff008c32b3e86b5929b3598f40a87726ac6598fb2aed3e",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-A04-REPORT",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a04-identity-report.md",
+                                 "sha256":  "26021bd9a599190c1c907ec6d594e559e543e9a2f6b18c2d2de3bbe5d1882b5d",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-F-SECRET-SCAN",
+                                 "worktree":  "NatForgeAI-R10-F",
+                                 "path":  "scripts/secret-scan.mjs",
+                                 "sha256":  "85837d696d06a29c8af313ce3c8d43762c079539d8b32592cc247ea5a88fb35a",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-BASE-ENV",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "api/lib/env.ts",
+                                 "sha256":  "1956e5b6746e0ddcf2b940691b31c5574b0c9d0fa32f9975efdb592975761408",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-BASE-FIREBASE",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "api/lib/firebase-admin.ts",
+                                 "sha256":  "7d34ea3b39933fc33e048e8aaf65fa33b9545510e82f53770a3db4208c3e40c2",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-BASE-CRYPTO",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "api/lib/crypto.ts",
+                                 "sha256":  "7f13a71374eee02fdac4a6cf849d0501fbbaa51fc6fdd5a7fdcfa84b555ed578",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-BASE-GCP-HELPER",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "api/lib/secrets.ts",
+                                 "sha256":  "046ffc5c3fcb2a09548c1b410ff8e8542e65d6dfd786587ecbd61739026985c6",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-BASE-BOOT",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "api/boot.ts",
+                                 "sha256":  "acd960999a8d7a33cb48d45d4af40e753561ff72f6939136c35a1e2d6c0ca4e6",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-BASE-WORKER",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "api/worker.ts",
+                                 "sha256":  "9e78dd1f65df491e76e4f73d46bbf32f0c9c407596b62a2d417c685a1544c599",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-BASE-DEPLOY-START",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "scripts/deployment/start-runtime.ps1",
+                                 "sha256":  "c9f311401fd7ff06e8eef78f09276459151014d359d9e6460e54bad1abfc4edf",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-BASE-DEPLOY-VERIFY",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "scripts/deployment/verify-release.ps1",
+                                 "sha256":  "5e7231457b2b66052dc26a15c7d0190e55bdeb0fe3bbe5a77c4e80bb620443e8",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-BASE-DEPLOY-ROLLBACK",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "scripts/deployment/rollback.ps1",
+                                 "sha256":  "390f3c548e0d7d231d2cf06ecc8f4d3b463703b9f46a8fccaba332b0ea8c9aca",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-BASE-LOGGER",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "api/lib/logger.ts",
+                                 "sha256":  "994bc709d2c8b2cb66b83c27d8ccdfa8bed4de905611e7382a9fc823c9cbbcfc",
+                                 "matchesPriorCatalog":  true
+                             },
+                             {
+                                 "id":  "A05-A01-REQUIREMENTS-UPDATED",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a01-requirements.md",
+                                 "sha256":  "d90584bff56fc9e9db180d3dabfb913fbb9871269024c7d5470a68cc632b3ffc",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "A01-DECISIONS",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a01-decisions.md",
+                                 "sha256":  "90dfac243f9017baade3872b2f167062db0360dce7b9b8c27a6f7b0b8fdd54b9",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "A01-BASELINE",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a01-platform-baseline.md",
+                                 "sha256":  "554611a95615a401ddd065305e9ba3b8a9bec0a4092d2c7bc90881dfe9e6c363",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "A02-ARCH",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a02-platform-architecture.md",
+                                 "sha256":  "48c6c4bb5e9cef4e546f48a2d865712f54cffeef4d56af2d459afa86d8b235cc",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "A03-PROCESS",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a03-process-ownership.md",
+                                 "sha256":  "d9076653a9fb5f6bd2f398e61d16deabe0e9c745985ddcdcd7f10f0f351de43d",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "A05-SECRETS",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a05-secrets-management.md",
+                                 "sha256":  "b2905f7d7ba1f7c9dc2041c2dabfa04e8c9fa879f4b641b1e17ff81d27ad6b47",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "A05-REPORT",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a05-secrets-report.md",
+                                 "sha256":  "3bf3ecd5b795230f4a2082754a190a5039496b25d59a6b918a34de500d503e9c",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "A06-SPEC",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a06-network-security.md",
+                                 "sha256":  "fb25aa358a6709ce566f1f9852ac9cb3b208ab0de2478f47c422538227e87d13",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "A06-REPORT",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "docs/recovery/r10-a-a06-network-security-report.md",
+                                 "sha256":  "dd957cc45bb909343577cf8064cec0c3a6bef26589c23c2d047bb28ea590cd9c",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "BASE-WEBCONFIG",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "public/web.config",
+                                 "sha256":  "914e1e97a7c9ecb2968ff2fd2855cedd9cf0bfe6e4d5cb5c66cde939907b7e84",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "BASE-VITE",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "api/lib/vite.ts",
+                                 "sha256":  "7bbef0a5aaa3b700f7bff29aec1adebd98e0e7bc5b8aa41722c47f59ca2cbdf1",
+                                 "matchesPriorCatalog":  false
+                             },
+                             {
+                                 "id":  "BASE-PACKAGE",
+                                 "worktree":  "NatForgeAI-R10-A",
+                                 "path":  "package.json",
+                                 "sha256":  "47f15164a0f35e3a3fcc536e9574c676644589f4125c3e77e589ba3b7f255aa8",
+                                 "matchesPriorCatalog":  false
+                             }
+                         ],
+    "historicalInputs":  [
+                             {
+                                 "id":  "A05-REQUIREMENTS-BEFORE-A06",
+                                 "path":  "docs/recovery/r10-a-a01-requirements.md",
+                                 "sha256":  "3dbda4fa8497eaf15c962a4217a9d96cdfbeab6621dd5b8e6d794f3a6a5cf828",
+                                 "note":  "Prior hash from A05 catalog; A06 updates this traceability document."
+                             }
+                         ],
+    "externalReferences":  [
+                               {
+                                   "id":  "MS-IIS-SNI-BINDING",
+                                   "url":  "https://learn.microsoft.com/en-us/iis/configuration/system.applicationHost/sites/site/bindings/binding",
+                                   "note":  "Binding host/SNI concepts only; no webpage content hash."
+                               },
+                               {
+                                   "id":  "MS-ARR-REWRITE",
+                                   "url":  "https://learn.microsoft.com/en-us/iis/extensions/url-rewrite-module/reverse-proxy-with-url-rewrite-v2-and-application-request-routing",
+                                   "note":  "ARR/URL Rewrite reverse-proxy concepts only; no webpage content hash."
+                               },
+                               {
+                                   "id":  "MS-REQUEST-LIMITS",
+                                   "url":  "https://learn.microsoft.com/en-us/iis/configuration/system.webserver/security/requestfiltering/requestlimits/",
+                                   "note":  "Request-limit semantics only; no webpage content hash."
+                               },
+                               {
+                                   "id":  "MS-RESPONSE-HEADERS",
+                                   "url":  "https://learn.microsoft.com/en-us/iis/extensions/url-rewrite-module/modifying-http-response-headers",
+                                   "note":  "Response-header proxy behavior only; no webpage content hash."
+                               }
+                           ],
+    "notes":  [
+                  "A01 source catalog references were re-hashed and matched where unchanged.",
+                  "A05 source references were re-hashed and matched; the A01 requirements file is recorded separately as a historical pre-A06 input because A06 updates it.",
+                  "Sibling Git status remains unverified as recorded by A01.",
+                  "No OneGrid host, DNS zone or Zuto configuration was accessed.",
+                  "External Microsoft links support concepts only, not installed host state."
+              ]
+}

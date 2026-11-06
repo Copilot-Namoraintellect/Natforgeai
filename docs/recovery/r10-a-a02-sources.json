@@ -1,0 +1,142 @@
+{
+    "schemaVersion":  1,
+    "stage":  "A02",
+    "missionSource":  "M2: current user A02 mission; host facts operator-verified, not inspected by agent; approved storage design, no implementation",
+    "baseline":  "799f6b4cb351ebe969f97da606324605fdf2a07b",
+    "branch":  "feature/r10-a-production-platform",
+    "a01Catalog":  "docs/recovery/r10-a-a01-sources.json",
+    "a01SourceCount":  23,
+    "a01SourcesRechecked":  true,
+    "a01Inputs":  [
+                      {
+                          "path":  "docs/recovery/r10-a-a01-acceptance-report.md",
+                          "sha256BeforeA02":  "306b604e01704e4146088fa0ae327a0bc6f9102f51191a3f8a5163904b2c56a6"
+                      },
+                      {
+                          "path":  "docs/recovery/r10-a-a01-decisions.md",
+                          "sha256BeforeA02":  "9b3243f7894e61387a8138e6ee9ac034460426b8b9f37e396ad75e57c0ce8634"
+                      },
+                      {
+                          "path":  "docs/recovery/r10-a-a01-platform-baseline.md",
+                          "sha256BeforeA02":  "554611a95615a401ddd065305e9ba3b8a9bec0a4092d2c7bc90881dfe9e6c363"
+                      },
+                      {
+                          "path":  "docs/recovery/r10-a-a01-requirements.md",
+                          "sha256BeforeA02":  "79ac2a77ea531279440a2b4be39706b5b642965cee4ddbfe2387c0d208a08040"
+                      },
+                      {
+                          "path":  "docs/recovery/r10-a-a01-sources.json",
+                          "sha256BeforeA02":  "1cd348decfe9890ed1d0c62205f0a54f0d03ed2b68d01ac7d62bdc24bc2db5a0"
+                      }
+                  ],
+    "repositorySources":  [
+                              {
+                                  "path":  "api/boot.ts",
+                                  "sha256":  "acd960999a8d7a33cb48d45d4af40e753561ff72f6939136c35a1e2d6c0ca4e6",
+                                  "lines":  274
+                              },
+                              {
+                                  "path":  "api/worker.ts",
+                                  "sha256":  "9e78dd1f65df491e76e4f73d46bbf32f0c9c407596b62a2d417c685a1544c599",
+                                  "lines":  55
+                              },
+                              {
+                                  "path":  "api/lib/env.ts",
+                                  "sha256":  "1956e5b6746e0ddcf2b940691b31c5574b0c9d0fa32f9975efdb592975761408",
+                                  "lines":  227
+                              },
+                              {
+                                  "path":  "api/lib/creative/storage.ts",
+                                  "sha256":  "afb5ffaa26ec6c0f65073b87790e24f1f67e8c0aa33226da70a36a5c49d9e810",
+                                  "lines":  202
+                              },
+                              {
+                                  "path":  "api/lib/vite.ts",
+                                  "sha256":  "7bbef0a5aaa3b700f7bff29aec1adebd98e0e7bc5b8aa41722c47f59ca2cbdf1",
+                                  "lines":  47
+                              },
+                              {
+                                  "path":  "api/lib/video/renderer.ts",
+                                  "sha256":  "69bc0bb8d66b91a573579f3b21fa3f7e831dfbdfe96281ada39a037958a4ef17",
+                                  "lines":  359
+                              },
+                              {
+                                  "path":  "api/lib/creative/service.ts",
+                                  "sha256":  "e14f6e79b1276fbda85c1b7b975f9ffee32c2321a5629fed119403214c1446be",
+                                  "lines":  3646
+                              },
+                              {
+                                  "path":  "api/lib/queue/publishing-worker.ts",
+                                  "sha256":  "da7ca8ff7cb77c2c970cc9bd3f99741becb596b80beff7338b0d45328d2dae6f",
+                                  "lines":  58
+                              },
+                              {
+                                  "path":  "api/lib/queue/content-generation-worker.ts",
+                                  "sha256":  "e50b97f70a0b6da07046e9926503bcec3fe7691633508540bff4db642b2dff3c",
+                                  "lines":  28
+                              },
+                              {
+                                  "path":  "api/lib/queue/bullmq.ts",
+                                  "sha256":  "2b09824d785d5825951ecda726abea4306e7cc6c64b877d1f4c72cd7f6a24c86",
+                                  "lines":  391
+                              },
+                              {
+                                  "path":  "api/lib/jobs/credit-renewal.ts",
+                                  "sha256":  "109db4ff2e8ced4b99144adbf4bcb0805e7f095d60198e66309185feb8fb7cc2",
+                                  "lines":  94
+                              },
+                              {
+                                  "path":  "api/lib/workflow/publishing-runner.ts",
+                                  "sha256":  "973d5f553bcd4d9bb4017c3c4fc7d7605707ba7f0930feedf1ebdbaa3291cfce",
+                                  "lines":  1602
+                              },
+                              {
+                                  "path":  "api/lib/workflow/post-live-lifecycle-scheduler.ts",
+                                  "sha256":  "5ad73feaf425512891b0755ac9ac6ed9f9b25399fb79c65832d97d6603263eb2",
+                                  "lines":  291
+                              },
+                              {
+                                  "path":  "api/lib/workflow/post-live-metrics-observation-scheduler.ts",
+                                  "sha256":  "83e9ac825f16b89017b4feda0888c959501ff6c379ca7763645b14d4bcdbea55",
+                                  "lines":  164
+                              },
+                              {
+                                  "path":  "api/lib/social-listening/polling-scheduler.ts",
+                                  "sha256":  "b0ede38f81f953b70a0ea5a36cb4349c599834d7741e0fdee273b558d08357b6",
+                                  "lines":  128
+                              },
+                              {
+                                  "path":  "api/queries/connection.ts",
+                                  "sha256":  "ba9f1bb60bfe0b1f11a6c97d6a99e9064d3e2a254e760e97548a76429fd66946",
+                                  "lines":  19
+                              },
+                              {
+                                  "path":  "api/lib/redis.ts",
+                                  "sha256":  "9ff6f1a31c9d247b02a5cb32bb532f63a294da686a250527686b54e9d3139129",
+                                  "lines":  45
+                              },
+                              {
+                                  "path":  "api/health-router.ts",
+                                  "sha256":  "06fedd8ba9a5d8253aee71b7badc75bf9a2006ccaa07f1e5e35e48da9d854140",
+                                  "lines":  626
+                              },
+                              {
+                                  "path":  "public/web.config",
+                                  "sha256":  "914e1e97a7c9ecb2968ff2fd2855cedd9cf0bfe6e4d5cb5c66cde939907b7e84",
+                                  "lines":  61
+                              },
+                              {
+                                  "path":  "package.json",
+                                  "sha256":  "47f15164a0f35e3a3fcc536e9574c676644589f4125c3e77e589ba3b7f255aa8",
+                                  "lines":  131
+                              },
+                              {
+                                  "path":  "vite.config.ts",
+                                  "sha256":  "50a987ea8aca33a219b93be80bae545519464a609dd09803cb24dd4cc81a166c",
+                                  "lines":  30
+                              }
+                          ],
+    "diagramValidation":  "Two Mermaid flowcharts; no installed Mermaid parser/CLI found; structural/manual review only, rendering unverified",
+    "liveGates":  "G01-G12 NOT RUN; local labels only",
+    "prohibitedActionsExecuted":  false
+}

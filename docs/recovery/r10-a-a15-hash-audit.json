@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "status": "PARTIAL_HISTORICAL_PROVENANCE",
+  "findings": [
+    {
+      "catalog": "r10-a-a02-sources.json",
+      "loc": "$.a01Inputs.1",
+      "key": "sha256BeforeA02",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "expected": "9b3243f7894e61387a8138e6ee9ac034460426b8b9f37e396ad75e57c0ce8634",
+      "actual": "b31d9d30e13438ee5c47b23d8fe8a82a3d7c333d6bc1b7d27279d4aa6834ce69",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "CURRENT_PREFIX_LF"
+    },
+    {
+      "catalog": "r10-a-a02-sources.json",
+      "loc": "$.a01Inputs.3",
+      "key": "sha256BeforeA02",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "expected": "79ac2a77ea531279440a2b4be39706b5b642965cee4ddbfe2387c0d208a08040",
+      "actual": "38f5c41348eb0c2fb0e0312f4cb8d4020c1f20b90d378c9b4c1e29cdafb8c19f",
+      "classification": "HISTORICAL_BYTES_UNREPRODUCED",
+      "verification": "Prior-stage reference retained; no exact historical file bytes in available committed HEAD or current append-only prefixes"
+    },
+    {
+      "catalog": "r10-a-a03-sources.json",
+      "loc": "$.priorInputs.1",
+      "key": "sha256BeforeA03",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "expected": "90dfac243f9017baade3872b2f167062db0360dce7b9b8c27a6f7b0b8fdd54b9",
+      "actual": "b31d9d30e13438ee5c47b23d8fe8a82a3d7c333d6bc1b7d27279d4aa6834ce69",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "COMMITTED_HEAD_BYTES"
+    },
+    {
+      "catalog": "r10-a-a03-sources.json",
+      "loc": "$.priorInputs.3",
+      "key": "sha256BeforeA03",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "expected": "5c2bc4791b736ad9dccca9d16c26193108dea87fb97e1a3637544b93cb30d870",
+      "actual": "38f5c41348eb0c2fb0e0312f4cb8d4020c1f20b90d378c9b4c1e29cdafb8c19f",
+      "classification": "HISTORICAL_BYTES_UNREPRODUCED",
+      "verification": "Prior-stage reference retained; no exact historical file bytes in available committed HEAD or current append-only prefixes"
+    },
+    {
+      "catalog": "r10-a-a03-sources.json",
+      "loc": "$.priorInputs.5",
+      "key": "sha256BeforeA03",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-implementation-report.md",
+      "expected": "6f9b6c612ff14857232a5ca89926bb08dde3e3cd9da5e0621a5859738abc3aff",
+      "actual": "249d0db50e8e73a0f262e318924a1bc1d5e15f3af1e13cc3636802227136fb03",
+      "classification": "HISTORICAL_BYTES_UNREPRODUCED",
+      "verification": "Prior-stage reference retained; no exact historical file bytes in available committed HEAD or current append-only prefixes"
+    },
+    {
+      "catalog": "r10-a-a03-sources.json",
+      "loc": "$.priorInputs.6",
+      "key": "sha256BeforeA03",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-platform-architecture.md",
+      "expected": "11409f7f6d769d7a4cf2013f2f2f459cda3be292235916d48784a549827a80b9",
+      "actual": "48c6c4bb5e9cef4e546f48a2d865712f54cffeef4d56af2d459afa86d8b235cc",
+      "classification": "HISTORICAL_BYTES_UNREPRODUCED",
+      "verification": "Prior-stage reference retained; no exact historical file bytes in available committed HEAD or current append-only prefixes"
+    },
+    {
+      "catalog": "r10-a-a04-sources.json",
+      "loc": "$.priorInputs.1",
+      "key": "sha256BeforeA04",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "expected": "90dfac243f9017baade3872b2f167062db0360dce7b9b8c27a6f7b0b8fdd54b9",
+      "actual": "b31d9d30e13438ee5c47b23d8fe8a82a3d7c333d6bc1b7d27279d4aa6834ce69",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "COMMITTED_HEAD_BYTES"
+    },
+    {
+      "catalog": "r10-a-a04-sources.json",
+      "loc": "$.priorInputs.3",
+      "key": "sha256BeforeA04",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "expected": "41b1e94bf73b625743bd562bc87e73e1a20e62a28e16b281b29ef71da1bf54f6",
+      "actual": "38f5c41348eb0c2fb0e0312f4cb8d4020c1f20b90d378c9b4c1e29cdafb8c19f",
+      "classification": "HISTORICAL_BYTES_UNREPRODUCED",
+      "verification": "Prior-stage reference retained; no exact historical file bytes in available committed HEAD or current append-only prefixes"
+    },
+    {
+      "catalog": "r10-a-a05-sources.json",
+      "loc": "$.sourceReferences.39",
+      "key": "sha256",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "expected": "3dbda4fa8497eaf15c962a4217a9d96cdfbeab6621dd5b8e6d794f3a6a5cf828",
+      "actual": "38f5c41348eb0c2fb0e0312f4cb8d4020c1f20b90d378c9b4c1e29cdafb8c19f",
+      "classification": "HISTORICAL_BYTES_UNREPRODUCED",
+      "verification": "Prior-stage reference retained; no exact historical file bytes in available committed HEAD or current append-only prefixes"
+    },
+    {
+      "catalog": "r10-a-a06-sources.json",
+      "loc": "$.sourceReferences.39",
+      "key": "sha256",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "expected": "d90584bff56fc9e9db180d3dabfb913fbb9871269024c7d5470a68cc632b3ffc",
+      "actual": "38f5c41348eb0c2fb0e0312f4cb8d4020c1f20b90d378c9b4c1e29cdafb8c19f",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "COMMITTED_HEAD_BYTES"
+    },
+    {
+      "catalog": "r10-a-a06-sources.json",
+      "loc": "$.sourceReferences.40",
+      "key": "sha256",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "expected": "90dfac243f9017baade3872b2f167062db0360dce7b9b8c27a6f7b0b8fdd54b9",
+      "actual": "b31d9d30e13438ee5c47b23d8fe8a82a3d7c333d6bc1b7d27279d4aa6834ce69",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "COMMITTED_HEAD_BYTES"
+    },
+    {
+      "catalog": "r10-a-a06-sources.json",
+      "loc": "$.historicalInputs.0",
+      "key": "sha256",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "expected": "3dbda4fa8497eaf15c962a4217a9d96cdfbeab6621dd5b8e6d794f3a6a5cf828",
+      "actual": "38f5c41348eb0c2fb0e0312f4cb8d4020c1f20b90d378c9b4c1e29cdafb8c19f",
+      "classification": "HISTORICAL_BYTES_UNREPRODUCED",
+      "verification": "Prior-stage reference retained; no exact historical file bytes in available committed HEAD or current append-only prefixes"
+    },
+    {
+      "catalog": "r10-a-a07-sources.json",
+      "loc": "$.sourceReferences.39",
+      "key": "sha256",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "expected": "bdf5111e8dc143706645db57653071654ade3d2f2ea31afbdd5197956c02297f",
+      "actual": "38f5c41348eb0c2fb0e0312f4cb8d4020c1f20b90d378c9b4c1e29cdafb8c19f",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "CURRENT_PREFIX_LF"
+    },
+    {
+      "catalog": "r10-a-a07-sources.json",
+      "loc": "$.sourceReferences.40",
+      "key": "sha256",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "expected": "19bfcd883e9d141b0cb9f432c4b8c6c8dad0f56f637d958ebdf0d3946b01ff32",
+      "actual": "b31d9d30e13438ee5c47b23d8fe8a82a3d7c333d6bc1b7d27279d4aa6834ce69",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "CURRENT_PREFIX_LF"
+    },
+    {
+      "catalog": "r10-a-a08-a10-sources.json",
+      "loc": "$.sourceReferences.1",
+      "key": "sha256",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "expected": "9d55082e20cfb038faf1e17a97a721f89f163463ab5a39de6cb6124dfaa0fcfd",
+      "actual": "b31d9d30e13438ee5c47b23d8fe8a82a3d7c333d6bc1b7d27279d4aa6834ce69",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "CURRENT_PREFIX_LF"
+    },
+    {
+      "catalog": "r10-a-a08-a10-sources.json",
+      "loc": "$.sourceReferences.3",
+      "key": "sha256",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "expected": "41d227dfbbb5542eae0dc597e3d0c754b5b2058533d6a7d9032cdbc7953125fb",
+      "actual": "38f5c41348eb0c2fb0e0312f4cb8d4020c1f20b90d378c9b4c1e29cdafb8c19f",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "CURRENT_PREFIX_LF"
+    },
+    {
+      "catalog": "r10-a-a11-a12-sources.json",
+      "loc": "$.sourceReferences.1",
+      "key": "sha256",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "expected": "c2fc11093e333665292b6779fad62dc14b96c09917eaa2374834a8374c93649e",
+      "actual": "b31d9d30e13438ee5c47b23d8fe8a82a3d7c333d6bc1b7d27279d4aa6834ce69",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "CURRENT_PREFIX_LF"
+    },
+    {
+      "catalog": "r10-a-a11-a12-sources.json",
+      "loc": "$.sourceReferences.3",
+      "key": "sha256",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "expected": "31bea6c194af554e282e24ac07f71017fbb8e7bf556af043192e7e33d8c56825",
+      "actual": "38f5c41348eb0c2fb0e0312f4cb8d4020c1f20b90d378c9b4c1e29cdafb8c19f",
+      "classification": "HISTORICAL_BYTES_VERIFIED",
+      "verification": "CURRENT_PREFIX_LF"
+    }
+  ],
+  "counts": {
+    "current": 488,
+    "historicalVerified": 11,
+    "historicalUnreproduced": 7
+  },
+  "totalReferenceOccurrences": 506,
+  "currentMatchingOccurrences": 488,
+  "mismatchOccurrences": 18
+}

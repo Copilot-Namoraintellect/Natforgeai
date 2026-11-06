@@ -1,0 +1,549 @@
+{
+    "schemaVersion":  1,
+    "stage":  "A03",
+    "missionSource":  "M3: current user A03 process ownership mission; documentation only; broadens local A03 scope without historical renumbering",
+    "baseline":  "799f6b4cb351ebe969f97da606324605fdf2a07b",
+    "branch":  "feature/r10-a-production-platform",
+    "priorInputs":  [
+                        {
+                            "path":  "docs/recovery/r10-a-a01-acceptance-report.md",
+                            "sha256BeforeA03":  "306b604e01704e4146088fa0ae327a0bc6f9102f51191a3f8a5163904b2c56a6"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a01-decisions.md",
+                            "sha256BeforeA03":  "90dfac243f9017baade3872b2f167062db0360dce7b9b8c27a6f7b0b8fdd54b9"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a01-platform-baseline.md",
+                            "sha256BeforeA03":  "554611a95615a401ddd065305e9ba3b8a9bec0a4092d2c7bc90881dfe9e6c363"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a01-requirements.md",
+                            "sha256BeforeA03":  "5c2bc4791b736ad9dccca9d16c26193108dea87fb97e1a3637544b93cb30d870"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a01-sources.json",
+                            "sha256BeforeA03":  "1cd348decfe9890ed1d0c62205f0a54f0d03ed2b68d01ac7d62bdc24bc2db5a0"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a02-implementation-report.md",
+                            "sha256BeforeA03":  "6f9b6c612ff14857232a5ca89926bb08dde3e3cd9da5e0621a5859738abc3aff"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a02-platform-architecture.md",
+                            "sha256BeforeA03":  "11409f7f6d769d7a4cf2013f2f2f459cda3be292235916d48784a549827a80b9"
+                        },
+                        {
+                            "path":  "docs/recovery/r10-a-a02-sources.json",
+                            "sha256BeforeA03":  "c12cca7f54f4beae5ba90a2d31a9674a335e016fc6cea3b80aa929f943e6b4c9"
+                        }
+                    ],
+    "repositorySources":  [
+                              {
+                                  "path":  "api/agent-router.ts",
+                                  "sha256":  "151ceca7fc0d2c9619b2fb9519b3602c4cc619c8f7832ecba21e0cd115cbc44e",
+                                  "lines":  1143
+                              },
+                              {
+                                  "path":  "api/approval-router.ts",
+                                  "sha256":  "ae594e2d1926c4e31a570ee367ab6064fea7c33570d08c58b33c0d518b5a98d3",
+                                  "lines":  1050
+                              },
+                              {
+                                  "path":  "api/autonomous-workflow-router.ts",
+                                  "sha256":  "b2cc255fc8da6d0bd40b00575dd7dc533e72c6abeb573d2be65d62fe49e6e6ca",
+                                  "lines":  297
+                              },
+                              {
+                                  "path":  "api/billing-router.ts",
+                                  "sha256":  "134390a2f147bf862998b3cbf880035901f9b82926c4d65a6539a06f29e421e9",
+                                  "lines":  334
+                              },
+                              {
+                                  "path":  "api/boot.ts",
+                                  "sha256":  "acd960999a8d7a33cb48d45d4af40e753561ff72f6939136c35a1e2d6c0ca4e6",
+                                  "lines":  274
+                              },
+                              {
+                                  "path":  "api/business-router.ts",
+                                  "sha256":  "891df2c016d3317bc19f9133d6906d4067296884b3b7c6d0b62740d580c448f7",
+                                  "lines":  833
+                              },
+                              {
+                                  "path":  "api/campaign-router.ts",
+                                  "sha256":  "0a2c2f7557d072c3431e71e48c20925ccd2e9cbddecf453e5631c1a2a47f875d",
+                                  "lines":  1609
+                              },
+                              {
+                                  "path":  "api/content-router.ts",
+                                  "sha256":  "7f1721904197c534592188924156230e224398b8b18c9ec715958571d07772bc",
+                                  "lines":  2000
+                              },
+                              {
+                                  "path":  "api/engagement-router.ts",
+                                  "sha256":  "3f76e0f5568f559b6d4507a478c62ed1d128b9d447224b96bb350fa742cdb259",
+                                  "lines":  347
+                              },
+                              {
+                                  "path":  "api/execution-coordination-router.ts",
+                                  "sha256":  "304db9155248726cf7fa70725b0f51fff6a82bf70e1977c952e66361741ced0a",
+                                  "lines":  219
+                              },
+                              {
+                                  "path":  "api/health-router.ts",
+                                  "sha256":  "06fedd8ba9a5d8253aee71b7badc75bf9a2006ccaa07f1e5e35e48da9d854140",
+                                  "lines":  626
+                              },
+                              {
+                                  "path":  "api/lib/agents/runner.ts",
+                                  "sha256":  "97e58d3782cd632ab76142cde9a454e4dbef3c0fcc45eb0b992c83a5de3b1b40",
+                                  "lines":  321
+                              },
+                              {
+                                  "path":  "api/lib/agents/strategy-agent.ts",
+                                  "sha256":  "b868b94951edd9765b6c49db8b1ed6ad3de5c67a9c8a0790aa2528597744bb59",
+                                  "lines":  1680
+                              },
+                              {
+                                  "path":  "api/lib/audience/adapters/linkedin-adapter.ts",
+                                  "sha256":  "29db23ff3522579da25eb9b48f93a5e0c7f984e5d2c6a8c3d86b1e948eaef1c1",
+                                  "lines":  231
+                              },
+                              {
+                                  "path":  "api/lib/audience/adapters/meta-adapter.ts",
+                                  "sha256":  "d64e79648721be42fa6bad7a158ac428720ca84542612f886d991e20238fd9f2",
+                                  "lines":  205
+                              },
+                              {
+                                  "path":  "api/lib/audience/types.ts",
+                                  "sha256":  "3038fb25e0b5a99828afb5a71656df9b2789e0da692f61a75f49ba424c62d0b0",
+                                  "lines":  73
+                              },
+                              {
+                                  "path":  "api/lib/billing/credit-engine.ts",
+                                  "sha256":  "a4c2f0b9927ca05302de3bbe7e9d226756e6a1c2a6f32d9eedd25e5aaf057a0a",
+                                  "lines":  648
+                              },
+                              {
+                                  "path":  "api/lib/creative/brand-asset-resolver.ts",
+                                  "sha256":  "d0739c5780e528b388541b12a26ad30fa818db52a0ddc78867a31e28d2deb124",
+                                  "lines":  272
+                              },
+                              {
+                                  "path":  "api/lib/creative/brand-palette.ts",
+                                  "sha256":  "e2c23395b00263cffe07edf6574ca539f7bdd7710afdaf776f87829d632c962e",
+                                  "lines":  360
+                              },
+                              {
+                                  "path":  "api/lib/creative/composition.ts",
+                                  "sha256":  "47cd7a8f305ab7a2dfcb9dd577e53037acb8e983c3815c8493b3879dccd7d955",
+                                  "lines":  1193
+                              },
+                              {
+                                  "path":  "api/lib/creative/creative-generation-claim.ts",
+                                  "sha256":  "464921fd7db3ac09b3902d962971b6e1677e0b7e5cbccc2f78b4e593afb93455",
+                                  "lines":  940
+                              },
+                              {
+                                  "path":  "api/lib/creative/image-render-claim-heartbeat.ts",
+                                  "sha256":  "f91a0fa850ff354a40f5706b4e0e6d67c759bc0c988f208c645521812bf4848f",
+                                  "lines":  158
+                              },
+                              {
+                                  "path":  "api/lib/creative/premium-v2/background-generator.ts",
+                                  "sha256":  "768826e60c7af3442af8de1bb9eff791d209fd5b5923eddf4b669a5eafa28086",
+                                  "lines":  58
+                              },
+                              {
+                                  "path":  "api/lib/creative/premium-v2/brand-kit-ai.ts",
+                                  "sha256":  "6ca8f21bdfe7465b27e767e4fa4c8d2cc0cfbd829813dd216cf6c6bb2cc81ae3",
+                                  "lines":  130
+                              },
+                              {
+                                  "path":  "api/lib/creative/premium-v2/brief-ai.ts",
+                                  "sha256":  "6625d5fc86f2a843218c913b57800a4cc4577e26067db66db75dd606f2e2c3b6",
+                                  "lines":  181
+                              },
+                              {
+                                  "path":  "api/lib/creative/premium-v2/html-renderer.ts",
+                                  "sha256":  "65d7871597690280c73ed8d3530a2a34ff59c0f3190f951a60dbf91831e002a0",
+                                  "lines":  861
+                              },
+                              {
+                                  "path":  "api/lib/creative/premium-v2/plan-ai.ts",
+                                  "sha256":  "9c386a5333bc9645227a0ccb3311760a76542e48930b51a3518dea9e3dc23173",
+                                  "lines":  149
+                              },
+                              {
+                                  "path":  "api/lib/creative/premium-v2/renderer.ts",
+                                  "sha256":  "3009aefba21038cafd07b6ad955f7374d7a9f4f04c1984d2fbb3d28bce44a022",
+                                  "lines":  681
+                              },
+                              {
+                                  "path":  "api/lib/creative/premium-v2/variant-selector.ts",
+                                  "sha256":  "a47719fc698be4e5e0181197532040890cfdc69f95df8a7e6a3bea74e453ccd6",
+                                  "lines":  303
+                              },
+                              {
+                                  "path":  "api/lib/creative/premium-v2/vision-critic.ts",
+                                  "sha256":  "12278ba2a6e769dc774ca3d3b7d4dd429a7edccc22c160bb7d9309ce0b2f57a5",
+                                  "lines":  204
+                              },
+                              {
+                                  "path":  "api/lib/creative/premium-v2/visual-direction.ts",
+                                  "sha256":  "809fb95660c60607db96b0203e310b8602107b4b04bbb2d19fa3fe1f173cb96b",
+                                  "lines":  122
+                              },
+                              {
+                                  "path":  "api/lib/creative/providers/bannerbear-template-renderer.ts",
+                                  "sha256":  "6816440256959eb7888d3e57f893cda02530fa7a2c8a0920042fae9a13fbd141",
+                                  "lines":  176
+                              },
+                              {
+                                  "path":  "api/lib/creative/providers/creatify-video-provider.ts",
+                                  "sha256":  "c3a8de9c88e8f8d9e2ac9c0ce6a41c33fd7c85ef384dd14cee081df06ed0c5dc",
+                                  "lines":  287
+                              },
+                              {
+                                  "path":  "api/lib/creative/providers/hybrid-leaflet-composer.ts",
+                                  "sha256":  "fc35006409a7b6f4f7a925c5e224808834212c246243ac99503795073eb93cd4",
+                                  "lines":  377
+                              },
+                              {
+                                  "path":  "api/lib/creative/providers/internal-template-renderer.ts",
+                                  "sha256":  "b6fb446f43c48226d7000ef01646dc316e09f92d465fccb0730beba8f234d7f2",
+                                  "lines":  154
+                              },
+                              {
+                                  "path":  "api/lib/creative/providers/openai-image-provider.ts",
+                                  "sha256":  "72190cb74980441cc6bceedb68814ea640c159c26fdaaa19057a78a394c50870",
+                                  "lines":  148
+                              },
+                              {
+                                  "path":  "api/lib/creative/providers/openai-leaflet-renderer.ts",
+                                  "sha256":  "5ee8390b23a3d652523599d79d55c04ab7d5c715b483baedc93ad4a559e8bb9d",
+                                  "lines":  165
+                              },
+                              {
+                                  "path":  "api/lib/creative/providers/templatedio-template-renderer.ts",
+                                  "sha256":  "30be259646c76ccba56d4765e3e52628f902a56deb293c088562ed02a6bce3a1",
+                                  "lines":  130
+                              },
+                              {
+                                  "path":  "api/lib/creative/quality.ts",
+                                  "sha256":  "7b6cec3ef306071804cee98da23744948816ce899d6a7040463ee1551a440cc3",
+                                  "lines":  682
+                              },
+                              {
+                                  "path":  "api/lib/creative/service.ts",
+                                  "sha256":  "e14f6e79b1276fbda85c1b7b975f9ffee32c2321a5629fed119403214c1446be",
+                                  "lines":  3646
+                              },
+                              {
+                                  "path":  "api/lib/creative/storage.ts",
+                                  "sha256":  "afb5ffaa26ec6c0f65073b87790e24f1f67e8c0aa33226da70a36a5c49d9e810",
+                                  "lines":  202
+                              },
+                              {
+                                  "path":  "api/lib/email.ts",
+                                  "sha256":  "d0d8a892007aff19c733f50174f2b7016ceef07581cc2efba2667d1451e1549d",
+                                  "lines":  53
+                              },
+                              {
+                                  "path":  "api/lib/engagement/continuation.ts",
+                                  "sha256":  "5503c9dc0fd6252db8bbbe66bc6193cd427f6c02593043fcaecccaebf6a26d26",
+                                  "lines":  212
+                              },
+                              {
+                                  "path":  "api/lib/engagement/execution.ts",
+                                  "sha256":  "09e6dc6e5d8f18997ad74e65a93bc04a0166b342384d7dca28e477b42c564aa4",
+                                  "lines":  1054
+                              },
+                              {
+                                  "path":  "api/lib/env.ts",
+                                  "sha256":  "1956e5b6746e0ddcf2b940691b31c5574b0c9d0fa32f9975efdb592975761408",
+                                  "lines":  227
+                              },
+                              {
+                                  "path":  "api/lib/http.ts",
+                                  "sha256":  "cf2a3ece10f91a5bfe1a39b9cfc162c4c2ed6ad76daf800a43b8d78857e98452",
+                                  "lines":  78
+                              },
+                              {
+                                  "path":  "api/lib/integrations/oauth.ts",
+                                  "sha256":  "c53fed68d3ebd7fa03ff9c3c8f546d15a95bf9a3ab9317e8da493efc308a2412",
+                                  "lines":  104
+                              },
+                              {
+                                  "path":  "api/lib/integrations/platforms.ts",
+                                  "sha256":  "c083ff161ac7185c79bc7872de043b71ec8b2e48dec837560981f1eba791ea37",
+                                  "lines":  528
+                              },
+                              {
+                                  "path":  "api/lib/jobs/content-generation-job.ts",
+                                  "sha256":  "a94d7e6b7d25483622165d948b4ec32921baeb36fa42e13cba9603dd3bd3c4f0",
+                                  "lines":  460
+                              },
+                              {
+                                  "path":  "api/lib/jobs/credit-renewal.ts",
+                                  "sha256":  "109db4ff2e8ced4b99144adbf4bcb0805e7f095d60198e66309185feb8fb7cc2",
+                                  "lines":  94
+                              },
+                              {
+                                  "path":  "api/lib/queue/bullmq.ts",
+                                  "sha256":  "2b09824d785d5825951ecda726abea4306e7cc6c64b877d1f4c72cd7f6a24c86",
+                                  "lines":  391
+                              },
+                              {
+                                  "path":  "api/lib/queue/content-generation-worker.ts",
+                                  "sha256":  "e50b97f70a0b6da07046e9926503bcec3fe7691633508540bff4db642b2dff3c",
+                                  "lines":  28
+                              },
+                              {
+                                  "path":  "api/lib/queue/publishing-worker.ts",
+                                  "sha256":  "da7ca8ff7cb77c2c970cc9bd3f99741becb596b80beff7338b0d45328d2dae6f",
+                                  "lines":  58
+                              },
+                              {
+                                  "path":  "api/lib/queue/terminal-replay-executor.ts",
+                                  "sha256":  "4146fe6acfb0c87fea56a88c810cabe4c1e9284f85fe9786fc342f499e88d3e3",
+                                  "lines":  446
+                              },
+                              {
+                                  "path":  "api/lib/redis.ts",
+                                  "sha256":  "9ff6f1a31c9d247b02a5cb32bb532f63a294da686a250527686b54e9d3139129",
+                                  "lines":  45
+                              },
+                              {
+                                  "path":  "api/lib/safety/checker.ts",
+                                  "sha256":  "979727f3e397525b193104421c0576e39556d3cc60488ebda2b433a3041bca3c",
+                                  "lines":  136
+                              },
+                              {
+                                  "path":  "api/lib/social-listening/polling.ts",
+                                  "sha256":  "28f37e8014f2469d9d22deebb88a8200b01f43618db224a67923cd30c03b7426",
+                                  "lines":  203
+                              },
+                              {
+                                  "path":  "api/lib/social-listening/polling-scheduler.ts",
+                                  "sha256":  "b0ede38f81f953b70a0ea5a36cb4349c599834d7741e0fdee273b558d08357b6",
+                                  "lines":  128
+                              },
+                              {
+                                  "path":  "api/lib/video/renderer.ts",
+                                  "sha256":  "69bc0bb8d66b91a573579f3b21fa3f7e831dfbdfe96281ada39a037958a4ef17",
+                                  "lines":  359
+                              },
+                              {
+                                  "path":  "api/lib/vite.ts",
+                                  "sha256":  "7bbef0a5aaa3b700f7bff29aec1adebd98e0e7bc5b8aa41722c47f59ca2cbdf1",
+                                  "lines":  47
+                              },
+                              {
+                                  "path":  "api/lib/website-analyser.ts",
+                                  "sha256":  "a7b28419069914eb74a161894234989d5854d74d3efb445ecd51bb31b7dd2304",
+                                  "lines":  718
+                              },
+                              {
+                                  "path":  "api/lib/workflow/approval-continuation.ts",
+                                  "sha256":  "f36bfc392806cc023573cb8398818a4237dfed84a50422d48af0387e2ad1d108",
+                                  "lines":  829
+                              },
+                              {
+                                  "path":  "api/lib/workflow/post-live-lifecycle-batch.ts",
+                                  "sha256":  "a3446863c6eb9aca7667c1307dd946b2669383f10cfe5af06f1f37cd2429ef78",
+                                  "lines":  159
+                              },
+                              {
+                                  "path":  "api/lib/workflow/post-live-lifecycle-lease.ts",
+                                  "sha256":  "c09174a991e1275a4d82606bbb3da30ced17fd33e4176ca7d9ecf60cd457ce83",
+                                  "lines":  187
+                              },
+                              {
+                                  "path":  "api/lib/workflow/post-live-lifecycle-leased-pass.ts",
+                                  "sha256":  "d66f06ff847643d2832f7f87e068794b132e251db0e98414aac8bc1a3df630ab",
+                                  "lines":  341
+                              },
+                              {
+                                  "path":  "api/lib/workflow/post-live-lifecycle-pass.ts",
+                                  "sha256":  "39e945d038023500787ff4c8295cc531a1688b1f970e54bd80d18ed4275044df",
+                                  "lines":  126
+                              },
+                              {
+                                  "path":  "api/lib/workflow/post-live-lifecycle-scheduler.ts",
+                                  "sha256":  "5ad73feaf425512891b0755ac9ac6ed9f9b25399fb79c65832d97d6603263eb2",
+                                  "lines":  291
+                              },
+                              {
+                                  "path":  "api/lib/workflow/post-live-metrics-observation-leased-pass.ts",
+                                  "sha256":  "b185e2729028455dfc01b2bc89d7d0459b4d4e62e28a9e33a7addccf3ccd5da8",
+                                  "lines":  249
+                              },
+                              {
+                                  "path":  "api/lib/workflow/post-live-metrics-observation-pass.ts",
+                                  "sha256":  "b59a9dc1a211c4fcb736621a14d57329cc08ceaa1381bcdb43d5486e658a1e32",
+                                  "lines":  383
+                              },
+                              {
+                                  "path":  "api/lib/workflow/post-live-metrics-observation-scheduler.ts",
+                                  "sha256":  "83e9ac825f16b89017b4feda0888c959501ff6c379ca7763645b14d4bcdbea55",
+                                  "lines":  164
+                              },
+                              {
+                                  "path":  "api/lib/workflow/publishing-runner.ts",
+                                  "sha256":  "973d5f553bcd4d9bb4017c3c4fc7d7605707ba7f0930feedf1ebdbaa3291cfce",
+                                  "lines":  1602
+                              },
+                              {
+                                  "path":  "api/lib/workflow/triggers.ts",
+                                  "sha256":  "5fd89f9f3befaac4804db4cc0822a2717c1d6381eaad19c2d0eb11f4ab0cb6fc",
+                                  "lines":  1122
+                              },
+                              {
+                                  "path":  "api/nurture-router.ts",
+                                  "sha256":  "5840efff2937e923ded4a6158fc26e92c3169c56cf1eea2d8a104d66a43803d9",
+                                  "lines":  175
+                              },
+                              {
+                                  "path":  "api/operations-router.ts",
+                                  "sha256":  "1e83822ad9291e8add248f9110bc38e1dbd1910dd2c9f8dff42a0bb83929ea4a",
+                                  "lines":  709
+                              },
+                              {
+                                  "path":  "api/publishing-router.ts",
+                                  "sha256":  "7dafe27e0d1af8e3044c3c9b636c7e39ec7cf37ccb575dd4ae3a557dd25227b6",
+                                  "lines":  489
+                              },
+                              {
+                                  "path":  "api/queries/connection.ts",
+                                  "sha256":  "ba9f1bb60bfe0b1f11a6c97d6a99e9064d3e2a254e760e97548a76429fd66946",
+                                  "lines":  19
+                              },
+                              {
+                                  "path":  "api/subscription-router.ts",
+                                  "sha256":  "d44c149c5914c4943af9953ffb97c63d5a47caebcd1bfd0ec94045cbd7fea733",
+                                  "lines":  237
+                              },
+                              {
+                                  "path":  "api/video-router.ts",
+                                  "sha256":  "6b908acf7686ad813dc5b23e0c24ee61b8b2df97a56ec450a1df1f16404215cc",
+                                  "lines":  176
+                              },
+                              {
+                                  "path":  "api/worker.ts",
+                                  "sha256":  "9e78dd1f65df491e76e4f73d46bbf32f0c9c407596b62a2d417c685a1544c599",
+                                  "lines":  55
+                              },
+                              {
+                                  "path":  "deploy.sh",
+                                  "sha256":  "831f2c941a26af3b87f4926b37059e3a72f8dff6e6c1128e10d5636ff9cc441a",
+                                  "lines":  126
+                              },
+                              {
+                                  "path":  "deploy-local.sh",
+                                  "sha256":  "37ba305263aaebe45c0d90cd9362b3954a1e5d8ea05eaecad72e3a86c7a11321",
+                                  "lines":  104
+                              },
+                              {
+                                  "path":  "deploy-vps.sh",
+                                  "sha256":  "f1d3ed971f4bb406a21839fdff2223f5c839492faf734acac9f835d42ca1f4a9",
+                                  "lines":  187
+                              },
+                              {
+                                  "path":  "package.json",
+                                  "sha256":  "47f15164a0f35e3a3fcc536e9574c676644589f4125c3e77e589ba3b7f255aa8",
+                                  "lines":  131
+                              },
+                              {
+                                  "path":  "package-for-upload.sh",
+                                  "sha256":  "78455909ecbba8ca2bab2c5f9b7394076b27bb7d7f346329d9481049ca70a8f3",
+                                  "lines":  87
+                              },
+                              {
+                                  "path":  "public/web.config",
+                                  "sha256":  "914e1e97a7c9ecb2968ff2fd2855cedd9cf0bfe6e4d5cb5c66cde939907b7e84",
+                                  "lines":  61
+                              },
+                              {
+                                  "path":  "scripts/deployment/README.md",
+                                  "sha256":  "7b4b43b5e9901e16e2ddc28427ea2a4e90e19dd773002e9e1c8b8de1a3c9d870",
+                                  "lines":  52
+                              },
+                              {
+                                  "path":  "scripts/deployment/rollback.ps1",
+                                  "sha256":  "390f3c548e0d7d231d2cf06ecc8f4d3b463703b9f46a8fccaba332b0ea8c9aca",
+                                  "lines":  70
+                              },
+                              {
+                                  "path":  "scripts/deployment/start-runtime.ps1",
+                                  "sha256":  "c9f311401fd7ff06e8eef78f09276459151014d359d9e6460e54bad1abfc4edf",
+                                  "lines":  65
+                              },
+                              {
+                                  "path":  "scripts/deployment/verify-release.ps1",
+                                  "sha256":  "5e7231457b2b66052dc26a15c7d0190e55bdeb0fe3bbe5a77c4e80bb620443e8",
+                                  "lines":  71
+                              },
+                              {
+                                  "path":  "scripts/verify-deployment.mjs",
+                                  "sha256":  "252397e73f69a900712993df7308c5fa31b2e2a7d26663989509c30a3812c0ee",
+                                  "lines":  89
+                              },
+                              {
+                                  "path":  "scripts/verify-deployment.ps1",
+                                  "sha256":  "7c2bf773ba174410d548f0cb3c52a8397e5770f2155f4b7e2c0fd7ed36ee9b02",
+                                  "lines":  58
+                              },
+                              {
+                                  "path":  "vite.config.ts",
+                                  "sha256":  "50a987ea8aca33a219b93be80bae545519464a609dd09803cb24dd4cc81a166c",
+                                  "lines":  30
+                              }
+                          ],
+    "contractCatalog":  "docs/recovery/r10-a-a01-sources.json",
+    "contractSourcesRechecked":  23,
+    "searchScope":  "api explicit interval/timeout/worker/scheduler/sweep constructors and callers; deployment and health entry points; direct outbound lexical matches exclude test files",
+    "outboundDirectCallFiles":  [
+                                    "api/business-router.ts",
+                                    "api/campaign-router.ts",
+                                    "api/lib/agents/runner.ts",
+                                    "api/lib/agents/strategy-agent.ts",
+                                    "api/subscription-router.ts",
+                                    "api/lib/creative/composition.ts",
+                                    "api/lib/audience/adapters/meta-adapter.ts",
+                                    "api/lib/audience/adapters/linkedin-adapter.ts",
+                                    "api/lib/creative/brand-asset-resolver.ts",
+                                    "api/lib/creative/brand-palette.ts",
+                                    "api/lib/creative/quality.ts",
+                                    "api/lib/creative/storage.ts",
+                                    "api/lib/creative/service.ts",
+                                    "api/lib/audience/types.ts",
+                                    "api/lib/website-analyser.ts",
+                                    "api/lib/video/renderer.ts",
+                                    "api/lib/creative/providers/internal-template-renderer.ts",
+                                    "api/lib/creative/providers/creatify-video-provider.ts",
+                                    "api/lib/creative/providers/openai-leaflet-renderer.ts",
+                                    "api/lib/creative/providers/hybrid-leaflet-composer.ts",
+                                    "api/lib/creative/providers/bannerbear-template-renderer.ts",
+                                    "api/lib/creative/providers/templatedio-template-renderer.ts",
+                                    "api/lib/creative/providers/openai-image-provider.ts",
+                                    "api/lib/safety/checker.ts",
+                                    "api/lib/email.ts",
+                                    "api/lib/integrations/platforms.ts",
+                                    "api/lib/integrations/oauth.ts",
+                                    "api/lib/http.ts",
+                                    "api/lib/creative/premium-v2/brand-kit-ai.ts",
+                                    "api/lib/creative/premium-v2/brief-ai.ts",
+                                    "api/lib/creative/premium-v2/plan-ai.ts",
+                                    "api/lib/creative/premium-v2/background-generator.ts",
+                                    "api/lib/creative/premium-v2/html-renderer.ts",
+                                    "api/lib/creative/premium-v2/renderer.ts",
+                                    "api/lib/creative/premium-v2/variant-selector.ts",
+                                    "api/lib/creative/premium-v2/vision-critic.ts",
+                                    "api/lib/creative/premium-v2/visual-direction.ts"
+                                ],
+    "coverageLimit":  "Direct lexical search and traced entry families do not prove complete transitive SDK or deployed Azure pipeline coverage; X integrated effect audit required",
+    "acceptanceTestStatus":  "T01-T16 specified, not implemented or executed",
+    "liveVerification":  "NOT RUN",
+    "applicationOwner":  "UNASSIGNED; explicit owner approval via X required"
+}

@@ -1,0 +1,633 @@
+{
+  "schemaVersion": 1,
+  "stages": [
+    "A08",
+    "A09",
+    "A10"
+  ],
+  "branch": "feature/r10-a-production-platform",
+  "baseline": "a0bea50a7bac480e7655ff1915532157b8360540",
+  "recordedDate": "2026-11-04",
+  "mission": "User consolidated A08-A10 documentation-only mission",
+  "q01Precondition": {
+    "status": "FUNCTIONAL_DECISION_VERIFIED",
+    "hashesVerified": 79,
+    "operationalAssignments": "OPEN",
+    "credentialCustodians": "UNASSIGNED",
+    "productionApproval": false
+  },
+  "scope": "Repository document/source hashes only; no credentials opened/hashed, no infrastructure or synthetic runtime tests",
+  "numbering": "Mission A08 monitoring mapping, A09 telemetry behavior, A10 monitoring security map primarily to original local A12; original A08/A09/A10 supervision/data obligations are retained",
+  "sourceCount": 39,
+  "sourceReferences": [
+    {
+      "id": "A-r10-a-a01-acceptance-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-acceptance-report.md",
+      "sha256": "306b604e01704e4146088fa0ae327a0bc6f9102f51191a3f8a5163904b2c56a6"
+    },
+    {
+      "id": "A-r10-a-a01-decisions.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-decisions.md",
+      "sha256": "9d55082e20cfb038faf1e17a97a721f89f163463ab5a39de6cb6124dfaa0fcfd",
+      "preMissionSha256": "19bfcd883e9d141b0cb9f432c4b8c6c8dad0f56f637d958ebdf0d3946b01ff32",
+      "change": "Authorized append-only monitoring traceability/decision dependencies; original prefix hash verified"
+    },
+    {
+      "id": "A-r10-a-a01-platform-baseline.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-platform-baseline.md",
+      "sha256": "554611a95615a401ddd065305e9ba3b8a9bec0a4092d2c7bc90881dfe9e6c363"
+    },
+    {
+      "id": "A-r10-a-a01-requirements.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-requirements.md",
+      "sha256": "41d227dfbbb5542eae0dc597e3d0c754b5b2058533d6a7d9032cdbc7953125fb",
+      "preMissionSha256": "bdf5111e8dc143706645db57653071654ade3d2f2ea31afbdd5197956c02297f",
+      "change": "Authorized append-only monitoring traceability/decision dependencies; original prefix hash verified"
+    },
+    {
+      "id": "A-r10-a-a01-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a01-sources.json",
+      "sha256": "1cd348decfe9890ed1d0c62205f0a54f0d03ed2b68d01ac7d62bdc24bc2db5a0"
+    },
+    {
+      "id": "A-r10-a-a02-implementation-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-implementation-report.md",
+      "sha256": "249d0db50e8e73a0f262e318924a1bc1d5e15f3af1e13cc3636802227136fb03"
+    },
+    {
+      "id": "A-r10-a-a02-platform-architecture.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-platform-architecture.md",
+      "sha256": "48c6c4bb5e9cef4e546f48a2d865712f54cffeef4d56af2d459afa86d8b235cc"
+    },
+    {
+      "id": "A-r10-a-a02-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a02-sources.json",
+      "sha256": "c12cca7f54f4beae5ba90a2d31a9674a335e016fc6cea3b80aa929f943e6b4c9"
+    },
+    {
+      "id": "A-r10-a-a03-ownership-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a03-ownership-report.md",
+      "sha256": "af6adc1feebde439de620870e45d304502ae0cea3005a94ff686f3f11dd879d9"
+    },
+    {
+      "id": "A-r10-a-a03-process-ownership.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a03-process-ownership.md",
+      "sha256": "d9076653a9fb5f6bd2f398e61d16deabe0e9c745985ddcdcd7f10f0f351de43d"
+    },
+    {
+      "id": "A-r10-a-a03-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a03-sources.json",
+      "sha256": "f29151c607a21a464a6498acd0d5806121d2a6405a2da05f29bbae14d4f78c2d"
+    },
+    {
+      "id": "A-r10-a-a04-identity-permissions.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a04-identity-permissions.md",
+      "sha256": "0310af2d8a4545d10bff008c32b3e86b5929b3598f40a87726ac6598fb2aed3e"
+    },
+    {
+      "id": "A-r10-a-a04-identity-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a04-identity-report.md",
+      "sha256": "26021bd9a599190c1c907ec6d594e559e543e9a2f6b18c2d2de3bbe5d1882b5d"
+    },
+    {
+      "id": "A-r10-a-a04-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a04-sources.json",
+      "sha256": "a2eae8748cd15a36b7fbfbb1ad209a269403a8011621888cbd02873bf3cb1b2b"
+    },
+    {
+      "id": "A-r10-a-a05-secrets-management.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a05-secrets-management.md",
+      "sha256": "b2905f7d7ba1f7c9dc2041c2dabfa04e8c9fa879f4b641b1e17ff81d27ad6b47"
+    },
+    {
+      "id": "A-r10-a-a05-secrets-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a05-secrets-report.md",
+      "sha256": "3bf3ecd5b795230f4a2082754a190a5039496b25d59a6b918a34de500d503e9c"
+    },
+    {
+      "id": "A-r10-a-a05-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a05-sources.json",
+      "sha256": "26566479d732cd6bc45eb2259604b9374be5b8d65c7a8c9c6685ff24f08d0651"
+    },
+    {
+      "id": "A-r10-a-a06-network-security-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a06-network-security-report.md",
+      "sha256": "dd957cc45bb909343577cf8064cec0c3a6bef26589c23c2d047bb28ea590cd9c"
+    },
+    {
+      "id": "A-r10-a-a06-network-security.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a06-network-security.md",
+      "sha256": "fb25aa358a6709ce566f1f9852ac9cb3b208ab0de2478f47c422538227e87d13"
+    },
+    {
+      "id": "A-r10-a-a06-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a06-sources.json",
+      "sha256": "4667b4b137ee6a20d94820151caeccc3a8bda02e15232c1772422fc8a6d31e30"
+    },
+    {
+      "id": "A-r10-a-a07-deployment-packaging.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-deployment-packaging.md",
+      "sha256": "d8796aee0f2bf2a1a21bf7bd8cd72d9b47619e5ad75628710feac87f6c0dc6b3"
+    },
+    {
+      "id": "A-r10-a-a07-package-manifest.schema.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-package-manifest.schema.json",
+      "sha256": "e036ffaac5f5978f8b0f95279188e4450c64bad3369b7d0c087b7e3d42fc421c"
+    },
+    {
+      "id": "A-r10-a-a07-packaging-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-packaging-report.md",
+      "sha256": "9a7314173c0579b7855a5a7bff342b46e57446334cc934f35d706cc5c8644101"
+    },
+    {
+      "id": "A-r10-a-a07-q01-decision-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-q01-decision-report.md",
+      "sha256": "0ec6c9f5e7bcc9a0d832b966d56f29ce5e6a2565b630ac37247cbae80052c3f5"
+    },
+    {
+      "id": "A-r10-a-a07-security-closure-report.md",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-security-closure-report.md",
+      "sha256": "d191d91adbe9efb90697be912fcfa944b6bb2e919c2e18064d63617086af01b5"
+    },
+    {
+      "id": "A-r10-a-a07-security-evidence-register.example.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-security-evidence-register.example.json",
+      "sha256": "75719c3584bb995efa553f4b9c8eab06a82010aabea6d8325a5ac2bf1e9f008e"
+    },
+    {
+      "id": "A-r10-a-a07-sources.json",
+      "worktree": "NatForgeAI-R10-A",
+      "path": "docs/recovery/r10-a-a07-sources.json",
+      "sha256": "e1ccb1564d9f80b587eb5f238680b3eeb20175e7def4f949f5bf278cdfd2c17a"
+    },
+    {
+      "id": "NatForgeAI-R10-E-observability-to-production-platform-contract.md",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "docs/contracts/observability-to-production-platform-contract.md",
+      "sha256": "a7ab463c863664b498ca58b4b046f397c9724510bd74238309671a8fc302806f"
+    },
+    {
+      "id": "NatForgeAI-R10-E-production-observability-contract.md",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "docs/contracts/production-observability-contract.md",
+      "sha256": "206dbaedc7d5c6baedb1ea38b06b6a86e38c7991bdea1ec1d4781ca9e3a7f0f5"
+    },
+    {
+      "id": "NatForgeAI-R10-E-r10-e-observability-operations-acceptance-report.md",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "docs/recovery/r10-e-observability-operations-acceptance-report.md",
+      "sha256": "ef5bd72d19cfc39419664ca2e13f9f91acda347eb005da8d46f7e31e876a12e2"
+    },
+    {
+      "id": "NatForgeAI-R10-E-observability-bridge.ts",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "api/lib/observability/observability-bridge.ts",
+      "sha256": "a22d551e26550dee4b1d508d2e9586eb40f258a4a3f3627a648e43261a2623fe"
+    },
+    {
+      "id": "NatForgeAI-R10-E-health-model.ts",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "api/lib/observability/health-model.ts",
+      "sha256": "e8b16666b12fd5edfe0a7a63330210f19ef3a6e0194f44200e9b4b84ba3753ad"
+    },
+    {
+      "id": "NatForgeAI-R10-E-observability-service.ts",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "api/lib/observability/observability-service.ts",
+      "sha256": "02f67feabc6f292bf7e5d0631e6781d36fd45f1c56e4f601a87c5563a4a1bfbd"
+    },
+    {
+      "id": "NatForgeAI-R10-E-observability-identity.ts",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "api/lib/observability/observability-identity.ts",
+      "sha256": "026cb4e9cff05a0839bb12ad6973b809f80a2cafa4b64e50406d1018983528de"
+    },
+    {
+      "id": "NatForgeAI-R10-E-alert-model.ts",
+      "worktree": "NatForgeAI-R10-E",
+      "path": "api/lib/observability/alert-model.ts",
+      "sha256": "179949fe9806b0465817a0bace3d074c100a67b804764e34989c31e137293088"
+    },
+    {
+      "id": "NatForgeAI-R10-F-production-security-configuration-contract.md",
+      "worktree": "NatForgeAI-R10-F",
+      "path": "docs/contracts/production-security-configuration-contract.md",
+      "sha256": "a8cda44ab74ef97b80a8e6e00618713bd5d82e6bd3e444292d0e6b6a93ea34e0"
+    },
+    {
+      "id": "NatForgeAI-R10-G-backup-monitoring-contract.md",
+      "worktree": "NatForgeAI-R10-G",
+      "path": "docs/contracts/backup-monitoring-contract.md",
+      "sha256": "9fe39fe6a5be67aed660dbf24997baba6d82b6edbee9d8ffd44e1b756a7b1aca"
+    },
+    {
+      "id": "NatForgeAI-R10-H-autonomy-activation-to-observability-contract.md",
+      "worktree": "NatForgeAI-R10-H",
+      "path": "docs/contracts/autonomy-activation-to-observability-contract.md",
+      "sha256": "38384904863288f0667b0b895a6ecc87a8e60501ff4faf49c92eff41f773c649"
+    },
+    {
+      "id": "NatForgeAI-R10-H-controlled-autonomy-contract.md",
+      "worktree": "NatForgeAI-R10-H",
+      "path": "docs/contracts/controlled-autonomy-contract.md",
+      "sha256": "6beddfe976a30e8d46febb163111f917c70719fba1dec1f97e7de902a2534050"
+    }
+  ],
+  "preservation": "A01 requirements/decisions may be appended for authorized traceability; all other A01-A07 artifacts preserved byte-for-byte. Prior catalogs retain historical hashes.",
+  "limitations": [
+    "Sibling working-file hashes do not prove clean trees, integrated commits, current remotes or production deployment",
+    "Sibling report dates and verdicts are inherited claims, not current-run acceptance",
+    "No vendor/runtime/Windows compatibility claim made; collectors are proposals"
+  ],
+  "artifactHashes": [
+    {
+      "path": "docs/recovery/r10-a-a08-a10-monitoring-telemetry-security.md",
+      "sha256": "b5f18b173efc09e9833bd84b2c6da2597c80e4b90ba72ef921ee3d8686e9f1b7"
+    }
+  ],
+  "platformSurfaces": [
+    {
+      "id": "M01",
+      "handoffNumber": 1,
+      "collector": "Service health: restricted Windows supervisor/service-status export",
+      "permittedIdentity": "MON query-only; supervisor produces status",
+      "interfaceAndTruth": "`getApiEvidence` adapter; service state, uptime and restart counts for exact API instance/release",
+      "failureAndGap": "Missing export UNKNOWN; measured stopped is unavailable fact. Current ApiHealthEvidence has no service/restart fields; extension needed; supervisor D02 OPEN",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M02",
+      "handoffNumber": 2,
+      "collector": "Process monitoring: process-lifecycle/heartbeat export, without command-line/env capture",
+      "permittedIdentity": "MON; WRK owns own heartbeat",
+      "interfaceAndTruth": "`getWorkerEvidence`; supervisor process generation plus durable worker heartbeat",
+      "failureAndGap": "Missing collector UNKNOWN; observed offline/crash loop UNAVAILABLE; PID alone proves no useful work. Process-generation binding needed",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M03",
+      "handoffNumber": 3,
+      "collector": "CPU/memory/disk advisory samples via read-only OS counters, NatForgeAI attribution",
+      "permittedIdentity": "MON approved counters only",
+      "interfaceAndTruth": "New advisory fields feeding api/workers; OS sample interval, units, host/process label and sample completeness",
+      "failureAndGap": "Missing counters UNKNOWN; no zero substitution. Thresholds and overhead budget D09 OPEN; host data admin-only, do not attribute Zuto usage to a tenant",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M04",
+      "handoffNumber": 4,
+      "collector": "API availability/latency/error rate: redacted request metrics and later approved loopback probe",
+      "permittedIdentity": "API exports; MON reads safe view",
+      "interfaceAndTruth": "`getApiEvidence`; request observations, route-class counts, p50 latency/error percentage over explicit window",
+      "failureAndGap": "No observations UNKNOWN, not 100% uptime. HTTP 200/liveness alone is not readiness; probe never starts app/jobs. Route classes/rate window and probes OPEN",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M05",
+      "handoffNumber": 5,
+      "collector": "IIS pool/request queue: site/pool-scoped status/counters, sanitized request-class metrics",
+      "permittedIdentity": "MON restricted to NatForgeAI pool/site",
+      "interfaceAndTruth": "`getApiEvidence` extension; IIS/supervisor status for exact pool/binding",
+      "failureAndGap": "Missing permission/interface UNKNOWN; observed failed pool/queue problem visible. No IIS config/service-control grant; extension not present",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M06",
+      "handoffNumber": 6,
+      "collector": "Worker health: BullMQ registry + application heartbeat/lease summary",
+      "permittedIdentity": "WRK exports safe facts; MON reads",
+      "interfaceAndTruth": "`getWorkerEvidence`; queue registry and durable heartbeat, lease/stuck/crash/retry/dead-letter/version evidence",
+      "failureAndGap": "Unknown/unavailable export UNKNOWN; stale heartbeat DEGRADED/UNAVAILABLE per E-MODEL. A03 embedded/standalone ownership unresolved; no collector starts workers",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M07",
+      "handoffNumber": 7,
+      "collector": "Scheduler status: per-job status and singleton/lease heartbeat export",
+      "permittedIdentity": "SCH produces; MON reads",
+      "interfaceAndTruth": "`getSchedulerEvidence`; authoritative scheduler owner, last heartbeat and job state",
+      "failureAndGap": "Missing collector UNKNOWN; observed stopped UNAVAILABLE, stale DEGRADED. Existing in-process status is not evidence it is bound or single-owner in production",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M08",
+      "handoffNumber": 8,
+      "collector": "DB health: application pool metrics plus scoped database observation view",
+      "permittedIdentity": "API/pool instrumentation emits; MON redacted view, no DB admin/runtime URL",
+      "interfaceAndTruth": "`getDatabaseEvidence`; connectivity, saturation, p50 latency, deadlocks, transaction/CAS/replay counts, X-approved schema version",
+      "failureAndGap": "No telemetry UNKNOWN; observed failed connection UNAVAILABLE. Schema unknown explicitly degrades; collector must not migrate or “repair” schema",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M09",
+      "handoffNumber": 9,
+      "collector": "Redis/queue health: restricted queue aggregate exporter",
+      "permittedIdentity": "Queue producer exports; MON via F-approved infrastructure interface only",
+      "interfaceAndTruth": "`getQueueEvidence` extension; queue depth, consumer lag, Redis health/availability source",
+      "failureAndGap": "Absent UNKNOWN; waitingCount alone does not prove Redis uptime. Lag/connectivity fields and Redis ACL/credential source unresolved; never reuse broad runtime credentials",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M10",
+      "handoffNumber": 10,
+      "collector": "Certificate expiry: read public certificate metadata for exact NatForgeAI binding and renewal status export",
+      "permittedIdentity": "MON public metadata only; certificate admin owns renewal",
+      "interfaceAndTruth": "New evidence/dimension, not currently declared in E model; leaf/chain validity, expiry UTC, binding identity and renewal result",
+      "failureAndGap": "Missing/invalid time UNKNOWN; within approved expiry window at least DEGRADED; expired certificate availability failure recorded. No private-key/PFX read or renewal command",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M11",
+      "handoffNumber": 11,
+      "collector": "Disk capacity: volume free bytes/percentage plus release/shared/scratch/spool volume mapping",
+      "permittedIdentity": "MON minimum counter access, no media/backup content",
+      "interfaceAndTruth": "New capacity field; OS volume counter. M03 host advisory sample reused with same identity, not counted twice",
+      "failureAndGap": "Missing volume mapping/counter UNKNOWN; approved thresholds DEGRADED/AT_RISK. Capacity/permissions are separate; no deletion/retention action by collector",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M12",
+      "handoffNumber": 12,
+      "collector": "Backup state: independent redacted G facts export and ingest heartbeat",
+      "permittedIdentity": "BKP writes facts; MON reads safe export only",
+      "interfaceAndTruth": "`getBackupEvidence`; G owns last success, age, verification, offsite ack/immutability, restore rehearsal, retention",
+      "failureAndGap": "Missing signal UNKNOWN and silence alert; failed verification/backup preserved. No raw backup-run.json wholesale ingestion: redact database names/paths and unnecessary metadata. E/G threshold and Windows adapter reconciliation OPEN",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M13",
+      "handoffNumber": 13,
+      "collector": "Provider health: aggregate sanitized adapter/callback metrics",
+      "permittedIdentity": "Authorized provider adapter emits; MON no provider credential",
+      "interfaceAndTruth": "`getProviderEvidence`; latency/status class/timeouts/auth failures, callback/reconciliation delay. Callback evidence via `getCallbackEvidence` where supported",
+      "failureAndGap": "Absent UNKNOWN, never AVAILABLE; failure does not switch account/provider or initiate a test provider call. Exact per-provider binding/export unresolved",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M14",
+      "handoffNumber": 14,
+      "collector": "Alert delivery: external bounded outbox/notification adapter with delivery receipts and own heartbeat",
+      "permittedIdentity": "E-INGEST produces approved alert projection; NOTIFY sends safe payload only",
+      "interfaceAndTruth": "Outbound `operational_alerts` projection plus durable receipt/attempt facts; channel receiver acknowledgement is delivery truth",
+      "failureAndGap": "Failure emits platform diagnostic UNKNOWN event; undelivered is not acknowledged/resolved. Adapter, event-type mapping, independent fallback, routes and credentials OPEN",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M15",
+      "handoffNumber": 15,
+      "collector": "Log retention: protected redacted log sink plus retention/ingest completeness exporter",
+      "permittedIdentity": "Producers append; MON safe read; human policy administrator controls retention",
+      "interfaceAndTruth": "Platform retention evidence; E event MySQL store distinct from supervisor/IIS/app logs; protected audit separate",
+      "failureAndGap": "Missing exporter/sink UNKNOWN; spool/storage failure explicit; retention cannot delete event evidence via dedup. Policy/periods, access, expiry and legal holds OPEN",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M16",
+      "handoffNumber": 16,
+      "collector": "Incident correlation: E correlation/dedup projection and scoped transport checks",
+      "permittedIdentity": "E-INGEST trusted server; MON read; authorized human for lifecycle",
+      "interfaceAndTruth": "`correlationId`, `evt1:`, `inc1:`, `alt1:`, `hlt1:` and durable E rows; audit facts for material transitions",
+      "failureAndGap": "Missing/mismatched/replayed conflicts visible, never mint random anchors. Scope key isolation/end-to-end delivery correlation need proof; correlation is not authority",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    },
+    {
+      "id": "M17",
+      "handoffNumber": 17,
+      "collector": "Release/version identity: publisher-signed manifest and supervisor-resolved launch identity",
+      "permittedIdentity": "Trusted publisher injects; MON reads safe manifest/process association",
+      "interfaceAndTruth": "`RELEASE_VERSION`/`GIT_SHA`, `releaseVersion`, `deployment_version`; exact commit/manifest + service generation",
+      "failureAndGap": "Missing => null/UNKNOWN. Empty/forged/mismatched identity rejected as unknown/drift by proposed adapter; current E resolver only null-coalesces. Version match alone cannot imply process health",
+      "liveCollectorAvailability": "UNKNOWN",
+      "liveVerification": "NOT_RUN"
+    }
+  ],
+  "stageAcceptance": [
+    {
+      "stage": "A08",
+      "scope": "monitoring mapping",
+      "documentation": "PASS",
+      "operationalAcceptance": "BLOCKED",
+      "syntheticExecution": "NOT_RUN",
+      "liveExecution": "NOT_RUN",
+      "tests": [
+        {
+          "id": "M-T01",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "M-T02",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "M-T03",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "M-T04",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        }
+      ]
+    },
+    {
+      "stage": "A09",
+      "scope": "telemetry behavior",
+      "documentation": "PASS",
+      "operationalAcceptance": "BLOCKED",
+      "syntheticExecution": "NOT_RUN",
+      "liveExecution": "NOT_RUN",
+      "tests": [
+        {
+          "id": "T01",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T02",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T03",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T04",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T05",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T06",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T07",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T08",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T09",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T10",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T11",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "T12",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        }
+      ]
+    },
+    {
+      "stage": "A10",
+      "scope": "monitoring security",
+      "documentation": "PASS",
+      "operationalAcceptance": "BLOCKED",
+      "syntheticExecution": "NOT_RUN",
+      "liveExecution": "NOT_RUN",
+      "tests": [
+        {
+          "id": "S01",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S02",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S03",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S04",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S05",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S06",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S07",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S08",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S09",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S10",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S11",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        },
+        {
+          "id": "S12",
+          "result": "NOT_RUN",
+          "kind": "SPECIFICATION_ONLY"
+        }
+      ]
+    }
+  ],
+  "clockDiscipline": {
+    "authority": "E-PLATFORM section 3.6",
+    "numberedSurface": false,
+    "collectorAvailability": "UNKNOWN",
+    "liveVerification": "NOT_RUN"
+  },
+  "preservedArtifactsVerified": 25,
+  "unresolved": {
+    "operationalIdentities": "UNASSIGNED",
+    "collectorAdapterOutboxImplementers": "UNASSIGNED",
+    "thresholdRetentionRoutesApprovers": "UNASSIGNED",
+    "credentialCustodians": "UNASSIGNED",
+    "productionDeploymentApprover": "UNASSIGNED",
+    "productionMonitoringApproved": false
+  }
+}
