@@ -967,6 +967,8 @@ describe("durable replay -> claim binding helper", () => {
       { claimId: 91, ownerTokenHash: fingerprintOwnerToken(FRESH_TOKEN) },
       db
     );
+    // Distinct timestamps must still converge to the original binding.
+    await new Promise(resolve => setTimeout(resolve, 5));
     const second = await bindContentRecoveryClaim(
       record.id,
       { claimId: 91, ownerTokenHash: fingerprintOwnerToken(FRESH_TOKEN) },
