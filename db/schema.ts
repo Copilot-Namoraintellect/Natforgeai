@@ -5389,3 +5389,212 @@ export const runtimeLifecycleEvents = mysqlTable(
 
 export type RuntimeLifecycleEventRow = typeof runtimeLifecycleEvents.$inferSelect;
 export type InsertRuntimeLifecycleEventRow = typeof runtimeLifecycleEvents.$inferInsert;
+
+
+// ─── R10-D Provider & Integration Resilience ───
+// Stream-local authority tables (provider-resilience/v1). Provisional
+// migration 0038_r10_d_provider_resilience — ARTEFACT ONLY, NOT executed;
+// R10-X owns canonical 0038 convergence. Canonical R9 0037 is never modified
+// by these definitions. R10-D never writes R9-D execution tables; it
+// re-validates them read-only through the guarded execution seam.
+
+export const providerAccountBindings = mysqlTable(
+  "provider_account_bindings",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic pbd1:<sha256> binding identity — exact authorized
+    // provider/account/capability/action binding for one tenant+business.
+    bindingId: varchar("bindingId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    providerId: varchar("providerId", { length: 32 }).notNull(),
+    providerAccountId: varchar("providerAccountId", { length: 128 }).notNull(),
+    capability: varchar("capability", { length: 40 }).notNull(),
+    actionType: varchar("actionType", { length: 20 }).notNull(),
+    // sha256 over the server-resolved credentialRef label — the credential
+    // itself never persists and is never returned through diagnostics.
+    credentialFingerprint: varchar("credentialFingerprint", { length: 64 }).notNull(),
+    // ACTIVE | SUSPENDED | REVOKED — lifecycle is tenant-scoped and CAS-guarded.
+    status: varchar("status", { length: 12 }).notNull(),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    bindingIdentityUnique: uniqueIndex("pab_binding_identity_uidx").on(table.bindingId),
+    userBindingUnique: uniqueIndex("pab_user_binding_uidx").on(table.userId, table.bindingId),
+    bindingNaturalUnique: uniqueIndex("pab_binding_natural_uidx").on(
+      table.userId,
+      table.businessId,
+      table.providerId,
+      table.providerAccountId,
+      table.capability,
+      table.actionType
+    ),
+    userProviderIdx: index("pab_user_provider_idx").on(table.userId, table.providerId),
+  })
+);
+
+export type ProviderAccountBindingRow = typeof providerAccountBindings.$inferSelect;
+export type InsertProviderAccountBindingRow = typeof providerAccountBindings.$inferInsert;
+
+export const providerDispatchRequests = mysqlTable(
+  "provider_dispatch_requests",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic prq1:<sha256> request identity — derived from the exact
+    // binding + R9-D action/attempt + parameter hash (D2/D3).
+    requestId: varchar("requestId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    bindingId: varchar("bindingId", { length: 69 }).notNull(),
+    executionActionId: varchar("executionActionId", { length: 69 }).notNull(),
+    attemptId: varchar("attemptId", { length: 69 }).notNull(),
+    providerId: varchar("providerId", { length: 32 }).notNull(),
+    providerAccountId: varchar("providerAccountId", { length: 128 }).notNull(),
+    capability: varchar("capability", { length: 40 }).notNull(),
+    actionType: varchar("actionType", { length: 20 }).notNull(),
+    parametersHash: varchar("parametersHash", { length: 64 }).notNull(),
+    // The native provider idempotency key when the provider declares one;
+    // identical to requestId — null when unsupported (limitation explicit).
+    nativeIdempotencyKey: varchar("nativeIdempotencyKey", { length: 69 }),
+    // PREPARED | DISPATCHED | SUCCEEDED | FAILED | UNCERTAIN | RATE_LIMITED |
+    // AUTHENTICATION_FAILED | CIRCUIT_BLOCKED | PENDING
+    state: varchar("state", { length: 22 }).notNull(),
+    classification: varchar("classification", { length: 24 }),
+    failureClass: varchar("failureClass", { length: 24 }),
+    providerReference: varchar("providerReference", { length: 191 }),
+    retryAfterMs: bigint("retryAfterMs", { mode: "number" }),
+    // Fingerprint of the redacted classification material — never raw payloads.
+    evidenceHash: varchar("evidenceHash", { length: 64 }),
+    circuitStateAtDispatch: varchar("circuitStateAtDispatch", { length: 12 }),
+    dispatchedAt: varchar("dispatchedAt", { length: 32 }),
+    completedAt: varchar("completedAt", { length: 32 }),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    requestIdentityUnique: uniqueIndex("pdr_request_identity_uidx").on(table.requestId),
+    userRequestUnique: uniqueIndex("pdr_user_request_uidx").on(table.userId, table.requestId),
+    requestNaturalUnique: uniqueIndex("pdr_request_natural_uidx").on(
+      table.userId,
+      table.executionActionId,
+      table.attemptId
+    ),
+    userBindingIdx: index("pdr_user_binding_idx").on(table.userId, table.bindingId),
+    userProviderIdx: index("pdr_user_provider_idx").on(table.userId, table.providerId),
+  })
+);
+
+export type ProviderDispatchRequestRow = typeof providerDispatchRequests.$inferSelect;
+export type InsertProviderDispatchRequestRow = typeof providerDispatchRequests.$inferInsert;
+
+export const providerCallbackEvents = mysqlTable(
+  "provider_callback_events",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic prcb1:<sha256> callback event identity.
+    callbackId: varchar("callbackId", { length: 70 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    requestId: varchar("requestId", { length: 69 }),
+    bindingId: varchar("bindingId", { length: 69 }),
+    providerId: varchar("providerId", { length: 32 }).notNull(),
+    providerAccountId: varchar("providerAccountId", { length: 128 }).notNull(),
+    providerEventId: varchar("providerEventId", { length: 191 }).notNull(),
+    // ACCEPTED_NEW | DUPLICATE_CONVERGED | CONFLICT_QUARANTINED |
+    // REJECTED_FORGED | REJECTED_STALE | REJECTED_IDENTITY_MISMATCH |
+    // REJECTED_UNKNOWN_REFERENCE | REJECTED_MALFORMED
+    disposition: varchar("disposition", { length: 28 }).notNull(),
+    classification: varchar("classification", { length: 24 }),
+    // sha256 over the bounded callback payload — raw payloads never persist.
+    payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    receivedAt: varchar("receivedAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    callbackIdentityUnique: uniqueIndex("pce_callback_identity_uidx").on(table.callbackId),
+    userCallbackUnique: uniqueIndex("pce_user_callback_uidx").on(table.userId, table.callbackId),
+    callbackNaturalUnique: uniqueIndex("pce_callback_natural_uidx").on(
+      table.providerId,
+      table.providerAccountId,
+      table.providerEventId,
+      table.payloadHash
+    ),
+    userRequestIdx: index("pce_user_request_idx").on(table.userId, table.requestId),
+  })
+);
+
+export type ProviderCallbackEventRow = typeof providerCallbackEvents.$inferSelect;
+export type InsertProviderCallbackEventRow = typeof providerCallbackEvents.$inferInsert;
+
+
+export const providerReconciliationRecords = mysqlTable(
+  "provider_reconciliation_records",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic prx1:<sha256> reconciliation record identity.
+    reconciliationId: varchar("reconciliationId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    requestId: varchar("requestId", { length: 69 }).notNull(),
+    // CONFIRMED_SUCCEEDED | CONFIRMED_FAILED | STILL_PENDING | UNKNOWN
+    outcome: varchar("outcome", { length: 24 }).notNull(),
+    // Fingerprint of the bounded adapter evidence — never raw evidence text.
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    providerReference: varchar("providerReference", { length: 191 }),
+    reconciledAt: varchar("reconciledAt", { length: 32 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    reconciliationIdentityUnique: uniqueIndex("prr_reconciliation_identity_uidx").on(table.reconciliationId),
+    userReconciliationUnique: uniqueIndex("prr_user_reconciliation_uidx").on(table.userId, table.reconciliationId),
+    reconciliationNaturalUnique: uniqueIndex("prr_reconciliation_natural_uidx").on(
+      table.userId,
+      table.requestId,
+      table.evidenceHash
+    ),
+    userRequestIdx: index("prr_user_request_idx").on(table.userId, table.requestId),
+  })
+);
+
+export type ProviderReconciliationRecordRow = typeof providerReconciliationRecords.$inferSelect;
+export type InsertProviderReconciliationRecordRow = typeof providerReconciliationRecords.$inferInsert;
+
+export const providerCircuitBreakerStates = mysqlTable(
+  "provider_circuit_breaker_states",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic pcb1:<sha256> circuit scope identity.
+    circuitId: varchar("circuitId", { length: 69 }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    providerId: varchar("providerId", { length: 32 }).notNull(),
+    providerAccountId: varchar("providerAccountId", { length: 128 }).notNull(),
+    actionType: varchar("actionType", { length: 20 }).notNull(),
+    // CLOSED | OPEN | HALF_OPEN
+    circuitState: varchar("circuitState", { length: 12 }).notNull(),
+    failureCount: int("failureCount").notNull(),
+    successCount: int("successCount").notNull(),
+    openedAtMs: bigint("openedAtMs", { mode: "number" }),
+    windowStartMs: bigint("windowStartMs", { mode: "number" }).notNull(),
+    halfOpenProbesInFlight: int("halfOpenProbesInFlight").notNull(),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    circuitIdentityUnique: uniqueIndex("pcbs_circuit_identity_uidx").on(table.circuitId),
+    userCircuitUnique: uniqueIndex("pcbs_user_circuit_uidx").on(table.userId, table.circuitId),
+    circuitNaturalUnique: uniqueIndex("pcbs_circuit_natural_uidx").on(
+      table.userId,
+      table.providerId,
+      table.providerAccountId,
+      table.actionType
+    ),
+  })
+);
+
+export type ProviderCircuitBreakerStateRow = typeof providerCircuitBreakerStates.$inferSelect;
+export type InsertProviderCircuitBreakerStateRow = typeof providerCircuitBreakerStates.$inferInsert;
