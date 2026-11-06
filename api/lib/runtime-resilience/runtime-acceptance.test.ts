@@ -289,22 +289,25 @@ describe("R10-C connected runtime acceptance", () => {
   });
   it("in-flight drain preserves ambiguous outcome", async () => {
     const h = await setup();
+    const w = await h.register();
     let release!: () => void;
     const wait = new Promise<void>(r => (release = r));
-    const original = h.harness.adapters.SOCIAL.dispatch;
-    h.harness.adapters.SOCIAL.dispatch = async input => {
-      await wait;
-      return { status: "ambiguous" };
-    };
-    const w = await h.register();
-    const running = w.run({ jobId: h.jobId });
-    await vi.waitFor(() =>
-      expect(h.rows("runtime_jobs")[0].resultStatus).toBe("DISPATCHING")
+    h.harness.adapters.SOCIAL.scriptOutcome(
+      "social.publish",
+      wait.then(() => ({ status: "ambiguous" as const }))
     );
-    expect((await w.drain()).drained).toBe(false);
-    release();
-    expect((await running)?.resultStatus).toBe("UNCERTAIN");
-    h.harness.adapters.SOCIAL.dispatch = original;
+    const running = w.run({ jobId: h.jobId });
+    try {
+      await vi.waitFor(() =>
+        expect(h.rows("runtime_jobs")[0].resultStatus).toBe("DISPATCHING")
+      );
+      expect((await w.drain()).drained).toBe(false);
+      release();
+      expect((await running)?.resultStatus).toBe("UNCERTAIN");
+    } finally {
+      release();
+      await running;
+    }
   });
   it("dead letter preserves uncertain evidence and never rewrites mission truth", async () => {
     const h = await setup();

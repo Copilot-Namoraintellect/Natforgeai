@@ -49,6 +49,12 @@ export interface ExecutionAdapterRegistry {
   list(): readonly ExecutionAdapter[];
 }
 
+// Object identity certification for the inert R9 regression harness only.
+const sandboxRegistries = new WeakSet<ExecutionAdapterRegistry>();
+export function isSandboxExecutionRegistry(registry: ExecutionAdapterRegistry): boolean {
+  return sandboxRegistries.has(registry);
+}
+
 export function createAdapterRegistry(
   adapters: readonly ExecutionAdapter[]
 ): ExecutionAdapterRegistry {
@@ -112,8 +118,8 @@ export function assertKnownAdapterType(value: string): ExecutionAdapterType {
 
 export interface FakeExecutionAdapter extends ExecutionAdapter {
   readonly dispatched: ExecutionAdapterDispatchInput[];
-  /** Script per capability: default success unless overridden. */
-  scriptOutcome(capability: ExecutionCapability, outcome: AdapterRawOutcome): void;
+  /** Script per capability; a promise defers dispatch until the test releases it. */
+  scriptOutcome(capability: ExecutionCapability, outcome: AdapterRawOutcome | Promise<AdapterRawOutcome>): void;
   /** Queue the eventual outcome for a pending externalReference. */
   queueCallback(externalReference: string, outcome: AdapterRawOutcome): void;
   readonly callbackLog: { readonly externalReference: string; readonly outcome: AdapterRawOutcome }[];
@@ -144,7 +150,7 @@ export function createSandboxAdapterHarness(): SandboxAdapterHarness {
 
   for (const [adapterType, capabilities] of byAdapter) {
     const dispatched: ExecutionAdapterDispatchInput[] = [];
-    const scripts = new Map<ExecutionCapability, AdapterRawOutcome>();
+    const scripts = new Map<ExecutionCapability, AdapterRawOutcome | Promise<AdapterRawOutcome>>();
     const pending = new Map<string, AdapterRawOutcome>();
     const callbackLog: { externalReference: string; outcome: AdapterRawOutcome }[] = [];
     adapters[adapterType] = {
@@ -185,9 +191,15 @@ export function createSandboxAdapterHarness(): SandboxAdapterHarness {
     };
   }
 
+  const registry = createAdapterRegistry(Object.values(adapters));
+  // Freeze registry and adapter methods so certification cannot survive mutation
+  // into a real transport. Script/callback state remains closure-private.
+  Object.values(adapters).forEach(adapter => Object.freeze(adapter));
+  Object.freeze(registry);
+  sandboxRegistries.add(registry);
   return {
     adapters,
-    registry: createAdapterRegistry(Object.values(adapters)),
+    registry,
     totalDispatches() {
       return Object.values(adapters).reduce((sum, a) => sum + a.dispatched.length, 0);
     },
