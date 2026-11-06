@@ -5598,3 +5598,208 @@ export const providerCircuitBreakerStates = mysqlTable(
 
 export type ProviderCircuitBreakerStateRow = typeof providerCircuitBreakerStates.$inferSelect;
 export type InsertProviderCircuitBreakerStateRow = typeof providerCircuitBreakerStates.$inferInsert;
+
+
+
+// ─── R10-E Observability, Operations & Incident Control ───
+//
+// Append-only operational telemetry, deterministic incident records,
+// deduplicated alert presentation and evidence-derived health observations.
+// Owned by api/lib/observability/ (docs/contracts/production-observability-contract.md).
+// No secrets, no chain-of-thought, no unrestricted request/response bodies;
+// safeMetadata is sanitized like the audit envelope. Canonical source of
+// truth is this file; migration 0038_r10_e_observability_operations is
+// provisional — artefact only, NOT executed (R10-X owns R10 sequencing).
+
+export const operationalEvents = mysqlTable(
+  "operational_events",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic evt1:<sha256> identity; durable unique anchor.
+    eventId: varchar("eventId", { length: 70 }).notNull(),
+    schemaVersion: int("schemaVersion").notNull(),
+    contractVersion: varchar("contractVersion", { length: 48 }).notNull(),
+    eventType: varchar("eventType", { length: 48 }).notNull(),
+    environment: varchar("environment", { length: 16 }).notNull(),
+    // Server-resolved release identity; NULL when unknown — never invented.
+    releaseVersion: varchar("releaseVersion", { length: 64 }),
+    service: varchar("service", { length: 24 }).notNull(),
+    component: varchar("component", { length: 64 }).notNull(),
+    operation: varchar("operation", { length: 64 }).notNull(),
+    severity: varchar("severity", { length: 12 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull(),
+    correlationId: varchar("correlationId", { length: 64 }),
+    // Tenant/business isolation; NULL for platform-scope events.
+    tenantId: bigint("tenantId", { mode: "number", unsigned: true }),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    missionId: varchar("missionId", { length: 69 }),
+    taskId: varchar("taskId", { length: 128 }),
+    executionAttemptId: varchar("executionAttemptId", { length: 69 }),
+    provider: varchar("provider", { length: 24 }),
+    // Only where safe: job/request id class — never credentials.
+    providerReference: varchar("providerReference", { length: 128 }),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    observedAt: varchar("observedAt", { length: 32 }).notNull(),
+    diagnosticCode: varchar("diagnosticCode", { length: 40 }).notNull(),
+    // JSON: sanitized safe metadata only (depth/key bounded, secrets removed).
+    safeMetadata: json("safeMetadata").notNull(),
+    // Immutable core hash; drift fails closed.
+    eventHash: varchar("eventHash", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    eventIdentityUnique: uniqueIndex("ope_identity_uidx").on(table.eventId),
+    tenantIdx: index("ope_tenant_idx").on(table.tenantId),
+    tenantTypeIdx: index("ope_tenant_type_idx").on(table.tenantId, table.eventType),
+    eventTypeIdx: index("ope_event_type_idx").on(table.eventType),
+    occurredAtIdx: index("ope_occurred_at_idx").on(table.occurredAt),
+    correlationIdx: index("ope_correlation_idx").on(table.correlationId),
+  })
+);
+
+export type OperationalEventRow = typeof operationalEvents.$inferSelect;
+export type InsertOperationalEventRow = typeof operationalEvents.$inferInsert;
+
+export const operationalIncidents = mysqlTable(
+  "operational_incidents",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic inc1:<sha256> identity over environment/service/component/
+    // failureClass/scope — re-detection converges to the open incident.
+    incidentId: varchar("incidentId", { length: 69 }).notNull(),
+    environment: varchar("environment", { length: 16 }).notNull(),
+    service: varchar("service", { length: 24 }).notNull(),
+    component: varchar("component", { length: 64 }).notNull(),
+    failureClass: varchar("failureClass", { length: 40 }).notNull(),
+    scope: varchar("scope", { length: 12 }).notNull(),
+    tenantId: bigint("tenantId", { mode: "number", unsigned: true }),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }),
+    severity: varchar("severity", { length: 12 }).notNull(),
+    // Current lifecycle state; every change is an icl1: fact + CAS version.
+    status: varchar("status", { length: 16 }).notNull(),
+    title: varchar("title", { length: 160 }).notNull(),
+    summary: varchar("summary", { length: 512 }).notNull(),
+    safetyState: varchar("safetyState", { length: 28 }).notNull(),
+    executionContinuing: boolean("executionContinuing").notNull(),
+    autonomousActionSuspended: boolean("autonomousActionSuspended").notNull(),
+    operatorAttentionRequired: boolean("operatorAttentionRequired").notNull(),
+    firstSeenAt: varchar("firstSeenAt", { length: 32 }).notNull(),
+    lastSeenAt: varchar("lastSeenAt", { length: 32 }).notNull(),
+    occurrenceCount: int("occurrenceCount").notNull(),
+    // JSON: bounded evt1: refs (<= 25) — evidence is never deleted on dedup.
+    evidenceEventIds: json("evidenceEventIds").notNull(),
+    correlationKey: varchar("correlationKey", { length: 160 }).notNull(),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    incidentIdentityUnique: uniqueIndex("opi_identity_uidx").on(table.incidentId),
+    tenantIdx: index("opi_tenant_idx").on(table.tenantId),
+    tenantStatusIdx: index("opi_tenant_status_idx").on(table.tenantId, table.status),
+    statusIdx: index("opi_status_idx").on(table.status),
+    failureClassIdx: index("opi_failure_class_idx").on(table.failureClass),
+  })
+);
+
+export type OperationalIncidentRow = typeof operationalIncidents.$inferSelect;
+export type InsertOperationalIncidentRow = typeof operationalIncidents.$inferInsert;
+
+export const operationalIncidentLifecycleEvents = mysqlTable(
+  "operational_incident_lifecycle_events",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic icl1:<sha256> fact identity; unique anchor.
+    lifecycleEventId: varchar("lifecycleEventId", { length: 70 }).notNull(),
+    incidentId: varchar("incidentId", { length: 69 }).notNull(),
+    tenantId: bigint("tenantId", { mode: "number", unsigned: true }),
+    fromStatus: varchar("fromStatus", { length: 16 }),
+    toStatus: varchar("toStatus", { length: 16 }).notNull(),
+    // OPERATOR | SYSTEM — transitions are explicit and attributable.
+    actorType: varchar("actorType", { length: 12 }).notNull(),
+    actorUserId: int("actorUserId"),
+    // Verbatim authority reference for SUPPRESSED; NULL otherwise.
+    suppressionAuthority: varchar("suppressionAuthority", { length: 160 }),
+    reason: varchar("reason", { length: 320 }).notNull(),
+    occurredAt: varchar("occurredAt", { length: 32 }).notNull(),
+    // Immutable core hash; drift fails closed.
+    eventHash: varchar("eventHash", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    lifecycleIdentityUnique: uniqueIndex("opil_identity_uidx").on(table.lifecycleEventId),
+    incidentIdx: index("opil_incident_idx").on(table.incidentId),
+  })
+);
+
+export type OperationalIncidentLifecycleEventRow = typeof operationalIncidentLifecycleEvents.$inferSelect;
+export type InsertOperationalIncidentLifecycleEventRow =
+  typeof operationalIncidentLifecycleEvents.$inferInsert;
+
+export const operationalAlerts = mysqlTable(
+  "operational_alerts",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic alt1:<sha256> identity over environment+dedupKey.
+    alertId: varchar("alertId", { length: 69 }).notNull(),
+    environment: varchar("environment", { length: 16 }).notNull(),
+    dedupKey: varchar("dedupKey", { length: 160 }).notNull(),
+    ruleId: varchar("ruleId", { length: 48 }).notNull(),
+    severity: varchar("severity", { length: 12 }).notNull(),
+    // OPEN | ACKNOWLEDGED | RESOLVED — presentation state; events persist.
+    status: varchar("status", { length: 14 }).notNull(),
+    title: varchar("title", { length: 160 }).notNull(),
+    summary: varchar("summary", { length: 512 }).notNull(),
+    affectedTarget: varchar("affectedTarget", { length: 160 }).notNull(),
+    safetyState: varchar("safetyState", { length: 28 }).notNull(),
+    executionContinuing: boolean("executionContinuing").notNull(),
+    autonomousActionSuspended: boolean("autonomousActionSuspended").notNull(),
+    operatorAttentionRequired: boolean("operatorAttentionRequired").notNull(),
+    incidentId: varchar("incidentId", { length: 69 }),
+    firstSeenAt: varchar("firstSeenAt", { length: 32 }).notNull(),
+    lastSeenAt: varchar("lastSeenAt", { length: 32 }).notNull(),
+    occurrenceCount: int("occurrenceCount").notNull(),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    alertIdentityUnique: uniqueIndex("opa_identity_uidx").on(table.alertId),
+    dedupIdx: uniqueIndex("opa_dedup_uidx").on(table.environment, table.dedupKey),
+    statusIdx: index("opa_status_idx").on(table.status),
+    severityIdx: index("opa_severity_idx").on(table.severity),
+  })
+);
+
+export type OperationalAlertRow = typeof operationalAlerts.$inferSelect;
+export type InsertOperationalAlertRow = typeof operationalAlerts.$inferInsert;
+
+export const serviceHealthObservations = mysqlTable(
+  "service_health_observations",
+  {
+    id: serial("id").primaryKey(),
+    // Deterministic hlt1:<sha256> observation identity.
+    observationId: varchar("observationId", { length: 70 }).notNull(),
+    environment: varchar("environment", { length: 16 }).notNull(),
+    dimension: varchar("dimension", { length: 28 }).notNull(),
+    service: varchar("service", { length: 24 }).notNull(),
+    healthClass: varchar("healthClass", { length: 12 }).notNull(),
+    // JSON: bounded evidence summary (no payloads, no secrets).
+    evidenceSummary: json("evidenceSummary").notNull(),
+    // JSON: dimensions whose evidence was absent at observation time.
+    unknownInputs: json("unknownInputs").notNull(),
+    evidenceHash: varchar("evidenceHash", { length: 64 }).notNull(),
+    observedAt: varchar("observedAt", { length: 32 }).notNull(),
+    releaseVersion: varchar("releaseVersion", { length: 64 }),
+    version: int("version").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    observationIdentityUnique: uniqueIndex("sho_identity_uidx").on(table.observationId),
+    dimensionIdx: index("sho_dimension_idx").on(table.dimension, table.observedAt),
+    observedAtIdx: index("sho_observed_at_idx").on(table.observedAt),
+  })
+);
+
+export type ServiceHealthObservationRow = typeof serviceHealthObservations.$inferSelect;
+export type InsertServiceHealthObservationRow = typeof serviceHealthObservations.$inferInsert;

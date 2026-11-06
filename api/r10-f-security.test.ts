@@ -209,7 +209,7 @@ describe("F10 rogue-agent security", () => {
         "optimisationGovernance", "strategicGovernance", "experimentation", "budgetPortfolio",
         "strategicMemory", "businessChange", "marketSignal", "strategicReasoning",
         "strategicOpportunityRisk", "missionAuthority", "missionGovernance", "missionPlanning",
-        "missionScheduling", "execution", "missionStateRecovery",
+        "missionScheduling", "execution", "missionStateRecovery", "observability",
       ]);
       const topLevel = paths.map((p) => p.split(".")[0]);
       expect(new Set(topLevel).size).toBeGreaterThan(40);

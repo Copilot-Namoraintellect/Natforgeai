@@ -52,6 +52,7 @@ import { missionPlanningRouter } from "./mission-planning-router";
 import { missionSchedulingRouter } from "./mission-scheduling-router";
 import { executionCoordinationRouter } from "./execution-coordination-router";
 import { missionStateRecoveryRouter } from "./mission-state-recovery-router";
+import { observabilityRouter } from "./observability-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -129,6 +130,7 @@ export const appRouter = createRouter({
   missionScheduling: missionSchedulingRouter,
   execution: executionCoordinationRouter,
   missionStateRecovery: missionStateRecoveryRouter,
+  observability: observabilityRouter,
 });
 
 export type AppRouter = typeof appRouter;
