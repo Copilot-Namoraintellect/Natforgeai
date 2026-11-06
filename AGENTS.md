@@ -44,6 +44,7 @@
 35. [Data Integrity, Real MySQL & Concurrency (WBS-R10-B)](#35-data-integrity-real-mysql--concurrency-wbs-r10-b)
 36. [Production Security, Secrets & Trust Boundary (WBS-R10-F)](#36-production-security-secrets--trust-boundary-wbs-r10-f)
 37. [Observability, Operations & Incident Control (WBS-R10-E)](#37-observability-operations--incident-control-wbs-r10-e)
+38. [Backup, Disaster Recovery & Business Continuity (R10-G)](#38-backup-disaster-recovery--business-continuity-r10-g)
 
 ---
 
@@ -1402,7 +1403,6 @@ The integrated R8 system (streams A/B/C/D/E/F merged on
   `recommendation != execution authorization`.
 - Real-MySQL concurrency remains the R10 / pre-production gate.
 
-<<<<<<< HEAD
 ---
 
 ## 31. Mission Authority & Objectives (WBS-R9-A)
@@ -1811,3 +1811,59 @@ audit.*
   `api/lib/observability/observability-security.test.ts` (22 rogue-agent
   cases). Report:
   `docs/recovery/r10-e-observability-operations-acceptance-report.md`.
+
+---
+
+## 38. Backup, Disaster Recovery & Business Continuity (R10-G)
+
+The production-grade backup/DR/business-continuity capability. Built
+pre-infrastructure: the OneGrid production server was still being configured,
+so this stream delivers the architecture, harnesses, contracts and testable
+recovery procedures **without** claiming production backup/restore has
+happened. Core principle: **backup success != recovery success** — a backup
+counts only through the chain independent protected copy → restore →
+application startup → integrity validation → Mission Control acceptance.
+
+- Core artefacts: `scripts/backup/` (`run-backup.sh`, `backup-database.sh`,
+  `backup-config.sh`, `backup-assets.sh`, `verify-backup.sh`, `backup-cli.ts`,
+  `lib/`: manifest / AES-256-GCM encrypt / secret-scan / redact-env /
+  retention / backup-set assembly) and `scripts/restore/` (`run-restore.sh`,
+  `restore.ts` run|gather|verify, `lib/integrity.ts`, `rehearsal-local.sh`).
+- 3-2-1 design (`docs/recovery/r10-g-backup-architecture.md`): 3 copies
+  (live DB, local encrypted set, offsite encrypted replica), 2 locations,
+  1 offsite independently protected (distinct credentials, versioning +
+  object-lock/immutability where supported, append-only). AES-256-GCM
+  (scrypt-derived key, passphrase from secret store only). Retention
+  14 daily + 8 weekly + 12 monthly, enforced locally and offsite.
+- Backup authority (G4) is separate from runtime: dedicated `backup-op`
+  identity, app user denied read access, no tRPC/agent surface (verified:
+  zero `scripts/backup|restore` references in `api/`/`src/`), runtime cannot
+  disable/delete/redirect/suppress backups — **AGENT_BACKUP_ACCESS=False** by
+  construction.
+- Recovery integrity (G7): `assessIntegrity()` over gathered facts — Tier A
+  presence + counts preserved, migration identity vs pinned release, audit
+  fingerprint uniqueness + no new id gaps, ≤ 1 SUCCEEDED attempt per
+  execution action (no duplicate dispatch), UNCERTAIN preserved verbatim,
+  identity-pattern sampling (`mis1:`/`exa1:`/`out1:`/`mgd1:`), no stale
+  claims. `restore.ts gather` reads a recovery DB read-only;
+  `PRODUCTION_DB_HOST` guard refuses production targets unless
+  `DISASTER_RECOVERY=1`.
+- Contracts: `docs/contracts/production-recovery-objectives-contract.md`
+  (provisional RPO/RTO: DB ≤ 24 h / ≤ 4 h; app ≤ 1 h; worker ≤ 30 min; full
+  platform ≤ 8 h target — drill-measured before commitment),
+  `docs/contracts/backup-monitoring-contract.md` (R10-E signals incl.
+  silence-is-an-alert).
+- Docs: `docs/recovery/r10-g-recovery-asset-inventory.md` (G0/G1, 118
+  tables tiered), `r10-g-backup-architecture.md` (G3/G4/G9),
+  `r10-g-disaster-scenarios.md` (G8, 12 scenarios × detect/contain/recover/
+  validate/resume), `r10-g-onegrid-implementation-checklist.md` (G11,
+  prepared-not-executed), `r10-g-recovery-rehearsal-plan.md` (G12),
+  `r10-g-backup-dr-acceptance-report.md`.
+- Local rehearsal (file level, no MySQL, no production):
+  `scripts/restore/rehearsal-local.sh` — 11 steps green: assembly →
+  verify/decrypt → negative paths (wrong passphrase, tamper, embedded
+  secret) → restore → G7 assessment → duplicate-dispatch rejection →
+  production-guard → orchestrator audit. Honest limit: no real database was
+  dumped/restored; **R10-X production restore gate** (real disposable MySQL
+  restore + Mission Control connected acceptance subset) is mandatory before
+  any disaster-recovery acceptance claim.
