@@ -780,6 +780,9 @@ function makeCallbackHarness(seedGovernance: (govRows: FakeGovernanceRow[]) => v
     upstream: createInMemoryExecutionUpstreamAuthority(upstreamRows),
     governance: createInMemoryMissionGovernanceConsumptionAuthority(govRows),
     adapters: createAdapterRegistry([social.adapter]),
+    // Synthetic callback-race fixture: explicitly bound inert autonomy gate.
+    // Production autonomy enforcement remains unchanged.
+    autonomyGate: async () => {},
     now: () => NOW,
   };
   const harness = {
