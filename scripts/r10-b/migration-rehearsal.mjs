@@ -137,7 +137,15 @@ function runStaticVerification() {
 
   // 2. Canonical 0037 authority markers.
   const last = entries[entries.length - 1];
-  if (last.tag !== CANONICAL_0037) problems.push(`journal head is ${last.tag}, expected ${CANONICAL_0037}`);
+  // R10-X may append the validated C/D/E/H package; R9's authority stays at 37.
+  if (entries.find(e => e.idx === 37)?.tag !== CANONICAL_0037) problems.push("canonical R9 journal entry 37 changed");
+  if (last.tag !== CANONICAL_0037) {
+    const successors = ["0038_r10_c_runtime_resilience", "0039_r10_d_provider_resilience", "0040_r10_e_observability_operations", "0041_r10_h_autonomy_activation"];
+    const appended = entries.filter(e => e.idx > 37);
+    if (JSON.stringify(appended.map(e => e.tag)) !== JSON.stringify(successors) || appended.some((e, i) => e.idx !== 38 + i)) {
+      problems.push(`journal head is ${last.tag}, expected canonical R9 or the reconciled four-migration R10 package`);
+    }
+  }
   const canonicalSql = fs.readFileSync(path.join(MIGRATIONS_DIR, `${CANONICAL_0037}.sql`), "utf8");
   for (const table of TABLES_CREATED_BY_0037) {
     if (!canonicalSql.includes(`CREATE TABLE \`${table}\``)) {

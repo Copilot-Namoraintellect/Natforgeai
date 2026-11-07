@@ -267,6 +267,34 @@
       "when": 1793467733779,
       "tag": "0037_r9_mission_control_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "5",
+      "when": 1793983274495,
+      "tag": "0038_r10_c_runtime_resilience",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "5",
+      "when": 1793983274508,
+      "tag": "0039_r10_d_provider_resilience",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "5",
+      "when": 1793983274520,
+      "tag": "0040_r10_e_observability_operations",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "5",
+      "when": 1793983274531,
+      "tag": "0041_r10_h_autonomy_activation",
+      "breakpoints": true
     }
   ]
 }

@@ -12,6 +12,8 @@ import {
   date,
   index,
   uniqueIndex,
+  primaryKey,
+  customType,
 } from "drizzle-orm/mysql-core";
 
 // ─── Users ───
@@ -5210,9 +5212,9 @@ export type InsertMissionOperationalTimelineEventRow =
   typeof missionOperationalTimelineEvents.$inferInsert;
 
 // ─── R10-C Runtime, Workers & Autonomous Execution Resilience ───
-// Stream-local runtime tables (runtime-resilience/v1). Provisional migration
-// 0038_r10_c_runtime_resilience — ARTEFACT ONLY, NOT executed; R10-X owns
-// canonical R10 migration convergence. Canonical R9 0037 is never modified by
+// Runtime tables (runtime-resilience/v1). Canonical offline migration
+// 0038_r10_c_runtime_resilience; provisional evidence is archived. NOT executed.
+// Canonical R9 0037 is never modified by
 // these definitions. A lease here NEVER grants execution authority — it only
 // fences runtime access to a job whose authorityRef was validated upstream.
 
@@ -5392,9 +5394,9 @@ export type InsertRuntimeLifecycleEventRow = typeof runtimeLifecycleEvents.$infe
 
 
 // ─── R10-D Provider & Integration Resilience ───
-// Stream-local authority tables (provider-resilience/v1). Provisional
-// migration 0038_r10_d_provider_resilience — ARTEFACT ONLY, NOT executed;
-// R10-X owns canonical 0038 convergence. Canonical R9 0037 is never modified
+// Authority tables (provider-resilience/v1). Canonical offline migration
+// 0039_r10_d_provider_resilience; provisional evidence is archived. NOT executed.
+// Canonical R9 0037 is never modified
 // by these definitions. R10-D never writes R9-D execution tables; it
 // re-validates them read-only through the guarded execution seam.
 
@@ -5608,8 +5610,8 @@ export type InsertProviderCircuitBreakerStateRow = typeof providerCircuitBreaker
 // Owned by api/lib/observability/ (docs/contracts/production-observability-contract.md).
 // No secrets, no chain-of-thought, no unrestricted request/response bodies;
 // safeMetadata is sanitized like the audit envelope. Canonical source of
-// truth is this file; migration 0038_r10_e_observability_operations is
-// provisional — artefact only, NOT executed (R10-X owns R10 sequencing).
+// truth is this file; canonical migration 0040_r10_e_observability_operations
+// is an offline artefact, NOT executed; provisional evidence is archived.
 
 export const operationalEvents = mysqlTable(
   "operational_events",
@@ -5803,3 +5805,29 @@ export const serviceHealthObservations = mysqlTable(
 
 export type ServiceHealthObservationRow = typeof serviceHealthObservations.$inferSelect;
 export type InsertServiceHealthObservationRow = typeof serviceHealthObservations.$inferInsert;
+
+// R10-H controlled autonomy. DDL creates empty ledgers, never activation rows.
+// Binary ASCII scope/action comparisons preserve the raw-SQL repository contract.
+const autonomyScopeKey = customType<{ data: string }>({
+  dataType: () => "varchar(512) CHARACTER SET ascii COLLATE ascii_bin",
+});
+const autonomyActionId = customType<{ data: string }>({
+  dataType: () => "varchar(120) CHARACTER SET ascii COLLATE ascii_bin",
+});
+
+export const autonomyActivations = mysqlTable("autonomy_activations", {
+  scopeKey: autonomyScopeKey("scope_key").primaryKey(),
+  version: bigint("version", { mode: "number", unsigned: true }).notNull(),
+  stateJson: json("state_json").notNull(),
+});
+
+export const autonomyActivationAudit = mysqlTable("autonomy_activation_audit", {
+  scopeKey: autonomyScopeKey("scope_key").notNull(),
+  version: bigint("version", { mode: "number", unsigned: true }).notNull(),
+  auditJson: json("audit_json").notNull(),
+}, (table) => [primaryKey({ columns: [table.scopeKey, table.version] })]);
+
+export const autonomyCanaryReservations = mysqlTable("autonomy_canary_reservations", {
+  scopeKey: autonomyScopeKey("scope_key").notNull(),
+  actionId: autonomyActionId("action_id").notNull(),
+}, (table) => [primaryKey({ columns: [table.scopeKey, table.actionId] })]);

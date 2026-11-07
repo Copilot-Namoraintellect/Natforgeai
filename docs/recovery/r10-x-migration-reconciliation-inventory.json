@@ -1,0 +1,2252 @@
+{
+  "ok": true,
+  "mode": "OFFLINE_ONLY",
+  "baseline": "c41cd564692717f6edc78ae581e01f9afab6125c",
+  "migrationExecution": false,
+  "tables": [
+    {
+      "migration": 38,
+      "table": "runtime_workers",
+      "columns": 14,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "workerInstanceId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "workerId": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "service": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "capabilities": {
+          "type": "json",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "runtimeVersion": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "releaseVersion": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "runtimeState": {
+          "type": "varchar(16)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "startedAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "heartbeatAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "stoppedAt": {
+          "type": "varchar(32)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "rtw_instance_uidx": [
+          "workerInstanceId"
+        ]
+      },
+      "indexes": {
+        "rtw_worker_role_idx": [
+          "workerId"
+        ],
+        "rtw_worker_state_idx": [
+          "runtimeState"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())",
+        "updatedAt": "(now())"
+      },
+      "difference": "CURRENT_TIMESTAMP normalized to (now()); inline PK becomes named PK. Equivalent semantics."
+    },
+    {
+      "migration": 38,
+      "table": "runtime_jobs",
+      "columns": 27,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "jobId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "userId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "businessId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "jobType": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "authorityRef": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "missionId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "planId": {
+          "type": "varchar(128)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "scheduleId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "taskId": {
+          "type": "varchar(128)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "attemptRef": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "parametersFingerprint": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "jobFingerprint": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "runtimeVersion": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "releaseVersion": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "notBefore": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "state": {
+          "type": "varchar(16)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "leaseId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "leaseOwnerInstanceId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "leaseEpoch": {
+          "type": "int",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "leaseExpiresAt": {
+          "type": "varchar(32)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "resultStatus": {
+          "type": "varchar(20)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "failureClass": {
+          "type": "varchar(24)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "uncertaintyClass": {
+          "type": "varchar(28)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "rtj_job_uidx": [
+          "jobId"
+        ],
+        "rtj_user_job_uidx": [
+          "userId",
+          "jobId"
+        ]
+      },
+      "indexes": {
+        "rtj_user_state_idx": [
+          "userId",
+          "state"
+        ],
+        "rtj_user_authority_idx": [
+          "userId",
+          "authorityRef"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())",
+        "updatedAt": "(now())"
+      },
+      "difference": "CURRENT_TIMESTAMP normalized to (now()); inline PK becomes named PK. Equivalent semantics."
+    },
+    {
+      "migration": 38,
+      "table": "runtime_leases",
+      "columns": 16,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "leaseId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "jobId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "userId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "businessId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "workerInstanceId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "authorityRef": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "attemptRef": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "leaseState": {
+          "type": "varchar(12)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "leaseEpoch": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "acquiredAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "heartbeatAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "leaseExpiresAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "rtl_lease_uidx": [
+          "leaseId"
+        ]
+      },
+      "indexes": {
+        "rtl_job_idx": [
+          "jobId"
+        ],
+        "rtl_worker_idx": [
+          "workerInstanceId"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())",
+        "updatedAt": "(now())"
+      },
+      "difference": "CURRENT_TIMESTAMP normalized to (now()); inline PK becomes named PK. Equivalent semantics."
+    },
+    {
+      "migration": 38,
+      "table": "runtime_dead_letters",
+      "columns": 15,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "deadLetterId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "jobId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "userId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "businessId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "jobType": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "authorityRef": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "attemptRef": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "reason": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "failureClass": {
+          "type": "varchar(24)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "uncertaintyClass": {
+          "type": "varchar(28)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "diagnostic": {
+          "type": "json",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "deadLetterFingerprint": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "occurredAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "rtdl_identity_uidx": [
+          "deadLetterId"
+        ]
+      },
+      "indexes": {
+        "rtdl_user_job_idx": [
+          "userId",
+          "jobId"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())"
+      },
+      "difference": "CURRENT_TIMESTAMP normalized to (now()); inline PK becomes named PK. Equivalent semantics."
+    },
+    {
+      "migration": 38,
+      "table": "runtime_lifecycle_events",
+      "columns": 13,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "lifecycleEventId": {
+          "type": "varchar(70)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "userId": {
+          "type": "bigint unsigned",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "jobId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "workerInstanceId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "leaseId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "lifecycleType": {
+          "type": "varchar(28)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "fromState": {
+          "type": "varchar(20)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "toState": {
+          "type": "varchar(20)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "reasonCode": {
+          "type": "varchar(64)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "occurredAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "eventHash": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "rtlf_identity_uidx": [
+          "lifecycleEventId"
+        ]
+      },
+      "indexes": {
+        "rtlf_job_idx": [
+          "jobId"
+        ],
+        "rtlf_worker_idx": [
+          "workerInstanceId"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())"
+      },
+      "difference": "CURRENT_TIMESTAMP normalized to (now()); inline PK becomes named PK. Equivalent semantics."
+    },
+    {
+      "migration": 39,
+      "table": "provider_account_bindings",
+      "columns": 13,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "bindingId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "userId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "businessId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "providerId": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "providerAccountId": {
+          "type": "varchar(128)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "capability": {
+          "type": "varchar(40)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "actionType": {
+          "type": "varchar(20)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "credentialFingerprint": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "status": {
+          "type": "varchar(12)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "pab_binding_identity_uidx": [
+          "bindingId"
+        ],
+        "pab_user_binding_uidx": [
+          "userId",
+          "bindingId"
+        ],
+        "pab_binding_natural_uidx": [
+          "userId",
+          "businessId",
+          "providerId",
+          "providerAccountId",
+          "capability",
+          "actionType"
+        ]
+      },
+      "indexes": {
+        "pab_user_provider_idx": [
+          "userId",
+          "providerId"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())",
+        "updatedAt": "(now())"
+      },
+      "difference": "No semantic difference; Drizzle statement formatting/order only."
+    },
+    {
+      "migration": 39,
+      "table": "provider_dispatch_requests",
+      "columns": 25,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "requestId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "userId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "businessId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "bindingId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "executionActionId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "attemptId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "providerId": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "providerAccountId": {
+          "type": "varchar(128)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "capability": {
+          "type": "varchar(40)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "actionType": {
+          "type": "varchar(20)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "parametersHash": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "nativeIdempotencyKey": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "state": {
+          "type": "varchar(22)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "classification": {
+          "type": "varchar(24)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "failureClass": {
+          "type": "varchar(24)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "providerReference": {
+          "type": "varchar(191)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "retryAfterMs": {
+          "type": "bigint",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "evidenceHash": {
+          "type": "varchar(64)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "circuitStateAtDispatch": {
+          "type": "varchar(12)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "dispatchedAt": {
+          "type": "varchar(32)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "completedAt": {
+          "type": "varchar(32)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "pdr_request_identity_uidx": [
+          "requestId"
+        ],
+        "pdr_user_request_uidx": [
+          "userId",
+          "requestId"
+        ],
+        "pdr_request_natural_uidx": [
+          "userId",
+          "executionActionId",
+          "attemptId"
+        ]
+      },
+      "indexes": {
+        "pdr_user_binding_idx": [
+          "userId",
+          "bindingId"
+        ],
+        "pdr_user_provider_idx": [
+          "userId",
+          "providerId"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())",
+        "updatedAt": "(now())"
+      },
+      "difference": "No semantic difference; Drizzle statement formatting/order only."
+    },
+    {
+      "migration": 39,
+      "table": "provider_callback_events",
+      "columns": 15,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "callbackId": {
+          "type": "varchar(70)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "userId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "businessId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "requestId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "bindingId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "providerId": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "providerAccountId": {
+          "type": "varchar(128)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "providerEventId": {
+          "type": "varchar(191)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "disposition": {
+          "type": "varchar(28)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "classification": {
+          "type": "varchar(24)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "payloadHash": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "occurredAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "receivedAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "pce_callback_identity_uidx": [
+          "callbackId"
+        ],
+        "pce_user_callback_uidx": [
+          "userId",
+          "callbackId"
+        ],
+        "pce_callback_natural_uidx": [
+          "providerId",
+          "providerAccountId",
+          "providerEventId",
+          "payloadHash"
+        ]
+      },
+      "indexes": {
+        "pce_user_request_idx": [
+          "userId",
+          "requestId"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())"
+      },
+      "difference": "No semantic difference; Drizzle statement formatting/order only."
+    },
+    {
+      "migration": 39,
+      "table": "provider_reconciliation_records",
+      "columns": 10,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "reconciliationId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "userId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "businessId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "requestId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "outcome": {
+          "type": "varchar(24)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "evidenceHash": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "providerReference": {
+          "type": "varchar(191)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "reconciledAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "prr_reconciliation_identity_uidx": [
+          "reconciliationId"
+        ],
+        "prr_user_reconciliation_uidx": [
+          "userId",
+          "reconciliationId"
+        ],
+        "prr_reconciliation_natural_uidx": [
+          "userId",
+          "requestId",
+          "evidenceHash"
+        ]
+      },
+      "indexes": {
+        "prr_user_request_idx": [
+          "userId",
+          "requestId"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())"
+      },
+      "difference": "No semantic difference; Drizzle statement formatting/order only."
+    },
+    {
+      "migration": 39,
+      "table": "provider_circuit_breaker_states",
+      "columns": 15,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "circuitId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "userId": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "providerId": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "providerAccountId": {
+          "type": "varchar(128)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "actionType": {
+          "type": "varchar(20)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "circuitState": {
+          "type": "varchar(12)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "failureCount": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "successCount": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "openedAtMs": {
+          "type": "bigint",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "windowStartMs": {
+          "type": "bigint",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "halfOpenProbesInFlight": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "pcbs_circuit_identity_uidx": [
+          "circuitId"
+        ],
+        "pcbs_user_circuit_uidx": [
+          "userId",
+          "circuitId"
+        ],
+        "pcbs_circuit_natural_uidx": [
+          "userId",
+          "providerId",
+          "providerAccountId",
+          "actionType"
+        ]
+      },
+      "indexes": {},
+      "defaults": {
+        "createdAt": "(now())",
+        "updatedAt": "(now())"
+      },
+      "difference": "No semantic difference; Drizzle statement formatting/order only."
+    },
+    {
+      "migration": 40,
+      "table": "operational_events",
+      "columns": 26,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "eventId": {
+          "type": "varchar(70)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "schemaVersion": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "contractVersion": {
+          "type": "varchar(48)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "eventType": {
+          "type": "varchar(48)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "environment": {
+          "type": "varchar(16)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "releaseVersion": {
+          "type": "varchar(64)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "service": {
+          "type": "varchar(24)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "component": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "operation": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "severity": {
+          "type": "varchar(12)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "status": {
+          "type": "varchar(20)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "correlationId": {
+          "type": "varchar(64)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "tenantId": {
+          "type": "bigint unsigned",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "businessId": {
+          "type": "bigint unsigned",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "missionId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "taskId": {
+          "type": "varchar(128)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "executionAttemptId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "provider": {
+          "type": "varchar(24)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "providerReference": {
+          "type": "varchar(128)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "occurredAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "observedAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "diagnosticCode": {
+          "type": "varchar(40)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "safeMetadata": {
+          "type": "json",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "eventHash": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "ope_identity_uidx": [
+          "eventId"
+        ]
+      },
+      "indexes": {
+        "ope_tenant_idx": [
+          "tenantId"
+        ],
+        "ope_tenant_type_idx": [
+          "tenantId",
+          "eventType"
+        ],
+        "ope_event_type_idx": [
+          "eventType"
+        ],
+        "ope_occurred_at_idx": [
+          "occurredAt"
+        ],
+        "ope_correlation_idx": [
+          "correlationId"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())"
+      },
+      "difference": "Canonical adds explicit id PRIMARY KEY required by schema; provisional serial implied uniqueness only."
+    },
+    {
+      "migration": 40,
+      "table": "operational_incidents",
+      "columns": 25,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "incidentId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "environment": {
+          "type": "varchar(16)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "service": {
+          "type": "varchar(24)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "component": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "failureClass": {
+          "type": "varchar(40)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "scope": {
+          "type": "varchar(12)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "tenantId": {
+          "type": "bigint unsigned",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "businessId": {
+          "type": "bigint unsigned",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "severity": {
+          "type": "varchar(12)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "status": {
+          "type": "varchar(16)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "title": {
+          "type": "varchar(160)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "summary": {
+          "type": "varchar(512)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "safetyState": {
+          "type": "varchar(28)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "executionContinuing": {
+          "type": "boolean",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "autonomousActionSuspended": {
+          "type": "boolean",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "operatorAttentionRequired": {
+          "type": "boolean",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "firstSeenAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "lastSeenAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "occurrenceCount": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "evidenceEventIds": {
+          "type": "json",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "correlationKey": {
+          "type": "varchar(160)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "opi_identity_uidx": [
+          "incidentId"
+        ]
+      },
+      "indexes": {
+        "opi_tenant_idx": [
+          "tenantId"
+        ],
+        "opi_tenant_status_idx": [
+          "tenantId",
+          "status"
+        ],
+        "opi_status_idx": [
+          "status"
+        ],
+        "opi_failure_class_idx": [
+          "failureClass"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())",
+        "updatedAt": "(now())"
+      },
+      "difference": "Canonical adds explicit id PRIMARY KEY required by schema; provisional serial implied uniqueness only."
+    },
+    {
+      "migration": 40,
+      "table": "operational_incident_lifecycle_events",
+      "columns": 13,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "lifecycleEventId": {
+          "type": "varchar(70)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "incidentId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "tenantId": {
+          "type": "bigint unsigned",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "fromStatus": {
+          "type": "varchar(16)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "toStatus": {
+          "type": "varchar(16)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "actorType": {
+          "type": "varchar(12)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "actorUserId": {
+          "type": "int",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "suppressionAuthority": {
+          "type": "varchar(160)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "reason": {
+          "type": "varchar(320)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "occurredAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "eventHash": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "opil_identity_uidx": [
+          "lifecycleEventId"
+        ]
+      },
+      "indexes": {
+        "opil_incident_idx": [
+          "incidentId"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())"
+      },
+      "difference": "Canonical adds explicit id PRIMARY KEY required by schema; provisional serial implied uniqueness only."
+    },
+    {
+      "migration": 40,
+      "table": "operational_alerts",
+      "columns": 21,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "alertId": {
+          "type": "varchar(69)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "environment": {
+          "type": "varchar(16)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "dedupKey": {
+          "type": "varchar(160)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "ruleId": {
+          "type": "varchar(48)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "severity": {
+          "type": "varchar(12)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "status": {
+          "type": "varchar(14)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "title": {
+          "type": "varchar(160)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "summary": {
+          "type": "varchar(512)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "affectedTarget": {
+          "type": "varchar(160)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "safetyState": {
+          "type": "varchar(28)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "executionContinuing": {
+          "type": "boolean",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "autonomousActionSuspended": {
+          "type": "boolean",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "operatorAttentionRequired": {
+          "type": "boolean",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "incidentId": {
+          "type": "varchar(69)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "firstSeenAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "lastSeenAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "occurrenceCount": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "opa_identity_uidx": [
+          "alertId"
+        ],
+        "opa_dedup_uidx": [
+          "environment",
+          "dedupKey"
+        ]
+      },
+      "indexes": {
+        "opa_status_idx": [
+          "status"
+        ],
+        "opa_severity_idx": [
+          "severity"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())",
+        "updatedAt": "(now())"
+      },
+      "difference": "Canonical adds explicit id PRIMARY KEY required by schema; provisional serial implied uniqueness only."
+    },
+    {
+      "migration": 40,
+      "table": "service_health_observations",
+      "columns": 13,
+      "columnDefinitions": {
+        "id": {
+          "type": "serial",
+          "notNull": true,
+          "auto": true,
+          "default": null
+        },
+        "observationId": {
+          "type": "varchar(70)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "environment": {
+          "type": "varchar(16)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "dimension": {
+          "type": "varchar(28)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "service": {
+          "type": "varchar(24)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "healthClass": {
+          "type": "varchar(12)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "evidenceSummary": {
+          "type": "json",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "unknownInputs": {
+          "type": "json",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "evidenceHash": {
+          "type": "varchar(64)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "observedAt": {
+          "type": "varchar(32)",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "releaseVersion": {
+          "type": "varchar(64)",
+          "notNull": false,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "int",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "notNull": true,
+          "auto": false,
+          "default": "(now())"
+        }
+      },
+      "primary": [
+        "id"
+      ],
+      "unique": {
+        "sho_identity_uidx": [
+          "observationId"
+        ]
+      },
+      "indexes": {
+        "sho_dimension_idx": [
+          "dimension",
+          "observedAt"
+        ],
+        "sho_observed_at_idx": [
+          "observedAt"
+        ]
+      },
+      "defaults": {
+        "createdAt": "(now())"
+      },
+      "difference": "Canonical adds explicit id PRIMARY KEY required by schema; provisional serial implied uniqueness only."
+    },
+    {
+      "migration": 41,
+      "table": "autonomy_activations",
+      "columns": 3,
+      "columnDefinitions": {
+        "scope_key": {
+          "type": "varchar(512) character set ascii collate ascii_bin",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "state_json": {
+          "type": "json",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        }
+      },
+      "primary": [
+        "scope_key"
+      ],
+      "unique": {},
+      "indexes": {},
+      "defaults": {},
+      "difference": "Primary keys named by Drizzle; identical columns/types/uniqueness and ASCII binary collation."
+    },
+    {
+      "migration": 41,
+      "table": "autonomy_activation_audit",
+      "columns": 3,
+      "columnDefinitions": {
+        "scope_key": {
+          "type": "varchar(512) character set ascii collate ascii_bin",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "version": {
+          "type": "bigint unsigned",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "audit_json": {
+          "type": "json",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        }
+      },
+      "primary": [
+        "scope_key",
+        "version"
+      ],
+      "unique": {},
+      "indexes": {},
+      "defaults": {},
+      "difference": "Primary keys named by Drizzle; identical columns/types/uniqueness and ASCII binary collation."
+    },
+    {
+      "migration": 41,
+      "table": "autonomy_canary_reservations",
+      "columns": 2,
+      "columnDefinitions": {
+        "scope_key": {
+          "type": "varchar(512) character set ascii collate ascii_bin",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        },
+        "action_id": {
+          "type": "varchar(120) character set ascii collate ascii_bin",
+          "notNull": true,
+          "auto": false,
+          "default": null
+        }
+      },
+      "primary": [
+        "scope_key",
+        "action_id"
+      ],
+      "unique": {},
+      "indexes": {},
+      "defaults": {},
+      "difference": "Primary keys named by Drizzle; identical columns/types/uniqueness and ASCII binary collation."
+    }
+  ],
+  "preservedFiles": {
+    "db/migrations/0000_vengeful_triathlon.sql": "72b3c061c1ad128ac438ccf529de78f0e0002725d10fe71502e71ffd2e9902a1",
+    "db/migrations/0001_parallel_tinkerer.sql": "a75ec6176d74c3154b716e32c8483cbe42606dd60e500f841507034e6588a19b",
+    "db/migrations/0002_hardening_sprint.sql": "01342ff8548d4881e3d4c6c4acf5f01e815d52be1b9fd7cb1a058aba546ef5cf",
+    "db/migrations/0003_safe_hydra.sql": "8c96026171d065c18a31b3ad8f1fb0838adf36e1f9d041931937c1ab36883a50",
+    "db/migrations/0004_left_squadron_supreme.sql": "688aed12f2e961e1bb024c148eb55600c60e3001ae5ec5bc463780fe8643a7ff",
+    "db/migrations/0005_dear_guardsmen.sql": "1cb50c16061be27e898d1394c658777b9bacd5c8c713e8c1a7a97cfdaf9a6492",
+    "db/migrations/0006_bizarre_gamma_corps.sql": "2e43ba6c7dcac164d49fd80bf77fd95c37f124faba72525a14141a1908767d89",
+    "db/migrations/0007_curved_nitro.sql": "816f5d610278f5d4d67670cebe1da72e0b4465629e28563509a73daceca45b90",
+    "db/migrations/0009_workable_stephen_strange.sql": "ce33730998dde10569ff2c8e038d321d8a4963f50a11b01ecfe36b0099bc147f",
+    "db/migrations/0010_colorful_polaris.sql": "7aaefb5ea121c78df1a910afc313915b5edf26ae44ca14e828280c795f2bc0b6",
+    "db/migrations/0011_polite_tusk.sql": "22f040486d9441dded492f5e137d403b183cb44400d229cee36a229031ca0655",
+    "db/migrations/0012_add_message_pack_asset_type.sql": "7d9452351c176705178034ab852b8fcc6a47b3e904c97790621c2660998638f9",
+    "db/migrations/0012_strange_puff_adder.sql": "e2a4f7230720940a41a03d9942ba8f0324992284b1048daf55384e560acc5e32",
+    "db/migrations/0013_add_social_integrations_business_id.sql": "026fc1717dfa1371f629f2e16dec11a1486040b1e4987b404bb8d53dcccbd7a8",
+    "db/migrations/0014_dedupe_social_profiles.sql": "ad3ba6c3f2e692a15cc42822eaba537e4fb59c5df094211cffa7efdde6a978fa",
+    "db/migrations/0015_medical_dreadnoughts.sql": "36e961ca7d822c6065cc19ce0d9cdd3ecb9d0edf0b3ab71212a46a1dd5bee0d0",
+    "db/migrations/0016_email_verification_fields.sql": "86412d4815a155b39ed074885176ba6a8e3179b4b830fb6808ccd3854bb7f0bf",
+    "db/migrations/0017_tired_warbird.sql": "e2f722db5977a5ee5530a4a089d738574e4fde6331bf0f4581da7a8d672ff007",
+    "db/migrations/0018_nervous_swordsman.sql": "d750871b77dd3cf90f97a8ea7747abe134875971438770c297ec80d8bdfc522e",
+    "db/migrations/0019_cuddly_nicolaos.sql": "7f8810c92d51200ea37f169e6a8ad1015058b139e65687a73904137a26100f59",
+    "db/migrations/0020_real_smasher.sql": "1184a8d53a3cb337763739915b1237fa964200bd06f2fe8e2f45c1fbb12b627b",
+    "db/migrations/0021_narrow_loners.sql": "09cdfb9f0dc55c337efe146b3e7a9bb5b1f33f675840faed23b51d49f793097a",
+    "db/migrations/0022_engagement_inbound_crash_recovery.sql": "41d44b5eca6457434cad9f961bacc1635527ecd2d877914c3cb6d2f973ee5cdb",
+    "db/migrations/0023_keen_black_panther.sql": "3f9e27ad84e7a2542beec976a68e4068be67a963b8abc1afdce26b270c90f86a",
+    "db/migrations/0024_past_phil_sheldon.sql": "fd101d5bba0a78bfdfe9f4a28f78e95649ceb5a0b3a09a3f6c7b4e0d3499409c",
+    "db/migrations/0025_empty_paibok.sql": "5392df4237cd455429708d22ad70772998dc72c18ef519580311879b430cb4a6",
+    "db/migrations/0026_add_publishing_queue_metadata.sql": "1dffa6347fff257e919fd0d4dc3e4a41751ed8fffdda3e99e25b72d49025f2c2",
+    "db/migrations/0027_add_analytics_observation_id.sql": "f27fd0e5b85eada0a50ff1ba17c380a916d1736e6dd18464dbd19851b3e3d8cf",
+    "db/migrations/0028_add_campaign_interest_signal_actor_unique.sql": "771c3345be5c8c65d3bdb78a30ffa8ac2d94a4746c4be431c731a1c7991ecf30",
+    "db/migrations/0029_social_listening_foundation.sql": "633f92b67e435b66583fa631030055a0f8938dd82c5c7be0b2dc0f365926826c",
+    "db/migrations/0030_social_interpretations.sql": "b6027342ed865a26dba05108d4c2c6636aec98e8ec427dcfa4dc05843400a2c0",
+    "db/migrations/0031_policy_foundation.sql": "f7f4e2192372e3e98e8f6fe15c365cc802ebb2145d180f824075b6997f231950",
+    "db/migrations/0032_engagement_execution_foundation.sql": "d20c236d90afdab0e81fa14fa748f3523d28adc3d4005e28d3b633f9e3fe0bfd",
+    "db/migrations/0033_opportunity_detection_foundation.sql": "2fcc7283df6a612320c768ffe229a0fa96fd479e83708bf636c075646b3e79ac",
+    "db/migrations/0034_r6_lead_autonomy_foundation.sql": "65b863f865dcea6266819ff42ddbaf717a9750f64c3dfec8e3d1cc44270c1ebb",
+    "db/migrations/0035_r7_business_optimisation_foundation.sql": "85e1c12cd1a194fc349b646501e76dd2d853e192a14f1a608b134a1558fba38b",
+    "db/migrations/0036_r8_strategic_intelligence_foundation.sql": "1dc7c14841e52719ebe726d4fde93085b38d89cc97eac8e3bc11e56d6ed6d6da",
+    "db/migrations/0037_r9_mission_control_foundation.sql": "74edc5ec6a5c02e0df0a0ade056e86ed5a3ee19051d2a8fbdf9835c604d92091",
+    "db/migrations/archived/0003_billing_engine.sql": "a350bfc591f4128f446e41ec204e850533a8a0b3f98b2f15bb85ea3061e6499f",
+    "db/migrations/archived/0004_database_indexes.sql": "7813f451c5bdbe9208ba7f084ca81315bb450669f66dda62e021fa538e1406db",
+    "db/migrations/archived/0005_user_usage_table.sql": "d00369aa36d8cf723ebf250ea8baee46944295b767adcbe61717982216c01435",
+    "db/migrations/archived/0006_credit_renewal_fields.sql": "9b0ff90c60084221bd7108b767facde3639e438851d6d129e2e09f621968e253",
+    "db/migrations/archived/0007_system_alerts.sql": "8651f21c098ec933bffc5e44230431a4c1e7af13dfa66d631132694982ab05c7",
+    "db/migrations/archived/0008_content_posts_metadata.sql": "550bb0462c67271d06b4dfe0a6888a3389152f44751b2dea6394213738767edf",
+    "db/migrations/archived/0009_2fa_fields.sql": "81dd802c354891fac65592fa55869ca101b73fdf8e021861e4dffba6c9c535f4",
+    "db/migrations/archived/0010_caption_adaptation.sql": "2d9fc2bdaafa4b590cc382f034149b6efe8c7f399afd21f4b618877ce488731a",
+    "db/migrations/archived/0011_video_render_jobs.sql": "91f796524c2f76a48efcb1921d92d28ca0342b0055aa794f9b946f52d9c3f12c",
+    "db/migrations/archived/0027_queue_durability_tables.sql": "d16dca0189b990511b875fb785412c78e869beb1e0d7496dff29f8893ead3ffa",
+    "db/migrations/meta/0000_snapshot.json": "1708534a8b7e05f255f1021ca603d33125ae5e0bb06ba400ba21027c78e9d663",
+    "db/migrations/meta/0001_snapshot.json": "b3788758af749c3757cc179b215cf4f504a526ea56f1f28290751cd784c07b2e",
+    "db/migrations/meta/0003_snapshot.json": "caa40901fd0dd8f1c8c48950d2d85da436a5e2b1c8bfac8c7e327c0d3c7e7b4b",
+    "db/migrations/meta/0004_snapshot.json": "6d5326123632e3cfcedd098f4511e799fc3dbfa17924d51baca4e462e93ccf19",
+    "db/migrations/meta/0005_snapshot.json": "eaab836b3da7a4909b0e0e7a98f691a02e24bf5a1e67087157636f1b85726ba1",
+    "db/migrations/meta/0006_snapshot.json": "4204192e2f988b9425d38ffd9112c0f4e4d1deea84cbf56ba70c86a795080744",
+    "db/migrations/meta/0007_snapshot.json": "3649aedc605a5463d030ad8b4f92a9d179deb871292f5d5858df9419ae71ffc3",
+    "db/migrations/meta/0008_snapshot.json": "e382c227d40070b5c2d887e32c0a3bf2bc3359dd93402a012600d042a4179e15",
+    "db/migrations/meta/0009_snapshot.json": "39a414b9c1291e7c6351b7a79ee49313c18f7e0c7501b3c41795e4eb915a7ee5",
+    "db/migrations/meta/0010_snapshot.json": "9d982bc6499692dbff827668efcd1b910bc592c4e0c33921aa8192a3fb503244",
+    "db/migrations/meta/0011_snapshot.json": "9deaad87dafbc7b54ea85b4b4c74a9c1d4526e0e919d301888631f096ca67ac8",
+    "db/migrations/meta/0012_snapshot.json": "e8275618f5410cc420542f9a0c34de9622d1e3bce8e70fbdd84bd13e4b54259c",
+    "db/migrations/meta/0013_snapshot.json": "9021518df50171fb18346b8c1e69eb7e54ada250dfd2fafd590d2de4c885254b",
+    "db/migrations/meta/0014_snapshot.json": "b777332892db5a2008a637199e8f6cd17a0b98b1203465f57e11eb519d6ce912",
+    "db/migrations/meta/0015_snapshot.json": "e5cd185df34741a75beecbec89ff8a5cc4a35dcfa0594673a7178eed548dbf51",
+    "db/migrations/meta/0016_snapshot.json": "81b2cad3701fccde25c8f90e87f36f7bb43a546c8bd8acc016087171a39c179a",
+    "db/migrations/meta/0017_snapshot.json": "2dbb20f7ea84ed6b0a2434d0f2b3ef212e83af91ac5ee6c94b03ca7119a5905c",
+    "db/migrations/meta/0018_snapshot.json": "851a9c7c7c5519d3135ea832b34bd293dbcf62a968095f6f3329258333ccdc9a",
+    "db/migrations/meta/0019_snapshot.json": "caf58c5fbf5d672ceb5e07cdae13f66be41105146c8aec4eb94689b579711f55",
+    "db/migrations/meta/0020_snapshot.json": "75c58301bffbf257afb745ad80827eca235522bd58458ef93774f98c0ce99e35",
+    "db/migrations/meta/0023_snapshot.json": "740137bc59d8614b9ed39e3da13bda1a7541de1315d8be9cdeb643feb38291af",
+    "db/migrations/meta/0024_snapshot.json": "4b617bc57797124cc0a5f2522d0a8dcd98ba5d3cd029ce143f44ba84af301088",
+    "db/migrations/meta/0025_snapshot.json": "df589e36ba48acdaf02b10190c147e36976996a3ded8e06ae6a77151a7f1501b",
+    "db/migrations/meta/0026_snapshot.json": "0132f6303f8a49c9f74f6d77e266bdb3bbb8623576b2d42e3c4ea8db5edf19a7",
+    "db/migrations/meta/0027_snapshot.json": "1eeace55b1ec71d56fd677384072156ced9ad24f155a3ca838addce8b2a11f38",
+    "db/migrations/meta/0028_snapshot.json": "860ff5abaf0da52c3a93d2db378935815b22c85fe1a452867f01753943f75b69",
+    "db/migrations/meta/0029_snapshot.json": "c8dd08aa97db56a78997961f24b9b4318744783bc689269c005e3778e0b9bc7e",
+    "db/migrations/meta/0030_snapshot.json": "d2c1337ed8a4f236966bb34e1c705fe2b1c01077369c8035298bb3554da7c374",
+    "db/migrations/meta/0031_snapshot.json": "01c962ff7349130e8f8ffa8d6cba0a2fe197d443d96e126b4c435a3057e2e8f5",
+    "db/migrations/meta/0032_snapshot.json": "66f34add5d0c44615a28f11ec8a4f38fa3ce2434c348488d35892f1346142b3a",
+    "db/migrations/meta/0033_snapshot.json": "704d58b87c409f558e5425a24630de745cff0cfe352743a1da3e4e10b13975a4",
+    "db/migrations/meta/0034_snapshot.json": "261f280610ca16ad499136e55e57b9ef3009830e54fb2aea22426b9d21f0517e",
+    "db/migrations/meta/0035_snapshot.json": "30c11fc7d9343b838a50849ac8758bee62edf58f1016b7d573810b607c742e43",
+    "db/migrations/meta/0036_snapshot.json": "8c5cf12367591d87c24ec00a2d60e3e9a3cc5b36da87c26123fe7a2588b1ac97",
+    "db/migrations/meta/0037_snapshot.json": "70127424770ca5117065dcf9543d6ef5aad5e2194e4bbb7651a2139deadec80f"
+  },
+  "preservedJournalEntries": 38,
+  "metadataCatchup": [
+    "mission_governance_decisions",
+    "mission_proposals",
+    "mission_lifecycle_events",
+    "mission_plans",
+    "mission_plan_tasks",
+    "mission_plan_lifecycle_events",
+    "mission_task_plan_snapshots",
+    "mission_dependency_edges",
+    "mission_schedules",
+    "mission_schedule_lifecycle_events",
+    "execution_actions",
+    "execution_attempts",
+    "execution_lifecycle_events",
+    "mission_state_records",
+    "mission_task_states",
+    "mission_recovery_candidates",
+    "mission_operational_timeline_events"
+  ],
+  "approvalEnumCatchup": "mission_action already applied by SQL 0037; recorded in generated snapshot 0038",
+  "inheritedR9Differences": [
+    "mission_schedules.version: schema default 1; SQL 0037 has no default",
+    "mission_governance_decisions: SQL *_uidx versus schema *_idx for two equivalent unique keys"
+  ],
+  "drizzleKitVersion": "0.31.10"
+}
